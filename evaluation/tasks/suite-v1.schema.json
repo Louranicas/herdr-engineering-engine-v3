@@ -1,0 +1,242 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:hee3:workload-suite:1",
+  "title": "RC01 frozen full workload suite v1",
+  "$comment": "T12 materializes the real protected bytes before any training, empirical tuning or comparison. Schema checks balance/cardinality only. Trusted builder additionally verifies unique workload IDs and unique source/specification families, disjoint split custody, matching immutable hashes, private oracle protection, maximum3 authoredfiles/200logical changedlines, and excludes WL-U64-PARSE-001/v1 from heldout. No fixture exists merely because this schema names it.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "suite_id",
+    "oracle_suite_id",
+    "tasks"
+  ],
+  "properties": {
+    "schema": {
+      "type": "integer",
+      "const": 1
+    },
+    "suite_id": {
+      "const": "WL-RUST-SMALL-001/v1"
+    },
+    "oracle_suite_id": {
+      "const": "ORACLE-RUST-SMALL-001/v1"
+    },
+    "tasks": {
+      "type": "array",
+      "minItems": 280,
+      "maxItems": 280,
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "workload_id",
+          "family",
+          "stratum",
+          "split",
+          "specification_sha256",
+          "source_tree_sha256",
+          "fixture_manifest_sha256",
+          "oracle_sha256"
+        ],
+        "properties": {
+          "workload_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "family": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "stratum": {
+            "enum": [
+              "parse",
+              "ordering",
+              "state-transition",
+              "bounded-resource"
+            ]
+          },
+          "split": {
+            "enum": [
+              "development",
+              "heldout"
+            ]
+          },
+          "specification_sha256": {
+            "type": "string",
+            "minLength": 64,
+            "maxLength": 64,
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "source_tree_sha256": {
+            "type": "string",
+            "minLength": 64,
+            "maxLength": 64,
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "fixture_manifest_sha256": {
+            "type": "string",
+            "minLength": 64,
+            "maxLength": 64,
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "oracle_sha256": {
+            "type": "string",
+            "minLength": 64,
+            "maxLength": 64,
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        }
+      },
+      "allOf": [
+        {
+          "contains": {
+            "properties": {
+              "split": {
+                "const": "development"
+              },
+              "stratum": {
+                "const": "parse"
+              }
+            },
+            "required": [
+              "split",
+              "stratum"
+            ]
+          },
+          "minContains": 20,
+          "maxContains": 20
+        },
+        {
+          "contains": {
+            "properties": {
+              "split": {
+                "const": "development"
+              },
+              "stratum": {
+                "const": "ordering"
+              }
+            },
+            "required": [
+              "split",
+              "stratum"
+            ]
+          },
+          "minContains": 20,
+          "maxContains": 20
+        },
+        {
+          "contains": {
+            "properties": {
+              "split": {
+                "const": "development"
+              },
+              "stratum": {
+                "const": "state-transition"
+              }
+            },
+            "required": [
+              "split",
+              "stratum"
+            ]
+          },
+          "minContains": 20,
+          "maxContains": 20
+        },
+        {
+          "contains": {
+            "properties": {
+              "split": {
+                "const": "development"
+              },
+              "stratum": {
+                "const": "bounded-resource"
+              }
+            },
+            "required": [
+              "split",
+              "stratum"
+            ]
+          },
+          "minContains": 20,
+          "maxContains": 20
+        },
+        {
+          "contains": {
+            "properties": {
+              "split": {
+                "const": "heldout"
+              },
+              "stratum": {
+                "const": "parse"
+              }
+            },
+            "required": [
+              "split",
+              "stratum"
+            ]
+          },
+          "minContains": 50,
+          "maxContains": 50
+        },
+        {
+          "contains": {
+            "properties": {
+              "split": {
+                "const": "heldout"
+              },
+              "stratum": {
+                "const": "ordering"
+              }
+            },
+            "required": [
+              "split",
+              "stratum"
+            ]
+          },
+          "minContains": 50,
+          "maxContains": 50
+        },
+        {
+          "contains": {
+            "properties": {
+              "split": {
+                "const": "heldout"
+              },
+              "stratum": {
+                "const": "state-transition"
+              }
+            },
+            "required": [
+              "split",
+              "stratum"
+            ]
+          },
+          "minContains": 50,
+          "maxContains": 50
+        },
+        {
+          "contains": {
+            "properties": {
+              "split": {
+                "const": "heldout"
+              },
+              "stratum": {
+                "const": "bounded-resource"
+              }
+            },
+            "required": [
+              "split",
+              "stratum"
+            ]
+          },
+          "minContains": 50,
+          "maxContains": 50
+        }
+      ]
+    }
+  }
+}

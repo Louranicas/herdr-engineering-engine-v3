@@ -1,0 +1,612 @@
+{
+  "errors": [
+    {
+      "protocol": "hee3.control",
+      "version": 1,
+      "kind": "error",
+      "request_id": "123e4567-e89b-42d3-a456-000000000001",
+      "request_sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "code": "invalid_frame",
+      "effect": "none",
+      "retry": "never",
+      "readback": null,
+      "message": "Fixture diagnostic",
+      "details": {
+        "field": "body",
+        "constraint": "fixture",
+        "current_generation": "7"
+      }
+    },
+    {
+      "protocol": "hee3.control",
+      "version": 1,
+      "kind": "error",
+      "request_id": "123e4567-e89b-42d3-a456-000000000001",
+      "request_sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "code": "unsupported_protocol",
+      "effect": "none",
+      "retry": "never",
+      "readback": null,
+      "message": "Fixture diagnostic",
+      "details": {
+        "field": "body",
+        "constraint": "fixture",
+        "current_generation": "7"
+      }
+    },
+    {
+      "protocol": "hee3.control",
+      "version": 1,
+      "kind": "error",
+      "request_id": "123e4567-e89b-42d3-a456-000000000001",
+      "request_sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "code": "unsupported_version",
+      "effect": "none",
+      "retry": "never",
+      "readback": null,
+      "message": "Fixture diagnostic",
+      "details": {
+        "field": "body",
+        "constraint": "fixture",
+        "current_generation": "7"
+      }
+    },
+    {
+      "protocol": "hee3.control",
+      "version": 1,
+      "kind": "error",
+      "request_id": "123e4567-e89b-42d3-a456-000000000001",
+      "request_sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "code": "unknown_action",
+      "effect": "none",
+      "retry": "never",
+      "readback": null,
+      "message": "Fixture diagnostic",
+      "details": {
+        "field": "body",
+        "constraint": "fixture",
+        "current_generation": "7"
+      }
+    },
+    {
+      "protocol": "hee3.control",
+      "version": 1,
+      "kind": "error",
+      "request_id": "123e4567-e89b-42d3-a456-000000000001",
+      "request_sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "code": "unsupported_action_version",
+      "effect": "none",
+      "retry": "never",
+      "readback": null,
+      "message": "Fixture diagnostic",
+      "details": {
+        "field": "body",
+        "constraint": "fixture",
+        "current_generation": "7"
+      }
+    },
+    {
+      "protocol": "hee3.control",
+      "version": 1,
+      "kind": "error",
+      "request_id": "123e4567-e89b-42d3-a456-000000000001",
+      "request_sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "code": "unauthenticated",
+      "effect": "none",
+      "retry": "never",
+      "readback": null,
+      "message": "Fixture diagnostic",
+      "details": {
+        "field": "body",
+        "constraint": "fixture",
+        "current_generation": "7"
+      }
+    },
+    {
+      "protocol": "hee3.control",
+      "version": 1,
+      "kind": "error",
+      "request_id": "123e4567-e89b-42d3-a456-000000000001",
+      "request_sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "code": "forbidden",
+      "effect": "none",
+      "retry": "never",
+      "readback": null,
+      "message": "Fixture diagnostic",
+      "details": {
+        "field": "body",
+        "constraint": "fixture",
+        "current_generation": "7"
+      }
+    },
+    {
+      "protocol": "hee3.control",
+      "version": 1,
+      "kind": "error",
+      "request_id": "123e4567-e89b-42d3-a456-000000000001",
+      "request_sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "code": "invalid_argument",
+      "effect": "none",
+      "retry": "never",
+      "readback": null,
+      "message": "Fixture diagnostic",
+      "details": {
+        "field": "body",
+        "constraint": "fixture",
+        "current_generation": "7"
+      }
+    },
+    {
+      "protocol": "hee3.control",
+      "version": 1,
+      "kind": "error",
+      "request_id": "123e4567-e89b-42d3-a456-000000000001",
+      "request_sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "code": "not_found",
+      "effect": "none",
+      "retry": "never",
+      "readback": null,
+      "message": "Fixture diagnostic",
+      "details": {
+        "field": "body",
+        "constraint": "fixture",
+        "current_generation": "7"
+      }
+    },
+    {
+      "protocol": "hee3.control",
+      "version": 1,
+      "kind": "error",
+      "request_id": "123e4567-e89b-42d3-a456-000000000001",
+      "request_sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "code": "conflict",
+      "effect": "none",
+      "retry": "never",
+      "readback": null,
+      "message": "Fixture diagnostic",
+      "details": {
+        "field": "body",
+        "constraint": "fixture",
+        "current_generation": "7"
+      }
+    },
+    {
+      "protocol": "hee3.control",
+      "version": 1,
+      "kind": "error",
+      "request_id": "123e4567-e89b-42d3-a456-000000000001",
+      "request_sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "code": "stale_generation",
+      "effect": "none",
+      "retry": "never",
+      "readback": null,
+      "message": "Fixture diagnostic",
+      "details": {
+        "field": "body",
+        "constraint": "fixture",
+        "current_generation": "7"
+      }
+    },
+    {
+      "protocol": "hee3.control",
+      "version": 1,
+      "kind": "error",
+      "request_id": "123e4567-e89b-42d3-a456-000000000001",
+      "request_sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "code": "deadline_exceeded",
+      "effect": "none",
+      "retry": "never",
+      "readback": null,
+      "message": "Fixture diagnostic",
+      "details": {
+        "field": "body",
+        "constraint": "fixture",
+        "current_generation": "7"
+      }
+    },
+    {
+      "protocol": "hee3.control",
+      "version": 1,
+      "kind": "error",
+      "request_id": "123e4567-e89b-42d3-a456-000000000001",
+      "request_sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "code": "cancelled",
+      "effect": "none",
+      "retry": "never",
+      "readback": null,
+      "message": "Fixture diagnostic",
+      "details": {
+        "field": "body",
+        "constraint": "fixture",
+        "current_generation": "7"
+      }
+    },
+    {
+      "protocol": "hee3.control",
+      "version": 1,
+      "kind": "error",
+      "request_id": "123e4567-e89b-42d3-a456-000000000001",
+      "request_sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "code": "resource_exhausted",
+      "effect": "none",
+      "retry": "never",
+      "readback": null,
+      "message": "Fixture diagnostic",
+      "details": {
+        "field": "body",
+        "constraint": "fixture",
+        "current_generation": "7"
+      }
+    },
+    {
+      "protocol": "hee3.control",
+      "version": 1,
+      "kind": "error",
+      "request_id": "123e4567-e89b-42d3-a456-000000000001",
+      "request_sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "code": "unavailable",
+      "effect": "none",
+      "retry": "never",
+      "readback": null,
+      "message": "Fixture diagnostic",
+      "details": {
+        "field": "body",
+        "constraint": "fixture",
+        "current_generation": "7"
+      }
+    },
+    {
+      "protocol": "hee3.control",
+      "version": 1,
+      "kind": "error",
+      "request_id": "123e4567-e89b-42d3-a456-000000000001",
+      "request_sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "code": "resync_required",
+      "effect": "none",
+      "retry": "never",
+      "readback": null,
+      "message": "Fixture diagnostic",
+      "details": {
+        "field": "body",
+        "constraint": "fixture",
+        "current_generation": "7"
+      }
+    },
+    {
+      "protocol": "hee3.control",
+      "version": 1,
+      "kind": "error",
+      "request_id": "123e4567-e89b-42d3-a456-000000000001",
+      "request_sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "code": "effect_unknown",
+      "effect": "unknown",
+      "retry": "after_readback",
+      "readback": {
+        "action": "task.get",
+        "action_version": 1,
+        "body": {
+          "selector": {
+            "task_id": "123e4567-e89b-42d3-a456-000000000004"
+          },
+          "evidence": "none"
+        }
+      },
+      "message": "Fixture diagnostic",
+      "details": {
+        "field": "body",
+        "constraint": "fixture",
+        "current_generation": "7"
+      }
+    },
+    {
+      "protocol": "hee3.control",
+      "version": 1,
+      "kind": "error",
+      "request_id": "123e4567-e89b-42d3-a456-000000000001",
+      "request_sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "code": "internal",
+      "effect": "none",
+      "retry": "never",
+      "readback": null,
+      "message": "Fixture diagnostic",
+      "details": {
+        "field": "body",
+        "constraint": "fixture",
+        "current_generation": "7"
+      }
+    }
+  ],
+  "events": [
+    {
+      "protocol": "hee3.control",
+      "version": 1,
+      "kind": "event",
+      "subscription_id": "123e4567-e89b-42d3-a456-000000000004",
+      "event_id": "123e4567-e89b-42d3-a456-000000000005",
+      "epoch": "123e4567-e89b-42d3-a456-000000000006",
+      "sequence": "2",
+      "previous_sequence": "1",
+      "occurred_unix_ms": "1769999990000",
+      "topic": "task",
+      "subject": {
+        "resource": "task",
+        "resource_id": "123e4567-e89b-42d3-a456-000000000004",
+        "generation": "1",
+        "readback": {
+          "action": "task.get",
+          "action_version": 1,
+          "body": {
+            "selector": {
+              "task_id": "123e4567-e89b-42d3-a456-000000000004"
+            },
+            "evidence": "none"
+          }
+        }
+      },
+      "change": "updated",
+      "cursor": {
+        "epoch": "123e4567-e89b-42d3-a456-000000000006",
+        "sequence": "2",
+        "filter_sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "visibility_revision": "1",
+        "issued_unix_ms": "1769999990000",
+        "expires_unix_ms": "1770000000000"
+      }
+    },
+    {
+      "protocol": "hee3.control",
+      "version": 1,
+      "kind": "event",
+      "subscription_id": "123e4567-e89b-42d3-a456-000000000004",
+      "event_id": "123e4567-e89b-42d3-a456-000000000005",
+      "epoch": "123e4567-e89b-42d3-a456-000000000006",
+      "sequence": "2",
+      "previous_sequence": "1",
+      "occurred_unix_ms": "1769999990000",
+      "topic": "thread",
+      "subject": {
+        "resource": "thread",
+        "resource_id": "123e4567-e89b-42d3-a456-000000000004",
+        "generation": "1",
+        "readback": {
+          "action": "thread.get",
+          "action_version": 1,
+          "body": {
+            "thread_id": "123e4567-e89b-42d3-a456-000000000004",
+            "expected_brief_revision": "1"
+          }
+        }
+      },
+      "change": "updated",
+      "cursor": {
+        "epoch": "123e4567-e89b-42d3-a456-000000000006",
+        "sequence": "2",
+        "filter_sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "visibility_revision": "1",
+        "issued_unix_ms": "1769999990000",
+        "expires_unix_ms": "1770000000000"
+      }
+    },
+    {
+      "protocol": "hee3.control",
+      "version": 1,
+      "kind": "event",
+      "subscription_id": "123e4567-e89b-42d3-a456-000000000004",
+      "event_id": "123e4567-e89b-42d3-a456-000000000005",
+      "epoch": "123e4567-e89b-42d3-a456-000000000006",
+      "sequence": "2",
+      "previous_sequence": "1",
+      "occurred_unix_ms": "1769999990000",
+      "topic": "roster",
+      "subject": {
+        "resource": "roster",
+        "resource_id": "123e4567-e89b-42d3-a456-000000000004",
+        "generation": "1",
+        "readback": {
+          "action": "roster.inspect",
+          "action_version": 1,
+          "body": {
+            "selector": {
+              "record_id": "123e4567-e89b-42d3-a456-000000000004"
+            }
+          }
+        }
+      },
+      "change": "updated",
+      "cursor": {
+        "epoch": "123e4567-e89b-42d3-a456-000000000006",
+        "sequence": "2",
+        "filter_sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "visibility_revision": "1",
+        "issued_unix_ms": "1769999990000",
+        "expires_unix_ms": "1770000000000"
+      }
+    },
+    {
+      "protocol": "hee3.control",
+      "version": 1,
+      "kind": "event",
+      "subscription_id": "123e4567-e89b-42d3-a456-000000000004",
+      "event_id": "123e4567-e89b-42d3-a456-000000000005",
+      "epoch": "123e4567-e89b-42d3-a456-000000000006",
+      "sequence": "2",
+      "previous_sequence": "1",
+      "occurred_unix_ms": "1769999990000",
+      "topic": "service",
+      "subject": {
+        "resource": "service",
+        "resource_id": "123e4567-e89b-42d3-a456-000000000004",
+        "generation": "1",
+        "readback": {
+          "action": "service.inspect",
+          "action_version": 1,
+          "body": {
+            "service_id": "123e4567-e89b-42d3-a456-000000000004",
+            "operation": {
+              "operation_id": "123e4567-e89b-42d3-a456-000000000005"
+            }
+          }
+        }
+      },
+      "change": "updated",
+      "cursor": {
+        "epoch": "123e4567-e89b-42d3-a456-000000000006",
+        "sequence": "2",
+        "filter_sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "visibility_revision": "1",
+        "issued_unix_ms": "1769999990000",
+        "expires_unix_ms": "1770000000000"
+      }
+    },
+    {
+      "protocol": "hee3.control",
+      "version": 1,
+      "kind": "event",
+      "subscription_id": "123e4567-e89b-42d3-a456-000000000004",
+      "event_id": "123e4567-e89b-42d3-a456-000000000005",
+      "epoch": "123e4567-e89b-42d3-a456-000000000006",
+      "sequence": "2",
+      "previous_sequence": "1",
+      "occurred_unix_ms": "1769999990000",
+      "topic": "analysis",
+      "subject": {
+        "resource": "analysis",
+        "resource_id": "123e4567-e89b-42d3-a456-000000000004",
+        "generation": "1",
+        "readback": {
+          "action": "analysis.get",
+          "action_version": 1,
+          "body": {
+            "selector": {
+              "analysis_id": "123e4567-e89b-42d3-a456-000000000004"
+            }
+          }
+        }
+      },
+      "change": "updated",
+      "cursor": {
+        "epoch": "123e4567-e89b-42d3-a456-000000000006",
+        "sequence": "2",
+        "filter_sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "visibility_revision": "1",
+        "issued_unix_ms": "1769999990000",
+        "expires_unix_ms": "1770000000000"
+      }
+    },
+    {
+      "protocol": "hee3.control",
+      "version": 1,
+      "kind": "event",
+      "subscription_id": "123e4567-e89b-42d3-a456-000000000004",
+      "event_id": "123e4567-e89b-42d3-a456-000000000005",
+      "epoch": "123e4567-e89b-42d3-a456-000000000006",
+      "sequence": "2",
+      "previous_sequence": "1",
+      "occurred_unix_ms": "1769999990000",
+      "topic": "delivery",
+      "subject": {
+        "resource": "delivery",
+        "resource_id": "123e4567-e89b-42d3-a456-000000000004",
+        "generation": "1",
+        "readback": {
+          "action": "task.get",
+          "action_version": 1,
+          "body": {
+            "selector": {
+              "task_id": "123e4567-e89b-42d3-a456-000000000004"
+            },
+            "evidence": "none"
+          }
+        }
+      },
+      "change": "updated",
+      "cursor": {
+        "epoch": "123e4567-e89b-42d3-a456-000000000006",
+        "sequence": "2",
+        "filter_sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "visibility_revision": "1",
+        "issued_unix_ms": "1769999990000",
+        "expires_unix_ms": "1770000000000"
+      }
+    },
+    {
+      "protocol": "hee3.control",
+      "version": 1,
+      "kind": "event",
+      "subscription_id": "123e4567-e89b-42d3-a456-000000000004",
+      "event_id": "123e4567-e89b-42d3-a456-000000000005",
+      "epoch": "123e4567-e89b-42d3-a456-000000000006",
+      "sequence": "2",
+      "previous_sequence": "1",
+      "occurred_unix_ms": "1769999990000",
+      "topic": "recovery",
+      "subject": {
+        "resource": "recovery",
+        "resource_id": "123e4567-e89b-42d3-a456-000000000004",
+        "generation": "1",
+        "readback": {
+          "action": "health",
+          "action_version": 1,
+          "body": {}
+        }
+      },
+      "change": "updated",
+      "cursor": {
+        "epoch": "123e4567-e89b-42d3-a456-000000000006",
+        "sequence": "2",
+        "filter_sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "visibility_revision": "1",
+        "issued_unix_ms": "1769999990000",
+        "expires_unix_ms": "1770000000000"
+      }
+    }
+  ],
+  "statuses": [
+    {
+      "protocol": "hee3.control",
+      "version": 1,
+      "kind": "stream_status",
+      "subscription_id": "123e4567-e89b-42d3-a456-000000000004",
+      "status": "resync_required",
+      "last_delivered_cursor": {
+        "epoch": "123e4567-e89b-42d3-a456-000000000006",
+        "sequence": "2",
+        "filter_sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "visibility_revision": "1",
+        "issued_unix_ms": "1769999990000",
+        "expires_unix_ms": "1770000000000"
+      }
+    },
+    {
+      "protocol": "hee3.control",
+      "version": 1,
+      "kind": "stream_status",
+      "subscription_id": "123e4567-e89b-42d3-a456-000000000004",
+      "status": "queue_limit",
+      "last_delivered_cursor": {
+        "epoch": "123e4567-e89b-42d3-a456-000000000006",
+        "sequence": "2",
+        "filter_sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "visibility_revision": "1",
+        "issued_unix_ms": "1769999990000",
+        "expires_unix_ms": "1770000000000"
+      }
+    },
+    {
+      "protocol": "hee3.control",
+      "version": 1,
+      "kind": "stream_status",
+      "subscription_id": "123e4567-e89b-42d3-a456-000000000004",
+      "status": "server_draining",
+      "last_delivered_cursor": {
+        "epoch": "123e4567-e89b-42d3-a456-000000000006",
+        "sequence": "2",
+        "filter_sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "visibility_revision": "1",
+        "issued_unix_ms": "1769999990000",
+        "expires_unix_ms": "1770000000000"
+      }
+    }
+  ],
+  "fixture_identity_policy": "All UUIDs and sha256:111... schema/evidence/scope references are fictional fixture values; they identify no published compatibility tuple, admitted artifact or grant. Result request_sha256 values in actions.json bind the actual compact fixture request bytes; C01 retains the exact published RC03 example bytes/hash."
+}

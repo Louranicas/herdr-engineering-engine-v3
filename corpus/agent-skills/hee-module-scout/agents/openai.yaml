@@ -1,0 +1,4 @@
+interface:
+  display_name: "HEE Module Scout"
+  short_description: "Scout HEE3 module context and verification routes"
+  default_prompt: "Use $hee-module-scout to prepare context for the selected HEE3 module and original task."

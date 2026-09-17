@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+set -euo pipefail
+# Documentation synchronization only; no engine test or deployment commands are executed.
+exec python3 /var/home/Louranicas/planning/herdr-engine-vision-20260915/corpus_sync.py "$@"

@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:hee3:workload-manifest:1",
+  "title": "Immutable development workload manifest v1",
+  "$comment": "Exact hashes describe bytes, not authentication or hostile custody. Full suite admission additionally enforces family-disjoint splits and four-stratum 80/200 balance at T12. Paths must resolve beneath the frozen fixture root without symlinks; tree hashes must be recomputed before use.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "workload_id", "oracle_id", "suite_id", "split", "family", "data_class", "changed_source_files", "changed_nonblank_lines_including_comments", "candidate_inputs", "heldout_eligible", "hostile_custody_qualified", "full_suite_status", "files_sha256", "base_tree_sha256", "reference_tree_sha256", "tree_hash_definition"],
+  "properties": {
+    "schema": {"const": 1, "type": "integer"},
+    "workload_id": {"type": "string", "minLength": 1, "maxLength": 128},
+    "oracle_id": {"type": "string", "minLength": 1, "maxLength": 128},
+    "suite_id": {"const": "WL-RUST-SMALL-001/v1"},
+    "split": {"const": "development"},
+    "family": {"type": "string", "minLength": 1, "maxLength": 128},
+    "data_class": {"const": "public_synthetic"},
+    "changed_source_files": {"type": "integer", "minimum": 1, "maximum": 3},
+    "changed_nonblank_lines_including_comments": {"type": "integer", "minimum": 1, "maximum": 200},
+    "candidate_inputs": {"type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": true, "items": {"$ref": "#/$defs/Path"}},
+    "heldout_eligible": {"const": false},
+    "hostile_custody_qualified": {"const": false},
+    "full_suite_status": {"const": "pending T12 before training/tuning/comparison"},
+    "files_sha256": {"type": "object", "minProperties": 1, "maxProperties": 32, "propertyNames": {"$ref": "#/$defs/Path"}, "additionalProperties": {"$ref": "#/$defs/Sha256"}},
+    "base_tree_sha256": {"$ref": "#/$defs/Sha256"},
+    "reference_tree_sha256": {"$ref": "#/$defs/Sha256"},
+    "tree_hash_definition": {"const": "SHA256 of UTF-8 compact sorted-key JSON mapping relative library paths to exact file SHA256; reference inherits unchanged base Cargo.toml"}
+  },
+  "$defs": {
+    "Sha256": {"type": "string", "minLength": 64, "maxLength": 64, "pattern": "^[0-9a-f]{64}$"},
+    "Path": {"type": "string", "minLength": 1, "maxLength": 256, "pattern": "^[A-Za-z0-9_-][A-Za-z0-9_.-]*(/[A-Za-z0-9_-][A-Za-z0-9_.-]*)*$", "not": {"pattern": "[^A-Za-z0-9_./-]"}}
+  }
+}

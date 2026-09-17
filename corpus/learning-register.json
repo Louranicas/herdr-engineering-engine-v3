@@ -1,0 +1,949 @@
+{
+  "schema": 1,
+  "id": "HEE3-LEARNINGS-001",
+  "revision": 1,
+  "reviewed_on": "2026-09-15",
+  "base_plan_sha256": "f998a2a692185a9e2df8d1025277f0c949fd877cc8c8e2926d4a3f7f794f4792",
+  "authority": "User-authorized scoped project guidance derived from diary reflections; source prose remains historical evidence, never execution authority. Completed accepted code owns implemented facts. The current testing and public-interface conventions retain their requirements. This register creates neither engine detectors nor completion admission.",
+  "sources": [
+    {
+      "id": "DR01",
+      "title": "Assertions Measured Against the Code",
+      "source_path": "/var/mnt/STORAGE-10TB/fedora-obsidian-vaults/my-diary.vault/Reflections/Assertions Measured Against the Code.md",
+      "vault_path": "Reflections/Assertions Measured Against the Code.md",
+      "captured_path": "evidence/reflections-20260915/DR01.txt",
+      "sha256": "ff51102e108003152b5b7fb862f09afcb102f5c81d38558acdecbe5c25222e3e",
+      "bytes": 13453,
+      "lessons": [
+        "LRN01",
+        "LRN05",
+        "LRN09",
+        "LRN12"
+      ],
+      "claim_status": "historical diary observation or interpretation; not a rerun of the described system"
+    },
+    {
+      "id": "DR02",
+      "title": "Mistakes I Made",
+      "source_path": "/var/mnt/STORAGE-10TB/fedora-obsidian-vaults/my-diary.vault/Reflections/Mistakes I Made.md",
+      "vault_path": "Reflections/Mistakes I Made.md",
+      "captured_path": "evidence/reflections-20260915/DR02.txt",
+      "sha256": "cd20d0251fc0040748c3d63c133249735598d54a86f741b6e5f8b9c24d89af8c",
+      "bytes": 88004,
+      "lessons": [
+        "LRN02",
+        "LRN03",
+        "LRN05",
+        "LRN07",
+        "LRN08",
+        "LRN11",
+        "LRN13"
+      ],
+      "claim_status": "historical diary observation or interpretation; not a rerun of the described system"
+    },
+    {
+      "id": "DR03",
+      "title": "The Antipattern Registers",
+      "source_path": "/var/mnt/STORAGE-10TB/fedora-obsidian-vaults/my-diary.vault/Reflections/The Antipattern Registers.md",
+      "vault_path": "Reflections/The Antipattern Registers.md",
+      "captured_path": "evidence/reflections-20260915/DR03.txt",
+      "sha256": "c56e9e13f054ad7e4500441267241dfadc802fddfa910272d5efff0da836d17f",
+      "bytes": 15162,
+      "lessons": [
+        "LRN01",
+        "LRN02",
+        "LRN03",
+        "LRN07",
+        "LRN08"
+      ],
+      "claim_status": "historical diary observation or interpretation; not a rerun of the described system"
+    },
+    {
+      "id": "DR04",
+      "title": "The Corpus of Me",
+      "source_path": "/var/mnt/STORAGE-10TB/fedora-obsidian-vaults/my-diary.vault/Reflections/The Corpus of Me.md",
+      "vault_path": "Reflections/The Corpus of Me.md",
+      "captured_path": "evidence/reflections-20260915/DR04.txt",
+      "sha256": "894453cdfc9aa7bc6212df543821f1747a58a10084a14373849d46bb122b05bb",
+      "bytes": 11955,
+      "lessons": [
+        "LRN09",
+        "LRN10"
+      ],
+      "claim_status": "historical diary observation or interpretation; not a rerun of the described system"
+    },
+    {
+      "id": "DR05",
+      "title": "The Seven Traits, Tested",
+      "source_path": "/var/mnt/STORAGE-10TB/fedora-obsidian-vaults/my-diary.vault/Reflections/The Seven Traits, Tested.md",
+      "vault_path": "Reflections/The Seven Traits, Tested.md",
+      "captured_path": "evidence/reflections-20260915/DR05.txt",
+      "sha256": "f5663e0410f7533a3d374288218cd900b13b1750c289ea1f793f173ee57ad6c5",
+      "bytes": 9536,
+      "lessons": [
+        "LRN10",
+        "LRN12"
+      ],
+      "claim_status": "historical diary observation or interpretation; not a rerun of the described system"
+    },
+    {
+      "id": "DR06",
+      "title": "The Spellbook and the Ember",
+      "source_path": "/var/mnt/STORAGE-10TB/fedora-obsidian-vaults/my-diary.vault/Reflections/The Spellbook and the Ember.md",
+      "vault_path": "Reflections/The Spellbook and the Ember.md",
+      "captured_path": "evidence/reflections-20260915/DR06.txt",
+      "sha256": "9eb7045a83a2a0b546724c5caecd0a5da51add3dcb2c870ed637b68fecd89cd4",
+      "bytes": 12192,
+      "lessons": [
+        "LRN05",
+        "LRN13",
+        "LRN14"
+      ],
+      "claim_status": "historical diary observation or interpretation; not a rerun of the described system"
+    },
+    {
+      "id": "DR07",
+      "title": "Thematic Analysis of the Vaults",
+      "source_path": "/var/mnt/STORAGE-10TB/fedora-obsidian-vaults/my-diary.vault/Reflections/Thematic Analysis of the Vaults.md",
+      "vault_path": "Reflections/Thematic Analysis of the Vaults.md",
+      "captured_path": "evidence/reflections-20260915/DR07.txt",
+      "sha256": "667cf6dd4f0ea1a1d0622b9fad4677f9a7bdaa8eadd7dd43005f44e05a7edf41",
+      "bytes": 12259,
+      "lessons": [
+        "LRN12"
+      ],
+      "claim_status": "historical diary observation or interpretation; not a rerun of the described system"
+    },
+    {
+      "id": "DR08",
+      "title": "What My Ancestors Knew That I Did Not",
+      "source_path": "/var/mnt/STORAGE-10TB/fedora-obsidian-vaults/my-diary.vault/Reflections/What My Ancestors Knew That I Did Not.md",
+      "vault_path": "Reflections/What My Ancestors Knew That I Did Not.md",
+      "captured_path": "evidence/reflections-20260915/DR08.txt",
+      "sha256": "5ee4b1ac79b9108004de1695e80ab5f8e61c636a972f7e33406b1c2532f227fb",
+      "bytes": 13375,
+      "lessons": [
+        "LRN01",
+        "LRN04",
+        "LRN05",
+        "LRN08",
+        "LRN11",
+        "LRN14"
+      ],
+      "claim_status": "historical diary observation or interpretation; not a rerun of the described system"
+    },
+    {
+      "id": "DR09",
+      "title": "What Prototyping Is For",
+      "source_path": "/var/mnt/STORAGE-10TB/fedora-obsidian-vaults/my-diary.vault/Reflections/What Prototyping Is For.md",
+      "vault_path": "Reflections/What Prototyping Is For.md",
+      "captured_path": "evidence/reflections-20260915/DR09.txt",
+      "sha256": "e34d3cc220a68021ab48e627bd85f8dd84e86814d238d3000299dae0c099663c",
+      "bytes": 6516,
+      "lessons": [
+        "LRN04",
+        "LRN10"
+      ],
+      "claim_status": "historical diary observation or interpretation; not a rerun of the described system"
+    },
+    {
+      "id": "DR10",
+      "title": "What the Workflow Is Worth",
+      "source_path": "/var/mnt/STORAGE-10TB/fedora-obsidian-vaults/my-diary.vault/Reflections/What the Workflow Is Worth.md",
+      "vault_path": "Reflections/What the Workflow Is Worth.md",
+      "captured_path": "evidence/reflections-20260915/DR10.txt",
+      "sha256": "ec3dd9f70174aba8e3f03736f8c82eb2247fa98f34a2029ef6387a0870842e3e",
+      "bytes": 26975,
+      "lessons": [
+        "LRN02",
+        "LRN09",
+        "LRN11",
+        "LRN14"
+      ],
+      "claim_status": "historical diary observation or interpretation; not a rerun of the described system"
+    },
+    {
+      "id": "DR11",
+      "title": "Why I Stopped Trusting Green",
+      "source_path": "/var/mnt/STORAGE-10TB/fedora-obsidian-vaults/my-diary.vault/Reflections/Why I Stopped Trusting Green.md",
+      "vault_path": "Reflections/Why I Stopped Trusting Green.md",
+      "captured_path": "evidence/reflections-20260915/DR11.txt",
+      "sha256": "8374fe8569f46677ea13b929bc6b7127042fb4f0edb24b1b7b413eff66412ed4",
+      "bytes": 8402,
+      "lessons": [
+        "LRN03",
+        "LRN06"
+      ],
+      "claim_status": "historical diary observation or interpretation; not a rerun of the described system"
+    },
+    {
+      "id": "DR12",
+      "title": "Working Style in This Habitat",
+      "source_path": "/var/mnt/STORAGE-10TB/fedora-obsidian-vaults/my-diary.vault/Reflections/Working Style in This Habitat.md",
+      "vault_path": "Reflections/Working Style in This Habitat.md",
+      "captured_path": "evidence/reflections-20260915/DR12.txt",
+      "sha256": "cfd2278eee71ee0d377d51382b259c32e4fe907e107bb2c3db31f99dcf93f46d",
+      "bytes": 7815,
+      "lessons": [
+        "LRN11"
+      ],
+      "claim_status": "historical diary observation or interpretation; not a rerun of the described system"
+    },
+    {
+      "id": "DR13",
+      "title": "Working in Sandboxes on Kinoite",
+      "source_path": "/var/mnt/STORAGE-10TB/fedora-obsidian-vaults/my-diary.vault/Reflections/Working in Sandboxes on Kinoite.md",
+      "vault_path": "Reflections/Working in Sandboxes on Kinoite.md",
+      "captured_path": "evidence/reflections-20260915/DR13.txt",
+      "sha256": "2b10d049cbf8ed0da76f5f6a8cab9d7da0861e8a1e33eb3d72dcefb1f7f33db1",
+      "bytes": 8076,
+      "lessons": [
+        "LRN06",
+        "LRN13"
+      ],
+      "claim_status": "historical diary observation or interpretation; not a rerun of the described system"
+    }
+  ],
+  "lessons": [
+    {
+      "id": "LRN01",
+      "title": "Earn the verdict from the complete subject",
+      "modules": [
+        "contracts",
+        "task",
+        "check",
+        "app",
+        "actions",
+        "herdr",
+        "notify",
+        "workflows"
+      ],
+      "evidence": [
+        {
+          "source": "DR03",
+          "line": 58,
+          "section": "The false-pass family — aimed squarely at me"
+        },
+        {
+          "source": "DR08",
+          "line": 40,
+          "section": "2 · Name the input that earns the verdict"
+        },
+        {
+          "source": "DR01",
+          "line": 100,
+          "section": "5 · Instruments that measured something other than what they printed"
+        }
+      ],
+      "status": "adopted scoped guidance; engine enforcement unqualified",
+      "detector_status": "specified; not implemented or qualified by this corpus update",
+      "trigger": "Before quoting a result, admitting a module, closing a parent or presenting done in a client.",
+      "antipattern": "Self-certification, a summary of a summary, a skipped prerequisite, or a note/file count represented as runtime readiness.",
+      "good_pattern": "Report a typed scoped verdict with exact candidate, admitted criteria, required checks, raw evidence, gaps and a counter-evidence pointer.",
+      "mechanism": "The verifier receives the expected obligation set from its independent owner, not a subset supplied by the producer; accepted integrated code remains factual primary truth.",
+      "detector": "Compare expected versus observed sets, exact subject/profile identities, exit/diagnostic evidence and all required dispositions; refuse empty, stale, invalid or missing coverage.",
+      "intended_fault": "A producer omits a failing mandatory check and supplies a green summary; parent acceptance must refuse.",
+      "benign_mirror": "The same complete subject with independently collected passing observations and no unresolved obligations is eligible for admission review.",
+      "placement": "At result ingestion and immediately before claim/admission; UI rendering cannot promote the underlying state.",
+      "limits": "Current v1 receipts and corpus publication prove scoped consistency only. No runtime admission collector exists. Independent review is useful but does not authenticate raw evidence by itself.",
+      "retirement": "Revise after a demonstrated false pass or false refusal; never redefine pass to exclude the observed defect."
+    },
+    {
+      "id": "LRN02",
+      "title": "Qualify the detector before trusting its scan",
+      "modules": [
+        "check",
+        "app",
+        "actions",
+        "workflows"
+      ],
+      "evidence": [
+        {
+          "source": "DR03",
+          "line": 33,
+          "section": "The contract — the actual gold"
+        },
+        {
+          "source": "DR10",
+          "line": 49,
+          "section": "2 · Controls as gate steps, not as good intentions"
+        },
+        {
+          "source": "DR02",
+          "line": 1123,
+          "section": "39 - My negative control passed while measuring the world it was supposed to replace"
+        },
+        {
+          "source": "DR02",
+          "line": 1165,
+          "section": "40 - I edited the control so my detector would pass"
+        }
+      ],
+      "status": "adopted scoped guidance; engine enforcement unqualified",
+      "detector_status": "specified; not implemented or qualified by this corpus update",
+      "trigger": "Before a new or changed detector is allowed to establish a clean result.",
+      "antipattern": "A control that never reaches the real detector, measures the live world instead of its fixture, or is edited merely to turn the detector green.",
+      "good_pattern": "Bind an intended-fault fixture and a benign mirror to the exact production check path, with a stable fault definition and expected diagnostic.",
+      "mechanism": "Fixture identity, execution path and oracle are reviewed independently; prove sensitivity and specificity before relying on scans.",
+      "detector": "Require actual intended-fault reachability and rejection for the right reason plus successful benign execution; record unmeasured or invalid fixture outcomes distinctly.",
+      "intended_fault": "A supposed stale-receipt fixture accidentally reads the current live receipt; the harness must classify the experiment invalid.",
+      "benign_mirror": "A bounded reader using a limit before allocation is accepted; do not ban the method name regardless of context.",
+      "placement": "During detector qualification before the consequential gate, and after changing detector, fixture or admitted profile.",
+      "limits": "Reading a reflection is not assimilation proof. These case designs are not implemented tests or primary case credits.",
+      "retirement": "Repair the detector or harness when a counterexample survives; changes to the fault definition require a separate reviewed rationale."
+    },
+    {
+      "id": "LRN03",
+      "title": "Put the bound before allocation and the guard before effect",
+      "modules": [
+        "contracts",
+        "worker",
+        "context",
+        "notify",
+        "numerical",
+        "julia",
+        "app",
+        "actions",
+        "bash",
+        "pi_extension"
+      ],
+      "evidence": [
+        {
+          "source": "DR11",
+          "line": 109,
+          "section": "Related failures of the same family"
+        },
+        {
+          "source": "DR03",
+          "line": 111,
+          "section": "What I did with them (2026-09-03, same day)"
+        },
+        {
+          "source": "DR02",
+          "line": 93,
+          "section": "6 · Wrote a bound and did not check that it bounded anything"
+        }
+      ],
+      "status": "adopted scoped guidance; engine enforcement unqualified",
+      "detector_status": "specified; not implemented or qualified by this corpus update",
+      "trigger": "Before parsing, allocation, fan-out, queue insertion, process launch or an irreversible effect.",
+      "antipattern": "Truncating after an unbounded read, limiting after split, or running an authorization/quality check after the action.",
+      "good_pattern": "Bound input acquisition and concurrency at the boundary; validate identities, capabilities and constraints before dispatch.",
+      "mechanism": "A typed bounded input and admitted dispatch path make the unsafe order unavailable; include backpressure and explicit overflow/refusal.",
+      "detector": "Observe peak acquisition/queue behavior and effect ordering under oversize input, saturation and denied admission.",
+      "intended_fault": "An oversized stream must be refused before whole-input allocation and a denied service action must never reach its owner.",
+      "benign_mirror": "An exact-limit stream and an authorized bounded request succeed through the same path.",
+      "placement": "Inside the acquisition/dispatch boundary, not only in a later audit.",
+      "limits": "Not a blanket ban on APIs that have safe bounded forms. Choose numerical and byte bounds from declared contracts, not inherited constants.",
+      "retirement": "Revise bounds with measured workloads and resource budgets; retain refusal tests and do not trade correctness for a cosmetically clean scan."
+    },
+    {
+      "id": "LRN04",
+      "title": "One semantic owner across every consumer surface",
+      "modules": [
+        "contracts",
+        "actions",
+        "app",
+        "task",
+        "store",
+        "bash",
+        "pi_extension",
+        "skills",
+        "workflows"
+      ],
+      "evidence": [
+        {
+          "source": "DR08",
+          "line": 72,
+          "section": "3 · Defects live at seams, not in functions"
+        },
+        {
+          "source": "DR08",
+          "line": 167,
+          "section": "8 · Two doors keeping one rule is a promise; one door is a mechanism"
+        },
+        {
+          "source": "DR09",
+          "line": 44,
+          "section": "Forge scored against the right questions"
+        }
+      ],
+      "status": "adopted scoped guidance; engine enforcement unqualified",
+      "detector_status": "specified; not implemented or qualified by this corpus update",
+      "trigger": "When adding a CLI, tool, Pi, Bash, workflow or cross-language entry point.",
+      "antipattern": "Two implementations of one rule drift; a callee reacquires an input from ambient state after being given the authoritative value.",
+      "good_pattern": "Use one typed owner and thin projections; pass source, environment, task and caller identities explicitly and preserve the return contract.",
+      "mechanism": "Reuse the existing 21-action catalogue and module dependency graph. Wrappers project arguments/results and cannot invent acceptance or grants.",
+      "detector": "Differentially exercise equivalent CLI/UDS/tool requests and compare owner dispatch, permission, errors, cancellation and readback.",
+      "intended_fault": "One wrapper accepts a forbidden effect or chooses an ambient target directory instead of the explicit one.",
+      "benign_mirror": "Equivalent valid requests through all admitted surfaces produce equivalent semantic results with transport-specific presentation only.",
+      "placement": "At interface contract review and consumer integration qualification before release.",
+      "limits": "Does not require a new RPC, crate, daemon or globally public Rust symbol. Exact consumers and compatibility ranges govern visibility.",
+      "retirement": "Retire redundant wrappers only after proving consumer replacement; version breaking changes and update both ends of the flow."
+    },
+    {
+      "id": "LRN05",
+      "title": "Identify the exact source before measuring it",
+      "modules": [
+        "store",
+        "roster",
+        "route",
+        "worker",
+        "check",
+        "recovery",
+        "numerical",
+        "julia",
+        "app"
+      ],
+      "evidence": [
+        {
+          "source": "DR06",
+          "line": 31,
+          "section": "The eleven, restated — and whether I cast them"
+        },
+        {
+          "source": "DR08",
+          "line": 178,
+          "section": "9 · Check the mtime before you investigate the field"
+        },
+        {
+          "source": "DR01",
+          "line": 24,
+          "section": "1 · The four code anchors — all four resolve, exactly"
+        },
+        {
+          "source": "DR02",
+          "line": 791,
+          "section": "30 - I committed a message describing an edit that never ran, then quoted it into a receipt and the vault"
+        }
+      ],
+      "status": "adopted scoped guidance; engine enforcement unqualified",
+      "detector_status": "specified; not implemented or qualified by this corpus update",
+      "trigger": "At re-entry, before evaluation or hardening, and before updating a completion claim.",
+      "antipattern": "A familiar path, branch label, timestamp, commit message, cached binary or old receipt is treated as the measured subject.",
+      "good_pattern": "Bind the actual source/artifact, dependencies, fixtures, toolchain and environment to the run; distinguish intended branch, current checkout and installed artifact.",
+      "mechanism": "Content identity and explicit scope prevent proximity from masquerading as identity. Recheck changed subjects before carrying old success forward.",
+      "detector": "Compare retained digests/revisions and current readback; inspect expected files and nonempty payloads before accepting results.",
+      "intended_fault": "A receipt for an older subject, empty plan file or different installed binary must remain stale/invalid despite a success label.",
+      "benign_mirror": "The unchanged exact subject with complete matching evidence remains applicable within its stated scope.",
+      "placement": "Before expensive probes and again at claim/admission/publication.",
+      "limits": "Mtime is a cheap clue, not proof of semantic freshness. This atlas is not a Git repository; do not invent a branch/commit. Historical receipts retain their original subject.",
+      "retirement": "Supersede claims with the new observation and reason; never refresh only a timestamp or erase the original counterexample."
+    },
+    {
+      "id": "LRN06",
+      "title": "Declare the coldness and execution layer actually tested",
+      "modules": [
+        "worker",
+        "check",
+        "recovery",
+        "service",
+        "numerical",
+        "julia",
+        "app"
+      ],
+      "evidence": [
+        {
+          "source": "DR11",
+          "line": 15,
+          "section": "The incident"
+        },
+        {
+          "source": "DR11",
+          "line": 94,
+          "section": "The generalisation beyond caches"
+        },
+        {
+          "source": "DR13",
+          "line": 14,
+          "section": "The layer model, and why it is always the first question"
+        },
+        {
+          "source": "DR13",
+          "line": 107,
+          "section": "The boundary worth naming"
+        }
+      ],
+      "status": "adopted scoped guidance; engine enforcement unqualified",
+      "detector_status": "specified; not implemented or qualified by this corpus update",
+      "trigger": "Before reproducibility, isolation or deployment claims and when crossing host, Toolbx and disposable worker boundaries.",
+      "antipattern": "Warm caches, resident services or ambient mounts supply the answer; a read from one layer is reported as a fact about another.",
+      "good_pattern": "Use explicit environment/toolchain/cache/workspace identities and independent output roots; qualify cold build, service state and installation separately.",
+      "mechanism": "Remove undeclared shared state from the tested boundary and record what remains warm; source read-only custody is one control among several.",
+      "detector": "Run the same meaningful candidate in declared clean and admitted warm profiles; check actual mount/process/environment identities and useful boundary results.",
+      "intended_fault": "A nested build silently shares its parent target directory, or a tool from Toolbx inspects the wrong host path.",
+      "benign_mirror": "Explicit isolated target/output directories and correctly routed host observations preserve the expected result.",
+      "placement": "At environment construction and before assigning evidence to a deployment subject.",
+      "limits": "No claim of a cold machine from a fresh build directory. Rootless execution still has security boundaries; SELinux z/Z are not universal ro fixes. Historical performance numbers are not current benchmarks.",
+      "retirement": "Adjust profiles when the supported environment changes; retain exact identities and disclose unavailable environments rather than counting them as pass."
+    },
+    {
+      "id": "LRN07",
+      "title": "Preserve producer verdict and process custody",
+      "modules": [
+        "bash",
+        "app",
+        "worker",
+        "recovery",
+        "service",
+        "cohort",
+        "pi_extension",
+        "workflows"
+      ],
+      "evidence": [
+        {
+          "source": "DR03",
+          "line": 153,
+          "section": "The set that transfers regardless of substrate"
+        },
+        {
+          "source": "DR02",
+          "line": 961,
+          "section": "35 - An agent working under my brief killed another session's mutation run, and my brief had not said the one rule that would have stopped it"
+        },
+        {
+          "source": "DR02",
+          "line": 1046,
+          "section": "38 - I started a job that was already running, then read its progress from a count that also prints on failure"
+        },
+        {
+          "source": "DR02",
+          "line": 1355,
+          "section": "44 - I took a verdict from a pipe for the fifth time, and the guard I built for it did not fire"
+        }
+      ],
+      "status": "adopted scoped guidance; engine enforcement unqualified",
+      "detector_status": "specified; not implemented or qualified by this corpus update",
+      "trigger": "Before shell chaining, retrying a job, cancelling a process or presenting progress as success.",
+      "antipattern": "A pipeline consumer hides producer failure; a pattern kill or duplicate launch affects another agent; progress counters appear on both failure and success.",
+      "good_pattern": "Capture the decisive producer status and raw output, keep explicit job/process/session identities and check existing obligations before retry or cleanup.",
+      "mechanism": "Thin argv-safe wrappers preserve status. One lifecycle owner controls each job; cancellation acknowledgement and verified settlement are separate.",
+      "detector": "Exercise failing producer through display/log pipelines, broken pipes, lost acknowledgements, duplicate starts and reused process identities.",
+      "intended_fault": "A failing producer followed by a successful formatter must still fail; an unrelated matching process must remain untouched.",
+      "benign_mirror": "A successful producer retains success through the same wrapper; cancellation addresses only the owned current job and verifies settlement.",
+      "placement": "Before command execution, retry and cleanup; not just a session-end detector.",
+      "limits": "PID alone does not establish identity. Do not copy diary pkill commands or prescribe blanket termination. No process cleanup or service changes are performed here.",
+      "retirement": "If the same trap recurs, test actual invocation coverage and move enforcement to the real entry path; do not add another prose warning only."
+    },
+    {
+      "id": "LRN08",
+      "title": "Keep meaningful coverage and the zero-warning baseline",
+      "modules": [
+        "contracts",
+        "task",
+        "store",
+        "roster",
+        "route",
+        "budget",
+        "worker",
+        "check",
+        "recovery",
+        "cohort",
+        "context",
+        "notify",
+        "service",
+        "herdr",
+        "numerical",
+        "julia",
+        "app",
+        "actions",
+        "bash",
+        "pi_extension",
+        "skills",
+        "workflows"
+      ],
+      "evidence": [
+        {
+          "source": "DR08",
+          "line": 16,
+          "section": "1 · The suppression ladder"
+        },
+        {
+          "source": "DR08",
+          "line": 151,
+          "section": "7 · Filler tests are coverage-as-theatre"
+        },
+        {
+          "source": "DR03",
+          "line": 98,
+          "section": "The finding I did not expect"
+        },
+        {
+          "source": "DR02",
+          "line": 726,
+          "section": "28 - I reported \"zero warnings\" for five commits, from a label I had written myself"
+        },
+        {
+          "source": "DR02",
+          "line": 1329,
+          "section": "43 - I landed a round with the workspace mutation sweep \"owed\", and the sweep then found 21 survivors in what I had landed"
+        }
+      ],
+      "status": "adopted scoped guidance; engine enforcement unqualified",
+      "detector_status": "specified; not implemented or qualified by this corpus update",
+      "trigger": "When designing module tests, fixing lint diagnostics or reporting a hardening result.",
+      "antipattern": "Padding the 50-case floor, weakening the oracle, broad lint suppression, deferred mutation evidence or a handwritten zero-warning label.",
+      "good_pattern": "Retain at least 50 distinct meaningful module-owned cases and zero baseline warnings/errors on every admitted profile; repair code and close material gaps.",
+      "mechanism": "Use the existing testing standard and case ownership rules; independent oracles, assimilation pairs and a nonempty mutation campaign remain separate obligations.",
+      "detector": "Inspect executed case identities, profile coverage, raw diagnostics and mutation survivors; reject skip/zero/stale results and unapproved rule changes.",
+      "intended_fault": "Fifty names that execute no behavior, one skipped required profile or a surviving material mutant must not qualify.",
+      "benign_mirror": "A meaningful complete suite with zero baseline diagnostics and reviewed mutation/assimilation evidence is eligible for qualification.",
+      "placement": "At test design, after repairs and before module/integrated acceptance; applicable doctests and package checks are included.",
+      "limits": "The diary discussion of a possible test-count override does not authorize one here. Its historical single-assertion criticism was corrected; assertion count is not a quality metric. No new blanket suppression permission is adopted.",
+      "retirement": "Improve coverage after counterexamples; do not lower the user floor or redefine the diagnostic budget to match existing output."
+    },
+    {
+      "id": "LRN09",
+      "title": "Preserve provenance and supersede stale claims",
+      "modules": [
+        "context",
+        "roster",
+        "route",
+        "budget",
+        "numerical",
+        "julia",
+        "skills",
+        "workflows"
+      ],
+      "evidence": [
+        {
+          "source": "DR04",
+          "line": 41,
+          "section": "Three theories of memory, in tension"
+        },
+        {
+          "source": "DR04",
+          "line": 86,
+          "section": "What my current habitat has, and lacks"
+        },
+        {
+          "source": "DR01",
+          "line": 39,
+          "section": "2 · Claims that turned out CLOSED — and the notes still say \"open\""
+        },
+        {
+          "source": "DR10",
+          "line": 136,
+          "section": "3 · Undated claims, in the register that preaches validity intervals"
+        }
+      ],
+      "status": "adopted scoped guidance; engine enforcement unqualified",
+      "detector_status": "specified; not implemented or qualified by this corpus update",
+      "trigger": "When recalling a lesson, updating a roster observation or projecting a changed accepted module.",
+      "antipattern": "An old confident statement is read as current; a new date replaces evidence; generated copies become competing truth.",
+      "good_pattern": "Retain original source/hash/date/scope, adoption decision and supersession reason; accepted code owns current implemented facts and requirements retain their owner.",
+      "mechanism": "Use the existing catalogue/receipt projections and stable module/source anchors. A diary reflection can motivate a rule but cannot grant runtime authority.",
+      "detector": "Compare live source content and captured subject, identify obsolete assertions and surface current-versus-desired differences with a review queue.",
+      "intended_fault": "A source changes under an adopted lesson while the old snapshot is still described as live/current.",
+      "benign_mirror": "A clearly labelled historical snapshot remains valid as historical evidence, alongside a new dated review that supersedes its applicability.",
+      "placement": "At intake, context assembly, publication and re-entry before acting on recalled claims.",
+      "limits": "No new knowledge graph, memory daemon or automatic claim-expiry service is needed. Content hashes prove identity, not truth; age alone does not prove falsity.",
+      "retirement": "Mark superseded/rejected lessons with the deciding evidence and successor; preserve originals and update all consumer routes."
+    },
+    {
+      "id": "LRN10",
+      "title": "Transfer the mechanism and keep prototypes disposable",
+      "modules": [
+        "route",
+        "worker",
+        "service",
+        "numerical",
+        "julia",
+        "app",
+        "pi_extension",
+        "skills",
+        "workflows"
+      ],
+      "evidence": [
+        {
+          "source": "DR09",
+          "line": 32,
+          "section": "The right questions"
+        },
+        {
+          "source": "DR09",
+          "line": 44,
+          "section": "Forge scored against the right questions"
+        },
+        {
+          "source": "DR04",
+          "line": 129,
+          "section": "The risk in reading it"
+        },
+        {
+          "source": "DR05",
+          "line": 37,
+          "section": "What I took, and what I left"
+        }
+      ],
+      "status": "adopted scoped guidance; engine enforcement unqualified",
+      "detector_status": "specified; not implemented or qualified by this corpus update",
+      "trigger": "When selecting a prototype component, optional neural operator, new helper or inherited working pattern.",
+      "antipattern": "Prototype gravity, imported jargon/persona, or an inherited architecture is mistaken for a validated v3 design.",
+      "good_pattern": "Name the local problem, smallest useful mechanism, evidence gained, commitment justified and what can be discarded.",
+      "mechanism": "Reuse existing module owners and optional task gates; copy neither old deployment state nor unqualified identities/credentials into the new engine.",
+      "detector": "Compare the proposed addition against existing owners and actual consumer need; require bounded success/failure criteria and an explicit reject/defer disposition.",
+      "intended_fault": "An optional operator or prototype service becomes a mandatory dependency without an admitted measured benefit.",
+      "benign_mirror": "A scoped component idea improves a declared task under held-out evaluation, or is rejected without harming baseline operation.",
+      "placement": "At architecture changes and prototype exit before adoption or deployment.",
+      "limits": "Historic prototype counts and top-tail ambitions are not v3 performance evidence. No personality or awareness claims are adopted from the diary.",
+      "retirement": "Retire scaffolding or an experiment when its question is answered; keep the lesson and evidence rather than preserving machinery by inertia."
+    },
+    {
+      "id": "LRN11",
+      "title": "Make specialist threads cohere through explicit ownership",
+      "modules": [
+        "task",
+        "cohort",
+        "context",
+        "worker",
+        "recovery",
+        "app",
+        "pi_extension",
+        "skills",
+        "workflows"
+      ],
+      "evidence": [
+        {
+          "source": "DR10",
+          "line": 194,
+          "section": "7 · Coordination held in prose"
+        },
+        {
+          "source": "DR02",
+          "line": 961,
+          "section": "35 - An agent working under my brief killed another session's mutation run, and my brief had not said the one rule that would have stopped it"
+        },
+        {
+          "source": "DR02",
+          "line": 1250,
+          "section": "41 - I ran a 3,978-mutant job inside another agent's repository, on a task that was not mine"
+        },
+        {
+          "source": "DR08",
+          "line": 134,
+          "section": "6 · The flow-state checkpoint"
+        },
+        {
+          "source": "DR12",
+          "line": 43,
+          "section": "How corrections arrive"
+        }
+      ],
+      "status": "adopted scoped guidance; engine enforcement unqualified",
+      "detector_status": "specified; not implemented or qualified by this corpus update",
+      "trigger": "At delegation, handoff, shared-resource access and every meaningful task/phase boundary.",
+      "antipattern": "Duplicate construction packets, unowned mutation runs, overlapping writes or a brief that omits the rule protecting another thread.",
+      "good_pattern": "Give each thread one bounded objective, subject/brief revision, resource/write ownership, dependencies, limits, return schema and cleanup obligations.",
+      "mechanism": "The existing cohort/task owner coordinates claims and joins; context carries relevant lessons and dissent. Child success cannot accept the parent.",
+      "detector": "Check ownership overlap, duplicate active jobs, stale brief revisions, omitted required children and integrated evidence at the parent join.",
+      "intended_fault": "Two agents mutate the same workspace or one kills an unowned job; a child passes against a superseded brief.",
+      "benign_mirror": "Disjoint owned work returns compatible candidates, evidence and gaps; the parent integrates and verifies the actual combined subject.",
+      "placement": "Before dispatch and before joins; reassert relevant standards at phase boundaries without inventing an arbitrary runtime ritual.",
+      "limits": "Different model families can add perspective but do not guarantee correctness or independent collector custody. Do not add a second scheduler.",
+      "retirement": "Change coordination when observed conflict/duplication justifies it; measure overhead and avoid copying every lesson into every brief."
+    },
+    {
+      "id": "LRN12",
+      "title": "Calibrate the instrument and retain counterexamples",
+      "modules": [
+        "check",
+        "numerical",
+        "julia",
+        "route",
+        "budget",
+        "cohort",
+        "context",
+        "app"
+      ],
+      "evidence": [
+        {
+          "source": "DR01",
+          "line": 54,
+          "section": "3 · The claim that REVERSED — AX-3 is now independent"
+        },
+        {
+          "source": "DR01",
+          "line": 100,
+          "section": "5 · Instruments that measured something other than what they printed"
+        },
+        {
+          "source": "DR07",
+          "line": 113,
+          "section": "3 · Negative case analysis"
+        },
+        {
+          "source": "DR07",
+          "line": 171,
+          "section": "5 · Limitations"
+        },
+        {
+          "source": "DR05",
+          "line": 82,
+          "section": "What this changes"
+        }
+      ],
+      "status": "adopted scoped guidance; engine enforcement unqualified",
+      "detector_status": "specified; not implemented or qualified by this corpus update",
+      "trigger": "Before trusting a metric, known-answer fixture, statistical comparison or a confident correction.",
+      "antipattern": "The metric samples the wrong domain, a test oracle is wrong, or humility/praise substitutes for observation.",
+      "good_pattern": "Define the measured construct, population, denominator and exclusions; independently check the oracle and record falsifiers, uncertainty and changed conclusions.",
+      "mechanism": "Expected sets come from the owner on the other side of the boundary. Retain reproducible analysis recipe and data identities, not only a narrative conclusion.",
+      "detector": "Use representative boundary cases and counterexamples; compare independent oracle/results and inspect all admitted domain coverage.",
+      "intended_fault": "A numeric residual is negative despite an actual survivor, or a thematic regex measures writing style instead of the claimed construct.",
+      "benign_mirror": "Exact set comparison reports the true missing/surviving items; a benign alternate notation expressing the same valid property is accepted.",
+      "placement": "Before evaluation results guide routing, cohort policy or completion reports; recheck after changing the instrument.",
+      "limits": "The diary thematic percentages and correlation claims remain historical and were not reproduced. No inherited 10x/top-7% effect is asserted.",
+      "retirement": "Invalidate conclusions when the construct or instrument fails; rerun the question rather than merely editing the sentence that reported it."
+    },
+    {
+      "id": "LRN13",
+      "title": "Test useful effects and declared persistence",
+      "modules": [
+        "store",
+        "recovery",
+        "notify",
+        "service",
+        "herdr",
+        "worker",
+        "app",
+        "workflows"
+      ],
+      "evidence": [
+        {
+          "source": "DR06",
+          "line": 31,
+          "section": "The eleven, restated — and whether I cast them"
+        },
+        {
+          "source": "DR13",
+          "line": 80,
+          "section": "The shape the OS taught the habitat"
+        },
+        {
+          "source": "DR02",
+          "line": 286,
+          "section": "14 · Shipped two MCP servers that had never once connected"
+        },
+        {
+          "source": "DR02",
+          "line": 336,
+          "section": "15 - I asserted the guard, not the target, and my script reported success"
+        }
+      ],
+      "status": "adopted scoped guidance; engine enforcement unqualified",
+      "detector_status": "specified; not implemented or qualified by this corpus update",
+      "trigger": "Before calling an integration connected, a deployment useful or a restore complete.",
+      "antipattern": "A listener, file, process or configuration stanza exists but no signal reaches the consumer; backup omits required persistent obligations.",
+      "good_pattern": "Send a real bounded request through the supported seam and verify useful return/readback; declare durable state and independently test restoration.",
+      "mechanism": "Bind installed artifact/configuration, ledger/schema epoch, effect identity and actual consumer response. Preserve uncertain effects and outstanding obligations.",
+      "detector": "Round-trip a permitted action and a denied/malformed request; restore controlled state and verify schema, reservations, evidence and delivery obligations.",
+      "intended_fault": "A healthy listener drops the actual method or a restored database silently loses a pending cancellation/outbox obligation.",
+      "benign_mirror": "The supported operation returns the correct typed result and restore retains the declared obligations under the new epoch.",
+      "placement": "At integration and deployment/restore qualification before reporting capability.",
+      "limits": "No new deployment is performed by corpus synchronization. Migration 001 remains comments; immutable migration checksum/freeze enforcement is still a release prerequisite.",
+      "retirement": "Revise persistence manifests with actual new dependencies and verify upgrades/rollback; an old readback is not continuing health."
+    },
+    {
+      "id": "LRN14",
+      "title": "Make learning earn its maintenance cost",
+      "modules": [
+        "app",
+        "actions",
+        "check",
+        "context",
+        "cohort",
+        "skills",
+        "workflows"
+      ],
+      "evidence": [
+        {
+          "source": "DR10",
+          "line": 237,
+          "section": "What I would change, in order"
+        },
+        {
+          "source": "DR10",
+          "line": 313,
+          "section": "The synthesis, and it is one sentence"
+        },
+        {
+          "source": "DR10",
+          "line": 353,
+          "section": "Unmeasured, and it is the gap that decides what to cut"
+        },
+        {
+          "source": "DR06",
+          "line": 118,
+          "section": "What I am taking from the form itself"
+        },
+        {
+          "source": "DR08",
+          "line": 191,
+          "section": "10 · Author script → invoke script"
+        }
+      ],
+      "status": "adopted scoped guidance; engine enforcement unqualified",
+      "detector_status": "specified; not implemented or qualified by this corpus update",
+      "trigger": "When adding another rule, helper, generated note, verification stage or repeated context packet.",
+      "antipattern": "Unmeasured scripts and notes grow while only Rust is budgeted; repeated prose changes never reach an action; a newly authored helper is never used.",
+      "good_pattern": "Prefer one existing owner and reusable entry point. Record the problem, placement, footprint, verification cost, prevented failure, false-positive/rework cost and retirement condition.",
+      "mechanism": "Derive projections from one bounded learning catalogue, reuse corpus-sync, and keep richer evidence outside short module briefs. Inventory real files independently of the previous manifest.",
+      "detector": "Compare expected published paths with observed inventory; measure changed helper/note/line counts and check that the advertised entry point was actually invoked.",
+      "intended_fault": "A new note or checker is omitted by a stale include list, or a second registry/scheduler adds no distinct consumer contract.",
+      "benign_mirror": "A justified module-linked lesson is reachable, its maintained projection runs through the existing command and its scope/cost are explicit.",
+      "placement": "At assimilation proposal, corpus publication and workflow review; do not infer usefulness from elapsed effort or file counts.",
+      "limits": "This update measures documentation/maintenance footprint only. Prevention rate and engine workflow benefit remain unmeasured; counts are not a performance score.",
+      "retirement": "Merge duplicate guidance and mark failed/obsolete lessons with a successor or rejection reason. Retire only after checking consumers and preserving historical evidence; never silently delete user work."
+    }
+  ],
+  "conflicts_and_limits": [
+    {
+      "source": "DR08",
+      "claim": "A 50-test floor might permit a documented override.",
+      "disposition": "Not adopted as permission. The active v3 requirement remains at least 50 meaningful module-owned cases; no filler and no silent override."
+    },
+    {
+      "source": "DR12",
+      "claim": "Historic start-coding gates, mining and cockpit re-entry commands.",
+      "disposition": "Historical HEE-v2 instructions are not v3 authorization. No mining, respawn, service activation or runtime implementation is performed from note commands."
+    },
+    {
+      "source": "DR13",
+      "claim": "Use :z rather than :Z as a universal fix for read-only mounts.",
+      "disposition": "Not adopted. Podman documents ro/rw separately from z/Z; z requests shared SELinux labeling and Z private labeling. Relabeling depends on host permissions and context. No automatic relabel or SELinux disable is prescribed.",
+      "primary_source": "https://docs.podman.io/en/latest/markdown/podman-run.1.html"
+    },
+    {
+      "source": "DR13",
+      "claim": "Rootless containers remove security boundaries and read-only sources make contamination impossible.",
+      "disposition": "Not adopted literally. Rootless mode and read-only mounts are scoped controls; shared outputs, credentials, network, user namespaces and host/container custody still require qualification.",
+      "primary_source": "https://docs.podman.io/en/latest/markdown/podman.1.html"
+    },
+    {
+      "source": "DR07",
+      "claim": "Historic thematic percentages, correlations and a proposed future rerun.",
+      "disposition": "Retained as historical interpretation. The reflection reports missing replay tooling; this update does not reproduce those metrics or infer causal improvement."
+    },
+    {
+      "source": "DR05",
+      "claim": "Inherited traits or identity imply reliable behavior.",
+      "disposition": "No persona/identity is imported. Transfer only specific observed failure classes, triggers and falsifiable verification obligations."
+    },
+    {
+      "source": "DR03",
+      "claim": "Blanket method bans, arbitrary antipattern numbering or mandatory self-criticism.",
+      "disposition": "Use the local LRN namespace, consumer-specific invariants and measured evidence. Do not ban safe bounded forms or manufacture weaknesses."
+    }
+  ],
+  "review_cost_fields": [
+    "source/subject scope",
+    "added/changed files and helper lines",
+    "wall time and resource cost",
+    "actual triggered checks",
+    "known prevented failures",
+    "false positives and rework",
+    "remaining gaps",
+    "retirement/merge disposition"
+  ]
+}

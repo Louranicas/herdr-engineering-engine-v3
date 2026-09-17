@@ -1,0 +1,1 @@
+{"id":"fixture-get_session_stats","type":"response","command":"get_session_stats","success":true,"data":{"sessionId":"fixture-session-001","userMessages":1,"assistantMessages":1,"toolCalls":0,"toolResults":0,"totalMessages":2,"tokens":{"input":20,"output":10,"cacheRead":3,"cacheWrite":6},"cost":0.039}}

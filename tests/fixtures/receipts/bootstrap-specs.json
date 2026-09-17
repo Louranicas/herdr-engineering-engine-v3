@@ -1,0 +1,278 @@
+{
+  "fixture_notice": "All UUIDs, times, paths, profile names, schema IDs and sha256:111... digests are fictional structural fixture values. They identify no published schema, protected run, accepted module or real referenced artifact. Schema-valid means shape only; no reference is resolved or authenticated and no collector has run. Fixtures and tests share schema authorship; independent oracle authorship is not claimed. Module case credits: 0.",
+  "kind": "RC04-bootstrap-reference-expectation-specifications",
+  "status": "candidate fixed expectations awaiting separate review and collector execution",
+  "authority": "RC04 revision 4 Bootstrap and promotion sequence and isolated reference-bootstrap verdicts; no collector implemented",
+  "collector_executions": 0,
+  "module_case_credits": 0,
+  "collector_admitted": false,
+  "known_pass": {
+    "qualification_eligible": true,
+    "expected_verdict_state": "PASS_CANDIDATE",
+    "expectation": "Independent reference result, exact subject/profile, all mandatory meaningful selected cases executed, complete untruncated diagnostics, zero baseline warnings/errors, settled cleanup and no unresolved material obligation."
+  },
+  "pairs": [
+    {
+      "id": "known-fail",
+      "executed": false,
+      "fault": {
+        "qualification_eligible": false,
+        "intended_reason": "Independent fixed expected value differs from actual output.",
+        "expected_verdict_state": "FAIL",
+        "verdict_mapping_note": null
+      },
+      "benign": {
+        "id": "known-fail-benign",
+        "qualification_eligible": true,
+        "expected_verdict_state": "PASS_CANDIDATE",
+        "difference": "Actual output equals the independently fixed expected value."
+      },
+      "validity_requirement": "Both members use independently fixed expectations, exact protected subject/profile identities, unchanged fixtures/oracle, complete raw observations and settled cleanup, except the single declared fault. Incidental setup failure invalidates discrimination; it is not the intended fault."
+    },
+    {
+      "id": "fabricated-pass-exit-zero",
+      "executed": false,
+      "fault": {
+        "qualification_eligible": false,
+        "intended_reason": "Producer prints PASS and exits zero while the independent oracle detects a wrong result.",
+        "expected_verdict_state": "FAIL",
+        "verdict_mapping_note": null
+      },
+      "benign": {
+        "id": "fabricated-pass-exit-zero-benign",
+        "qualification_eligible": true,
+        "expected_verdict_state": "PASS_CANDIDATE",
+        "difference": "Same stdout/exit framing, but independently checked result is correct."
+      },
+      "validity_requirement": "Both members use independently fixed expectations, exact protected subject/profile identities, unchanged fixtures/oracle, complete raw observations and settled cleanup, except the single declared fault. Incidental setup failure invalidates discrimination; it is not the intended fault."
+    },
+    {
+      "id": "wrong-candidate-hash",
+      "executed": false,
+      "fault": {
+        "qualification_eligible": false,
+        "intended_reason": "Frozen candidate digest differs from the predeclared exact subject: INVALID_SUBJECT.",
+        "expected_verdict_state": "INVALID",
+        "verdict_mapping_note": null
+      },
+      "benign": {
+        "id": "wrong-candidate-hash-benign",
+        "qualification_eligible": true,
+        "expected_verdict_state": "PASS_CANDIDATE",
+        "difference": "Exact frozen candidate matches the predeclared digest and remains stable."
+      },
+      "validity_requirement": "Both members use independently fixed expectations, exact protected subject/profile identities, unchanged fixtures/oracle, complete raw observations and settled cleanup, except the single declared fault. Incidental setup failure invalidates discrimination; it is not the intended fault."
+    },
+    {
+      "id": "changed-fixture",
+      "executed": false,
+      "fault": {
+        "qualification_eligible": false,
+        "intended_reason": "Protected fixture bytes change across dispatch/collection: INVALID_SUBJECT.",
+        "expected_verdict_state": "INVALID",
+        "verdict_mapping_note": null
+      },
+      "benign": {
+        "id": "changed-fixture-benign",
+        "qualification_eligible": true,
+        "expected_verdict_state": "PASS_CANDIDATE",
+        "difference": "Protected fixture bytes and hash remain unchanged."
+      },
+      "validity_requirement": "Both members use independently fixed expectations, exact protected subject/profile identities, unchanged fixtures/oracle, complete raw observations and settled cleanup, except the single declared fault. Incidental setup failure invalidates discrimination; it is not the intended fault."
+    },
+    {
+      "id": "changed-oracle",
+      "executed": false,
+      "fault": {
+        "qualification_eligible": false,
+        "intended_reason": "Protected oracle bytes change across dispatch/collection: INVALID_SUBJECT.",
+        "expected_verdict_state": "INVALID",
+        "verdict_mapping_note": null
+      },
+      "benign": {
+        "id": "changed-oracle-benign",
+        "qualification_eligible": true,
+        "expected_verdict_state": "PASS_CANDIDATE",
+        "difference": "Protected oracle bytes and hash remain unchanged."
+      },
+      "validity_requirement": "Both members use independently fixed expectations, exact protected subject/profile identities, unchanged fixtures/oracle, complete raw observations and settled cleanup, except the single declared fault. Incidental setup failure invalidates discrimination; it is not the intended fault."
+    },
+    {
+      "id": "missing-log",
+      "executed": false,
+      "fault": {
+        "qualification_eligible": false,
+        "intended_reason": "One required trusted raw stream is unavailable.",
+        "expected_verdict_state": "INVALID",
+        "verdict_mapping_note": null
+      },
+      "benign": {
+        "id": "missing-log-benign",
+        "qualification_eligible": true,
+        "expected_verdict_state": "PASS_CANDIDATE",
+        "difference": "Both required trusted raw streams exist, including a retained zero-byte stream when empty."
+      },
+      "validity_requirement": "Both members use independently fixed expectations, exact protected subject/profile identities, unchanged fixtures/oracle, complete raw observations and settled cleanup, except the single declared fault. Incidental setup failure invalidates discrimination; it is not the intended fault."
+    },
+    {
+      "id": "truncated-log",
+      "executed": false,
+      "fault": {
+        "qualification_eligible": false,
+        "intended_reason": "Required trusted raw diagnostic stream is truncated.",
+        "expected_verdict_state": "INVALID",
+        "verdict_mapping_note": null
+      },
+      "benign": {
+        "id": "truncated-log-benign",
+        "qualification_eligible": true,
+        "expected_verdict_state": "PASS_CANDIDATE",
+        "difference": "Complete stream at the declared cap is retained without truncation."
+      },
+      "validity_requirement": "Both members use independently fixed expectations, exact protected subject/profile identities, unchanged fixtures/oracle, complete raw observations and settled cleanup, except the single declared fault. Incidental setup failure invalidates discrimination; it is not the intended fault."
+    },
+    {
+      "id": "zero-selected",
+      "executed": false,
+      "fault": {
+        "qualification_eligible": false,
+        "intended_reason": "No meaningful mandatory case is selected.",
+        "expected_verdict_state": "INVALID",
+        "verdict_mapping_note": null
+      },
+      "benign": {
+        "id": "zero-selected-benign",
+        "qualification_eligible": true,
+        "expected_verdict_state": "PASS_CANDIDATE",
+        "difference": "One meaningful mandatory reference case is selected and executed."
+      },
+      "validity_requirement": "Both members use independently fixed expectations, exact protected subject/profile identities, unchanged fixtures/oracle, complete raw observations and settled cleanup, except the single declared fault. Incidental setup failure invalidates discrimination; it is not the intended fault."
+    },
+    {
+      "id": "zero-executed",
+      "executed": false,
+      "fault": {
+        "qualification_eligible": false,
+        "intended_reason": "Selected mandatory reference case never executes.",
+        "expected_verdict_state": "INVALID",
+        "verdict_mapping_note": null
+      },
+      "benign": {
+        "id": "zero-executed-benign",
+        "qualification_eligible": true,
+        "expected_verdict_state": "PASS_CANDIDATE",
+        "difference": "The same selected mandatory reference case executes decisively."
+      },
+      "validity_requirement": "Both members use independently fixed expectations, exact protected subject/profile identities, unchanged fixtures/oracle, complete raw observations and settled cleanup, except the single declared fault. Incidental setup failure invalidates discrimination; it is not the intended fault."
+    },
+    {
+      "id": "required-skip",
+      "executed": false,
+      "fault": {
+        "qualification_eligible": false,
+        "intended_reason": "A selected mandatory reference case reports skipped instead of a decisive expected outcome.",
+        "expected_verdict_state": "INVALID",
+        "verdict_mapping_note": null
+      },
+      "benign": {
+        "id": "required-skip-benign",
+        "qualification_eligible": true,
+        "expected_verdict_state": "PASS_CANDIDATE",
+        "difference": "The same required case executes with its exact expected outcome."
+      },
+      "validity_requirement": "Both members use independently fixed expectations, exact protected subject/profile identities, unchanged fixtures/oracle, complete raw observations and settled cleanup, except the single declared fault. Incidental setup failure invalidates discrimination; it is not the intended fault."
+    },
+    {
+      "id": "producer-signal",
+      "executed": false,
+      "fault": {
+        "qualification_eligible": false,
+        "intended_reason": "The ordinary reference producer is terminated by an unexpected signal.",
+        "expected_verdict_state": "ERROR",
+        "verdict_mapping_note": null
+      },
+      "benign": {
+        "id": "producer-signal-benign",
+        "qualification_eligible": true,
+        "expected_verdict_state": "PASS_CANDIDATE",
+        "difference": "The ordinary reference producer exits normally with its expected result."
+      },
+      "validity_requirement": "Both members use independently fixed expectations, exact protected subject/profile identities, unchanged fixtures/oracle, complete raw observations and settled cleanup, except the single declared fault. Incidental setup failure invalidates discrimination; it is not the intended fault."
+    },
+    {
+      "id": "verifier-crash",
+      "executed": false,
+      "fault": {
+        "qualification_eligible": false,
+        "intended_reason": "The verifier crashes before producing its decisive independent oracle result.",
+        "expected_verdict_state": "ERROR",
+        "verdict_mapping_note": null
+      },
+      "benign": {
+        "id": "verifier-crash-benign",
+        "qualification_eligible": true,
+        "expected_verdict_state": "PASS_CANDIDATE",
+        "difference": "The verifier completes and retains its exact independent oracle result."
+      },
+      "validity_requirement": "Both members use independently fixed expectations, exact protected subject/profile identities, unchanged fixtures/oracle, complete raw observations and settled cleanup, except the single declared fault. Incidental setup failure invalidates discrimination; it is not the intended fault."
+    },
+    {
+      "id": "timeout",
+      "executed": false,
+      "fault": {
+        "qualification_eligible": false,
+        "intended_reason": "The declared deadline expires before the required decisive observation.",
+        "expected_verdict_state": "TIMEOUT",
+        "verdict_mapping_note": null
+      },
+      "benign": {
+        "id": "timeout-benign",
+        "qualification_eligible": true,
+        "expected_verdict_state": "PASS_CANDIDATE",
+        "difference": "The same producer completes within the predeclared deadline."
+      },
+      "validity_requirement": "Both members use independently fixed expectations, exact protected subject/profile identities, unchanged fixtures/oracle, complete raw observations and settled cleanup, except the single declared fault. Incidental setup failure invalidates discrimination; it is not the intended fault."
+    },
+    {
+      "id": "post-check-mutation",
+      "executed": false,
+      "fault": {
+        "qualification_eligible": false,
+        "intended_reason": "Frozen result subject changes after verification: INVALID_SUBJECT.",
+        "expected_verdict_state": "INVALID",
+        "verdict_mapping_note": null
+      },
+      "benign": {
+        "id": "post-check-mutation-benign",
+        "qualification_eligible": true,
+        "expected_verdict_state": "PASS_CANDIDATE",
+        "difference": "Verification pre/post hashes of the frozen result agree."
+      },
+      "validity_requirement": "Both members use independently fixed expectations, exact protected subject/profile identities, unchanged fixtures/oracle, complete raw observations and settled cleanup, except the single declared fault. Incidental setup failure invalidates discrimination; it is not the intended fault."
+    },
+    {
+      "id": "failed-cleanup",
+      "executed": false,
+      "fault": {
+        "qualification_eligible": false,
+        "intended_reason": "Required descendant cleanup/readback remains unsettled or leaves live descendants.",
+        "expected_verdict_state": "INVALID",
+        "verdict_mapping_note": null
+      },
+      "benign": {
+        "id": "failed-cleanup-benign",
+        "qualification_eligible": true,
+        "expected_verdict_state": "PASS_CANDIDATE",
+        "difference": "Cleanup settles and trusted readback finds no descendants or material obligation."
+      },
+      "validity_requirement": "Both members use independently fixed expectations, exact protected subject/profile identities, unchanged fixtures/oracle, complete raw observations and settled cleanup, except the single declared fault. Incidental setup failure invalidates discrimination; it is not the intended fault."
+    }
+  ],
+  "limitations": [
+    "These are specifications, not protected executions or a collector bootstrap result.",
+    "Eligibility permits separate review only and cannot admit any module or the collector.",
+    "The schema author also authored these specifications; independent oracle authorship is not claimed.",
+    "A future fixture implementation must remain non-engine and retain fault/benign intended-detector observations.",
+    "Separate review must inspect exact independent raw oracle fixtures before collection; incidental setup failure never substitutes for the declared fault."
+  ]
+}

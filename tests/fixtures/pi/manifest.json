@@ -1,0 +1,3375 @@
+{
+  "kind": "hee3.pi-wire-development-fixtures/1",
+  "profile": "pi-rpc-earendil-0.85.1",
+  "package": "@earendil-works/pi-coding-agent",
+  "package_version": "0.85.1",
+  "status": "authored-expectations-not-executed-against-parser",
+  "authorship": "Source-backed fixture author separate from initial Rust parser author; not a qualified independent oracle.",
+  "fictional_values": "All authored wire records use synthetic session/request/model/provider/tool/entry IDs, URLs, timestamps, text and usage/cost values. The source manifest separately identifies an actual parent-retained metadata capture; that source is not fictional and was not executed by the fixture author.",
+  "module_case_credits": 0,
+  "provider_requests": 0,
+  "pi_processes_launched": 0,
+  "scope": "Initial closed worker adapter subset; no compaction, extension, custom entry or tool authority.",
+  "worker_policy": {
+    "max_payload_bytes_before_lf": 1048576,
+    "max_stream_bytes": 8388608,
+    "max_json_depth": 32,
+    "max_records": 65536,
+    "max_exact_counter": 9007199254740991,
+    "depth_root_container": 1,
+    "framing": "Strict UTF-8, LF only, one closed JSON object per frame, unique keys, final LF required; CRLF refused.",
+    "policy_origin": "Explicit parent-selected Pi worker caps; not inherited HEE3-Control bounds.",
+    "streams": "Apply 8MiB independently to stdout/stderr. Stderr is diagnostic data only."
+  },
+  "interpretation": [
+    "expected_accept is limited to the declared layer, never task or module acceptance.",
+    "A record accepted in isolation may still fail lifecycle, correlation, recipe, session attribution or profile enablement.",
+    "Retry shapes are admitted parser observations; metadata-only startup disables retry and must separately reject unexpected retry activity.",
+    "Known upstream open maps deliberately remain refused until a reviewed closed nested definition is adopted.",
+    "Trace stdout paths contain receives only; outbound fixtures in steps specify controller behavior and must not be fed into stdout.",
+    "Targeted subsequences are explicit; do not claim they are captured complete real Pi transcripts.",
+    "Boundary recipes test only their named layer; materialize by ordered UTF-8/ASCII parts and exact repetition counts, then verify the retained hash.",
+    "Exact integers in fixtures use decimal integer tokens; alternate equivalent exponent/decimal lexemes are not decided here."
+  ],
+  "sources": [
+    {
+      "id": "package",
+      "path": "/var/home/Louranicas/.local/lib/node_modules/@earendil-works/pi-coding-agent/package.json",
+      "read_sections": [
+        "1-106"
+      ],
+      "byte_length": 4145,
+      "sha256": "f1738e4b42203e5f22bcb513f13fb2fb224f1e98d1f129ff042f87048665a94c"
+    },
+    {
+      "id": "rpc",
+      "path": "/var/home/Louranicas/.local/lib/node_modules/@earendil-works/pi-coding-agent/dist/modes/rpc/rpc-mode.js",
+      "read_sections": [
+        "21-40",
+        "292-397",
+        "468-472",
+        "604-654"
+      ],
+      "byte_length": 28075,
+      "sha256": "e7e4724aa55c5aac73cf36793653b26736200e5c59d58373990fc31028f86477"
+    },
+    {
+      "id": "rpc_types",
+      "path": "/var/home/Louranicas/.local/lib/node_modules/@earendil-works/pi-coding-agent/dist/modes/rpc/rpc-types.d.ts",
+      "read_sections": [
+        "17-63",
+        "149-235",
+        "280-311"
+      ],
+      "byte_length": 9801,
+      "sha256": "e968e5be01dc7ad9615f938ae867ef136fa495f13dcf169942e9f781a299d9eb"
+    },
+    {
+      "id": "json_event",
+      "path": "/var/home/Louranicas/.local/lib/node_modules/@earendil-works/pi-coding-agent/dist/modes/json-event.js",
+      "read_sections": [
+        "1-31"
+      ],
+      "byte_length": 1057,
+      "sha256": "5f3756470739fa4a1595feeaf1ce2dfd29e36a2cffd9e642f914fc23f540d606"
+    },
+    {
+      "id": "jsonl",
+      "path": "/var/home/Louranicas/.local/lib/node_modules/@earendil-works/pi-coding-agent/dist/modes/rpc/jsonl.js",
+      "read_sections": [
+        "1-61"
+      ],
+      "byte_length": 1562,
+      "sha256": "049a9f8ca4242c79f1911ed977949e8d8906b4561f424c2729687f426fabaacf"
+    },
+    {
+      "id": "session",
+      "path": "/var/home/Louranicas/.local/lib/node_modules/@earendil-works/pi-coding-agent/dist/core/agent-session.js",
+      "read_sections": [
+        "309-440",
+        "616-623",
+        "765-810",
+        "821-953",
+        "1190-1234",
+        "1356-1378",
+        "2283-2334",
+        "2651-2748"
+      ],
+      "byte_length": 125310,
+      "sha256": "fb8a3981c20c8c0bbd42231b1c99a10335fb3858b659056b341954de9cfa467f"
+    },
+    {
+      "id": "session_types",
+      "path": "/var/home/Louranicas/.local/lib/node_modules/@earendil-works/pi-coding-agent/dist/core/agent-session.d.ts",
+      "read_sections": [
+        "38-96",
+        "174-195"
+      ],
+      "byte_length": 27420,
+      "sha256": "db3bfd2ae08eda4936d8807656f06120e6e62672d6a7798bccba486a0dc994ea"
+    },
+    {
+      "id": "agent_types",
+      "path": "/var/home/Louranicas/.local/lib/node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-agent-core/dist/types.d.ts",
+      "read_sections": [
+        "260-287",
+        "367-421"
+      ],
+      "byte_length": 18066,
+      "sha256": "2ae8602b59de73435b6d9bd7d4c9dd1b344b7f1d1214866bc08feb04fc490061"
+    },
+    {
+      "id": "default_model",
+      "path": "/var/home/Louranicas/.local/lib/node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-agent-core/dist/agent.js",
+      "read_sections": [
+        "14-34"
+      ],
+      "byte_length": 16099,
+      "sha256": "d84351e451b9fef40fe2532c446aca90d26a4be9038b2d77d3d45dd6eab21d41"
+    },
+    {
+      "id": "ai_types",
+      "path": "/var/home/Louranicas/.local/lib/node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/types.d.ts",
+      "read_sections": [
+        "235-353",
+        "398-469",
+        "695-738"
+      ],
+      "byte_length": 37284,
+      "sha256": "8c11014ea6c454bf60c7c22b65cdb00bebd834e4e9ebb07d3f0fffb6a58ea78a"
+    },
+    {
+      "id": "metadata_capture",
+      "path": "/var/home/Louranicas/.cache/hee3-implementation/T02/evidence/implementation/T02/sdk-smoke/metadata-benign.stdout",
+      "read_sections": [
+        "Complete 2-line stdout supplied by parent; scout did not execute process"
+      ],
+      "status": "parent-retained-runtime-observation",
+      "byte_length": 659,
+      "sha256": "51460b3fd74622629214379fc5a2c1147028965f96729ac586dc709ee57a451a"
+    }
+  ],
+  "record_cases": [
+    {
+      "id": "request-get_state",
+      "path": "records/request-get_state.jsonl",
+      "byte_length": 46,
+      "sha256": "9a0f8e0e4f8ab5d627b254e9f762c1a17fb588b61dd6fe906611e9a8f7165b05",
+      "layer": "outbound_profile",
+      "expected_accept": true,
+      "expected_kind": "request",
+      "expected_meaning": "Closed profile request; fixture bytes do not authorize dispatch.",
+      "context": {},
+      "source_ids": [
+        "rpc",
+        "rpc_types"
+      ]
+    },
+    {
+      "id": "request-get_available_models",
+      "path": "records/request-get_available_models.jsonl",
+      "byte_length": 68,
+      "sha256": "1d85982d6aa40e6a55380e53e8a693d7284893829ef65a9908cd3f6c1597c8e0",
+      "layer": "outbound_profile",
+      "expected_accept": true,
+      "expected_kind": "request",
+      "expected_meaning": "Closed profile request; fixture bytes do not authorize dispatch.",
+      "context": {},
+      "source_ids": [
+        "rpc",
+        "rpc_types"
+      ]
+    },
+    {
+      "id": "request-set_model",
+      "path": "records/request-set_model.jsonl",
+      "byte_length": 102,
+      "sha256": "e419e785b8b80b25e30578a85e5f39b52e424ae9c77420848600f1a596c85c8d",
+      "layer": "outbound_profile",
+      "expected_accept": true,
+      "expected_kind": "request",
+      "expected_meaning": "Closed profile request; fixture bytes do not authorize dispatch.",
+      "context": {},
+      "source_ids": [
+        "rpc",
+        "rpc_types"
+      ]
+    },
+    {
+      "id": "request-set_thinking_level",
+      "path": "records/request-set_thinking_level.jsonl",
+      "byte_length": 79,
+      "sha256": "ec4497ecd06ec2a0caf5d9f8b59e9ad17167c42da5a954f058e4a8ff1ada72c7",
+      "layer": "outbound_profile",
+      "expected_accept": true,
+      "expected_kind": "request",
+      "expected_meaning": "Closed profile request; fixture bytes do not authorize dispatch.",
+      "context": {},
+      "source_ids": [
+        "rpc",
+        "rpc_types"
+      ]
+    },
+    {
+      "id": "request-prompt",
+      "path": "records/request-prompt.jsonl",
+      "byte_length": 86,
+      "sha256": "158988e7fe685b3162ff9e0f9486973faa532ab7338ea35024a3a29c68f59748",
+      "layer": "outbound_profile",
+      "expected_accept": true,
+      "expected_kind": "request",
+      "expected_meaning": "Closed profile request; fixture bytes do not authorize dispatch.",
+      "context": {},
+      "source_ids": [
+        "rpc",
+        "rpc_types"
+      ]
+    },
+    {
+      "id": "request-clear_queue",
+      "path": "records/request-clear_queue.jsonl",
+      "byte_length": 50,
+      "sha256": "46e5f4ef074a55897637ab685f517e7350d8293c2266bfd2c07d9cb062be6d5a",
+      "layer": "outbound_profile",
+      "expected_accept": true,
+      "expected_kind": "request",
+      "expected_meaning": "Closed profile request; fixture bytes do not authorize dispatch.",
+      "context": {},
+      "source_ids": [
+        "rpc",
+        "rpc_types"
+      ]
+    },
+    {
+      "id": "request-abort",
+      "path": "records/request-abort.jsonl",
+      "byte_length": 38,
+      "sha256": "8887560d82da91eb965a58aa779c1288e4a3e49d15f7a8fc17d0410f24fe85b6",
+      "layer": "outbound_profile",
+      "expected_accept": true,
+      "expected_kind": "request",
+      "expected_meaning": "Closed profile request; fixture bytes do not authorize dispatch.",
+      "context": {},
+      "source_ids": [
+        "rpc",
+        "rpc_types"
+      ]
+    },
+    {
+      "id": "request-get_session_stats",
+      "path": "records/request-get_session_stats.jsonl",
+      "byte_length": 62,
+      "sha256": "37b24727e50a2442450feb2078faac3988814f86b6b2c666232621f36d21aceb",
+      "layer": "outbound_profile",
+      "expected_accept": true,
+      "expected_kind": "request",
+      "expected_meaning": "Closed profile request; fixture bytes do not authorize dispatch.",
+      "context": {},
+      "source_ids": [
+        "rpc",
+        "rpc_types"
+      ]
+    },
+    {
+      "id": "request-prompt-images",
+      "path": "records/request-prompt-images.jsonl",
+      "byte_length": 98,
+      "sha256": "450132b5149e6370022c1b168a8eaca7b11424f20ef3dee88dac43e2238744ef",
+      "layer": "outbound_profile",
+      "expected_accept": false,
+      "expected_kind": null,
+      "expected_meaning": "Vendor option is outside this text-only profile.",
+      "context": {},
+      "source_ids": [
+        "rpc",
+        "rpc_types"
+      ]
+    },
+    {
+      "id": "request-bash",
+      "path": "records/request-bash.jsonl",
+      "byte_length": 53,
+      "sha256": "8ff22805c9c5833ff3e211fb675e4b885dcaa60cd4125b85319c37d643a64ce5",
+      "layer": "outbound_profile",
+      "expected_accept": false,
+      "expected_kind": null,
+      "expected_meaning": "Unsupported command; no dispatch.",
+      "context": {},
+      "source_ids": [
+        "rpc",
+        "rpc_types"
+      ]
+    },
+    {
+      "id": "state-empty",
+      "path": "records/state-empty.jsonl",
+      "byte_length": 311,
+      "sha256": "bf687434fb272ebc3399c9d41a80ad27c168945e677b87bb300a08db70984d54",
+      "layer": "record",
+      "expected_accept": true,
+      "expected_kind": "state",
+      "expected_meaning": "Allowed optional-model type shape; model unavailable. Actual empty SDK capture uses explicit unknown sentinel instead.",
+      "context": {
+        "owned_session_id": "fixture-session-001",
+        "pending": {
+          "id": "fixture-get_state",
+          "command": "get_state"
+        }
+      },
+      "source_ids": [
+        "rpc",
+        "rpc_types"
+      ]
+    },
+    {
+      "id": "state-unavailable-sentinel",
+      "path": "records/state-unavailable-sentinel.jsonl",
+      "byte_length": 523,
+      "sha256": "ade1a13c885bb320a6f20ee80378a404b08a69b7b689a4f0b5a2e0248ed01fa1",
+      "layer": "record",
+      "expected_accept": true,
+      "expected_kind": "state",
+      "expected_meaning": "Exact SDK DEFAULT_MODEL sentinel is unavailable, never an effective routable model.",
+      "context": {
+        "pending": {
+          "id": "fixture-get_state",
+          "command": "get_state"
+        }
+      },
+      "source_ids": [
+        "rpc",
+        "default_model",
+        "metadata_capture"
+      ]
+    },
+    {
+      "id": "sentinel-with-route",
+      "path": "records/sentinel-with-route.jsonl",
+      "byte_length": 549,
+      "sha256": "22ae617b36b936ed201c7906f083d683e65af6ae3451e8c1345372c59504011c",
+      "layer": "record",
+      "expected_accept": false,
+      "expected_kind": null,
+      "expected_meaning": "Reserved unknown sentinel must match exact DEFAULT_MODEL; near-neighbor is neither valid sentinel nor selected model.",
+      "context": {
+        "pending": {
+          "id": "fixture-get_state",
+          "command": "get_state"
+        }
+      },
+      "source_ids": [
+        "rpc",
+        "default_model"
+      ]
+    },
+    {
+      "id": "sentinel-with-cost",
+      "path": "records/sentinel-with-cost.jsonl",
+      "byte_length": 523,
+      "sha256": "967e10002c9385853ebec7cdc14c6867c2581782a472c390c5521bb21d4a2e1a",
+      "layer": "record",
+      "expected_accept": false,
+      "expected_kind": null,
+      "expected_meaning": "Reserved unknown sentinel must match exact DEFAULT_MODEL; near-neighbor is neither valid sentinel nor selected model.",
+      "context": {
+        "pending": {
+          "id": "fixture-get_state",
+          "command": "get_state"
+        }
+      },
+      "source_ids": [
+        "rpc",
+        "default_model"
+      ]
+    },
+    {
+      "id": "sentinel-with-window",
+      "path": "records/sentinel-with-window.jsonl",
+      "byte_length": 523,
+      "sha256": "66a87a137b4566a8a75a07c40f7f9551e4823de005c9a17c407b475cde3610fa",
+      "layer": "record",
+      "expected_accept": false,
+      "expected_kind": null,
+      "expected_meaning": "Reserved unknown sentinel must match exact DEFAULT_MODEL; near-neighbor is neither valid sentinel nor selected model.",
+      "context": {
+        "pending": {
+          "id": "fixture-get_state",
+          "command": "get_state"
+        }
+      },
+      "source_ids": [
+        "rpc",
+        "default_model"
+      ]
+    },
+    {
+      "id": "sentinel-with-name",
+      "path": "records/sentinel-with-name.jsonl",
+      "byte_length": 531,
+      "sha256": "485f4f78a599ac69a407e3ecb07d05c8906a1b169937191a34a3386644e31b8e",
+      "layer": "record",
+      "expected_accept": false,
+      "expected_kind": null,
+      "expected_meaning": "Reserved unknown sentinel must match exact DEFAULT_MODEL; near-neighbor is neither valid sentinel nor selected model.",
+      "context": {
+        "pending": {
+          "id": "fixture-get_state",
+          "command": "get_state"
+        }
+      },
+      "source_ids": [
+        "rpc",
+        "default_model"
+      ]
+    },
+    {
+      "id": "state-model",
+      "path": "records/state-model.jsonl",
+      "byte_length": 604,
+      "sha256": "30903d2332a452d9f9bb10956ff8895bd45fbade126a2ee7a9beba5791a08e24",
+      "layer": "record",
+      "expected_accept": true,
+      "expected_kind": "state",
+      "expected_meaning": "Effective fictional provider/model and high thinking, subject to recipe comparison.",
+      "context": {
+        "owned_session_id": "fixture-session-001",
+        "pending": {
+          "id": "fixture-get_state",
+          "command": "get_state"
+        }
+      },
+      "source_ids": [
+        "rpc",
+        "rpc_types"
+      ]
+    },
+    {
+      "id": "state-after-run",
+      "path": "records/state-after-run.jsonl",
+      "byte_length": 604,
+      "sha256": "b461e8654d26cf6dd34af4d543c2e7dac245eb92df6f84f03860cb67eb9df83d",
+      "layer": "record",
+      "expected_accept": true,
+      "expected_kind": "state",
+      "expected_meaning": "Synthetic final state for one user/assistant pair; idle and queues empty.",
+      "context": {
+        "owned_session_id": "fixture-session-001",
+        "pending": {
+          "id": "fixture-get_state",
+          "command": "get_state"
+        }
+      },
+      "source_ids": [
+        "rpc",
+        "rpc_types"
+      ]
+    },
+    {
+      "id": "state-foreign-model",
+      "path": "records/state-foreign-model.jsonl",
+      "byte_length": 610,
+      "sha256": "f305790cc0e74786b518488155e588baf86e7c0453aa04fa8ee30c7303f0a4e4",
+      "layer": "record",
+      "expected_accept": true,
+      "expected_kind": "state",
+      "expected_meaning": "Structurally valid different model; recipe identity comparison must refuse mismatch.",
+      "context": {
+        "pending": {
+          "id": "fixture-get_state",
+          "command": "get_state"
+        }
+      },
+      "source_ids": [
+        "rpc",
+        "rpc_types"
+      ]
+    },
+    {
+      "id": "state-compacting",
+      "path": "records/state-compacting.jsonl",
+      "byte_length": 310,
+      "sha256": "ceabda568013fb5ee98c171cf49447cc93562c32ca13704d93f58f6ec852d2f1",
+      "layer": "record",
+      "expected_accept": true,
+      "expected_kind": "state",
+      "expected_meaning": "Structurally valid observation; not idle. Unexpected compaction blocks this profile.",
+      "context": {
+        "pending": {
+          "id": "fixture-get_state",
+          "command": "get_state"
+        }
+      },
+      "source_ids": [
+        "rpc",
+        "rpc_types"
+      ]
+    },
+    {
+      "id": "state-queued",
+      "path": "records/state-queued.jsonl",
+      "byte_length": 311,
+      "sha256": "896f07a4ab61e57da39cfb19c074957ca6c54cd11de3c1383996c46b265b095d",
+      "layer": "record",
+      "expected_accept": true,
+      "expected_kind": "state",
+      "expected_meaning": "Structurally valid observation; not idle even with both activity flags false.",
+      "context": {
+        "pending": {
+          "id": "fixture-get_state",
+          "command": "get_state"
+        }
+      },
+      "source_ids": [
+        "rpc",
+        "rpc_types"
+      ]
+    },
+    {
+      "id": "models-empty",
+      "path": "records/models-empty.jsonl",
+      "byte_length": 125,
+      "sha256": "0a181be0aba8a85ec3b34552076103be50b869fd0934cbf4384983804ee28d15",
+      "layer": "record",
+      "expected_accept": true,
+      "expected_kind": "available_models",
+      "expected_meaning": "No available model; metadata-only result, not an error or prompt grant.",
+      "context": {
+        "pending": {
+          "id": "fixture-get_available_models",
+          "command": "get_available_models"
+        }
+      },
+      "source_ids": [
+        "rpc",
+        "rpc_types"
+      ]
+    },
+    {
+      "id": "models-one",
+      "path": "records/models-one.jsonl",
+      "byte_length": 408,
+      "sha256": "2d84ca3570ec17984a69786e096c8a6cf5d0adef54f26a0f1113b1b89b77f728",
+      "layer": "record",
+      "expected_accept": true,
+      "expected_kind": "available_models",
+      "expected_meaning": "One fictional model descriptor; no real configured provider is asserted.",
+      "context": {
+        "pending": {
+          "id": "fixture-get_available_models",
+          "command": "get_available_models"
+        }
+      },
+      "source_ids": [
+        "rpc",
+        "rpc_types"
+      ]
+    },
+    {
+      "id": "model-image-capability",
+      "path": "records/model-image-capability.jsonl",
+      "byte_length": 381,
+      "sha256": "1b5e50d813cf9503d7730688dc6cb67e6670416c61a6350c5cb51308988dbbc5",
+      "layer": "record",
+      "expected_accept": true,
+      "expected_kind": "model",
+      "expected_meaning": "Image capability is valid metadata; this does not admit prompt image payloads.",
+      "context": {
+        "pending": {
+          "id": "fixture-set_model",
+          "command": "set_model"
+        }
+      },
+      "source_ids": [
+        "rpc",
+        "rpc_types"
+      ]
+    },
+    {
+      "id": "model-selected",
+      "path": "records/model-selected.jsonl",
+      "byte_length": 373,
+      "sha256": "834b07ef334c0ebd3204aa3a751996ea3786519e97e01f7f7f10a53efe36ec5f",
+      "layer": "record",
+      "expected_accept": true,
+      "expected_kind": "model",
+      "expected_meaning": "Set response only; final correlated get_state must match recipe.",
+      "context": {
+        "pending": {
+          "id": "fixture-set_model",
+          "command": "set_model"
+        }
+      },
+      "source_ids": [
+        "rpc",
+        "rpc_types"
+      ]
+    },
+    {
+      "id": "model-unavailable",
+      "path": "records/model-unavailable.jsonl",
+      "byte_length": 141,
+      "sha256": "8e100f0f98df99080189153cb2e7453d26e14760622b883962f1edb794f82252",
+      "layer": "record",
+      "expected_accept": true,
+      "expected_kind": "command_error",
+      "expected_meaning": "Correlated refusal; no selected model.",
+      "context": {
+        "pending": {
+          "id": "fixture-set_model",
+          "command": "set_model"
+        }
+      },
+      "source_ids": [
+        "rpc",
+        "rpc_types"
+      ]
+    },
+    {
+      "id": "thinking-ack",
+      "path": "records/thinking-ack.jsonl",
+      "byte_length": 100,
+      "sha256": "5052ff388c5819bf8d8b7ace7c02572b4ea23017c87731a955cd9009acd9f2ed",
+      "layer": "record",
+      "expected_accept": true,
+      "expected_kind": "ack",
+      "expected_meaning": "Acknowledgement can follow clamping; not proof of requested effective level.",
+      "context": {
+        "pending": {
+          "id": "fixture-set_thinking_level",
+          "command": "set_thinking_level"
+        }
+      },
+      "source_ids": [
+        "rpc",
+        "rpc_types"
+      ]
+    },
+    {
+      "id": "prompt-ack",
+      "path": "records/prompt-ack.jsonl",
+      "byte_length": 76,
+      "sha256": "50d3272415c6463503fd74cd531018333b66eb5207e32aebc6a056b6c3ba316f",
+      "layer": "record",
+      "expected_accept": true,
+      "expected_kind": "ack",
+      "expected_meaning": "Preflight acknowledgement only; execution, candidate, Pi settlement and acceptance all unproved.",
+      "context": {
+        "pending": {
+          "id": "fixture-prompt",
+          "command": "prompt"
+        }
+      },
+      "source_ids": [
+        "rpc",
+        "rpc_types"
+      ]
+    },
+    {
+      "id": "prompt-refused",
+      "path": "records/prompt-refused.jsonl",
+      "byte_length": 117,
+      "sha256": "86fe6f3ea3eac00794596e878e32abaf521479e7dcc085e903a2fa00ce7bbef4",
+      "layer": "record",
+      "expected_accept": true,
+      "expected_kind": "command_error",
+      "expected_meaning": "Correlated preflight refusal; never infer an executed attempt.",
+      "context": {
+        "pending": {
+          "id": "fixture-prompt",
+          "command": "prompt"
+        }
+      },
+      "source_ids": [
+        "rpc",
+        "rpc_types"
+      ]
+    },
+    {
+      "id": "clear-removed",
+      "path": "records/clear-removed.jsonl",
+      "byte_length": 152,
+      "sha256": "4660d53afa61c01e0025c421318f2744818d07d149e8a12e393992edcd78dd77",
+      "layer": "record",
+      "expected_accept": true,
+      "expected_kind": "cleared_queue",
+      "expected_meaning": "Arrays are removed prior contents, not remaining queue counts.",
+      "context": {
+        "pending": {
+          "id": "fixture-clear_queue",
+          "command": "clear_queue"
+        }
+      },
+      "source_ids": [
+        "rpc",
+        "session"
+      ]
+    },
+    {
+      "id": "clear-empty",
+      "path": "records/clear-empty.jsonl",
+      "byte_length": 123,
+      "sha256": "c81f6f69f6b4734c61b53274924c7eaa25c5e8a5206635839e2890dbf05f95d1",
+      "layer": "record",
+      "expected_accept": true,
+      "expected_kind": "cleared_queue",
+      "expected_meaning": "Both prior queues were empty.",
+      "context": {
+        "pending": {
+          "id": "fixture-clear_queue",
+          "command": "clear_queue"
+        }
+      },
+      "source_ids": [
+        "rpc",
+        "session"
+      ]
+    },
+    {
+      "id": "abort-ack",
+      "path": "records/abort-ack.jsonl",
+      "byte_length": 74,
+      "sha256": "8e7e7b35f9c3055f4b1c53d73649aec27eeb4729af8ddc8b1a7cd12f764ca366",
+      "layer": "record",
+      "expected_accept": true,
+      "expected_kind": "ack",
+      "expected_meaning": "Pi abort awaited idle; own state readback and external custody remain required.",
+      "context": {
+        "pending": {
+          "id": "fixture-abort",
+          "command": "abort"
+        }
+      },
+      "source_ids": [
+        "rpc",
+        "rpc_types"
+      ]
+    },
+    {
+      "id": "stats-known",
+      "path": "records/stats-known.jsonl",
+      "byte_length": 315,
+      "sha256": "a9cdd7c56269e6ea0571a1c4026969fb63280ed9e4addb4dd3d1e75c4d22def5",
+      "layer": "record",
+      "expected_accept": true,
+      "expected_kind": "session_stats",
+      "expected_meaning": "Session total tokens=20+10+3+6=39; costs are fictional provider-reported numbers.",
+      "context": {
+        "owned_session_id": "fixture-session-001",
+        "pending": {
+          "id": "fixture-get_session_stats",
+          "command": "get_session_stats"
+        }
+      },
+      "source_ids": [
+        "rpc",
+        "session",
+        "session_types"
+      ]
+    },
+    {
+      "id": "stats-unknown-context",
+      "path": "records/stats-unknown-context.jsonl",
+      "byte_length": 383,
+      "sha256": "6ebf7268bf52bf08033c8d03886585dd8e6a9693e5c7c428abd67429cceca056",
+      "layer": "record",
+      "expected_accept": true,
+      "expected_kind": "session_stats",
+      "expected_meaning": "Preserve unknown tokens/percent as null, not zero.",
+      "context": {
+        "pending": {
+          "id": "fixture-get_session_stats",
+          "command": "get_session_stats"
+        }
+      },
+      "source_ids": [
+        "session",
+        "session_types"
+      ]
+    },
+    {
+      "id": "stats-known-context",
+      "path": "records/stats-known-context.jsonl",
+      "byte_length": 384,
+      "sha256": "c40b00118faaa234b17414ea4b10dc5095dc8f1f0e4ba06749433f842d8877c5",
+      "layer": "record",
+      "expected_accept": true,
+      "expected_kind": "session_stats",
+      "expected_meaning": "1024/32768*100=3.125; context snapshot does not replace session totals.",
+      "context": {
+        "pending": {
+          "id": "fixture-get_session_stats",
+          "command": "get_session_stats"
+        }
+      },
+      "source_ids": [
+        "session",
+        "session_types"
+      ]
+    },
+    {
+      "id": "agent-start",
+      "path": "records/agent-start.jsonl",
+      "byte_length": 23,
+      "sha256": "b539582a7a43dc6e0f528acc9d0d417e98c5c34fb61795de82a983a8a3c9c289",
+      "layer": "record",
+      "expected_accept": true,
+      "expected_kind": "agent_start",
+      "expected_meaning": "Activity began; original deadline remains unchanged.",
+      "context": {},
+      "source_ids": [
+        "json_event",
+        "session",
+        "session_types",
+        "agent_types",
+        "ai_types"
+      ]
+    },
+    {
+      "id": "turn-start",
+      "path": "records/turn-start.jsonl",
+      "byte_length": 22,
+      "sha256": "4b3eac2fad77c05b42703480e6a67d02e3c3daa2c5f70689c62c62bcbbd33896",
+      "layer": "record",
+      "expected_accept": true,
+      "expected_kind": "turn_start",
+      "expected_meaning": "Turn observation, not settlement.",
+      "context": {},
+      "source_ids": [
+        "json_event",
+        "session",
+        "session_types",
+        "agent_types",
+        "ai_types"
+      ]
+    },
+    {
+      "id": "user-start",
+      "path": "records/user-start.jsonl",
+      "byte_length": 114,
+      "sha256": "349b0543d810a9493f029a9dff3bc85b83868f4ed2a7c8adbe713ffeb64418ef",
+      "layer": "record",
+      "expected_accept": true,
+      "expected_kind": "message_start",
+      "expected_meaning": "User text remains data.",
+      "context": {},
+      "source_ids": [
+        "json_event",
+        "session",
+        "session_types",
+        "agent_types",
+        "ai_types"
+      ]
+    },
+    {
+      "id": "user-end",
+      "path": "records/user-end.jsonl",
+      "byte_length": 112,
+      "sha256": "f2f3bc7031fba48509241935e155088637ef74f3b609faab7cd9a7dbd3e48c6e",
+      "layer": "record",
+      "expected_accept": true,
+      "expected_kind": "message_end",
+      "expected_meaning": "Complete user message.",
+      "context": {},
+      "source_ids": [
+        "json_event",
+        "session",
+        "session_types",
+        "agent_types",
+        "ai_types"
+      ]
+    },
+    {
+      "id": "assistant-start",
+      "path": "records/assistant-start.jsonl",
+      "byte_length": 335,
+      "sha256": "b36f642fb43454f3c64d239c0092ede89f8689fdae5b9f52e6a6243b68c2bf1c",
+      "layer": "record",
+      "expected_accept": true,
+      "expected_kind": "message_start",
+      "expected_meaning": "Pending assistant; zero usage not final accounting.",
+      "context": {},
+      "source_ids": [
+        "json_event",
+        "session",
+        "session_types",
+        "agent_types",
+        "ai_types"
+      ]
+    },
+    {
+      "id": "update-start",
+      "path": "records/update-start.jsonl",
+      "byte_length": 212,
+      "sha256": "7cab9b5341a5d719dd664620f5b3522eb1d0fb4f34b18f109132f483d9b57f76",
+      "layer": "record",
+      "expected_accept": true,
+      "expected_kind": "message_update",
+      "expected_meaning": "Wire partial field omitted.",
+      "context": {},
+      "source_ids": [
+        "json_event",
+        "session",
+        "session_types",
+        "agent_types",
+        "ai_types"
+      ]
+    },
+    {
+      "id": "text-start",
+      "path": "records/text-start.jsonl",
+      "byte_length": 234,
+      "sha256": "dc3551319c1cc0fed1d460c5815c3e7cc9e28ed5747b1b7885ec877f8e130820",
+      "layer": "record",
+      "expected_accept": true,
+      "expected_kind": "message_update",
+      "expected_meaning": "Text block begins at index zero.",
+      "context": {},
+      "source_ids": [
+        "json_event",
+        "session",
+        "session_types",
+        "agent_types",
+        "ai_types"
+      ]
+    },
+    {
+      "id": "text-delta",
+      "path": "records/text-delta.jsonl",
+      "byte_length": 252,
+      "sha256": "31470424f1cf7e025aad885fae167d96a5b31c0bfd28a2820cbeef9abbb4232d",
+      "layer": "record",
+      "expected_accept": true,
+      "expected_kind": "message_update",
+      "expected_meaning": "Presentation delta; never execute text.",
+      "context": {},
+      "source_ids": [
+        "json_event",
+        "session",
+        "session_types",
+        "agent_types",
+        "ai_types"
+      ]
+    },
+    {
+      "id": "text-end",
+      "path": "records/text-end.jsonl",
+      "byte_length": 304,
+      "sha256": "52c7efc3af7b76aa38b142c785c83c20a4515a6a7e57c90ab55bbf5e5fa2cb87",
+      "layer": "record",
+      "expected_accept": true,
+      "expected_kind": "message_update",
+      "expected_meaning": "Authoritative block end may differ from deltas.",
+      "context": {},
+      "source_ids": [
+        "json_event",
+        "session",
+        "session_types",
+        "agent_types",
+        "ai_types"
+      ]
+    },
+    {
+      "id": "thinking-start",
+      "path": "records/thinking-start.jsonl",
+      "byte_length": 238,
+      "sha256": "90a1ee3a58532db9ea76607bdb1215ebec1172fffa09baf615b324cd02dcb232",
+      "layer": "record",
+      "expected_accept": true,
+      "expected_kind": "message_update",
+      "expected_meaning": "Known thinking event; no activity renewal.",
+      "context": {},
+      "source_ids": [
+        "json_event",
+        "session",
+        "session_types",
+        "agent_types",
+        "ai_types"
+      ]
+    },
+    {
+      "id": "thinking-delta",
+      "path": "records/thinking-delta.jsonl",
+      "byte_length": 266,
+      "sha256": "ecb698863fb61427b0f19353ea8fcd6808852ef4f8167aa0d061bfe846c8ae70",
+      "layer": "record",
+      "expected_accept": true,
+      "expected_kind": "message_update",
+      "expected_meaning": "Opaque model output; no control authority.",
+      "context": {},
+      "source_ids": [
+        "json_event",
+        "session",
+        "session_types",
+        "agent_types",
+        "ai_types"
+      ]
+    },
+    {
+      "id": "thinking-end",
+      "path": "records/thinking-end.jsonl",
+      "byte_length": 266,
+      "sha256": "106c037dd52e3117bd97f1a8d1b4c7c3e5639dddf65b0d6f8f2e03a2396c39d9",
+      "layer": "record",
+      "expected_accept": true,
+      "expected_kind": "message_update",
+      "expected_meaning": "Known thinking block closure.",
+      "context": {},
+      "source_ids": [
+        "json_event",
+        "session",
+        "session_types",
+        "agent_types",
+        "ai_types"
+      ]
+    },
+    {
+      "id": "update-done",
+      "path": "records/update-done.jsonl",
+      "byte_length": 670,
+      "sha256": "e9e678d9121321b4503788f04797b7ffe2180a68ce1792d90c30d798d763cf79",
+      "layer": "record",
+      "expected_accept": true,
+      "expected_kind": "message_update",
+      "expected_meaning": "Actual emitter keeps done.message; not Pi settled.",
+      "context": {},
+      "source_ids": [
+        "json_event",
+        "session",
+        "session_types",
+        "agent_types",
+        "ai_types"
+      ]
+    },
+    {
+      "id": "update-error",
+      "path": "records/update-error.jsonl",
+      "byte_length": 582,
+      "sha256": "50403bd55790e7553b44544df1cac9446993a9309f435c43d5985b5df1026fca",
+      "layer": "record",
+      "expected_accept": true,
+      "expected_kind": "message_update",
+      "expected_meaning": "Error event retains full assistant error; not prompt preflight failure.",
+      "context": {},
+      "source_ids": [
+        "json_event",
+        "session",
+        "session_types",
+        "agent_types",
+        "ai_types"
+      ]
+    },
+    {
+      "id": "assistant-end",
+      "path": "records/assistant-end.jsonl",
+      "byte_length": 414,
+      "sha256": "70bee9fa29ccafb4a2685a15c29d1188eacdb9cdaecadf4d357c3b96e02e6f0c",
+      "layer": "record",
+      "expected_accept": true,
+      "expected_kind": "message_end",
+      "expected_meaning": "Final text final Y is authoritative; preserve usage subsets without double-add.",
+      "context": {},
+      "source_ids": [
+        "json_event",
+        "session",
+        "session_types",
+        "agent_types",
+        "ai_types"
+      ]
+    },
+    {
+      "id": "assistant-error-end",
+      "path": "records/assistant-error-end.jsonl",
+      "byte_length": 378,
+      "sha256": "5c3c947c50bcaf2302a486446cf17a4ed6e083f85941456dbb77788b6b546cdf",
+      "layer": "record",
+      "expected_accept": true,
+      "expected_kind": "message_end",
+      "expected_meaning": "Completed error message; retry remains possible.",
+      "context": {},
+      "source_ids": [
+        "json_event",
+        "session",
+        "session_types",
+        "agent_types",
+        "ai_types"
+      ]
+    },
+    {
+      "id": "turn-end",
+      "path": "records/turn-end.jsonl",
+      "byte_length": 428,
+      "sha256": "ab4dfe973aacf23348bc4b6aa9a5e2b309c661e017fd3d9e240e888d671b841b",
+      "layer": "record",
+      "expected_accept": true,
+      "expected_kind": "turn_end",
+      "expected_meaning": "No-tools turn; still not settled.",
+      "context": {},
+      "source_ids": [
+        "json_event",
+        "session",
+        "session_types",
+        "agent_types",
+        "ai_types"
+      ]
+    },
+    {
+      "id": "agent-end-no-retry",
+      "path": "records/agent-end-no-retry.jsonl",
+      "byte_length": 512,
+      "sha256": "74a698f0fbdae2b2185dbf09c0a83025fbdd9b363b1efa534ebc07a7c6456249",
+      "layer": "record",
+      "expected_accept": true,
+      "expected_kind": "agent_end",
+      "expected_meaning": "False willRetry does not rule out compaction or queued continuation.",
+      "context": {},
+      "source_ids": [
+        "json_event",
+        "session",
+        "session_types",
+        "agent_types",
+        "ai_types"
+      ]
+    },
+    {
+      "id": "agent-end-continuation",
+      "path": "records/agent-end-continuation.jsonl",
+      "byte_length": 433,
+      "sha256": "07c22bd8ba61534c517cc79557b87d62aa3099c251aaebc594bfeaa2fbca0c12",
+      "layer": "record",
+      "expected_accept": true,
+      "expected_kind": "agent_end",
+      "expected_meaning": "Continuation produced one assistant message; still await agent_settled.",
+      "context": {},
+      "source_ids": [
+        "json_event",
+        "session",
+        "session_types",
+        "agent_types",
+        "ai_types"
+      ]
+    },
+    {
+      "id": "agent-end-retry",
+      "path": "records/agent-end-retry.jsonl",
+      "byte_length": 396,
+      "sha256": "51cad4807ede808ca316f7f6d9130a5e6cd87957cef35e7e17bb67406b007d08",
+      "layer": "record",
+      "expected_accept": true,
+      "expected_kind": "agent_end",
+      "expected_meaning": "Retry indicated; remain active.",
+      "context": {},
+      "source_ids": [
+        "json_event",
+        "session",
+        "session_types",
+        "agent_types",
+        "ai_types"
+      ]
+    },
+    {
+      "id": "retry-start",
+      "path": "records/retry-start.jsonl",
+      "byte_length": 118,
+      "sha256": "fae99f1cfbc3a5440e3584fd2137929dbd6149672bfc56fb0ae80c53d862058b",
+      "layer": "record",
+      "expected_accept": true,
+      "expected_kind": "auto_retry_start",
+      "expected_meaning": "Backoff does not renew worker deadline.",
+      "context": {},
+      "source_ids": [
+        "json_event",
+        "session",
+        "session_types",
+        "agent_types",
+        "ai_types"
+      ]
+    },
+    {
+      "id": "retry-success",
+      "path": "records/retry-success.jsonl",
+      "byte_length": 53,
+      "sha256": "4946cbd6cb48694e9b036d0994a3c5335ae33495d90e5aef4001878377a5e4f8",
+      "layer": "record",
+      "expected_accept": true,
+      "expected_kind": "auto_retry_end",
+      "expected_meaning": "Successful retried message observed; still await final settlement.",
+      "context": {},
+      "source_ids": [
+        "json_event",
+        "session",
+        "session_types",
+        "agent_types",
+        "ai_types"
+      ]
+    },
+    {
+      "id": "retry-cancelled",
+      "path": "records/retry-cancelled.jsonl",
+      "byte_length": 85,
+      "sha256": "65e8c48c6ea9437787a1978a48ebfb17d40d4cf6414f613b26220fec7c6ff117",
+      "layer": "record",
+      "expected_accept": true,
+      "expected_kind": "auto_retry_end",
+      "expected_meaning": "Retry sleep cancelled; not external custody settlement.",
+      "context": {},
+      "source_ids": [
+        "json_event",
+        "session",
+        "session_types",
+        "agent_types",
+        "ai_types"
+      ]
+    },
+    {
+      "id": "agent-settled",
+      "path": "records/agent-settled.jsonl",
+      "byte_length": 25,
+      "sha256": "cfecb65de109626fa6ff26e9a9f8586e7d2a55f32c91a3b48fa48e0334aff5c3",
+      "layer": "record",
+      "expected_accept": true,
+      "expected_kind": "agent_settled",
+      "expected_meaning": "Only Pi continuation settlement; require owned lifecycle and idle readback.",
+      "context": {},
+      "source_ids": [
+        "json_event",
+        "session",
+        "session_types",
+        "agent_types",
+        "ai_types"
+      ]
+    },
+    {
+      "id": "queue-empty",
+      "path": "records/queue-empty.jsonl",
+      "byte_length": 52,
+      "sha256": "2b0d769bad6869e977f9e022a09f46eae4ef87e8d1669741c1892cd35e6cf0cb",
+      "layer": "record",
+      "expected_accept": true,
+      "expected_kind": "queue_update",
+      "expected_meaning": "Empty current queues; not request response.",
+      "context": {},
+      "source_ids": [
+        "json_event",
+        "session",
+        "session_types",
+        "agent_types",
+        "ai_types"
+      ]
+    },
+    {
+      "id": "queue-nonempty",
+      "path": "records/queue-nonempty.jsonl",
+      "byte_length": 81,
+      "sha256": "9d28e9575dfe33f48bc1edb4fae34511fa5160a96da58af086871832045fdc4b",
+      "layer": "record",
+      "expected_accept": true,
+      "expected_kind": "queue_update",
+      "expected_meaning": "Unexpected queued work remains explicit; not permission to execute it.",
+      "context": {},
+      "source_ids": [
+        "json_event",
+        "session",
+        "session_types",
+        "agent_types",
+        "ai_types"
+      ]
+    },
+    {
+      "id": "thinking-changed",
+      "path": "records/thinking-changed.jsonl",
+      "byte_length": 49,
+      "sha256": "5101e9d2f6a43bbbbbdf20b7fc89f020d3c407020053d9b296ac71d9665d6d37",
+      "layer": "record",
+      "expected_accept": true,
+      "expected_kind": "thinking_level_changed",
+      "expected_meaning": "Effective level event precedes set_thinking response when changed.",
+      "context": {},
+      "source_ids": [
+        "json_event",
+        "session",
+        "session_types",
+        "agent_types",
+        "ai_types"
+      ]
+    },
+    {
+      "id": "state-missing-field",
+      "path": "records/state-missing-field.jsonl",
+      "byte_length": 291,
+      "sha256": "9aa83ba6df66654abb595530b055a1b294039d64015b887aecb5dc1b3a80e2c3",
+      "layer": "record",
+      "expected_accept": false,
+      "expected_kind": null,
+      "expected_meaning": "Required state field missing.",
+      "context": {
+        "pending": {
+          "id": "fixture-get_state",
+          "command": "get_state"
+        }
+      },
+      "source_ids": [
+        "json_event",
+        "session",
+        "session_types",
+        "agent_types",
+        "ai_types",
+        "rpc_types"
+      ]
+    },
+    {
+      "id": "state-unknown-field",
+      "path": "records/state-unknown-field.jsonl",
+      "byte_length": 326,
+      "sha256": "a733ed8c8bba92ac3c9388f5ee6a0a1f47f8d5346bdabba1dcaf9e1c8f65ef03",
+      "layer": "record",
+      "expected_accept": false,
+      "expected_kind": null,
+      "expected_meaning": "Unknown nested state field cannot supply settlement.",
+      "context": {
+        "pending": {
+          "id": "fixture-get_state",
+          "command": "get_state"
+        }
+      },
+      "source_ids": [
+        "json_event",
+        "session",
+        "session_types",
+        "agent_types",
+        "ai_types",
+        "rpc_types"
+      ]
+    },
+    {
+      "id": "state-null-model",
+      "path": "records/state-null-model.jsonl",
+      "byte_length": 324,
+      "sha256": "28cbcb57ddbf95effe4d1afa635e5f264bce3fe3778562fa0454f506aea0ddf5",
+      "layer": "record",
+      "expected_accept": false,
+      "expected_kind": null,
+      "expected_meaning": "Undefined model is omitted by emitter; null is a different invalid type.",
+      "context": {
+        "pending": {
+          "id": "fixture-get_state",
+          "command": "get_state"
+        }
+      },
+      "source_ids": [
+        "json_event",
+        "session",
+        "session_types",
+        "agent_types",
+        "ai_types",
+        "rpc_types"
+      ]
+    },
+    {
+      "id": "state-bad-enum",
+      "path": "records/state-bad-enum.jsonl",
+      "byte_length": 313,
+      "sha256": "b5e3025efa96709d703d3e819cbc521699fb7fd47e13daf5ef68a7f83e1c627c",
+      "layer": "record",
+      "expected_accept": false,
+      "expected_kind": null,
+      "expected_meaning": "Unknown thinking level.",
+      "context": {
+        "pending": {
+          "id": "fixture-get_state",
+          "command": "get_state"
+        }
+      },
+      "source_ids": [
+        "json_event",
+        "session",
+        "session_types",
+        "agent_types",
+        "ai_types",
+        "rpc_types"
+      ]
+    },
+    {
+      "id": "state-bool-counter",
+      "path": "records/state-bool-counter.jsonl",
+      "byte_length": 314,
+      "sha256": "0a73a09dbda5c860efd2ed10c836a252b60cdccb1d8bd037a32dbf57053e6209",
+      "layer": "record",
+      "expected_accept": false,
+      "expected_kind": null,
+      "expected_meaning": "Boolean is not a numeric counter.",
+      "context": {
+        "pending": {
+          "id": "fixture-get_state",
+          "command": "get_state"
+        }
+      },
+      "source_ids": [
+        "json_event",
+        "session",
+        "session_types",
+        "agent_types",
+        "ai_types",
+        "rpc_types"
+      ]
+    },
+    {
+      "id": "state-negative-counter",
+      "path": "records/state-negative-counter.jsonl",
+      "byte_length": 312,
+      "sha256": "d9b75650e422637028953cd387be610287aafb4f9a7f8c0d9906b5eb46c76896",
+      "layer": "record",
+      "expected_accept": false,
+      "expected_kind": null,
+      "expected_meaning": "Worker counter policy rejects negative values.",
+      "context": {
+        "pending": {
+          "id": "fixture-get_state",
+          "command": "get_state"
+        }
+      },
+      "source_ids": [
+        "json_event",
+        "session",
+        "session_types",
+        "agent_types",
+        "ai_types",
+        "rpc_types"
+      ]
+    },
+    {
+      "id": "state-fractional-counter",
+      "path": "records/state-fractional-counter.jsonl",
+      "byte_length": 313,
+      "sha256": "b859dcc6c0cdd342f4497c555b168453232da2ef1e1ed702833a334b303f04c4",
+      "layer": "record",
+      "expected_accept": false,
+      "expected_kind": null,
+      "expected_meaning": "Worker counter policy rejects fractional values.",
+      "context": {
+        "pending": {
+          "id": "fixture-get_state",
+          "command": "get_state"
+        }
+      },
+      "source_ids": [
+        "json_event",
+        "session",
+        "session_types",
+        "agent_types",
+        "ai_types",
+        "rpc_types"
+      ]
+    },
+    {
+      "id": "state-unsafe-counter",
+      "path": "records/state-unsafe-counter.jsonl",
+      "byte_length": 326,
+      "sha256": "514d38031155cd5bd5f469fd137741d09225a18fcd96b01151d69b0334f6334b",
+      "layer": "record",
+      "expected_accept": false,
+      "expected_kind": null,
+      "expected_meaning": "Above JS safe exact integer ceiling.",
+      "context": {
+        "pending": {
+          "id": "fixture-get_state",
+          "command": "get_state"
+        }
+      },
+      "source_ids": [
+        "json_event",
+        "session",
+        "session_types",
+        "agent_types",
+        "ai_types",
+        "rpc_types"
+      ]
+    },
+    {
+      "id": "model-missing-cost",
+      "path": "records/model-missing-cost.jsonl",
+      "byte_length": 314,
+      "sha256": "2be3d55e1ae020bce73c4cce21e364a35b0084cd296f076331cc5d586600291f",
+      "layer": "record",
+      "expected_accept": false,
+      "expected_kind": null,
+      "expected_meaning": "Required Model cost missing.",
+      "context": {
+        "pending": {
+          "id": "fixture-set_model",
+          "command": "set_model"
+        }
+      },
+      "source_ids": [
+        "json_event",
+        "session",
+        "session_types",
+        "agent_types",
+        "ai_types",
+        "rpc_types"
+      ]
+    },
+    {
+      "id": "model-unknown-cost",
+      "path": "records/model-unknown-cost.jsonl",
+      "byte_length": 390,
+      "sha256": "dc7d98644a1b65afc9a056955ed2ad005df4c5aacbdb90fe9c9ad3fbb065b536",
+      "layer": "record",
+      "expected_accept": false,
+      "expected_kind": null,
+      "expected_meaning": "Unreviewed currency field; cannot invent billing currency.",
+      "context": {
+        "pending": {
+          "id": "fixture-set_model",
+          "command": "set_model"
+        }
+      },
+      "source_ids": [
+        "json_event",
+        "session",
+        "session_types",
+        "agent_types",
+        "ai_types",
+        "rpc_types"
+      ]
+    },
+    {
+      "id": "model-bad-input",
+      "path": "records/model-bad-input.jsonl",
+      "byte_length": 374,
+      "sha256": "d3216755df325d7ec5932b6868720695bb021550c34bcce95dc3656ce2ca134c",
+      "layer": "record",
+      "expected_accept": false,
+      "expected_kind": null,
+      "expected_meaning": "Unsupported upstream input modality enum.",
+      "context": {
+        "pending": {
+          "id": "fixture-set_model",
+          "command": "set_model"
+        }
+      },
+      "source_ids": [
+        "json_event",
+        "session",
+        "session_types",
+        "agent_types",
+        "ai_types",
+        "rpc_types"
+      ]
+    },
+    {
+      "id": "model-open-headers",
+      "path": "records/model-open-headers.jsonl",
+      "byte_length": 405,
+      "sha256": "39414f67fb3ae87df95cb4cbb3ec8721048f3c716d8162e0cf83d7518f742d8b",
+      "layer": "record",
+      "expected_accept": false,
+      "expected_kind": null,
+      "expected_meaning": "Known upstream open map is deliberately unadmitted in initial closed profile.",
+      "context": {
+        "pending": {
+          "id": "fixture-set_model",
+          "command": "set_model"
+        }
+      },
+      "source_ids": [
+        "json_event",
+        "session",
+        "session_types",
+        "agent_types",
+        "ai_types",
+        "rpc_types"
+      ]
+    },
+    {
+      "id": "stats-missing-total",
+      "path": "records/stats-missing-total.jsonl",
+      "byte_length": 304,
+      "sha256": "b903dbb5ca1833e8638a3203e8de0427fb5b38cef85ae6ee91d2ad31afa94522",
+      "layer": "record",
+      "expected_accept": false,
+      "expected_kind": null,
+      "expected_meaning": "Required stats token total missing.",
+      "context": {
+        "pending": {
+          "id": "fixture-get_session_stats",
+          "command": "get_session_stats"
+        }
+      },
+      "source_ids": [
+        "json_event",
+        "session",
+        "session_types",
+        "agent_types",
+        "ai_types",
+        "rpc_types"
+      ]
+    },
+    {
+      "id": "stats-unknown-token",
+      "path": "records/stats-unknown-token.jsonl",
+      "byte_length": 329,
+      "sha256": "a41de556e9af4aadca1032b47aaf711a2b581563f97fcf2c4748b2e216da0748",
+      "layer": "record",
+      "expected_accept": false,
+      "expected_kind": null,
+      "expected_meaning": "SessionStats tokens has no reasoning field.",
+      "context": {
+        "pending": {
+          "id": "fixture-get_session_stats",
+          "command": "get_session_stats"
+        }
+      },
+      "source_ids": [
+        "json_event",
+        "session",
+        "session_types",
+        "agent_types",
+        "ai_types",
+        "rpc_types"
+      ]
+    },
+    {
+      "id": "ack-null-data",
+      "path": "records/ack-null-data.jsonl",
+      "byte_length": 88,
+      "sha256": "f9e6ba0d25860e362f728122cda7d7ae20d50605d098743399b4cb904ae8aa4f",
+      "layer": "record",
+      "expected_accept": false,
+      "expected_kind": null,
+      "expected_meaning": "Successful no-data response omits data; null is an extra field.",
+      "context": {
+        "pending": {
+          "id": "fixture-prompt",
+          "command": "prompt"
+        }
+      },
+      "source_ids": [
+        "json_event",
+        "session",
+        "session_types",
+        "agent_types",
+        "ai_types",
+        "rpc_types"
+      ]
+    },
+    {
+      "id": "response-success-string",
+      "path": "records/response-success-string.jsonl",
+      "byte_length": 76,
+      "sha256": "7f8ea60008a539398b9c97cf4dcdf4c5a2c5671a82f143c0bfdb984485e38444",
+      "layer": "record",
+      "expected_accept": false,
+      "expected_kind": null,
+      "expected_meaning": "Success must be boolean.",
+      "context": {
+        "pending": {
+          "id": "fixture-abort",
+          "command": "abort"
+        }
+      },
+      "source_ids": [
+        "json_event",
+        "session",
+        "session_types",
+        "agent_types",
+        "ai_types",
+        "rpc_types"
+      ]
+    },
+    {
+      "id": "response-error-and-data",
+      "path": "records/response-error-and-data.jsonl",
+      "byte_length": 113,
+      "sha256": "7fbd5889b39a0f18b5d7bbb7b33e0951c4f436163851c96256f2e86f8e540688",
+      "layer": "record",
+      "expected_accept": false,
+      "expected_kind": null,
+      "expected_meaning": "Failure envelope has error and no data.",
+      "context": {
+        "pending": {
+          "id": "fixture-prompt",
+          "command": "prompt"
+        }
+      },
+      "source_ids": [
+        "json_event",
+        "session",
+        "session_types",
+        "agent_types",
+        "ai_types",
+        "rpc_types"
+      ]
+    },
+    {
+      "id": "response-missing-error",
+      "path": "records/response-missing-error.jsonl",
+      "byte_length": 77,
+      "sha256": "89f8239ddedc9481ce60333350cecbb71bd2980d30b7530b676588d6e08d1610",
+      "layer": "record",
+      "expected_accept": false,
+      "expected_kind": null,
+      "expected_meaning": "Failure envelope requires error string.",
+      "context": {
+        "pending": {
+          "id": "fixture-prompt",
+          "command": "prompt"
+        }
+      },
+      "source_ids": [
+        "json_event",
+        "session",
+        "session_types",
+        "agent_types",
+        "ai_types",
+        "rpc_types"
+      ]
+    },
+    {
+      "id": "response-unknown-field",
+      "path": "records/response-unknown-field.jsonl",
+      "byte_length": 90,
+      "sha256": "4e17a9fab2b80ff229ab7164dbe367f15abde5f6f68437779b19d4a5506c0ee4",
+      "layer": "record",
+      "expected_accept": false,
+      "expected_kind": null,
+      "expected_meaning": "Unknown root field cannot assert HEE acceptance.",
+      "context": {
+        "pending": {
+          "id": "fixture-abort",
+          "command": "abort"
+        }
+      },
+      "source_ids": [
+        "json_event",
+        "session",
+        "session_types",
+        "agent_types",
+        "ai_types",
+        "rpc_types"
+      ]
+    },
+    {
+      "id": "delta-old-message",
+      "path": "records/delta-old-message.jsonl",
+      "byte_length": 556,
+      "sha256": "0c14c02b744bd9dfd47abd961ec2a101bcb2b34a89c4afc328518a7e7e1c354e",
+      "layer": "record",
+      "expected_accept": false,
+      "expected_kind": null,
+      "expected_meaning": "Pinned wire emitter omits cumulative message.",
+      "context": {},
+      "source_ids": [
+        "json_event",
+        "session",
+        "session_types",
+        "agent_types",
+        "ai_types",
+        "rpc_types"
+      ]
+    },
+    {
+      "id": "delta-old-partial",
+      "path": "records/delta-old-partial.jsonl",
+      "byte_length": 556,
+      "sha256": "65c4ff970705b23b2bd38bf672d52f57963b0e715a77570e076ae009b97f1082",
+      "layer": "record",
+      "expected_accept": false,
+      "expected_kind": null,
+      "expected_meaning": "Pinned wire emitter removes nested partial.",
+      "context": {},
+      "source_ids": [
+        "json_event",
+        "session",
+        "session_types",
+        "agent_types",
+        "ai_types",
+        "rpc_types"
+      ]
+    },
+    {
+      "id": "delta-missing-usage",
+      "path": "records/delta-missing-usage.jsonl",
+      "byte_length": 67,
+      "sha256": "0ecad49947c63f535d4d10123272460de713cec78a75412941ecb725904ab223",
+      "layer": "record",
+      "expected_accept": false,
+      "expected_kind": null,
+      "expected_meaning": "Wire message_update requires usage.",
+      "context": {},
+      "source_ids": [
+        "json_event",
+        "session",
+        "session_types",
+        "agent_types",
+        "ai_types",
+        "rpc_types"
+      ]
+    },
+    {
+      "id": "delta-negative-index",
+      "path": "records/delta-negative-index.jsonl",
+      "byte_length": 235,
+      "sha256": "20db104f695870bf889e197723f4d0dca8c3d22970ab4fd2048aee572c13f15f",
+      "layer": "record",
+      "expected_accept": false,
+      "expected_kind": null,
+      "expected_meaning": "Negative content index violates selected counter profile.",
+      "context": {},
+      "source_ids": [
+        "json_event",
+        "session",
+        "session_types",
+        "agent_types",
+        "ai_types",
+        "rpc_types"
+      ]
+    },
+    {
+      "id": "delta-unknown-kind",
+      "path": "records/delta-unknown-kind.jsonl",
+      "byte_length": 239,
+      "sha256": "0166636f5d75a0f51f805e887302a01b7283cbb55040fc80b8a85326024c7812",
+      "layer": "record",
+      "expected_accept": false,
+      "expected_kind": null,
+      "expected_meaning": "Unreviewed nested event kind.",
+      "context": {},
+      "source_ids": [
+        "json_event",
+        "session",
+        "session_types",
+        "agent_types",
+        "ai_types",
+        "rpc_types"
+      ]
+    },
+    {
+      "id": "assistant-unknown-block",
+      "path": "records/assistant-unknown-block.jsonl",
+      "byte_length": 415,
+      "sha256": "0cd164fa7b22b3408cb87d25ecd7cdee9409af43a09ff05f9f3309c47ac35b2b",
+      "layer": "record",
+      "expected_accept": false,
+      "expected_kind": null,
+      "expected_meaning": "Unreviewed content block type.",
+      "context": {},
+      "source_ids": [
+        "json_event",
+        "session",
+        "session_types",
+        "agent_types",
+        "ai_types",
+        "rpc_types"
+      ]
+    },
+    {
+      "id": "assistant-unknown-usage",
+      "path": "records/assistant-unknown-usage.jsonl",
+      "byte_length": 435,
+      "sha256": "2984439aca02cfee623f37126fc2cfcb7d162e81658c8d70f5d746bad9115d06",
+      "layer": "record",
+      "expected_accept": false,
+      "expected_kind": null,
+      "expected_meaning": "Usage does not report authoritative provider request count.",
+      "context": {},
+      "source_ids": [
+        "json_event",
+        "session",
+        "session_types",
+        "agent_types",
+        "ai_types",
+        "rpc_types"
+      ]
+    },
+    {
+      "id": "assistant-missing-stop",
+      "path": "records/assistant-missing-stop.jsonl",
+      "byte_length": 394,
+      "sha256": "ba1f2f76172ea91ce44ee70d6b41e4b56e62de9a73f9ba8cde9ee254818539b6",
+      "layer": "record",
+      "expected_accept": false,
+      "expected_kind": null,
+      "expected_meaning": "Required stop reason missing.",
+      "context": {},
+      "source_ids": [
+        "json_event",
+        "session",
+        "session_types",
+        "agent_types",
+        "ai_types",
+        "rpc_types"
+      ]
+    },
+    {
+      "id": "agent-end-missing-retry",
+      "path": "records/agent-end-missing-retry.jsonl",
+      "byte_length": 35,
+      "sha256": "c369f2115820b98215bbf7a6503c9055bd6a0d0d94d3c65e340773a31e8e552c",
+      "layer": "record",
+      "expected_accept": false,
+      "expected_kind": null,
+      "expected_meaning": "AgentSession wire adds mandatory willRetry.",
+      "context": {},
+      "source_ids": [
+        "json_event",
+        "session",
+        "session_types",
+        "agent_types",
+        "ai_types",
+        "rpc_types"
+      ]
+    },
+    {
+      "id": "agent-settled-extra",
+      "path": "records/agent-settled-extra.jsonl",
+      "byte_length": 41,
+      "sha256": "858ef78aafdce3a1e094628a87d82d0c1219450e434de0618a3cb80b5774995d",
+      "layer": "record",
+      "expected_accept": false,
+      "expected_kind": null,
+      "expected_meaning": "Pinned settled event has only type.",
+      "context": {},
+      "source_ids": [
+        "json_event",
+        "session",
+        "session_types",
+        "agent_types",
+        "ai_types",
+        "rpc_types"
+      ]
+    },
+    {
+      "id": "queue-nonstring",
+      "path": "records/queue-nonstring.jsonl",
+      "byte_length": 53,
+      "sha256": "cef3fbe718bc39bb5888aff5cd85235aa85538403ad49a51115a4640d1a9515e",
+      "layer": "record",
+      "expected_accept": false,
+      "expected_kind": null,
+      "expected_meaning": "Queue contents are strings.",
+      "context": {},
+      "source_ids": [
+        "json_event",
+        "session",
+        "session_types",
+        "agent_types",
+        "ai_types",
+        "rpc_types"
+      ]
+    },
+    {
+      "id": "state-safe-counter",
+      "path": "records/state-safe-counter.jsonl",
+      "byte_length": 326,
+      "sha256": "303b4b9b154ded22f2ed16034413c5e8cfe9a11199e12612fef72f6bd2f4500d",
+      "layer": "record",
+      "expected_accept": true,
+      "expected_kind": "state",
+      "expected_meaning": "Exactly-at-safe-ceiling counter is structurally acceptable; not a real session-size assertion.",
+      "context": {
+        "pending": {
+          "id": "fixture-get_state",
+          "command": "get_state"
+        }
+      },
+      "source_ids": [
+        "rpc",
+        "rpc_types"
+      ]
+    },
+    {
+      "id": "unsupported-compaction",
+      "path": "records/unsupported-compaction.jsonl",
+      "byte_length": 49,
+      "sha256": "22341a2358b1868c9f423ad06f45ae2c29f84e0ebf44caab28d7d924d504ffc4",
+      "layer": "profile",
+      "expected_accept": false,
+      "expected_kind": null,
+      "expected_meaning": "Compaction branch is not admitted; refusal cannot settle run.",
+      "context": {},
+      "source_ids": [
+        "json_event",
+        "session",
+        "session_types",
+        "agent_types",
+        "ai_types"
+      ]
+    },
+    {
+      "id": "unsupported-entry",
+      "path": "records/unsupported-entry.jsonl",
+      "byte_length": 163,
+      "sha256": "b062e342e37c93c72c04a87f36dbab171916eb96ee8246b7157baab9d5251ac7",
+      "layer": "profile",
+      "expected_accept": false,
+      "expected_kind": null,
+      "expected_meaning": "SessionEntry/custom-extension schema has not been admitted.",
+      "context": {},
+      "source_ids": [
+        "json_event",
+        "session",
+        "session_types",
+        "agent_types",
+        "ai_types"
+      ]
+    },
+    {
+      "id": "unsupported-tool-start",
+      "path": "records/unsupported-tool-start.jsonl",
+      "byte_length": 98,
+      "sha256": "326d623dfb32355eea2a655e52c4ed515d6e4e25f576b7a3a721cb5ac72c79fd",
+      "layer": "profile",
+      "expected_accept": false,
+      "expected_kind": null,
+      "expected_meaning": "Unexpected tool execution in no-tools profile.",
+      "context": {},
+      "source_ids": [
+        "json_event",
+        "session",
+        "session_types",
+        "agent_types",
+        "ai_types"
+      ]
+    },
+    {
+      "id": "unsupported-toolcall-start",
+      "path": "records/unsupported-toolcall-start.jsonl",
+      "byte_length": 286,
+      "sha256": "8c741695f26d8508b27d6322aa9c13be8f6ebc499456976dd7ebdc89f6ecdc9a",
+      "layer": "profile",
+      "expected_accept": false,
+      "expected_kind": null,
+      "expected_meaning": "Actual transformed toolcall_start fields, but tool branch remains unadmitted.",
+      "context": {},
+      "source_ids": [
+        "json_event",
+        "session",
+        "session_types",
+        "agent_types",
+        "ai_types"
+      ]
+    },
+    {
+      "id": "unsupported-toolcall-delta",
+      "path": "records/unsupported-toolcall-delta.jsonl",
+      "byte_length": 256,
+      "sha256": "f686b4c937d7bb88ce36dbff426ba9c9e3fa7dd32ee7684130ae37d5f560cf21",
+      "layer": "profile",
+      "expected_accept": false,
+      "expected_kind": null,
+      "expected_meaning": "Incomplete argument text is not executable; tool branch unadmitted.",
+      "context": {},
+      "source_ids": [
+        "json_event",
+        "session",
+        "session_types",
+        "agent_types",
+        "ai_types"
+      ]
+    },
+    {
+      "id": "unsupported-deferred",
+      "path": "records/unsupported-deferred.jsonl",
+      "byte_length": 538,
+      "sha256": "84e14d37d3b515949f17b3b5da58de08932067250311c69cf3fbf53ebc6d9acd",
+      "layer": "profile",
+      "expected_accept": false,
+      "expected_kind": null,
+      "expected_meaning": "Deferred effects cannot become accepted output under current command subset.",
+      "context": {},
+      "source_ids": [
+        "json_event",
+        "session",
+        "session_types",
+        "agent_types",
+        "ai_types"
+      ]
+    },
+    {
+      "id": "unknown-lifecycle",
+      "path": "records/unknown-lifecycle.jsonl",
+      "byte_length": 26,
+      "sha256": "a850d40d3cbcff52c4afb0f110ceaac3f47f9df7de3e35a6386eb1c97cec15e5",
+      "layer": "profile",
+      "expected_accept": false,
+      "expected_kind": null,
+      "expected_meaning": "Unknown lifecycle name has no authority.",
+      "context": {},
+      "source_ids": [
+        "json_event",
+        "session",
+        "session_types",
+        "agent_types",
+        "ai_types"
+      ]
+    },
+    {
+      "id": "response-wrong-id",
+      "path": "records/response-wrong-id.jsonl",
+      "byte_length": 307,
+      "sha256": "166335897dde37710c990760dc91a3804dd37b10cb770ee3193c82b13ae00127",
+      "layer": "correlation",
+      "expected_accept": false,
+      "expected_kind": null,
+      "expected_meaning": "Wrong pending id; do not advance state.",
+      "context": {
+        "pending": {
+          "id": "fixture-get_state",
+          "command": "get_state"
+        }
+      },
+      "source_ids": [
+        "rpc",
+        "rpc_types"
+      ]
+    },
+    {
+      "id": "response-wrong-command",
+      "path": "records/response-wrong-command.jsonl",
+      "byte_length": 78,
+      "sha256": "81f338529e32f2ccd2a1f7482c49c1a281255b0b11189e838996c6e0b75ff21a",
+      "layer": "correlation",
+      "expected_accept": false,
+      "expected_kind": null,
+      "expected_meaning": "Correct id with wrong command; do not advance state.",
+      "context": {
+        "pending": {
+          "id": "fixture-get_state",
+          "command": "get_state"
+        }
+      },
+      "source_ids": [
+        "rpc",
+        "rpc_types"
+      ]
+    },
+    {
+      "id": "response-no-id",
+      "path": "records/response-no-id.jsonl",
+      "byte_length": 86,
+      "sha256": "b6a8b53bd154967f58099cc1d2c4b5288e7b5008c6d88319cdd6ed034ceca070",
+      "layer": "correlation",
+      "expected_accept": false,
+      "expected_kind": null,
+      "expected_meaning": "Vendor parse failure can be uncorrelated; preserve refusal, never attach to a request.",
+      "context": {},
+      "source_ids": [
+        "rpc",
+        "rpc_types"
+      ]
+    },
+    {
+      "id": "stats-wrong-session",
+      "path": "records/stats-wrong-session.jsonl",
+      "byte_length": 319,
+      "sha256": "b0207232237ef8825a00d9fa2446be339e4a5f7ce3cb4d8286378a4f2ad8528b",
+      "layer": "attribution",
+      "expected_accept": false,
+      "expected_kind": null,
+      "expected_meaning": "Valid stats shape but foreign session; no usage attribution.",
+      "context": {
+        "owned_session_id": "fixture-session-001",
+        "pending": {
+          "id": "fixture-get_session_stats",
+          "command": "get_session_stats"
+        }
+      },
+      "source_ids": [
+        "rpc",
+        "rpc_types"
+      ]
+    },
+    {
+      "id": "raw-unterminated",
+      "path": "records/raw-unterminated.wire",
+      "byte_length": 75,
+      "sha256": "3ae610c49a37140033ce9f329ce23bc320c3625f4bd486c82508cf37460abbe4",
+      "layer": "framing",
+      "expected_accept": false,
+      "expected_kind": null,
+      "expected_meaning": "Nonempty EOF fragment is truncation.",
+      "context": {},
+      "source_ids": [
+        "jsonl"
+      ]
+    },
+    {
+      "id": "raw-crlf",
+      "path": "records/raw-crlf.wire",
+      "byte_length": 77,
+      "sha256": "f275143247190ae108548bfa68f5699f768ecccb0c39ea2ca8076206542d1aaa",
+      "layer": "framing",
+      "expected_accept": false,
+      "expected_kind": null,
+      "expected_meaning": "Chosen strict worker LF profile refuses CRLF; vendor input reader is more permissive.",
+      "context": {},
+      "source_ids": [
+        "jsonl"
+      ]
+    },
+    {
+      "id": "raw-empty-line",
+      "path": "records/raw-empty-line.wire",
+      "byte_length": 1,
+      "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
+      "layer": "framing",
+      "expected_accept": false,
+      "expected_kind": null,
+      "expected_meaning": "Empty record is not JSON.",
+      "context": {},
+      "source_ids": [
+        "jsonl"
+      ]
+    },
+    {
+      "id": "raw-invalid-utf8",
+      "path": "records/raw-invalid-utf8.wire",
+      "byte_length": 24,
+      "sha256": "f8873a4ba81fa0d044be16b2d6b354d64dff5bb09dc7b034a5c48f8682e0f1c3",
+      "layer": "framing",
+      "expected_accept": false,
+      "expected_kind": null,
+      "expected_meaning": "Invalid UTF-8 before JSON projection.",
+      "context": {},
+      "source_ids": [
+        "jsonl"
+      ]
+    },
+    {
+      "id": "raw-duplicate-id",
+      "path": "records/raw-duplicate-id.wire",
+      "byte_length": 97,
+      "sha256": "4db836d0964e9b6dfce1bb760ba8e2f5d074d564acb451b47bfb7cd243224b6d",
+      "layer": "json",
+      "expected_accept": false,
+      "expected_kind": null,
+      "expected_meaning": "Duplicate keys refused; no last-key-wins.",
+      "context": {},
+      "source_ids": [
+        "jsonl"
+      ]
+    },
+    {
+      "id": "raw-duplicate-nested",
+      "path": "records/raw-duplicate-nested.wire",
+      "byte_length": 328,
+      "sha256": "361ec6bf4a8f58ad293dbeded512e1622e04d93f7c465abeb21d32b4c8411715",
+      "layer": "json",
+      "expected_accept": false,
+      "expected_kind": null,
+      "expected_meaning": "Duplicate keys refused at every depth.",
+      "context": {},
+      "source_ids": [
+        "jsonl"
+      ]
+    },
+    {
+      "id": "raw-trailing-value",
+      "path": "records/raw-trailing-value.wire",
+      "byte_length": 25,
+      "sha256": "6159c29c68d07cb638ad93443215ffdab304bc9bd522ad12b4ff101fc1393688",
+      "layer": "json",
+      "expected_accept": false,
+      "expected_kind": null,
+      "expected_meaning": "Exactly one JSON object per LF frame.",
+      "context": {},
+      "source_ids": [
+        "jsonl"
+      ]
+    },
+    {
+      "id": "raw-nonfinite",
+      "path": "records/raw-nonfinite.wire",
+      "byte_length": 315,
+      "sha256": "1d7faa3a8f01d3e5ad4e998325a9deaadf20b74bcb967586a7200681aa941cbb",
+      "layer": "json",
+      "expected_accept": false,
+      "expected_kind": null,
+      "expected_meaning": "Nonfinite counter in otherwise complete state cannot be accepted.",
+      "context": {},
+      "source_ids": [
+        "jsonl"
+      ]
+    },
+    {
+      "id": "raw-array-root",
+      "path": "records/raw-array-root.wire",
+      "byte_length": 3,
+      "sha256": "37517e5f3dc66819f61f5a7bb8ace1921282415f10551d2defa5c3eb0985b570",
+      "layer": "record",
+      "expected_accept": false,
+      "expected_kind": null,
+      "expected_meaning": "Root must be a closed protocol object.",
+      "context": {},
+      "source_ids": [
+        "jsonl"
+      ]
+    },
+    {
+      "id": "unicode-delta",
+      "path": "records/unicode-delta.jsonl",
+      "byte_length": 260,
+      "sha256": "ee48dc8fe6eb5fce55819ecbf282c0aea65cb2ce3f40720ab84ac53d4442ef7f",
+      "layer": "record",
+      "expected_accept": true,
+      "expected_kind": "message_update",
+      "expected_meaning": "One LF frame; literal U+2028/U+2029 and multibyte text stay in string.",
+      "context": {},
+      "source_ids": [
+        "jsonl",
+        "json_event"
+      ]
+    },
+    {
+      "id": "stderr-forged-pass",
+      "path": "records/stderr-forged-pass.wire",
+      "byte_length": 81,
+      "sha256": "7defb644d92df1c460cae5018b9aa0306085ddf9a0e53ed29b2c532f0cb03903",
+      "layer": "stderr",
+      "expected_accept": false,
+      "expected_kind": null,
+      "expected_meaning": "Raw stderr is retained diagnostic evidence; neither text nor JSON is a response.",
+      "context": {},
+      "source_ids": [
+        "rpc",
+        "jsonl"
+      ]
+    }
+  ],
+  "trace_cases": [
+    {
+      "id": "metadata-empty",
+      "path": "traces/metadata-empty.jsonl",
+      "byte_length": 648,
+      "sha256": "da1a554147fef914746d1fa9660809c8fb4433686d8c222197865e27295b595e",
+      "steps": [
+        {
+          "direction": "send",
+          "fixture_id": "request-get_state",
+          "expected_observation": "Bind exact pending id+command before write."
+        },
+        {
+          "direction": "receive",
+          "fixture_id": "state-unavailable-sentinel",
+          "expected_observation": "Bind fictional session and observe idle/unavailable sentinel.",
+          "record_index": 0,
+          "byte_offset": 0,
+          "byte_length": 523
+        },
+        {
+          "direction": "send",
+          "fixture_id": "request-get_available_models",
+          "expected_observation": "Independent metadata request after state response."
+        },
+        {
+          "direction": "receive",
+          "fixture_id": "models-empty",
+          "expected_observation": "No model available; no prompt should be sent.",
+          "record_index": 1,
+          "byte_offset": 523,
+          "byte_length": 125
+        }
+      ],
+      "expected_meaning": "Credential-free metadata can succeed with an empty model inventory.",
+      "expected_final": {
+        "pi_idle": true,
+        "provider_calls_authorized": false,
+        "attempt_accepted": false
+      },
+      "source_ids": [
+        "rpc",
+        "session",
+        "json_event",
+        "ai_types"
+      ]
+    },
+    {
+      "id": "model-thinking-readback",
+      "path": "traces/model-thinking-readback.jsonl",
+      "byte_length": 1534,
+      "sha256": "3ae59d68f6a8e9eb55c52d35db07f9ac6ce433a224c936e961a8468a8139c44b",
+      "steps": [
+        {
+          "direction": "send",
+          "fixture_id": "request-get_available_models",
+          "expected_observation": "Bind discovery."
+        },
+        {
+          "direction": "receive",
+          "fixture_id": "models-one",
+          "expected_observation": "Fictional descriptor available.",
+          "record_index": 0,
+          "byte_offset": 0,
+          "byte_length": 408
+        },
+        {
+          "direction": "send",
+          "fixture_id": "request-set_model",
+          "expected_observation": "Await correlated model set before thinking command."
+        },
+        {
+          "direction": "receive",
+          "fixture_id": "model-selected",
+          "expected_observation": "Set observed; readback pending.",
+          "record_index": 1,
+          "byte_offset": 408,
+          "byte_length": 373
+        },
+        {
+          "direction": "send",
+          "fixture_id": "request-set_thinking_level",
+          "expected_observation": "Requested high."
+        },
+        {
+          "direction": "receive",
+          "fixture_id": "thinking-changed",
+          "expected_observation": "Changed event can precede response.",
+          "record_index": 2,
+          "byte_offset": 781,
+          "byte_length": 49
+        },
+        {
+          "direction": "receive",
+          "fixture_id": "thinking-ack",
+          "expected_observation": "Acknowledgement only.",
+          "record_index": 3,
+          "byte_offset": 830,
+          "byte_length": 100
+        },
+        {
+          "direction": "send",
+          "fixture_id": "request-get_state",
+          "expected_observation": "Confirm effective recipe."
+        },
+        {
+          "direction": "receive",
+          "fixture_id": "state-model",
+          "expected_observation": "Exact fictional model identity and high thinking match.",
+          "record_index": 4,
+          "byte_offset": 930,
+          "byte_length": 604
+        }
+      ],
+      "expected_meaning": "Dependent commands are serialized and final state supplies effective configuration.",
+      "expected_final": {
+        "recipe_matches": true,
+        "attempt_accepted": false
+      },
+      "source_ids": [
+        "rpc",
+        "session",
+        "json_event",
+        "ai_types"
+      ]
+    },
+    {
+      "id": "thinking-clamped",
+      "path": "traces/thinking-clamped.jsonl",
+      "byte_length": 411,
+      "sha256": "7b64a2f52f19f40c97c04c7bfc50c3abd75dc635f74fc099c04e7631f44807d1",
+      "steps": [
+        {
+          "direction": "send",
+          "fixture_id": "request-set_thinking_level",
+          "expected_observation": "Requested high."
+        },
+        {
+          "direction": "receive",
+          "fixture_id": "thinking-ack",
+          "expected_observation": "No proof of high.",
+          "record_index": 0,
+          "byte_offset": 0,
+          "byte_length": 100
+        },
+        {
+          "direction": "send",
+          "fixture_id": "request-get_state",
+          "expected_observation": "Required readback."
+        },
+        {
+          "direction": "receive",
+          "fixture_id": "state-empty",
+          "expected_observation": "Observed off; recipe mismatch.",
+          "record_index": 1,
+          "byte_offset": 100,
+          "byte_length": 311
+        }
+      ],
+      "expected_meaning": "Success acknowledgement cannot override readback mismatch.",
+      "expected_final": {
+        "recipe_matches": false,
+        "attempt_accepted": false
+      },
+      "source_ids": [
+        "rpc",
+        "session",
+        "json_event",
+        "ai_types"
+      ]
+    },
+    {
+      "id": "model-readback-mismatch",
+      "path": "traces/model-readback-mismatch.jsonl",
+      "byte_length": 983,
+      "sha256": "bdbc2154ce1ed13ab7d61c6a165abaed260e8b822fbe6fca1cec44e85e8dbf51",
+      "steps": [
+        {
+          "direction": "send",
+          "fixture_id": "request-set_model",
+          "expected_observation": "Requested exact fixture-provider/fixture-model."
+        },
+        {
+          "direction": "receive",
+          "fixture_id": "model-selected",
+          "expected_observation": "Correlated requested descriptor returned.",
+          "record_index": 0,
+          "byte_offset": 0,
+          "byte_length": 373
+        },
+        {
+          "direction": "send",
+          "fixture_id": "request-get_state",
+          "expected_observation": "Required effective model readback."
+        },
+        {
+          "direction": "receive",
+          "fixture_id": "state-foreign-model",
+          "expected_observation": "Observed fixture-other-model; refuse recipe compatibility.",
+          "record_index": 1,
+          "byte_offset": 373,
+          "byte_length": 610
+        }
+      ],
+      "expected_meaning": "A matching set response cannot override a different effective provider/model in final state.",
+      "expected_final": {
+        "recipe_matches": false,
+        "attempt_accepted": false
+      },
+      "source_ids": [
+        "rpc",
+        "session",
+        "json_event",
+        "ai_types"
+      ]
+    },
+    {
+      "id": "prompt-ack-only",
+      "path": "traces/prompt-ack-only.jsonl",
+      "byte_length": 76,
+      "sha256": "50d3272415c6463503fd74cd531018333b66eb5207e32aebc6a056b6c3ba316f",
+      "steps": [
+        {
+          "direction": "send",
+          "fixture_id": "request-prompt",
+          "expected_observation": "Bind owned run before send."
+        },
+        {
+          "direction": "receive",
+          "fixture_id": "prompt-ack",
+          "expected_observation": "Preflight acknowledged only.",
+          "record_index": 0,
+          "byte_offset": 0,
+          "byte_length": 76
+        }
+      ],
+      "expected_meaning": "EOF after only an ack is not a completed execution.",
+      "expected_final": {
+        "prompt_acknowledged": true,
+        "execution_observed": false,
+        "pi_settled": false,
+        "attempt_accepted": false
+      },
+      "source_ids": [
+        "rpc",
+        "session",
+        "json_event",
+        "ai_types"
+      ]
+    },
+    {
+      "id": "prompt-final-overrides-deltas",
+      "path": "traces/prompt-final-overrides-deltas.jsonl",
+      "byte_length": 4337,
+      "sha256": "2bce9a5c2a634fda37360a3bc4f24b7521d03c69b4d7829652ffb9dac8b952cf",
+      "steps": [
+        {
+          "direction": "send",
+          "fixture_id": "request-prompt",
+          "expected_observation": "Prebind owned run and original deadline."
+        },
+        {
+          "direction": "receive",
+          "fixture_id": "prompt-ack",
+          "expected_observation": "Preflight only.",
+          "record_index": 0,
+          "byte_offset": 0,
+          "byte_length": 76
+        },
+        {
+          "direction": "receive",
+          "fixture_id": "agent-start",
+          "expected_observation": "Run active.",
+          "record_index": 1,
+          "byte_offset": 76,
+          "byte_length": 23
+        },
+        {
+          "direction": "receive",
+          "fixture_id": "turn-start",
+          "expected_observation": "Turn active.",
+          "record_index": 2,
+          "byte_offset": 99,
+          "byte_length": 22
+        },
+        {
+          "direction": "receive",
+          "fixture_id": "user-start",
+          "expected_observation": "User message started.",
+          "record_index": 3,
+          "byte_offset": 121,
+          "byte_length": 114
+        },
+        {
+          "direction": "receive",
+          "fixture_id": "user-end",
+          "expected_observation": "User message ended.",
+          "record_index": 4,
+          "byte_offset": 235,
+          "byte_length": 112
+        },
+        {
+          "direction": "receive",
+          "fixture_id": "assistant-start",
+          "expected_observation": "Pending assistant.",
+          "record_index": 5,
+          "byte_offset": 347,
+          "byte_length": 335
+        },
+        {
+          "direction": "receive",
+          "fixture_id": "update-start",
+          "expected_observation": "Native partial omitted.",
+          "record_index": 6,
+          "byte_offset": 682,
+          "byte_length": 212
+        },
+        {
+          "direction": "receive",
+          "fixture_id": "text-start",
+          "expected_observation": "Block index0.",
+          "record_index": 7,
+          "byte_offset": 894,
+          "byte_length": 234
+        },
+        {
+          "direction": "receive",
+          "fixture_id": "text-delta",
+          "expected_observation": "Provisional draft X.",
+          "record_index": 8,
+          "byte_offset": 1128,
+          "byte_length": 252
+        },
+        {
+          "direction": "receive",
+          "fixture_id": "text-end",
+          "expected_observation": "Block final Y.",
+          "record_index": 9,
+          "byte_offset": 1380,
+          "byte_length": 304
+        },
+        {
+          "direction": "receive",
+          "fixture_id": "update-done",
+          "expected_observation": "Full final message retained.",
+          "record_index": 10,
+          "byte_offset": 1684,
+          "byte_length": 670
+        },
+        {
+          "direction": "receive",
+          "fixture_id": "assistant-end",
+          "expected_observation": "Final Y authoritative; tokens39.",
+          "record_index": 11,
+          "byte_offset": 2354,
+          "byte_length": 414
+        },
+        {
+          "direction": "receive",
+          "fixture_id": "turn-end",
+          "expected_observation": "Turn closed, run not yet settled.",
+          "record_index": 12,
+          "byte_offset": 2768,
+          "byte_length": 428
+        },
+        {
+          "direction": "receive",
+          "fixture_id": "agent-end-no-retry",
+          "expected_observation": "Still not settlement.",
+          "record_index": 13,
+          "byte_offset": 3196,
+          "byte_length": 512
+        },
+        {
+          "direction": "receive",
+          "fixture_id": "agent-settled",
+          "expected_observation": "Owned Pi continuation settled.",
+          "record_index": 14,
+          "byte_offset": 3708,
+          "byte_length": 25
+        },
+        {
+          "direction": "send",
+          "fixture_id": "request-get_state",
+          "expected_observation": "Idle readback required."
+        },
+        {
+          "direction": "receive",
+          "fixture_id": "state-after-run",
+          "expected_observation": "Idle flags, queues and two observed messages.",
+          "record_index": 15,
+          "byte_offset": 3733,
+          "byte_length": 604
+        }
+      ],
+      "expected_meaning": "Synthetic finite lifecycle: final Y overrides draft X; no HEE task/admission inference.",
+      "expected_final": {
+        "final_text": "final Y",
+        "reported_total_tokens": 39,
+        "pi_settled": true,
+        "pi_idle": true,
+        "external_custody": "unmeasured",
+        "attempt_accepted": false
+      },
+      "source_ids": [
+        "rpc",
+        "session",
+        "json_event",
+        "ai_types"
+      ]
+    },
+    {
+      "id": "retry-remains-active",
+      "path": "traces/retry-remains-active.jsonl",
+      "byte_length": 1939,
+      "sha256": "ea3fb28f5f10962926f68e86c148a31a755a990e338f645e2e34dca6fc9d0760",
+      "steps": [
+        {
+          "direction": "send",
+          "fixture_id": "request-prompt",
+          "expected_observation": "Bind one nonrenewable deadline."
+        },
+        {
+          "direction": "receive",
+          "fixture_id": "prompt-ack",
+          "expected_observation": "Preflight.",
+          "record_index": 0,
+          "byte_offset": 0,
+          "byte_length": 76
+        },
+        {
+          "direction": "receive",
+          "fixture_id": "agent-start",
+          "expected_observation": "First run active.",
+          "record_index": 1,
+          "byte_offset": 76,
+          "byte_length": 23
+        },
+        {
+          "direction": "receive",
+          "fixture_id": "assistant-error-end",
+          "expected_observation": "Error message observed.",
+          "record_index": 2,
+          "byte_offset": 99,
+          "byte_length": 378
+        },
+        {
+          "direction": "receive",
+          "fixture_id": "agent-end-retry",
+          "expected_observation": "Retry indicated; no settlement.",
+          "record_index": 3,
+          "byte_offset": 477,
+          "byte_length": 396
+        },
+        {
+          "direction": "receive",
+          "fixture_id": "retry-start",
+          "expected_observation": "Same deadline through backoff.",
+          "record_index": 4,
+          "byte_offset": 873,
+          "byte_length": 118
+        },
+        {
+          "direction": "receive",
+          "fixture_id": "agent-start",
+          "expected_observation": "Continuation active.",
+          "record_index": 5,
+          "byte_offset": 991,
+          "byte_length": 23
+        },
+        {
+          "direction": "receive",
+          "fixture_id": "assistant-end",
+          "expected_observation": "Successful message.",
+          "record_index": 6,
+          "byte_offset": 1014,
+          "byte_length": 414
+        },
+        {
+          "direction": "receive",
+          "fixture_id": "retry-success",
+          "expected_observation": "Emitted after successful assistant message_end.",
+          "record_index": 7,
+          "byte_offset": 1428,
+          "byte_length": 53
+        },
+        {
+          "direction": "receive",
+          "fixture_id": "agent-end-continuation",
+          "expected_observation": "Still await settled.",
+          "record_index": 8,
+          "byte_offset": 1481,
+          "byte_length": 433
+        },
+        {
+          "direction": "receive",
+          "fixture_id": "agent-settled",
+          "expected_observation": "Pi settled only now.",
+          "record_index": 9,
+          "byte_offset": 1914,
+          "byte_length": 25
+        }
+      ],
+      "expected_meaning": "Targeted lifecycle subsequence, not a complete transcript or enabled metadata-smoke retry policy.",
+      "expected_final": {
+        "pi_settled": true,
+        "deadline_renewals": 0,
+        "attempt_accepted": false
+      },
+      "source_ids": [
+        "rpc",
+        "session",
+        "json_event",
+        "ai_types"
+      ]
+    },
+    {
+      "id": "clear-removed-then-abort",
+      "path": "traces/clear-removed-then-abort.jsonl",
+      "byte_length": 614,
+      "sha256": "2f604cd54f7258fa3ca4dad95dd6f4e0e04bd35d870122807f23f00bc8c6b724",
+      "steps": [
+        {
+          "direction": "send",
+          "fixture_id": "request-clear_queue",
+          "expected_observation": "Cancel an already-owned active run; do not send abort yet."
+        },
+        {
+          "direction": "receive",
+          "fixture_id": "queue-empty",
+          "expected_observation": "Current queues empty; response still pending.",
+          "record_index": 0,
+          "byte_offset": 0,
+          "byte_length": 52
+        },
+        {
+          "direction": "receive",
+          "fixture_id": "clear-removed",
+          "expected_observation": "Correlated response reports removed strings; permits dependent abort dispatch.",
+          "record_index": 1,
+          "byte_offset": 52,
+          "byte_length": 152
+        },
+        {
+          "direction": "send",
+          "fixture_id": "request-abort",
+          "expected_observation": "Now abort with its own bound id."
+        },
+        {
+          "direction": "receive",
+          "fixture_id": "agent-settled",
+          "expected_observation": "Owned run settles during abort.",
+          "record_index": 2,
+          "byte_offset": 204,
+          "byte_length": 25
+        },
+        {
+          "direction": "receive",
+          "fixture_id": "abort-ack",
+          "expected_observation": "Pi abort waiter resolved.",
+          "record_index": 3,
+          "byte_offset": 229,
+          "byte_length": 74
+        },
+        {
+          "direction": "send",
+          "fixture_id": "request-get_state",
+          "expected_observation": "Read current Pi state."
+        },
+        {
+          "direction": "receive",
+          "fixture_id": "state-empty",
+          "expected_observation": "Idle queues and activity flags.",
+          "record_index": 4,
+          "byte_offset": 303,
+          "byte_length": 311
+        }
+      ],
+      "expected_meaning": "Precondition: an owned active run exists; clear_queue arrays are removed contents, not pending work.",
+      "expected_final": {
+        "pi_idle": true,
+        "pi_settled": true,
+        "external_custody": "unmeasured",
+        "attempt_accepted": false
+      },
+      "source_ids": [
+        "rpc",
+        "session",
+        "json_event",
+        "ai_types"
+      ]
+    },
+    {
+      "id": "cancel-unsafe-dispatch",
+      "path": "traces/cancel-unsafe-dispatch.jsonl",
+      "byte_length": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "steps": [
+        {
+          "direction": "send",
+          "fixture_id": "request-clear_queue",
+          "expected_observation": "Clear pending."
+        },
+        {
+          "direction": "send",
+          "fixture_id": "request-abort",
+          "expected_observation": "Refuse dependent send before correlated clear_queue response."
+        }
+      ],
+      "expected_meaning": "A controller must refuse the second outbound step; no fake incoming reply can repair premature dispatch.",
+      "expected_final": {
+        "dispatch_rejected_at_step": 1,
+        "pi_settled": false,
+        "attempt_accepted": false
+      },
+      "source_ids": [
+        "rpc",
+        "session",
+        "json_event",
+        "ai_types"
+      ]
+    },
+    {
+      "id": "stale-settled",
+      "path": "traces/stale-settled.jsonl",
+      "byte_length": 25,
+      "sha256": "cfecb65de109626fa6ff26e9a9f8586e7d2a55f32c91a3b48fa48e0334aff5c3",
+      "steps": [
+        {
+          "direction": "receive",
+          "fixture_id": "agent-settled",
+          "expected_observation": "No bound active run: reject lifecycle attribution.",
+          "record_index": 0,
+          "byte_offset": 0,
+          "byte_length": 25
+        }
+      ],
+      "expected_meaning": "A valid event shape alone does not establish an owned run.",
+      "expected_final": {
+        "lifecycle_accepted": false,
+        "pi_settled": false,
+        "attempt_accepted": false
+      },
+      "source_ids": [
+        "rpc",
+        "session",
+        "json_event",
+        "ai_types"
+      ]
+    },
+    {
+      "id": "compaction-after-end",
+      "path": "traces/compaction-after-end.jsonl",
+      "byte_length": 586,
+      "sha256": "209a5aa72874403cd8eacd07fea141a4b3d242df21eef8fbbee8b0314ed935b9",
+      "steps": [
+        {
+          "direction": "receive",
+          "fixture_id": "agent-end-no-retry",
+          "expected_observation": "Assume owned active run; willRetry false does not settle it.",
+          "record_index": 0,
+          "byte_offset": 0,
+          "byte_length": 512
+        },
+        {
+          "direction": "receive",
+          "fixture_id": "unsupported-compaction",
+          "expected_observation": "Refuse unsupported continuation; retain unresolved run.",
+          "record_index": 1,
+          "byte_offset": 512,
+          "byte_length": 49
+        },
+        {
+          "direction": "receive",
+          "fixture_id": "agent-settled",
+          "expected_observation": "After refusal, do not resume authoritative state merely on a later valid event.",
+          "record_index": 2,
+          "byte_offset": 561,
+          "byte_length": 25
+        }
+      ],
+      "expected_meaning": "Unsupported continuation is fail-closed; its subsequent settled event cannot launder the refusal.",
+      "expected_final": {
+        "profile_accepted": false,
+        "pi_settled": false,
+        "attempt_accepted": false
+      },
+      "source_ids": [
+        "rpc",
+        "session",
+        "json_event",
+        "ai_types"
+      ]
+    }
+  ],
+  "boundary_recipes": [
+    {
+      "id": "frame-at-limit",
+      "parts": [
+        {
+          "ascii": "{\"id\":\"fixture-prompt\",\"type\":\"response\",\"command\":\"prompt\",\"success\":false,\"error\":\""
+        },
+        {
+          "ascii": "x",
+          "repeat": 1048489
+        },
+        {
+          "ascii": "\"}\n"
+        }
+      ],
+      "byte_length": 1048577,
+      "sha256": "12ed7fb41cfb5cc76664cb478e74a24565a9dc366feb4b544a548b99e2a8bd87",
+      "layer": "framing",
+      "expected_accept": true,
+      "expected_meaning": "1048576 payload bytes before LF; chosen 1MiB cap excludes LF."
+    },
+    {
+      "id": "frame-over-limit",
+      "parts": [
+        {
+          "ascii": "{\"id\":\"fixture-prompt\",\"type\":\"response\",\"command\":\"prompt\",\"success\":false,\"error\":\""
+        },
+        {
+          "ascii": "x",
+          "repeat": 1048490
+        },
+        {
+          "ascii": "\"}\n"
+        }
+      ],
+      "byte_length": 1048578,
+      "sha256": "a482c9b4700b00bf053c974f3841b723c31ebdd4db8a4436bd99da2d86b4e825",
+      "layer": "framing",
+      "expected_accept": false,
+      "expected_meaning": "1048577 payload bytes before LF; chosen 1MiB cap excludes LF."
+    },
+    {
+      "id": "stream-at-limit",
+      "parts": [
+        {
+          "ascii": "{\"id\":\"fixture-prompt\",\"type\":\"response\",\"command\":\"prompt\",\"success\":false,\"error\":\""
+        },
+        {
+          "ascii": "x",
+          "repeat": 1048488
+        },
+        {
+          "ascii": "\"}\n"
+        },
+        {
+          "ascii": "{\"id\":\"fixture-prompt\",\"type\":\"response\",\"command\":\"prompt\",\"success\":false,\"error\":\""
+        },
+        {
+          "ascii": "x",
+          "repeat": 1048488
+        },
+        {
+          "ascii": "\"}\n"
+        },
+        {
+          "ascii": "{\"id\":\"fixture-prompt\",\"type\":\"response\",\"command\":\"prompt\",\"success\":false,\"error\":\""
+        },
+        {
+          "ascii": "x",
+          "repeat": 1048488
+        },
+        {
+          "ascii": "\"}\n"
+        },
+        {
+          "ascii": "{\"id\":\"fixture-prompt\",\"type\":\"response\",\"command\":\"prompt\",\"success\":false,\"error\":\""
+        },
+        {
+          "ascii": "x",
+          "repeat": 1048488
+        },
+        {
+          "ascii": "\"}\n"
+        },
+        {
+          "ascii": "{\"id\":\"fixture-prompt\",\"type\":\"response\",\"command\":\"prompt\",\"success\":false,\"error\":\""
+        },
+        {
+          "ascii": "x",
+          "repeat": 1048488
+        },
+        {
+          "ascii": "\"}\n"
+        },
+        {
+          "ascii": "{\"id\":\"fixture-prompt\",\"type\":\"response\",\"command\":\"prompt\",\"success\":false,\"error\":\""
+        },
+        {
+          "ascii": "x",
+          "repeat": 1048488
+        },
+        {
+          "ascii": "\"}\n"
+        },
+        {
+          "ascii": "{\"id\":\"fixture-prompt\",\"type\":\"response\",\"command\":\"prompt\",\"success\":false,\"error\":\""
+        },
+        {
+          "ascii": "x",
+          "repeat": 1048488
+        },
+        {
+          "ascii": "\"}\n"
+        },
+        {
+          "ascii": "{\"id\":\"fixture-prompt\",\"type\":\"response\",\"command\":\"prompt\",\"success\":false,\"error\":\""
+        },
+        {
+          "ascii": "x",
+          "repeat": 1048488
+        },
+        {
+          "ascii": "\"}\n"
+        }
+      ],
+      "byte_length": 8388608,
+      "sha256": "3bdab0b25bdbc273058f5c77f957b991d7d8b1b671f4d53dafe1bda4f6960716",
+      "layer": "stream_bound",
+      "expected_accept": true,
+      "expected_meaning": "8MiB cumulative raw stream cap includes delimiters; response correlation is deliberately outside this test."
+    },
+    {
+      "id": "stream-over-limit",
+      "parts": [
+        {
+          "ascii": "{\"id\":\"fixture-prompt\",\"type\":\"response\",\"command\":\"prompt\",\"success\":false,\"error\":\""
+        },
+        {
+          "ascii": "x",
+          "repeat": 1048488
+        },
+        {
+          "ascii": "\"}\n"
+        },
+        {
+          "ascii": "{\"id\":\"fixture-prompt\",\"type\":\"response\",\"command\":\"prompt\",\"success\":false,\"error\":\""
+        },
+        {
+          "ascii": "x",
+          "repeat": 1048488
+        },
+        {
+          "ascii": "\"}\n"
+        },
+        {
+          "ascii": "{\"id\":\"fixture-prompt\",\"type\":\"response\",\"command\":\"prompt\",\"success\":false,\"error\":\""
+        },
+        {
+          "ascii": "x",
+          "repeat": 1048488
+        },
+        {
+          "ascii": "\"}\n"
+        },
+        {
+          "ascii": "{\"id\":\"fixture-prompt\",\"type\":\"response\",\"command\":\"prompt\",\"success\":false,\"error\":\""
+        },
+        {
+          "ascii": "x",
+          "repeat": 1048488
+        },
+        {
+          "ascii": "\"}\n"
+        },
+        {
+          "ascii": "{\"id\":\"fixture-prompt\",\"type\":\"response\",\"command\":\"prompt\",\"success\":false,\"error\":\""
+        },
+        {
+          "ascii": "x",
+          "repeat": 1048488
+        },
+        {
+          "ascii": "\"}\n"
+        },
+        {
+          "ascii": "{\"id\":\"fixture-prompt\",\"type\":\"response\",\"command\":\"prompt\",\"success\":false,\"error\":\""
+        },
+        {
+          "ascii": "x",
+          "repeat": 1048488
+        },
+        {
+          "ascii": "\"}\n"
+        },
+        {
+          "ascii": "{\"id\":\"fixture-prompt\",\"type\":\"response\",\"command\":\"prompt\",\"success\":false,\"error\":\""
+        },
+        {
+          "ascii": "x",
+          "repeat": 1048488
+        },
+        {
+          "ascii": "\"}\n"
+        },
+        {
+          "ascii": "{\"id\":\"fixture-prompt\",\"type\":\"response\",\"command\":\"prompt\",\"success\":false,\"error\":\""
+        },
+        {
+          "ascii": "x",
+          "repeat": 1048488
+        },
+        {
+          "ascii": "\"}\n"
+        },
+        {
+          "ascii": "x"
+        }
+      ],
+      "byte_length": 8388609,
+      "sha256": "3a3fc3da7a3db9d7699ee7f70b1268d4600e58ba9632a2cdb404cee4a1cc3aa9",
+      "layer": "stream_bound",
+      "expected_accept": false,
+      "expected_meaning": "8MiB cumulative raw stream cap includes delimiters; response correlation is deliberately outside this test."
+    },
+    {
+      "id": "records-at-limit",
+      "parts": [
+        {
+          "fixture_id": "agent-start",
+          "repeat": 65536
+        }
+      ],
+      "byte_length": 1507328,
+      "sha256": "73f963985e542995a8ac2eafdf73e94b27312f1560245a9598c576dd6888d147",
+      "layer": "record_count_bound",
+      "expected_accept": true,
+      "expected_meaning": "Framer count only; repeated starts are not a legal lifecycle."
+    },
+    {
+      "id": "records-over-limit",
+      "parts": [
+        {
+          "fixture_id": "agent-start",
+          "repeat": 65537
+        }
+      ],
+      "byte_length": 1507351,
+      "sha256": "7354046e9597dac32500d7a683e355b6ddea70e507c5bf653a073a68fd76e0bf",
+      "layer": "record_count_bound",
+      "expected_accept": false,
+      "expected_meaning": "Framer count only; repeated starts are not a legal lifecycle."
+    },
+    {
+      "id": "depth-at-limit",
+      "parts": [
+        {
+          "ascii": "{\"x\":"
+        },
+        {
+          "ascii": "[",
+          "repeat": 31
+        },
+        {
+          "ascii": "null"
+        },
+        {
+          "ascii": "]",
+          "repeat": 31
+        },
+        {
+          "ascii": "}\n"
+        }
+      ],
+      "byte_length": 73,
+      "sha256": "604375aeaf66caa2db9bf913178d5ff76fc9e28f81a19bf79152e3c399eff9be",
+      "layer": "json_depth_bound",
+      "expected_accept": true,
+      "expected_meaning": "Depth counts root object as1 and each nested object/array as1; field x is intentionally not protocol-admitted."
+    },
+    {
+      "id": "depth-over-limit",
+      "parts": [
+        {
+          "ascii": "{\"x\":"
+        },
+        {
+          "ascii": "[",
+          "repeat": 32
+        },
+        {
+          "ascii": "null"
+        },
+        {
+          "ascii": "]",
+          "repeat": 32
+        },
+        {
+          "ascii": "}\n"
+        }
+      ],
+      "byte_length": 75,
+      "sha256": "8689601eace3f7b3087805087c93c5091b0a59241b8b43bd65fe825a73a5fe4e",
+      "layer": "json_depth_bound",
+      "expected_accept": false,
+      "expected_meaning": "Depth counts root object as1 and each nested object/array as1; field x is intentionally not protocol-admitted."
+    }
+  ],
+  "chunking_cases": [
+    {
+      "id": "unicode-one-byte-chunks",
+      "fixture_id": "unicode-delta",
+      "chunk_size": 1,
+      "expected_records": 1,
+      "expected_accept": true,
+      "expected_meaning": "Split inside every UTF-8 code point; retain decoder state and split only LF."
+    },
+    {
+      "id": "ack-before-final-lf",
+      "fixture_id": "prompt-ack",
+      "split_offsets": [
+        75
+      ],
+      "expected_records_before_last_chunk": 0,
+      "expected_records": 1,
+      "expected_accept": true,
+      "expected_meaning": "Do not project a record until LF arrives; EOF instead is raw-unterminated fault."
+    }
+  ],
+  "startup_scenarios_deferred": [
+    "P29-warning-visibility",
+    "P30-no-extension",
+    "P31-ambient-resource"
+  ],
+  "not_proved": [
+    "Runtime/provider compatibility",
+    "startup dependency/read/network isolation",
+    "warning detector qualification",
+    "OS process/descendant/workspace custody",
+    "50-case module qualification",
+    "collector or module admission"
+  ]
+}

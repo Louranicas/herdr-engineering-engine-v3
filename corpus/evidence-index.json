@@ -1,0 +1,13 @@
+{
+  "schema": 1,
+  "receipts": [
+    {
+      "path": "corpus/receipts/T01-contracts-20260915T104401Z.json",
+      "sha256": "c67d0ad438a09c027cf4dfd29fc15d144cd1c40e42c580312b02c39f2493c522"
+    },
+    {
+      "path": "corpus/receipts/T01-task-20260915T104401Z.json",
+      "sha256": "5704994f8273c67fe9a25e19abbed5b1fafe56d729acaf1e712b60044eb69b8c"
+    }
+  ]
+}

@@ -1,0 +1,10 @@
+# This file is machine-generated - editing it directly is not advised
+
+julia_version = "1.12.7"
+manifest_format = "2.0"
+project_hash = "37ce3db120bf0fdc2d8fa8ecf433674a29191ed1"
+
+[[deps.HabitatAnalysis]]
+path = "."
+uuid = "27bc5c0a-e2f1-4a83-a4c2-9c324f347a1e"
+version = "0.1.0"

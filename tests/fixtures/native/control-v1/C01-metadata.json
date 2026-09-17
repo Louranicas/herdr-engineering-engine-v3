@@ -1,0 +1,14 @@
+{
+  "id": "C01-control-valid-cancel",
+  "protocol": "hee3.control",
+  "protocol_version": 1,
+  "action": "task.cancel",
+  "action_version": 1,
+  "fixture_receive_unix_ms": "1769999995000",
+  "payload_bytes_excluding_lf": 540,
+  "payload_sha256": "b762237226571d87fa1b71a871f055923110aa531efe00a670535450dc589384",
+  "framing": "one terminal LF; digest excludes LF",
+  "expected_schema": "valid",
+  "expected_dispatch": "candidate only after independent peer/grant/generation checks; schema does not dispatch",
+  "fixture_identity_policy": "All UUIDs and sha256:111... schema/evidence/scope references are fictional fixture values; they identify no published compatibility tuple, admitted artifact or grant. Result request_sha256 values in actions.json bind the actual compact fixture request bytes; C01 retains the exact published RC03 example bytes/hash."
+}

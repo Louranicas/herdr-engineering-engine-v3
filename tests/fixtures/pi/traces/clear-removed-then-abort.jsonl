@@ -1,0 +1,5 @@
+{"type":"queue_update","steering":[],"followUp":[]}
+{"id":"fixture-clear_queue","type":"response","command":"clear_queue","success":true,"data":{"steering":["old steering"],"followUp":["old follow-up"]}}
+{"type":"agent_settled"}
+{"id":"fixture-abort","type":"response","command":"abort","success":true}
+{"id":"fixture-get_state","type":"response","command":"get_state","success":true,"data":{"thinkingLevel":"off","isStreaming":false,"isCompacting":false,"steeringMode":"all","followUpMode":"one-at-a-time","sessionId":"fixture-session-001","autoCompactionEnabled":false,"messageCount":0,"pendingMessageCount":0}}

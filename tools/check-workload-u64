@@ -1,0 +1,125 @@
+#!/usr/bin/env python3
+"""Check the frozen T01 development workload; not a protected admission collector.
+
+Only the fixed, reviewed dependency-free libraries and oracle below are compiled.
+No caller-supplied source, Cargo build hook, package or executable is accepted.
+"""
+import hashlib
+import json
+import os
+from pathlib import Path
+import subprocess
+import tempfile
+import time
+from datetime import datetime, timezone
+
+ROOT = Path(__file__).resolve().parent.parent
+FIXTURE = ROOT / "evaluation/tasks/WL-U64-PARSE-001/v1"
+
+
+def digest(path):
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def harness(cases):
+    lines = ["use workload::{ParseError, parse_u64};"]
+    for case in cases:
+        value = 'b"' + ''.join(f"\\x{byte:02x}" for byte in case["input"].encode()) + '"'
+        expected = case["expected"]
+        oracle = "Ok(" + expected["value"] + "_u64)" if "value" in expected else "Err(ParseError::" + expected["error"] + ")"
+        lines.extend([
+            "#[test]", "fn " + case["id"] + "() {",
+            "    let input = std::str::from_utf8(" + value + ").expect(\"frozen UTF-8\");",
+            "    assert_eq!(parse_u64(input), " + oracle + ");",
+            "    if let Ok(value) = parse_u64(input) { assert_eq!(value.to_string(), input); }",
+            "}",
+        ])
+    return "\n".join(lines) + "\n"
+
+
+def main():
+    manifest = json.loads((FIXTURE / "manifest.json").read_bytes())
+    for relative, expected in manifest["files_sha256"].items():
+        path = FIXTURE / relative
+        if path.is_symlink() or digest(path) != expected:
+            raise ValueError("Frozen fixture changed: " + relative)
+    oracle = json.loads((FIXTURE / "oracle/cases.json").read_bytes())
+    cases = oracle["cases"]
+    if len({case["id"] for case in cases}) != len(cases):
+        raise ValueError("Duplicate oracle identity")
+    rustup = Path.home() / ".cargo/bin/rustup"
+    rustc = Path(subprocess.check_output([str(rustup), "which", "--toolchain", "1.98.0", "rustc"], timeout=10, text=True).strip())
+    run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    evidence = ROOT / "evidence/implementation/T01/workload-runs" / run_id
+    evidence.mkdir(parents=True, mode=0o700)
+    report = {
+        "schema": 1, "kind": "development_workload_observation", "run_id": run_id,
+        "qualification": "TH-DEV only; no hostile custody or module admission",
+        "fixture_manifest_sha256": digest(FIXTURE / "manifest.json"),
+        "runner_sha256": digest(Path(__file__)),
+        "rustc": {"path": str(rustc), "sha256": digest(rustc)},
+        "oracle_cases": len(cases), "commands": [], "passed": False,
+    }
+    try:
+        with tempfile.TemporaryDirectory(prefix="hee3-u64-development-") as temporary:
+            work = Path(temporary)
+            env = {"PATH": str(rustc.parent) + ":/usr/bin:/bin", "LC_ALL": "C", "TMPDIR": str(work)}
+            source = work / "oracle.rs"
+            source.write_text(harness(cases))
+            report["generated_harness_sha256"] = digest(source)
+            report["environment"] = env
+
+            def run(label, argv, expected_exit=0):
+                start = time.monotonic()
+                with (evidence / (label + ".stdout")).open("wb") as stdout, (evidence / (label + ".stderr")).open("wb") as stderr:
+                    process = subprocess.Popen(argv, cwd=work, env=env, stdin=subprocess.DEVNULL, stdout=stdout, stderr=stderr, start_new_session=True)
+                    timed_out = False
+                    try:
+                        status = process.wait(timeout=60)
+                    except subprocess.TimeoutExpired:
+                        import signal
+                        timed_out = True
+                        os.killpg(process.pid, signal.SIGKILL)
+                        status = process.wait(timeout=10)
+                row = {"label": label, "argv": argv, "exit_code": status, "expected_exit": expected_exit, "timed_out": timed_out, "elapsed_seconds": time.monotonic() - start}
+                for stream in ("stdout", "stderr"):
+                    path = evidence / (label + "." + stream)
+                    row[stream] = {"path": path.name, "sha256": digest(path), "bytes": path.stat().st_size}
+                report["commands"].append(row)
+                if timed_out or status != expected_exit:
+                    raise ValueError("Unexpected workload command outcome: " + label)
+                return (evidence / (label + ".stdout")).read_text()
+
+            run("rustc-version", [str(rustc), "-vV"])
+            for variant in ("base", "reference"):
+                for optimization in ("0", "2"):
+                    label = variant + "-opt" + optimization
+                    library = work / (label + ".rlib")
+                    # rustc requires an extern library filename beginning with lib.
+                    library = library.with_name("lib" + library.name)
+                    common = ["--edition=2024", "-Dwarnings", "-C", "overflow-checks=yes", "-C", "opt-level=" + optimization]
+                    run(label + "-compile", [str(rustc), *common, "--crate-name=workload", "--crate-type=rlib", str(FIXTURE / variant / "src/lib.rs"), "-o", str(library)])
+                    binary = work / (label + "-oracle")
+                    run(label + "-oracle-compile", [str(rustc), *common, "--test", str(source), "--extern", "workload=" + str(library), "-o", str(binary)])
+                    # Base is an intentional bad control; demonstrate the named canonicality defect.
+                    if variant == "base":
+                        raw = run(label + "-negative", [str(binary), "--exact", "leading_zero", "--nocapture"], 101)
+                        if "test leading_zero ... FAILED" not in raw or "1 failed" not in raw:
+                            raise ValueError("Base did not fail the intended leading-zero oracle")
+                    else:
+                        raw = run(label + "-tests", [str(binary), "--test-threads=1"])
+                        if f"{len(cases)} passed; 0 failed; 0 ignored" not in raw:
+                            raise ValueError("Missing or skipped oracle cases")
+            for relative, expected in manifest["files_sha256"].items():
+                if digest(FIXTURE / relative) != expected:
+                    raise ValueError("Fixture changed during observation: " + relative)
+            report["passed"] = True
+    finally:
+        (evidence / "results.json").write_text(json.dumps(report, indent=2) + "\n")
+        print(evidence / "results.json", flush=True)
+    if not report["passed"]:
+        raise SystemExit(1)
+
+
+if __name__ == "__main__":
+    main()

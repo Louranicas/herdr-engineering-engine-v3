@@ -1,0 +1,335 @@
+#!/usr/bin/env python3
+"""Fixed store/roster development mutations on an isolated lock-bound subject.
+
+The default store profile preserves the seven T04 faults. Roster execution
+requires independently reviewed floors/declarations. Exact failures are required; compiler
+errors and producer failures do not count. TH-DEV only, no module admission.
+"""
+import argparse
+from datetime import datetime, timezone
+from importlib.machinery import SourceFileLoader
+from importlib.util import module_from_spec, spec_from_loader
+import json
+from pathlib import Path
+import re
+import shutil
+import sys
+import tempfile
+import time
+
+sys.dont_write_bytecode = True
+ROOT = Path(__file__).resolve().parents[1]
+TEST_COUNT = 68
+REQUIRED_SUBJECTS = (
+    "src/store.rs", "src/store/artifact.rs", "src/store/schema.rs", "src/store/backup.rs",
+    "migrations/001.sql", "tests/t04_store.rs", "tools/sqlite-static.py", "tools/check-store-mutations",
+)
+
+MUTATIONS = (('replay-digest-conflict',
+  'src/store.rs',
+  'same_request_key_with_different_exact_bytes_conflicts_atomically',
+  'if prior_digest != request_digest { return Err(Error::Conflict); }',
+  'if prior_digest != request_digest && false { return Err(Error::Conflict); }',
+  'The same principal-scoped request key with changed canonical bytes must conflict without another task or '
+  'event.'),
+ ('unknown-work-liability',
+  'src/store.rs',
+  'uncertain_effect_retains_measured_usage_and_full_conservative_liability',
+  'let used=if settled {used_ms.unwrap_or(0)}else{0};',
+  'let used=used_ms.unwrap_or(0);',
+  'Known partial usage cannot release the conservative work reservation while effect settlement remains '
+  'unknown.'),
+ ('cancellation-intent',
+  'src/store.rs',
+  'cancellation_first_prevents_acceptance_even_for_prepared_durable_proof',
+  "UPDATE tasks SET cancellation=1,state='cancellation_requested',generation=? WHERE id=?",
+  'UPDATE tasks SET cancellation=0,generation=? WHERE id=?',
+  'Committing cancellation before acceptance must retain intent and block later acceptance, including proof '
+  'prepared for the new revision.'),
+ ('object-content-hash',
+  'src/store/artifact.rs',
+  'corrupt_existing_object_is_refused_and_never_overwritten',
+  '|| digest(&bytes) != object.digest',
+  '|| (digest(&bytes) != object.digest && false)',
+  'Reusing an existing same-size content-addressed object requires its actual hash, not merely its path and '
+  'length.'),
+ ('migration-history',
+  'src/store/schema.rs',
+  'changed_migration_checksum_refuses_even_at_supported_version',
+  'history != (1, digest(SQL.as_bytes()), 0, None, PACKAGE.to_owned())',
+  '(history != (1, digest(SQL.as_bytes()), 0, None, PACKAGE.to_owned()) && false)',
+  'Supported user_version alone cannot admit a ledger whose exact applied migration history differs.'),
+ ('atomic-outbox',
+  'src/store.rs',
+  'acceptance_commits_objects_history_budget_and_outbox_as_one_unit',
+  'INSERT INTO outbox(event_id,recipient) VALUES(?,?)',
+  'INSERT INTO outbox(event_id,recipient) SELECT ?,? WHERE 0',
+  'Acceptance must commit its delivery obligation together with proof references, task state and budget; a '
+  'no-op insert cannot count as success.'),
+ ('backup-logical-inventory',
+  'src/store/backup.rs',
+  'backup_inspection_reconciles_logical_inventory_not_only_manifest_hash',
+  'counts(&connection)? != report.counts',
+  '(counts(&connection)? != report.counts && false)',
+  'A freshly hashed backup manifest must still agree with the independently reopened database inventory; '
+  'rehashing forged metadata cannot validate it.'))
+
+# Fixed fault declarations against the independently authored 35-test Store
+# suite. Selection is structural here; only the retained campaign can establish
+# that each named assertion failed and the restored benign baseline passed.
+ROSTER_MUTATIONS = (
+    (
+        "roster-replay-source-digest",
+        "src/store/roster.rs",
+        "changed_manifest_bytes_conflict_under_reused_keys_without_partial_updates",
+        "if old_digest != request_digest {",
+        "if old_digest != request_digest && false {",
+        "Appending an LF to the same imported requests must conflict under the reused keys; "
+        "returning the retained outcomes cannot accept different exact manifest bytes.",
+    ),
+    (
+        "roster-update-revision-cas",
+        "src/store/roster.rs",
+        "two_distinct_updates_of_one_expected_revision_cannot_both_commit",
+        "if update.expected_revision.as_ref() != Some(&existing.head.record_version) {",
+        "if update.expected_revision.as_ref() != Some(&existing.head.record_version) && false {",
+        "After one update commits, another key using the old expected revision must conflict "
+        "and preserve the winner and the independent ledger readback.",
+    ),
+    (
+        "roster-update-preserves-disabled",
+        "src/store/roster.rs",
+        "update_reopen_and_stale_reimport_all_preserve_disabled_state",
+        "UPDATE roster_records SET revision=?,definition=?,observation_id=NULL WHERE id=?",
+        "UPDATE roster_records SET revision=?,definition=?,disabled=0,observation_id=NULL WHERE id=?",
+        "Updating a disabled definition must retain the disabled bit in the reopened database; "
+        "a returned disabled head cannot hide a persisted re-enabled record.",
+    ),
+    (
+        "roster-source-label-is-not-confirmation",
+        "src/store/roster.rs",
+        "self_labeled_generic_observation_cannot_select_but_confirmed_worker_path_can",
+        "self.record_roster_observation(principal, input, None, deadline)",
+        "self.record_roster_observation(principal, input, Some(ObservationSource::Worker), deadline)",
+        "The generic observation entry must return confirmed_source=None even for a worker "
+        "label; only the separate owner-confirmed path can qualify the observation.",
+    ),
+    (
+        "roster-instance-proof-does-not-replace-profile",
+        "src/store/roster.rs",
+        "old_instance_report_binds_historical_pin_without_replacing_new_profile_proof",
+        "if input.instance_id.is_none() {",
+        "if true {",
+        "An old pinned instance observation may remain in history but cannot replace the "
+        "current profile's newer-version proof in independent profile readback.",
+    ),
+    (
+        "roster-observed-capability-required",
+        "src/contracts/roster.rs",
+        "unavailable_required_proof_refuses_before_any_attempt_instance_or_pin_write",
+        "&& observed.input.capabilities.contains(cap)",
+        "&& true",
+        "A fresh confirmed observation with no observed capabilities must refuse the required "
+        "capability before creating an attempt, instance or pin; declaration alone is insufficient.",
+    ),
+    (
+        "roster-verifying-attempt-cancellation",
+        "src/store/roster/attempts.rs",
+        "request_cancel_includes_current_verifying_attempt_after_worker_settlement_only",
+        "(a.state!='settled' OR (t.state='verifying' AND a.id=(SELECT latest.id FROM attempts latest "
+        "WHERE latest.task_id=a.task_id ORDER BY length(latest.generation) DESC,latest.generation DESC LIMIT 1)))",
+        "a.state!='settled'",
+        "RequestCancel must report and cancel the latest settled worker attempt while its task "
+        "is verifying, excluding the earlier settled attempt; worker settlement alone is not task completion.",
+    ),
+    (
+        "roster-distinct-disable-causes",
+        "src/store/roster/attempts.rs",
+        "two_disabled_selected_profiles_keep_two_causes_but_one_task_cancellation_transition",
+        "INSERT INTO roster_cancel_causes VALUES(?,?,?,?)",
+        "INSERT INTO roster_cancel_causes SELECT ?1,?2,?3,?4 WHERE NOT EXISTS"
+        "(SELECT 1 FROM roster_cancel_causes WHERE attempt_id=?4)",
+        "Disabling two selected profiles must persist two distinct causes for the same attempt "
+        "while advancing task cancellation only once; independent SQL count must remain two.",
+    ),
+)
+ROSTER_MUTATION_COUNT = 8
+
+
+def selected_profile(module, quality, root):
+    expectations = quality.rust_test_expectations(root)
+    if not expectations.get("has_t04") or quality.T04_TEST_COUNT != TEST_COUNT:
+        raise ValueError("Reviewed T04 source/target/floor is missing")
+    if module == "store":
+        task, prefix, mutations = "T04", "store::tests::", MUTATIONS
+    elif module == "roster":
+        if (not expectations.get("has_t05") or type(ROSTER_MUTATION_COUNT) is not int
+                or ROSTER_MUTATION_COUNT <= 0 or not isinstance(ROSTER_MUTATIONS, tuple)
+                or len(ROSTER_MUTATIONS) != ROSTER_MUTATION_COUNT):
+            raise ValueError("Reviewed T05 roster mutation declarations are pending")
+        task, prefix, mutations = "T05", "store::roster_tests::", ROSTER_MUTATIONS
+    else:
+        raise ValueError("Unsupported mutation module")
+    if (not mutations or any(len(row) != 6 or not all(isinstance(value, str) and value for value in row) for row in mutations)
+            or len({row[0] for row in mutations}) != len(mutations)
+            or len({row[2] for row in mutations}) != len(mutations)):
+        raise ValueError("Invalid fixed mutation declarations")
+    units = expectations.get("unit_test_counts", {})
+    count = sum(units.values()) if expectations.get("has_t05") else TEST_COUNT
+    return {"module": module, "task": task, "prefix": prefix, "mutations": mutations,
+            "library_test_count": count, "unit_test_counts": units, "expectations": expectations}
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--module", choices=("store", "roster"), default="store")
+    arguments = parser.parse_args()
+    loader = SourceFileLoader("t04_quality", str(ROOT / "tools/check-quality"))
+    quality = module_from_spec(spec_from_loader(loader.name, loader))
+    loader.exec_module(quality)
+    profile = selected_profile(arguments.module, quality, ROOT)
+    mutations = profile["mutations"]
+    origin = time.monotonic()
+    deadline = origin + 900
+    output = ROOT / ("evidence/implementation/" + profile["task"] + "/mutation-runs") / datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    output.mkdir(parents=True, exist_ok=False)
+    report = {"scope": profile["task"] + " fixed development mutation controls; no module admission",
+              "profile": "TH-DEV", "status": "running", "module_admission": False,
+              "commands": [], "mutations": [], "subject_files": {}, "module": profile["module"],
+              "rust_test_expectations": profile["expectations"], "library_test_count": profile["library_test_count"]}
+    workspace = None
+    cleanup = True
+    try:
+        names = quality.quality_subject_paths(ROOT, deadline, True) + list(REQUIRED_SUBJECTS) + [quality.sqlite_static.ARCHIVE_NAME]
+        quality.refuse_unsupported_cargo_inputs(ROOT)
+        workspace = Path(tempfile.mkdtemp(prefix="hee3-store-mutations-"))
+        quality.refuse_ancestor_cargo_configuration(workspace)
+        report["workspace"] = str(workspace)
+        total_bytes = 0
+        for name in sorted(set(names)):
+            quality.require_work_time(deadline, "mutation subject copy")
+            source = ROOT / name
+            if source.is_symlink() or not source.is_file():
+                raise ValueError("Nonregular mutation input: " + name)
+            total_bytes += source.stat().st_size
+            if len(report["subject_files"]) >= quality.INVENTORY_FILE_LIMIT or total_bytes > quality.INVENTORY_BYTE_LIMIT:
+                raise ValueError("Mutation subject inventory bound exceeded")
+            target = workspace / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source, target)
+            report["subject_files"][name] = quality.digest(target)
+            if quality.digest(source) != report["subject_files"][name]:
+                raise ValueError("Input drift during copy: " + name)
+        compiler = Path.home() / ".rustup/toolchains/1.98.0-x86_64-unknown-linux-gnu/bin"
+        binaries = {name: compiler / name for name in ("cargo", "rustc", "rustdoc")}
+        report["executables"] = {name: {"path": str(path), "sha256": quality.digest(path)} for name, path in binaries.items()}
+        vendor, cargo_home = workspace / "vendor", workspace / "cargo-home"
+        report["offline_dependencies"] = quality.rust_offline.materialize(
+            workspace / "Cargo.lock", workspace / quality.RUST_OFFLINE_BUNDLE,
+            vendor, cargo_home, deadline)
+        environment = {"PATH": str(compiler) + ":/usr/bin:/bin", "LC_ALL": "C",
+                       "TMPDIR": str(workspace), "CARGO_HOME": str(cargo_home),
+                       "CARGO_TARGET_DIR": str(workspace / "target"), "CARGO_BUILD_JOBS": "2",
+                       "CARGO_NET_OFFLINE": "true", "RUSTUP_TOOLCHAIN": "1.98.0",
+                       "RUSTC": str(binaries["rustc"]), "RUSTDOC": str(binaries["rustdoc"]),
+                       "RUSTFLAGS": "-Dwarnings", "RUSTDOCFLAGS": "-Dwarnings",
+                       "PYTHONDONTWRITEBYTECODE": "1", "PYTHONWARNINGS": "error"}
+        report["environment"] = environment.copy()
+
+        def run(label, argv, expected=0):
+            nonlocal cleanup
+            row = {"id": label, "argv": argv, "cwd": str(workspace), "environment": environment.copy(),
+                   "expected_exit_code": expected}
+            report["commands"].append(row)
+            streams = {name: output / (label + "." + name) for name in ("stdout", "stderr")}
+            try:
+                row.update(quality.run_bounded(argv, workspace, environment, streams["stdout"], streams["stderr"],
+                                              deadline, stream_limit=quality.STREAM_LIMIT))
+            except BaseException as error:
+                if not quality.merge_exception_observation(row, error):
+                    cleanup = False
+                row["error"] = f"{type(error).__name__}: {error}"
+                raise
+            finally:
+                if row.get("started") and not row.get("cleanup_complete"):
+                    cleanup = False
+                for name, path in streams.items():
+                    if path.is_file():
+                        row[name] = {"path": path.name, "sha256": quality.digest(path), "bytes": path.stat().st_size}
+                (output / "results.json").write_text(json.dumps(report, indent=2) + "\n")
+            if (row["exit_code"] != expected or not row["started"] or not row["cleanup_complete"]
+                    or row["timed_out"] or row["output_limit_exceeded"] or row["descendants_detected"]):
+                raise ValueError("Unexpected mutation process outcome: " + label)
+            texts = {}
+            for name, path in streams.items():
+                with path.open("rb") as raw:
+                    data = raw.read(quality.STREAM_LIMIT + 1)
+                if len(data) > quality.STREAM_LIMIT:
+                    raise ValueError("Retained stream exceeds bound: " + label)
+                texts[name] = data.decode("utf-8", errors="strict")
+            return texts
+
+        cargo = str(binaries["cargo"])
+        metadata = run("offline-dependency-resolution", [cargo, "metadata", "--locked", "--offline", "--format-version=1"])
+        if profile["expectations"].get("has_t05"):
+            quality.validate_t05_features(json.loads(metadata["stdout"]))
+        quality.sqlite_static.validate_features(json.loads(metadata["stdout"]))
+        report["sqlite_static"] = {}
+        environment.update(quality.sqlite_static.build(
+            workspace / quality.sqlite_static.ARCHIVE_NAME, workspace / "sqlite-private", deadline,
+            run, report["sqlite_static"]))
+        report["environment"] = environment.copy()
+
+        def tests(label, selected=None):
+            argv = [cargo, "test", "--locked", "--offline", "--lib"]
+            if selected is not None:
+                argv += [selected, "--", "--exact"]
+            text = run(label, argv, 0 if selected is None else 101)["stdout"]
+            if selected is None:
+                quality.require_rust_test_summaries(text, {"test_counts": [profile["library_test_count"]],
+                    "has_t02": False, "unit_test_counts": profile["unit_test_counts"]}, label)
+            else:
+                summary = (r"^test result: FAILED\. 0 passed; 1 failed; 0 ignored; 0 measured; "
+                           + str(profile["library_test_count"] - 1) + r" filtered out; finished in .+$")
+                if text.splitlines().count(f"test {selected} ... FAILED") != 1 or len(re.findall(summary, text, re.MULTILINE)) != 1:
+                    raise ValueError("Missing intended test outcome: " + label)
+            print(label + ": expected outcome observed", flush=True)
+
+        originals = {name: (workspace / name).read_bytes() for name in {row[1] for row in mutations}}
+        for label, name, _, before, after, _ in mutations:
+            original = originals[name].decode("utf-8")
+            if original.count(before) != 1 or before == after:
+                raise ValueError("Mutation selector is not unique or effective: " + label)
+        tests("baseline")
+        for label, name, test, before, after, basis in mutations:
+            source = workspace / name
+            changed = originals[name].decode("utf-8").replace(before, after, 1).encode("utf-8")
+            source.write_bytes(changed)
+            snapshot = output / (label + ".rs")
+            snapshot.write_bytes(changed)
+            selected = profile["prefix"] + test
+            row = {"id": label, "source_path": name, "test": selected, "expectation": basis,
+                   "before": before, "after": after, "source_snapshot": snapshot.name, "sha256": quality.digest(snapshot)}
+            report["mutations"].append(row)
+            try:
+                tests(label, selected)
+                row["outcome"] = "intended test failed"
+            finally:
+                source.write_bytes(originals[name])
+        tests("restored-benign")
+        quality.sqlite_static.verify(workspace / "sqlite-private", report["sqlite_static"], deadline)
+        quality.rust_offline.verify_materialized(vendor, cargo_home, report["offline_dependencies"], deadline)
+        for name, expected in report["subject_files"].items():
+            if quality.digest(workspace / name) != expected or quality.digest(ROOT / name) != expected:
+                raise ValueError("Mutation input drift: " + name)
+        report["status"] = ("pass seven intended mutations and restored benign baseline" if profile["module"] == "store"
+                            else "pass " + str(len(mutations)) + " intended mutations and restored benign baseline")
+    except BaseException as error:
+        report["error"] = f"{type(error).__name__}: {error}"
+        raise
+    finally:
+        quality.finalize_run(report, output, workspace, cleanup, origin + 1200, origin, sys.exc_info()[0])
+
+
+if __name__ == "__main__":
+    main()

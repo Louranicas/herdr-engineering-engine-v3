@@ -1,0 +1,228 @@
+#!/usr/bin/env python3
+"""T02/T03 development mutation controls on an isolated, lock-bound copied subject.
+
+These fixed source faults test existing independently justified expectations.
+No arguments select T02; --contract selects the fixed T03 contract campaign.
+When the copied project includes T04, its exact SQLite static dependency is built
+through the same bounded process owner before the selected tests.
+They do not qualify a hostile collector or admit a module.
+"""
+from datetime import datetime, timezone
+from importlib.machinery import SourceFileLoader
+from importlib.util import module_from_spec, spec_from_loader
+import json
+import re
+from pathlib import Path
+import shutil
+import sys
+import tempfile
+import time
+
+sys.dont_write_bytecode = True
+ROOT = Path(__file__).resolve().parents[1]
+
+# Each substitution must match once. Fault expectations precede execution.
+MUTATIONS = (
+    ("request-namespace", "command_ids_do_not_repeat_after_readback",
+     '\n'.join(['        let id = format!(', '            "{}:{}:{}:{}",',
+                  '            self.binding.task.as_str(),', '            self.binding.attempt.as_str(),',
+                  '            self.binding.generation,', '            self.next_id', '        );']),
+     '        let id = format!("{}:{}", self.binding.attempt.as_str(), self.next_id);',
+     "Request identity must remain distinct across tasks and generations, as well as sequence numbers."),
+    ("response-owner", "response_id_mismatch_permanently_refuses_the_attempt",
+     'text(&v["id"])? != pending.id || ', '',
+     "An exact command name cannot substitute for the owned request ID."),
+    ("run-message-reconciliation", "mismatched_agent_end_cannot_replace_completed_messages",
+     'if array(&v["messages"])? != self.run_messages {', 'if false {',
+     "agent_end must repeat the completed message sequence exactly."),
+    ("retry-settlement", "announced_retry_prevents_early_settlement",
+     'self.run != RunState::Ended || self.retry != Retry::None',
+     'self.run != RunState::Ended',
+     "An announced retry cannot settle before its continuation or failed end."),
+    ("usage-reconciliation", "settled_session_totals_must_reconcile_authoritative_messages",
+     '] != self.reported\n        {', '] != self.reported && false\n        {',
+     "Settled session totals must equal completed assistant usage."),
+    ("truncated-eof", "eof_fragment_is_not_dispatched",
+     'if !self.pending.is_empty() {', 'if self.pending.is_empty() {',
+     "A nonempty EOF fragment must refuse, not become a complete record."),
+)
+
+
+CONTRACT_MUTATIONS = (
+    ("invocation-generation", "every_invocation_namespace_dimension_is_checked_and_refusal_is_permanent",
+     "\n            && self.binding.generation == other.binding.generation", "",
+     "An event from another owned invocation generation must refuse permanently, even when UUID fields agree."),
+    ("required-runtime-identity", "provider_self_report_is_preserved_but_cannot_satisfy_required_runtime_identity",
+     ".is_none_or(|identity| identity.origin != IdentityOrigin::RuntimeReadback)", ".is_none()",
+     "Provider self-report remains evidence but cannot satisfy a required runtime readback identity."),
+    ("final-usage-input-retention", "final_usage_cannot_regress_to_provisional_or_be_erased_by_a_missing_final_field",
+     "|| (input.is_some() && next_input.is_none())",
+     "|| (input.is_some() && next_input.is_none() && false)",
+     "A later final report cannot erase known input usage; both direct and candidate-embedded updates preserve prior information."),
+    ("issued-cancel-idle", "idle_before_cancellation_cannot_satisfy_a_later_cancellation_readback",
+     "if !self.cancellation.issued() || self.cancellation.adapter_idle {",
+     "if self.cancellation.adapter_idle {",
+     "Idle observed before a cancellation was issued cannot become evidence that the later cancellation settled."),
+    ("selected-identity-capability", "optional_reported_features_still_require_selected_adapter_capabilities",
+     "if !self.capabilities.has(Feature::Identity) {",
+     "if !self.capabilities.has(Feature::Identity) && false {",
+     "An optional identity observation still requires the selected adapter to advertise Identity capability."),
+    ("finish-terminal-agreement", "finish_reasons_map_to_distinct_terminal_dispositions",
+     "if expected != terminal {", "if expected != terminal && false {",
+     "A length-limited final candidate must retain a truncated disposition rather than clean completion."),
+)
+
+
+def contract_mode(arguments):
+    if arguments == []:
+        return False
+    if arguments == ["--contract"]:
+        return True
+    raise SystemExit("usage: check-pi-mutations [--contract]")
+
+
+def main():
+    contract = contract_mode(sys.argv[1:])
+    task, test_target, source_name, test_count, mutations, prefix = (
+        ("T03", "t03_contract", "src/worker/mod.rs", 34, CONTRACT_MUTATIONS, "hee3-contract-mutations-")
+        if contract else
+        ("T02", "t02_pi", "src/worker/pi.rs", 60, MUTATIONS, "hee3-pi-mutations-")
+    )
+    loader = SourceFileLoader("t02_quality", str(ROOT / "tools/check-quality"))
+    quality = module_from_spec(spec_from_loader(loader.name, loader))
+    loader.exec_module(quality)
+    origin = time.monotonic()
+    deadline = origin + 900
+    output = ROOT / "evidence/implementation" / task / "mutation-runs" / datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    output.mkdir(parents=True, exist_ok=False)
+    report = {"scope": task + " fixed development mutation controls; no module admission",
+              "profile": "TH-DEV", "status": "running", "module_admission": False,
+              "commands": [], "mutations": [], "subject_files": {}}
+    workspace = None
+    cleanup = True
+    try:
+        names = quality.quality_subject_paths(ROOT, deadline, True) + ["tools/check-pi-mutations"]
+        quality.refuse_unsupported_cargo_inputs(ROOT)
+        workspace = Path(tempfile.mkdtemp(prefix=prefix))
+        quality.refuse_ancestor_cargo_configuration(workspace)
+        report["workspace"] = str(workspace)
+        total_bytes = 0
+        for name in sorted(set(names)):
+            quality.require_work_time(deadline, "mutation subject copy")
+            source = ROOT / name
+            if source.is_symlink() or not source.is_file():
+                raise ValueError("Nonregular mutation input: " + name)
+            total_bytes += source.stat().st_size
+            if len(report["subject_files"]) >= quality.INVENTORY_FILE_LIMIT or total_bytes > quality.INVENTORY_BYTE_LIMIT:
+                raise ValueError("Mutation subject inventory bound exceeded")
+            target = workspace / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source, target)
+            report["subject_files"][name] = quality.digest(target)
+            if quality.digest(source) != report["subject_files"][name]:
+                raise ValueError("Input drift during copy: " + name)
+        compiler = Path.home() / ".rustup/toolchains/1.98.0-x86_64-unknown-linux-gnu/bin"
+        binaries = {name: compiler / name for name in ("cargo", "rustc", "rustdoc")}
+        report["executables"] = {name: {"path": str(path), "sha256": quality.digest(path)} for name, path in binaries.items()}
+        vendor, cargo_home = workspace / "vendor", workspace / "cargo-home"
+        report["offline_dependencies"] = quality.rust_offline.materialize(
+            workspace / "Cargo.lock", workspace / quality.RUST_OFFLINE_BUNDLE,
+            vendor, cargo_home, deadline)
+        environment = {"PATH": str(compiler) + ":/usr/bin:/bin", "LC_ALL": "C",
+                       "TMPDIR": str(workspace), "CARGO_HOME": str(cargo_home),
+                       "CARGO_TARGET_DIR": str(workspace / "target"), "CARGO_BUILD_JOBS": "2",
+                       "CARGO_NET_OFFLINE": "true", "RUSTUP_TOOLCHAIN": "1.98.0",
+                       "RUSTC": str(binaries["rustc"]), "RUSTDOC": str(binaries["rustdoc"]),
+                       "RUSTFLAGS": "-Dwarnings", "RUSTDOCFLAGS": "-Dwarnings"}
+        report["environment"] = environment.copy()
+        def produce(label, argv, expected=0):
+            nonlocal cleanup
+            row = {"id": label, "argv": argv, "cwd": str(workspace), "environment": environment.copy(),
+                   "expected_exit_code": expected}
+            report["commands"].append(row)
+            streams = {name: output / (label + "." + name) for name in ("stdout", "stderr")}
+            try:
+                row.update(quality.run_bounded(argv, workspace, environment, streams["stdout"], streams["stderr"],
+                                              deadline, stream_limit=quality.STREAM_LIMIT))
+            except BaseException as error:
+                if not quality.merge_exception_observation(row, error):
+                    cleanup = False
+                row["error"] = f"{type(error).__name__}: {error}"
+                raise
+            finally:
+                if row.get("started") and not row.get("cleanup_complete"):
+                    cleanup = False
+                for name, path in streams.items():
+                    if path.is_file():
+                        row[name] = {"path": path.name, "sha256": quality.digest(path), "bytes": path.stat().st_size}
+            if (row["exit_code"] != row["expected_exit_code"] or not row["started"] or not row["cleanup_complete"]
+                    or row["timed_out"] or row["output_limit_exceeded"] or row["descendants_detected"]):
+                raise ValueError("Unexpected mutation process outcome: " + label)
+            texts = {}
+            for name, path in streams.items():
+                with path.open("rb") as raw:
+                    data = raw.read(quality.STREAM_LIMIT + 1)
+                if len(data) > quality.STREAM_LIMIT:
+                    raise ValueError("Retained stream exceeds bound: " + label)
+                texts[name] = data.decode("utf-8", errors="strict")
+            return texts
+
+        store_present = quality.has_t04(workspace)
+        if store_present:
+            metadata = produce("offline-dependency-resolution", [str(binaries["cargo"]), "metadata",
+                               "--locked", "--offline", "--format-version=1"])
+            quality.sqlite_static.validate_features(json.loads(metadata["stdout"]))
+            report["sqlite_static"] = {}
+            environment.update(quality.sqlite_static.build(
+                workspace / quality.sqlite_static.ARCHIVE_NAME, workspace / "sqlite-private", deadline,
+                produce, report["sqlite_static"]))
+            report["environment"] = environment.copy()
+
+        def run(label, selected=None):
+            argv = [str(binaries["cargo"]), "test", "--locked", "--offline", "--test", test_target]
+            if selected is not None:
+                argv += [selected, "--", "--exact"]
+            text = produce(label, argv, 0 if selected is None else 101)["stdout"]
+            if selected is None:
+                quality.require_rust_test_summaries(text, {"test_counts": [test_count], "has_t02": False}, label)
+            else:
+                summary = (r"^test result: FAILED\. 0 passed; 1 failed; 0 ignored; 0 measured; "
+                           rf"{test_count - 1} filtered out; finished in .+$")
+                if text.splitlines().count(f"test {selected} ... FAILED") != 1 or len(re.findall(summary, text, re.MULTILINE)) != 1:
+                    raise ValueError("Missing intended test outcome: " + label)
+            print(label + ": expected outcome observed", flush=True)
+        source = workspace / source_name
+        original = source.read_text()
+        run("baseline")
+        for label, test, before, after, basis in mutations:
+            if original.count(before) != 1:
+                raise ValueError("Mutation selector is not unique: " + label)
+            changed = original.replace(before, after, 1)
+            source.write_text(changed)
+            snapshot = output / (label + ".rs")
+            snapshot.write_text(changed)
+            row = {"id": label, "test": test, "expectation": basis, "before": before,
+                   "after": after, "source_snapshot": snapshot.name, "sha256": quality.digest(snapshot)}
+            report["mutations"].append(row)
+            try:
+                run(label, test)
+                row["outcome"] = "intended test failed"
+            finally:
+                source.write_text(original)
+        run("restored-benign")
+        if store_present:
+            quality.sqlite_static.verify(workspace / "sqlite-private", report["sqlite_static"], deadline)
+        quality.rust_offline.verify_materialized(vendor, cargo_home, report["offline_dependencies"], deadline)
+        for name, expected in report["subject_files"].items():
+            if quality.digest(workspace / name) != expected or quality.digest(ROOT / name) != expected:
+                raise ValueError("Mutation input drift: " + name)
+        report["status"] = "pass six intended mutations and restored benign baseline"
+    except BaseException as error:
+        report["error"] = f"{type(error).__name__}: {error}"
+        raise
+    finally:
+        quality.finalize_run(report, output, workspace, cleanup, origin + 1200, origin, sys.exc_info()[0])
+
+
+if __name__ == "__main__":
+    main()

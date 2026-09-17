@@ -1,0 +1,2074 @@
+{
+  "fixture_notice": "All UUIDs, times, paths, profile names, schema IDs and sha256:111... digests are fictional structural fixture values. They identify no published schema, protected run, accepted module or real referenced artifact. Schema-valid means shape only; no reference is resolved or authenticated and no collector has run. Fixtures and tests share schema authorship; independent oracle authorship is not claimed. Module case credits: 0. These examples are structural objects, not a resolving artifact graph; one repeated fictional reference identity is intentional and confers no inventory credit.",
+  "definitions": {
+    "CaseV1": {
+      "case_id": "fixture-check-001",
+      "primary_module_id": "check",
+      "criterion_ids": [
+        "G04"
+      ],
+      "fixture_sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "oracle_id": "fixture-reference",
+      "expected": {
+        "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+        "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "byte_length": 0,
+        "media_type": "application/json",
+        "schema_id": "hee3.receipt/1:ExpectationV1"
+      },
+      "mandatory": true,
+      "excluded": false,
+      "selected": true,
+      "executed": true,
+      "outcome": "passed",
+      "producer_exit_or_signal": {
+        "status": "exited",
+        "exit_code": {
+          "value": 0,
+          "unavailable_reason": null
+        },
+        "signal": {
+          "value": null,
+          "unavailable_reason": "Producer exited normally."
+        },
+        "timeout": false,
+        "stdout": {
+          "value": {
+            "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+            "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+            "byte_length": 0,
+            "media_type": "application/json",
+            "schema_id": "hee3.raw/1"
+          },
+          "unavailable_reason": null
+        },
+        "stderr": {
+          "value": {
+            "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+            "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+            "byte_length": 0,
+            "media_type": "application/json",
+            "schema_id": "hee3.raw/1"
+          },
+          "unavailable_reason": null
+        }
+      },
+      "detector_id": "fixture-equality",
+      "benign_pair_id": {
+        "value": "123e4567-e89b-42d3-a456-000000000001",
+        "unavailable_reason": null
+      },
+      "raw_evidence_refs": [
+        {
+          "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+          "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+          "byte_length": 0,
+          "media_type": "application/octet-stream",
+          "schema_id": "hee3.raw/1"
+        }
+      ],
+      "reason": ""
+    },
+    "SubjectV1": {
+      "subject_id": "123e4567-e89b-42d3-a456-000000000001",
+      "files": {
+        "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+        "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "byte_length": 0,
+        "media_type": "application/json",
+        "schema_id": "hee3.receipt/1:SubjectFilePageV1"
+      },
+      "tree_sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "dirty_patch": {
+        "value": null,
+        "unavailable_reason": "Fictional unavailable value."
+      }
+    },
+    "SubjectFileV1": {
+      "path": "src/fixture.rs",
+      "kind": "file",
+      "content": {
+        "value": {
+          "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+          "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+          "byte_length": 0,
+          "media_type": "application/octet-stream",
+          "schema_id": "hee3.raw/1"
+        },
+        "unavailable_reason": null
+      },
+      "executable": false,
+      "link_target": {
+        "value": null,
+        "unavailable_reason": "Fictional unavailable value."
+      },
+      "origin": "authored",
+      "exclusion_reason": {
+        "value": null,
+        "unavailable_reason": "Fictional unavailable value."
+      }
+    },
+    "LockV1": {
+      "lock_id": "fixture-cargo",
+      "ecosystem": "cargo",
+      "path": "Cargo.lock",
+      "content": {
+        "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+        "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "byte_length": 0,
+        "media_type": "application/octet-stream",
+        "schema_id": "hee3.raw/1"
+      },
+      "dependencies": {
+        "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+        "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "byte_length": 0,
+        "media_type": "application/json",
+        "schema_id": "hee3.receipt/1:DependencyPageV1"
+      }
+    },
+    "DependencyV1": {
+      "dependency_id": "fixture-package",
+      "name": "fixture-package",
+      "version": "1.0.0",
+      "source": "Fictional locked source.",
+      "checksum": {
+        "value": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "unavailable_reason": null
+      },
+      "locked_by": {
+        "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+        "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "byte_length": 0,
+        "media_type": "application/octet-stream",
+        "schema_id": "hee3.raw/1"
+      }
+    },
+    "ToolV1": {
+      "tool_id": "fixture-rustc",
+      "executable": {
+        "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+        "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "byte_length": 0,
+        "media_type": "application/octet-stream",
+        "schema_id": "hee3.raw/1"
+      },
+      "executable_path": "/fictional/rustc",
+      "version": "fictional-version",
+      "version_output": {
+        "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+        "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "byte_length": 0,
+        "media_type": "application/octet-stream",
+        "schema_id": "hee3.raw/1"
+      },
+      "target": "fictional-target"
+    },
+    "BuildProfileV1": {
+      "target": "fictional-target",
+      "features": [
+        "fixture-feature"
+      ],
+      "default_features": false,
+      "build_profile": "fixture-test",
+      "language_flags": {
+        "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+        "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "byte_length": 0,
+        "media_type": "application/json",
+        "schema_id": "hee3.receipt/1:LanguageFlagsPageV1"
+      }
+    },
+    "LanguageFlagsV1": {
+      "language": "rust",
+      "argv": [
+        "--fictional-flag"
+      ]
+    },
+    "StandardV1": {
+      "standard_id": "RC04",
+      "revision": "4",
+      "document": {
+        "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+        "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "byte_length": 0,
+        "media_type": "application/octet-stream",
+        "schema_id": "hee3.raw/1"
+      }
+    },
+    "EnvironmentV1": {
+      "name": "FIXTURE_MODE",
+      "value": {
+        "value": "benign",
+        "unavailable_reason": null
+      },
+      "secret_handle": {
+        "value": null,
+        "unavailable_reason": "Fictional unavailable value."
+      }
+    },
+    "GrantV1": {
+      "grant_id": "123e4567-e89b-42d3-a456-000000000001",
+      "scope_sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "issuer_id": "fictional-owner",
+      "grant": {
+        "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+        "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "byte_length": 0,
+        "media_type": "application/octet-stream",
+        "schema_id": "hee3.raw/1"
+      }
+    },
+    "ExpectationV1": {
+      "oracle_id": "fixture-reference",
+      "oracle_class": "reference",
+      "specification": {
+        "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+        "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "byte_length": 0,
+        "media_type": "application/octet-stream",
+        "schema_id": "hee3.raw/1"
+      },
+      "expected_producer": {
+        "status": "exited",
+        "exit_code": {
+          "value": 0,
+          "unavailable_reason": null
+        },
+        "signal": {
+          "value": null,
+          "unavailable_reason": "Fictional unavailable value."
+        }
+      },
+      "expected_oracle": "satisfied",
+      "intended_detector": "fixture-equality",
+      "shared_assumptions": {
+        "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+        "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "byte_length": 0,
+        "media_type": "application/json",
+        "schema_id": "hee3.receipt/1:AssumptionPageV1"
+      }
+    },
+    "ExpectedProducerV1": {
+      "status": "exited",
+      "exit_code": {
+        "value": 0,
+        "unavailable_reason": null
+      },
+      "signal": {
+        "value": null,
+        "unavailable_reason": "Fictional unavailable value."
+      }
+    },
+    "LimitsV1": {
+      "wall_ms": "1000",
+      "cpu_quota_percent": 100,
+      "memory_bytes": "1048576",
+      "memory_swap_bytes": "0",
+      "tasks_max": 4,
+      "compiler_jobs": 1,
+      "julia_threads": 1,
+      "blas_threads": 1,
+      "scratch_bytes": "1048576",
+      "stdout_bytes": "4096",
+      "stderr_bytes": "4096",
+      "artifact_bytes": "1048576",
+      "external_requests": "0",
+      "external_cost_microunits": "0",
+      "currency": {
+        "value": null,
+        "unavailable_reason": "Fictional unavailable value."
+      },
+      "term_grace_ms": "100",
+      "cleanup_deadline_ms": "200"
+    },
+    "EffectV1": {
+      "effect_id": "fixture-effect",
+      "grant_id": "123e4567-e89b-42d3-a456-000000000001",
+      "owner_id": "fixture-owner",
+      "scope": "Fictional writable output.",
+      "specification": {
+        "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+        "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "byte_length": 0,
+        "media_type": "application/octet-stream",
+        "schema_id": "hee3.raw/1"
+      }
+    },
+    "CleanupContractV1": {
+      "owner_id": "fixture-owner",
+      "term_grace_ms": "100",
+      "deadline_ms": "200",
+      "require_empty_descendants": true,
+      "obligations": {
+        "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+        "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "byte_length": 0,
+        "media_type": "application/json",
+        "schema_id": "hee3.receipt/1:ObligationPageV1"
+      },
+      "readback_specification": {
+        "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+        "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "byte_length": 0,
+        "media_type": "application/octet-stream",
+        "schema_id": "hee3.raw/1"
+      }
+    },
+    "HostV1": {
+      "os": "linux",
+      "release": "fictional-release",
+      "architecture": "x86_64",
+      "kernel": "fictional-kernel",
+      "boot_id": "fictional-boot",
+      "logical_cpus": 1,
+      "memory_bytes": "1048576",
+      "facts": {
+        "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+        "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "byte_length": 0,
+        "media_type": "application/octet-stream",
+        "schema_id": "hee3.raw/1"
+      }
+    },
+    "ResourceV1": {
+      "metric": "peak_memory",
+      "unit": "byte",
+      "value": {
+        "value": "1",
+        "unavailable_reason": null
+      },
+      "limit": {
+        "value": "1048576",
+        "unavailable_reason": null
+      },
+      "limit_event": false,
+      "evidence": {
+        "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+        "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "byte_length": 0,
+        "media_type": "application/octet-stream",
+        "schema_id": "hee3.raw/1"
+      }
+    },
+    "ObligationV1": {
+      "obligation_id": "123e4567-e89b-42d3-a456-000000000001",
+      "owner_id": "fixture-owner",
+      "scope": "Fictional cleanup.",
+      "material": true,
+      "state": "settled",
+      "evidence": [
+        {
+          "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+          "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+          "byte_length": 0,
+          "media_type": "application/octet-stream",
+          "schema_id": "hee3.raw/1"
+        }
+      ],
+      "reason": "Fictional settled observation."
+    },
+    "DiagnosticV1": {
+      "tool_id": "fixture-tool",
+      "baseline": true,
+      "warning_count": 0,
+      "error_count": 0,
+      "stdout": {
+        "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+        "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "byte_length": 0,
+        "media_type": "application/octet-stream",
+        "schema_id": "hee3.raw/1"
+      },
+      "stderr": {
+        "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+        "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "byte_length": 0,
+        "media_type": "application/octet-stream",
+        "schema_id": "hee3.raw/1"
+      },
+      "stdout_truncated": false,
+      "stderr_truncated": false,
+      "producer": {
+        "status": "exited",
+        "exit_code": {
+          "value": 0,
+          "unavailable_reason": null
+        },
+        "signal": {
+          "value": null,
+          "unavailable_reason": "Producer exited normally."
+        },
+        "timeout": false,
+        "stdout": {
+          "value": {
+            "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+            "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+            "byte_length": 0,
+            "media_type": "application/json",
+            "schema_id": "hee3.raw/1"
+          },
+          "unavailable_reason": null
+        },
+        "stderr": {
+          "value": {
+            "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+            "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+            "byte_length": 0,
+            "media_type": "application/json",
+            "schema_id": "hee3.raw/1"
+          },
+          "unavailable_reason": null
+        }
+      }
+    },
+    "ArtifactV1": {
+      "object": {
+        "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+        "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "byte_length": 0,
+        "media_type": "application/octet-stream",
+        "schema_id": "hee3.raw/1"
+      },
+      "role": "fixture-stdout",
+      "required": true,
+      "truncated": false,
+      "availability": "available",
+      "reason": ""
+    },
+    "CampaignV1": {
+      "campaign_id": "fixture-campaign",
+      "language": "rust",
+      "family_id": "fixture-boundary",
+      "tool": {
+        "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+        "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "byte_length": 0,
+        "media_type": "application/octet-stream",
+        "schema_id": "hee3.raw/1"
+      },
+      "config": {
+        "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+        "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "byte_length": 0,
+        "media_type": "application/octet-stream",
+        "schema_id": "hee3.raw/1"
+      },
+      "baseline_receipt": {
+        "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+        "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "byte_length": 0,
+        "media_type": "application/json",
+        "schema_id": "hee3.receipt/1:ReceiptV1"
+      },
+      "mutants": {
+        "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+        "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "byte_length": 0,
+        "media_type": "application/json",
+        "schema_id": "hee3.receipt/1:MutantPageV1"
+      },
+      "planned_mutants": 1
+    },
+    "MutantV1": {
+      "mutant_id": "fixture-mutant",
+      "campaign_id": "fixture-campaign",
+      "baseline_subject_sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "diff": {
+        "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+        "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "byte_length": 1,
+        "media_type": "application/octet-stream",
+        "schema_id": "hee3.raw/1"
+      },
+      "expected_detector": "fixture-equality",
+      "observed_detector": {
+        "value": "fixture-equality",
+        "unavailable_reason": null
+      },
+      "outcome": "caught",
+      "executed": true,
+      "reason": "Fictional intended detector.",
+      "raw_evidence_refs": [
+        {
+          "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+          "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+          "byte_length": 0,
+          "media_type": "application/octet-stream",
+          "schema_id": "hee3.raw/1"
+        }
+      ],
+      "review_ref": {
+        "value": null,
+        "unavailable_reason": "Fictional unavailable value."
+      }
+    },
+    "AssumptionV1": {
+      "assumption_id": "fixture-assumption",
+      "shared_with": [
+        "fixture-author"
+      ],
+      "statement": "Schema and fixture authorship are shared.",
+      "evidence": [
+        {
+          "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+          "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+          "byte_length": 0,
+          "media_type": "application/octet-stream",
+          "schema_id": "hee3.raw/1"
+        }
+      ]
+    },
+    "FindingV1": {
+      "finding_id": "fixture-finding",
+      "owner_id": "fixture-owner",
+      "scope": "Fictional boundary.",
+      "material": true,
+      "disposition": "fixed",
+      "rationale": "Fictional finding disposition.",
+      "evidence": [
+        {
+          "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+          "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+          "byte_length": 0,
+          "media_type": "application/octet-stream",
+          "schema_id": "hee3.raw/1"
+        }
+      ],
+      "pre_fix_evidence": [
+        {
+          "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+          "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+          "byte_length": 0,
+          "media_type": "application/octet-stream",
+          "schema_id": "hee3.raw/1"
+        }
+      ],
+      "post_fix_evidence": [
+        {
+          "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+          "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+          "byte_length": 0,
+          "media_type": "application/octet-stream",
+          "schema_id": "hee3.raw/1"
+        }
+      ]
+    },
+    "OracleResultV1": {
+      "oracle_id": "fixture-reference",
+      "expected": {
+        "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+        "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "byte_length": 0,
+        "media_type": "application/json",
+        "schema_id": "hee3.receipt/1:ExpectationV1"
+      },
+      "result": "satisfied",
+      "detector_id": {
+        "value": "fixture-equality",
+        "unavailable_reason": null
+      },
+      "raw_evidence_refs": [
+        {
+          "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+          "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+          "byte_length": 0,
+          "media_type": "application/octet-stream",
+          "schema_id": "hee3.raw/1"
+        }
+      ],
+      "reason": ""
+    },
+    "MissingObjectV1": {
+      "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+      "expected_sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "expected_byte_length": 0,
+      "expected_schema_id": "hee3.raw/1",
+      "reason": "Fictional missing byte object descriptor."
+    },
+    "ReviewV1": {
+      "reviewer": "Fictional reviewer; this is not an actual review.",
+      "effective_model": {
+        "value": null,
+        "unavailable_reason": "Fictional human fixture."
+      },
+      "action": "fixture-review",
+      "subject_sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "shared_assumptions": {
+        "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+        "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "byte_length": 0,
+        "media_type": "application/json",
+        "schema_id": "hee3.receipt/1:AssumptionPageV1"
+      },
+      "findings": {
+        "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+        "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "byte_length": 0,
+        "media_type": "application/json",
+        "schema_id": "hee3.receipt/1:FindingPageV1"
+      },
+      "residual_obligations": {
+        "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+        "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "byte_length": 0,
+        "media_type": "application/json",
+        "schema_id": "hee3.receipt/1:ObligationPageV1"
+      },
+      "disposition": "fixture-pending",
+      "pre_fix_evidence": [
+        {
+          "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+          "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+          "byte_length": 0,
+          "media_type": "application/json",
+          "schema_id": "hee3.raw/1"
+        }
+      ],
+      "post_fix_evidence": [
+        {
+          "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+          "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+          "byte_length": 0,
+          "media_type": "application/json",
+          "schema_id": "hee3.raw/1"
+        }
+      ]
+    },
+    "ReviewReceiptV1": {
+      "protocol": "hee3.receipt.review",
+      "version": 1,
+      "receipt": {
+        "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+        "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "byte_length": 0,
+        "media_type": "application/json",
+        "schema_id": "hee3.receipt/1:ReceiptV1"
+      },
+      "review": {
+        "reviewer": "Fictional reviewer; this is not an actual review.",
+        "effective_model": {
+          "value": null,
+          "unavailable_reason": "Fictional human fixture."
+        },
+        "action": "fixture-review",
+        "subject_sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "shared_assumptions": {
+          "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+          "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+          "byte_length": 0,
+          "media_type": "application/json",
+          "schema_id": "hee3.receipt/1:AssumptionPageV1"
+        },
+        "findings": {
+          "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+          "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+          "byte_length": 0,
+          "media_type": "application/json",
+          "schema_id": "hee3.receipt/1:FindingPageV1"
+        },
+        "residual_obligations": {
+          "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+          "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+          "byte_length": 0,
+          "media_type": "application/json",
+          "schema_id": "hee3.receipt/1:ObligationPageV1"
+        },
+        "disposition": "fixture-pending",
+        "pre_fix_evidence": [
+          {
+            "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+            "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+            "byte_length": 0,
+            "media_type": "application/json",
+            "schema_id": "hee3.raw/1"
+          }
+        ],
+        "post_fix_evidence": [
+          {
+            "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+            "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+            "byte_length": 0,
+            "media_type": "application/json",
+            "schema_id": "hee3.raw/1"
+          }
+        ]
+      }
+    },
+    "AvailabilityReceiptV1": {
+      "protocol": "hee3.receipt.availability",
+      "version": 1,
+      "receipt": {
+        "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+        "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "byte_length": 0,
+        "media_type": "application/json",
+        "schema_id": "hee3.receipt/1:ReceiptV1"
+      },
+      "availability": {
+        "observed_unix_ms": "1769999990200",
+        "state": "complete",
+        "missing_objects": {
+          "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+          "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+          "byte_length": 0,
+          "media_type": "application/json",
+          "schema_id": "hee3.receipt/1:MissingObjectPageV1"
+        },
+        "retention_policy": "retain-v1"
+      }
+    },
+    "IdentityV1": {
+      "run_id": "123e4567-e89b-42d3-a456-000000000001",
+      "task_id": "123e4567-e89b-42d3-a456-000000000002",
+      "attempt_id": "123e4567-e89b-42d3-a456-000000000003",
+      "generation": "1",
+      "module_id": "check",
+      "criterion_ids": [
+        "G04",
+        "G05"
+      ],
+      "profile_id": "TH-DEV-fixture",
+      "parent_run": {
+        "value": null,
+        "unavailable_reason": "Fictional root fixture has no parent run."
+      }
+    },
+    "SubjectsV1": {
+      "seed_subject": {
+        "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+        "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "byte_length": 0,
+        "media_type": "application/json",
+        "schema_id": "hee3.receipt/1:SubjectV1"
+      },
+      "fixtures": {
+        "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+        "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "byte_length": 0,
+        "media_type": "application/json",
+        "schema_id": "hee3.receipt/1:SubjectV1"
+      },
+      "oracle": {
+        "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+        "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "byte_length": 0,
+        "media_type": "application/json",
+        "schema_id": "hee3.receipt/1:SubjectV1"
+      },
+      "harness": {
+        "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+        "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "byte_length": 0,
+        "media_type": "application/json",
+        "schema_id": "hee3.receipt/1:SubjectV1"
+      },
+      "collector": {
+        "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+        "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "byte_length": 0,
+        "media_type": "application/json",
+        "schema_id": "hee3.receipt/1:SubjectV1"
+      },
+      "launcher": {
+        "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+        "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "byte_length": 0,
+        "media_type": "application/json",
+        "schema_id": "hee3.receipt/1:SubjectV1"
+      },
+      "locks": {
+        "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+        "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "byte_length": 0,
+        "media_type": "application/json",
+        "schema_id": "hee3.receipt/1:LockPageV1"
+      },
+      "toolchain": {
+        "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+        "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "byte_length": 0,
+        "media_type": "application/json",
+        "schema_id": "hee3.receipt/1:ToolPageV1"
+      },
+      "target_features_build_profile": {
+        "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+        "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "byte_length": 0,
+        "media_type": "application/json",
+        "schema_id": "hee3.receipt/1:BuildProfileV1"
+      },
+      "standards": {
+        "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+        "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "byte_length": 0,
+        "media_type": "application/json",
+        "schema_id": "hee3.receipt/1:StandardPageV1"
+      },
+      "isolation_profile": {
+        "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+        "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "byte_length": 0,
+        "media_type": "application/json",
+        "schema_id": "hee3.raw/1"
+      },
+      "result_subject": {
+        "value": {
+          "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+          "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+          "byte_length": 0,
+          "media_type": "application/json",
+          "schema_id": "hee3.receipt/1:SubjectV1"
+        },
+        "unavailable_reason": null
+      },
+      "seed_to_result_patch": {
+        "value": {
+          "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+          "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+          "byte_length": 0,
+          "media_type": "application/json",
+          "schema_id": "hee3.raw/1"
+        },
+        "unavailable_reason": null
+      }
+    },
+    "InvocationV1": {
+      "argv": [
+        "/fictional/fixture",
+        "--known-pass"
+      ],
+      "cwd_logical": "fixture-root",
+      "environment": {
+        "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+        "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "byte_length": 0,
+        "media_type": "application/json",
+        "schema_id": "hee3.receipt/1:EnvironmentPageV1"
+      },
+      "grants": {
+        "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+        "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "byte_length": 0,
+        "media_type": "application/json",
+        "schema_id": "hee3.receipt/1:GrantPageV1"
+      },
+      "expected": {
+        "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+        "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "byte_length": 0,
+        "media_type": "application/json",
+        "schema_id": "hee3.receipt/1:ExpectationV1"
+      },
+      "limits": {
+        "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+        "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "byte_length": 0,
+        "media_type": "application/json",
+        "schema_id": "hee3.receipt/1:LimitsV1"
+      },
+      "allowed_effects": {
+        "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+        "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "byte_length": 0,
+        "media_type": "application/json",
+        "schema_id": "hee3.receipt/1:EffectPageV1"
+      },
+      "cleanup_contract": {
+        "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+        "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "byte_length": 0,
+        "media_type": "application/json",
+        "schema_id": "hee3.receipt/1:CleanupContractV1"
+      },
+      "oracle_id": "fixed-reference-fixture-v1"
+    },
+    "ObservationsV1": {
+      "host": {
+        "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+        "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "byte_length": 0,
+        "media_type": "application/json",
+        "schema_id": "hee3.receipt/1:HostV1"
+      },
+      "start_unix_ms": "1769999990000",
+      "end_unix_ms": "1769999990100",
+      "start_monotonic_ns": "100",
+      "end_monotonic_ns": "200",
+      "cutoff_unix_ms": "1769999990000",
+      "resources": {
+        "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+        "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "byte_length": 0,
+        "media_type": "application/json",
+        "schema_id": "hee3.receipt/1:ResourcePageV1"
+      },
+      "unresolved_obligations": {
+        "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+        "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "byte_length": 0,
+        "media_type": "application/json",
+        "schema_id": "hee3.receipt/1:ObligationPageV1"
+      },
+      "producer": {
+        "status": "exited",
+        "exit_code": {
+          "value": 0,
+          "unavailable_reason": null
+        },
+        "signal": {
+          "value": null,
+          "unavailable_reason": "Producer exited normally."
+        },
+        "timeout": false,
+        "stdout": {
+          "value": {
+            "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+            "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+            "byte_length": 0,
+            "media_type": "application/json",
+            "schema_id": "hee3.raw/1"
+          },
+          "unavailable_reason": null
+        },
+        "stderr": {
+          "value": {
+            "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+            "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+            "byte_length": 0,
+            "media_type": "application/json",
+            "schema_id": "hee3.raw/1"
+          },
+          "unavailable_reason": null
+        }
+      },
+      "cancellation": "not_requested",
+      "cleanup": "settled"
+    },
+    "ProducerV1": {
+      "status": "exited",
+      "exit_code": {
+        "value": 0,
+        "unavailable_reason": null
+      },
+      "signal": {
+        "value": null,
+        "unavailable_reason": "Producer exited normally."
+      },
+      "timeout": false,
+      "stdout": {
+        "value": {
+          "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+          "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+          "byte_length": 0,
+          "media_type": "application/json",
+          "schema_id": "hee3.raw/1"
+        },
+        "unavailable_reason": null
+      },
+      "stderr": {
+        "value": {
+          "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+          "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+          "byte_length": 0,
+          "media_type": "application/json",
+          "schema_id": "hee3.raw/1"
+        },
+        "unavailable_reason": null
+      }
+    },
+    "CasesV1": {
+      "inventory": {
+        "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+        "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "byte_length": 0,
+        "media_type": "application/json",
+        "schema_id": "hee3.receipt/1:CasePageV1"
+      },
+      "discovered": 1,
+      "selected": 1,
+      "executed": 1,
+      "passed": 1,
+      "failed": 0,
+      "skipped": 0,
+      "ignored": 0,
+      "broken": 0,
+      "timed_out": 0,
+      "invalid": 0,
+      "excluded": 0,
+      "unmeasured": 0,
+      "primary_credit": 0
+    },
+    "DiagnosticsV1": {
+      "baseline": true,
+      "warning_count": 0,
+      "error_count": 0,
+      "by_tool": {
+        "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+        "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "byte_length": 0,
+        "media_type": "application/json",
+        "schema_id": "hee3.receipt/1:DiagnosticPageV1"
+      },
+      "stdout_truncated": false,
+      "stderr_truncated": false,
+      "mismatch": {
+        "value": null,
+        "unavailable_reason": "No fixture mismatch."
+      }
+    },
+    "ArtifactsV1": {
+      "inventory": {
+        "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+        "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "byte_length": 0,
+        "media_type": "application/json",
+        "schema_id": "hee3.receipt/1:ArtifactPageV1"
+      },
+      "count": 1,
+      "total_bytes": "0",
+      "finalized": true
+    },
+    "MutationV1": {
+      "campaigns": {
+        "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+        "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "byte_length": 0,
+        "media_type": "application/json",
+        "schema_id": "hee3.receipt/1:CampaignPageV1"
+      },
+      "campaign_count": 0,
+      "distinct_mutants": 0,
+      "caught": 0,
+      "survived": 0,
+      "timed_out": 0,
+      "unviable": 0,
+      "equivalent": 0,
+      "excluded": 0,
+      "unmeasured": 0
+    },
+    "VerdictV1": {
+      "state": "PASS_CANDIDATE",
+      "oracle_result": {
+        "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+        "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "byte_length": 0,
+        "media_type": "application/json",
+        "schema_id": "hee3.receipt/1:OracleResultV1"
+      },
+      "intended_detector": "fixture-known-pass",
+      "benign_pair": {
+        "value": "123e4567-e89b-42d3-a456-000000000002",
+        "unavailable_reason": null
+      },
+      "reasons": []
+    },
+    "AvailabilityV1": {
+      "observed_unix_ms": "1769999990200",
+      "state": "complete",
+      "missing_objects": {
+        "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+        "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "byte_length": 0,
+        "media_type": "application/json",
+        "schema_id": "hee3.receipt/1:MissingObjectPageV1"
+      },
+      "retention_policy": "retain-v1"
+    },
+    "ReceiptV1": {
+      "protocol": "hee3.receipt",
+      "version": 1,
+      "serialization": "json-exact-v1",
+      "schema_sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "identity": {
+        "run_id": "123e4567-e89b-42d3-a456-000000000001",
+        "task_id": "123e4567-e89b-42d3-a456-000000000002",
+        "attempt_id": "123e4567-e89b-42d3-a456-000000000003",
+        "generation": "1",
+        "module_id": "check",
+        "criterion_ids": [
+          "G04",
+          "G05"
+        ],
+        "profile_id": "TH-DEV-fixture",
+        "parent_run": {
+          "value": null,
+          "unavailable_reason": "Fictional root fixture has no parent run."
+        }
+      },
+      "subjects": {
+        "seed_subject": {
+          "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+          "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+          "byte_length": 0,
+          "media_type": "application/json",
+          "schema_id": "hee3.receipt/1:SubjectV1"
+        },
+        "fixtures": {
+          "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+          "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+          "byte_length": 0,
+          "media_type": "application/json",
+          "schema_id": "hee3.receipt/1:SubjectV1"
+        },
+        "oracle": {
+          "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+          "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+          "byte_length": 0,
+          "media_type": "application/json",
+          "schema_id": "hee3.receipt/1:SubjectV1"
+        },
+        "harness": {
+          "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+          "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+          "byte_length": 0,
+          "media_type": "application/json",
+          "schema_id": "hee3.receipt/1:SubjectV1"
+        },
+        "collector": {
+          "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+          "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+          "byte_length": 0,
+          "media_type": "application/json",
+          "schema_id": "hee3.receipt/1:SubjectV1"
+        },
+        "launcher": {
+          "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+          "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+          "byte_length": 0,
+          "media_type": "application/json",
+          "schema_id": "hee3.receipt/1:SubjectV1"
+        },
+        "locks": {
+          "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+          "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+          "byte_length": 0,
+          "media_type": "application/json",
+          "schema_id": "hee3.receipt/1:LockPageV1"
+        },
+        "toolchain": {
+          "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+          "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+          "byte_length": 0,
+          "media_type": "application/json",
+          "schema_id": "hee3.receipt/1:ToolPageV1"
+        },
+        "target_features_build_profile": {
+          "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+          "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+          "byte_length": 0,
+          "media_type": "application/json",
+          "schema_id": "hee3.receipt/1:BuildProfileV1"
+        },
+        "standards": {
+          "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+          "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+          "byte_length": 0,
+          "media_type": "application/json",
+          "schema_id": "hee3.receipt/1:StandardPageV1"
+        },
+        "isolation_profile": {
+          "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+          "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+          "byte_length": 0,
+          "media_type": "application/json",
+          "schema_id": "hee3.raw/1"
+        },
+        "result_subject": {
+          "value": {
+            "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+            "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+            "byte_length": 0,
+            "media_type": "application/json",
+            "schema_id": "hee3.receipt/1:SubjectV1"
+          },
+          "unavailable_reason": null
+        },
+        "seed_to_result_patch": {
+          "value": {
+            "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+            "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+            "byte_length": 0,
+            "media_type": "application/json",
+            "schema_id": "hee3.raw/1"
+          },
+          "unavailable_reason": null
+        }
+      },
+      "invocation": {
+        "argv": [
+          "/fictional/fixture",
+          "--known-pass"
+        ],
+        "cwd_logical": "fixture-root",
+        "environment": {
+          "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+          "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+          "byte_length": 0,
+          "media_type": "application/json",
+          "schema_id": "hee3.receipt/1:EnvironmentPageV1"
+        },
+        "grants": {
+          "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+          "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+          "byte_length": 0,
+          "media_type": "application/json",
+          "schema_id": "hee3.receipt/1:GrantPageV1"
+        },
+        "expected": {
+          "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+          "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+          "byte_length": 0,
+          "media_type": "application/json",
+          "schema_id": "hee3.receipt/1:ExpectationV1"
+        },
+        "limits": {
+          "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+          "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+          "byte_length": 0,
+          "media_type": "application/json",
+          "schema_id": "hee3.receipt/1:LimitsV1"
+        },
+        "allowed_effects": {
+          "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+          "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+          "byte_length": 0,
+          "media_type": "application/json",
+          "schema_id": "hee3.receipt/1:EffectPageV1"
+        },
+        "cleanup_contract": {
+          "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+          "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+          "byte_length": 0,
+          "media_type": "application/json",
+          "schema_id": "hee3.receipt/1:CleanupContractV1"
+        },
+        "oracle_id": "fixed-reference-fixture-v1"
+      },
+      "observations": {
+        "host": {
+          "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+          "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+          "byte_length": 0,
+          "media_type": "application/json",
+          "schema_id": "hee3.receipt/1:HostV1"
+        },
+        "start_unix_ms": "1769999990000",
+        "end_unix_ms": "1769999990100",
+        "start_monotonic_ns": "100",
+        "end_monotonic_ns": "200",
+        "cutoff_unix_ms": "1769999990000",
+        "resources": {
+          "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+          "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+          "byte_length": 0,
+          "media_type": "application/json",
+          "schema_id": "hee3.receipt/1:ResourcePageV1"
+        },
+        "unresolved_obligations": {
+          "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+          "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+          "byte_length": 0,
+          "media_type": "application/json",
+          "schema_id": "hee3.receipt/1:ObligationPageV1"
+        },
+        "producer": {
+          "status": "exited",
+          "exit_code": {
+            "value": 0,
+            "unavailable_reason": null
+          },
+          "signal": {
+            "value": null,
+            "unavailable_reason": "Producer exited normally."
+          },
+          "timeout": false,
+          "stdout": {
+            "value": {
+              "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+              "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+              "byte_length": 0,
+              "media_type": "application/json",
+              "schema_id": "hee3.raw/1"
+            },
+            "unavailable_reason": null
+          },
+          "stderr": {
+            "value": {
+              "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+              "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+              "byte_length": 0,
+              "media_type": "application/json",
+              "schema_id": "hee3.raw/1"
+            },
+            "unavailable_reason": null
+          }
+        },
+        "cancellation": "not_requested",
+        "cleanup": "settled"
+      },
+      "cases": {
+        "inventory": {
+          "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+          "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+          "byte_length": 0,
+          "media_type": "application/json",
+          "schema_id": "hee3.receipt/1:CasePageV1"
+        },
+        "discovered": 1,
+        "selected": 1,
+        "executed": 1,
+        "passed": 1,
+        "failed": 0,
+        "skipped": 0,
+        "ignored": 0,
+        "broken": 0,
+        "timed_out": 0,
+        "invalid": 0,
+        "excluded": 0,
+        "unmeasured": 0,
+        "primary_credit": 0
+      },
+      "diagnostics": {
+        "baseline": true,
+        "warning_count": 0,
+        "error_count": 0,
+        "by_tool": {
+          "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+          "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+          "byte_length": 0,
+          "media_type": "application/json",
+          "schema_id": "hee3.receipt/1:DiagnosticPageV1"
+        },
+        "stdout_truncated": false,
+        "stderr_truncated": false,
+        "mismatch": {
+          "value": null,
+          "unavailable_reason": "No fixture mismatch."
+        }
+      },
+      "artifacts": {
+        "inventory": {
+          "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+          "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+          "byte_length": 0,
+          "media_type": "application/json",
+          "schema_id": "hee3.receipt/1:ArtifactPageV1"
+        },
+        "count": 1,
+        "total_bytes": "0",
+        "finalized": true
+      },
+      "mutation": {
+        "campaigns": {
+          "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+          "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+          "byte_length": 0,
+          "media_type": "application/json",
+          "schema_id": "hee3.receipt/1:CampaignPageV1"
+        },
+        "campaign_count": 0,
+        "distinct_mutants": 0,
+        "caught": 0,
+        "survived": 0,
+        "timed_out": 0,
+        "unviable": 0,
+        "equivalent": 0,
+        "excluded": 0,
+        "unmeasured": 0
+      },
+      "review": {
+        "value": null,
+        "unavailable_reason": "Synthetic pre-review fixture; no admission action occurred."
+      },
+      "verdict": {
+        "state": "PASS_CANDIDATE",
+        "oracle_result": {
+          "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+          "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+          "byte_length": 0,
+          "media_type": "application/json",
+          "schema_id": "hee3.receipt/1:OracleResultV1"
+        },
+        "intended_detector": "fixture-known-pass",
+        "benign_pair": {
+          "value": "123e4567-e89b-42d3-a456-000000000002",
+          "unavailable_reason": null
+        },
+        "reasons": []
+      },
+      "availability": {
+        "observed_unix_ms": "1769999990200",
+        "state": "complete",
+        "missing_objects": {
+          "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+          "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+          "byte_length": 0,
+          "media_type": "application/json",
+          "schema_id": "hee3.receipt/1:MissingObjectPageV1"
+        },
+        "retention_policy": "retain-v1"
+      }
+    },
+    "CasePageV1": {
+      "page_index": 0,
+      "page_count": 1,
+      "row_count": 1,
+      "total_rows": 1,
+      "rows": [
+        {
+          "case_id": "fixture-check-001",
+          "primary_module_id": "check",
+          "criterion_ids": [
+            "G04"
+          ],
+          "fixture_sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+          "oracle_id": "fixture-reference",
+          "expected": {
+            "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+            "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+            "byte_length": 0,
+            "media_type": "application/json",
+            "schema_id": "hee3.receipt/1:ExpectationV1"
+          },
+          "mandatory": true,
+          "excluded": false,
+          "selected": true,
+          "executed": true,
+          "outcome": "passed",
+          "producer_exit_or_signal": {
+            "status": "exited",
+            "exit_code": {
+              "value": 0,
+              "unavailable_reason": null
+            },
+            "signal": {
+              "value": null,
+              "unavailable_reason": "Producer exited normally."
+            },
+            "timeout": false,
+            "stdout": {
+              "value": {
+                "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+                "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+                "byte_length": 0,
+                "media_type": "application/json",
+                "schema_id": "hee3.raw/1"
+              },
+              "unavailable_reason": null
+            },
+            "stderr": {
+              "value": {
+                "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+                "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+                "byte_length": 0,
+                "media_type": "application/json",
+                "schema_id": "hee3.raw/1"
+              },
+              "unavailable_reason": null
+            }
+          },
+          "detector_id": "fixture-equality",
+          "benign_pair_id": {
+            "value": "123e4567-e89b-42d3-a456-000000000001",
+            "unavailable_reason": null
+          },
+          "raw_evidence_refs": [
+            {
+              "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+              "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+              "byte_length": 0,
+              "media_type": "application/octet-stream",
+              "schema_id": "hee3.raw/1"
+            }
+          ],
+          "reason": ""
+        }
+      ],
+      "next": {
+        "value": null,
+        "unavailable_reason": "end_of_inventory"
+      }
+    },
+    "SubjectFilePageV1": {
+      "page_index": 0,
+      "page_count": 1,
+      "row_count": 1,
+      "total_rows": 1,
+      "rows": [
+        {
+          "path": "src/fixture.rs",
+          "kind": "file",
+          "content": {
+            "value": {
+              "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+              "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+              "byte_length": 0,
+              "media_type": "application/octet-stream",
+              "schema_id": "hee3.raw/1"
+            },
+            "unavailable_reason": null
+          },
+          "executable": false,
+          "link_target": {
+            "value": null,
+            "unavailable_reason": "Fictional unavailable value."
+          },
+          "origin": "authored",
+          "exclusion_reason": {
+            "value": null,
+            "unavailable_reason": "Fictional unavailable value."
+          }
+        }
+      ],
+      "next": {
+        "value": null,
+        "unavailable_reason": "end_of_inventory"
+      }
+    },
+    "LockPageV1": {
+      "page_index": 0,
+      "page_count": 1,
+      "row_count": 1,
+      "total_rows": 1,
+      "rows": [
+        {
+          "lock_id": "fixture-cargo",
+          "ecosystem": "cargo",
+          "path": "Cargo.lock",
+          "content": {
+            "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+            "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+            "byte_length": 0,
+            "media_type": "application/octet-stream",
+            "schema_id": "hee3.raw/1"
+          },
+          "dependencies": {
+            "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+            "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+            "byte_length": 0,
+            "media_type": "application/json",
+            "schema_id": "hee3.receipt/1:DependencyPageV1"
+          }
+        }
+      ],
+      "next": {
+        "value": null,
+        "unavailable_reason": "end_of_inventory"
+      }
+    },
+    "DependencyPageV1": {
+      "page_index": 0,
+      "page_count": 1,
+      "row_count": 1,
+      "total_rows": 1,
+      "rows": [
+        {
+          "dependency_id": "fixture-package",
+          "name": "fixture-package",
+          "version": "1.0.0",
+          "source": "Fictional locked source.",
+          "checksum": {
+            "value": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+            "unavailable_reason": null
+          },
+          "locked_by": {
+            "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+            "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+            "byte_length": 0,
+            "media_type": "application/octet-stream",
+            "schema_id": "hee3.raw/1"
+          }
+        }
+      ],
+      "next": {
+        "value": null,
+        "unavailable_reason": "end_of_inventory"
+      }
+    },
+    "ToolPageV1": {
+      "page_index": 0,
+      "page_count": 1,
+      "row_count": 1,
+      "total_rows": 1,
+      "rows": [
+        {
+          "tool_id": "fixture-rustc",
+          "executable": {
+            "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+            "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+            "byte_length": 0,
+            "media_type": "application/octet-stream",
+            "schema_id": "hee3.raw/1"
+          },
+          "executable_path": "/fictional/rustc",
+          "version": "fictional-version",
+          "version_output": {
+            "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+            "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+            "byte_length": 0,
+            "media_type": "application/octet-stream",
+            "schema_id": "hee3.raw/1"
+          },
+          "target": "fictional-target"
+        }
+      ],
+      "next": {
+        "value": null,
+        "unavailable_reason": "end_of_inventory"
+      }
+    },
+    "LanguageFlagsPageV1": {
+      "page_index": 0,
+      "page_count": 1,
+      "row_count": 1,
+      "total_rows": 1,
+      "rows": [
+        {
+          "language": "rust",
+          "argv": [
+            "--fictional-flag"
+          ]
+        }
+      ],
+      "next": {
+        "value": null,
+        "unavailable_reason": "end_of_inventory"
+      }
+    },
+    "StandardPageV1": {
+      "page_index": 0,
+      "page_count": 1,
+      "row_count": 1,
+      "total_rows": 1,
+      "rows": [
+        {
+          "standard_id": "RC04",
+          "revision": "4",
+          "document": {
+            "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+            "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+            "byte_length": 0,
+            "media_type": "application/octet-stream",
+            "schema_id": "hee3.raw/1"
+          }
+        }
+      ],
+      "next": {
+        "value": null,
+        "unavailable_reason": "end_of_inventory"
+      }
+    },
+    "EnvironmentPageV1": {
+      "page_index": 0,
+      "page_count": 1,
+      "row_count": 1,
+      "total_rows": 1,
+      "rows": [
+        {
+          "name": "FIXTURE_MODE",
+          "value": {
+            "value": "benign",
+            "unavailable_reason": null
+          },
+          "secret_handle": {
+            "value": null,
+            "unavailable_reason": "Fictional unavailable value."
+          }
+        }
+      ],
+      "next": {
+        "value": null,
+        "unavailable_reason": "end_of_inventory"
+      }
+    },
+    "GrantPageV1": {
+      "page_index": 0,
+      "page_count": 1,
+      "row_count": 1,
+      "total_rows": 1,
+      "rows": [
+        {
+          "grant_id": "123e4567-e89b-42d3-a456-000000000001",
+          "scope_sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+          "issuer_id": "fictional-owner",
+          "grant": {
+            "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+            "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+            "byte_length": 0,
+            "media_type": "application/octet-stream",
+            "schema_id": "hee3.raw/1"
+          }
+        }
+      ],
+      "next": {
+        "value": null,
+        "unavailable_reason": "end_of_inventory"
+      }
+    },
+    "EffectPageV1": {
+      "page_index": 0,
+      "page_count": 1,
+      "row_count": 1,
+      "total_rows": 1,
+      "rows": [
+        {
+          "effect_id": "fixture-effect",
+          "grant_id": "123e4567-e89b-42d3-a456-000000000001",
+          "owner_id": "fixture-owner",
+          "scope": "Fictional writable output.",
+          "specification": {
+            "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+            "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+            "byte_length": 0,
+            "media_type": "application/octet-stream",
+            "schema_id": "hee3.raw/1"
+          }
+        }
+      ],
+      "next": {
+        "value": null,
+        "unavailable_reason": "end_of_inventory"
+      }
+    },
+    "ResourcePageV1": {
+      "page_index": 0,
+      "page_count": 1,
+      "row_count": 1,
+      "total_rows": 1,
+      "rows": [
+        {
+          "metric": "peak_memory",
+          "unit": "byte",
+          "value": {
+            "value": "1",
+            "unavailable_reason": null
+          },
+          "limit": {
+            "value": "1048576",
+            "unavailable_reason": null
+          },
+          "limit_event": false,
+          "evidence": {
+            "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+            "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+            "byte_length": 0,
+            "media_type": "application/octet-stream",
+            "schema_id": "hee3.raw/1"
+          }
+        }
+      ],
+      "next": {
+        "value": null,
+        "unavailable_reason": "end_of_inventory"
+      }
+    },
+    "ObligationPageV1": {
+      "page_index": 0,
+      "page_count": 1,
+      "row_count": 1,
+      "total_rows": 1,
+      "rows": [
+        {
+          "obligation_id": "123e4567-e89b-42d3-a456-000000000001",
+          "owner_id": "fixture-owner",
+          "scope": "Fictional cleanup.",
+          "material": true,
+          "state": "settled",
+          "evidence": [
+            {
+              "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+              "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+              "byte_length": 0,
+              "media_type": "application/octet-stream",
+              "schema_id": "hee3.raw/1"
+            }
+          ],
+          "reason": "Fictional settled observation."
+        }
+      ],
+      "next": {
+        "value": null,
+        "unavailable_reason": "end_of_inventory"
+      }
+    },
+    "DiagnosticPageV1": {
+      "page_index": 0,
+      "page_count": 1,
+      "row_count": 1,
+      "total_rows": 1,
+      "rows": [
+        {
+          "tool_id": "fixture-tool",
+          "baseline": true,
+          "warning_count": 0,
+          "error_count": 0,
+          "stdout": {
+            "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+            "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+            "byte_length": 0,
+            "media_type": "application/octet-stream",
+            "schema_id": "hee3.raw/1"
+          },
+          "stderr": {
+            "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+            "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+            "byte_length": 0,
+            "media_type": "application/octet-stream",
+            "schema_id": "hee3.raw/1"
+          },
+          "stdout_truncated": false,
+          "stderr_truncated": false,
+          "producer": {
+            "status": "exited",
+            "exit_code": {
+              "value": 0,
+              "unavailable_reason": null
+            },
+            "signal": {
+              "value": null,
+              "unavailable_reason": "Producer exited normally."
+            },
+            "timeout": false,
+            "stdout": {
+              "value": {
+                "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+                "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+                "byte_length": 0,
+                "media_type": "application/json",
+                "schema_id": "hee3.raw/1"
+              },
+              "unavailable_reason": null
+            },
+            "stderr": {
+              "value": {
+                "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+                "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+                "byte_length": 0,
+                "media_type": "application/json",
+                "schema_id": "hee3.raw/1"
+              },
+              "unavailable_reason": null
+            }
+          }
+        }
+      ],
+      "next": {
+        "value": null,
+        "unavailable_reason": "end_of_inventory"
+      }
+    },
+    "ArtifactPageV1": {
+      "page_index": 0,
+      "page_count": 1,
+      "row_count": 1,
+      "total_rows": 1,
+      "rows": [
+        {
+          "object": {
+            "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+            "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+            "byte_length": 0,
+            "media_type": "application/octet-stream",
+            "schema_id": "hee3.raw/1"
+          },
+          "role": "fixture-stdout",
+          "required": true,
+          "truncated": false,
+          "availability": "available",
+          "reason": ""
+        }
+      ],
+      "next": {
+        "value": null,
+        "unavailable_reason": "end_of_inventory"
+      }
+    },
+    "CampaignPageV1": {
+      "page_index": 0,
+      "page_count": 1,
+      "row_count": 1,
+      "total_rows": 1,
+      "rows": [
+        {
+          "campaign_id": "fixture-campaign",
+          "language": "rust",
+          "family_id": "fixture-boundary",
+          "tool": {
+            "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+            "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+            "byte_length": 0,
+            "media_type": "application/octet-stream",
+            "schema_id": "hee3.raw/1"
+          },
+          "config": {
+            "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+            "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+            "byte_length": 0,
+            "media_type": "application/octet-stream",
+            "schema_id": "hee3.raw/1"
+          },
+          "baseline_receipt": {
+            "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+            "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+            "byte_length": 0,
+            "media_type": "application/json",
+            "schema_id": "hee3.receipt/1:ReceiptV1"
+          },
+          "mutants": {
+            "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+            "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+            "byte_length": 0,
+            "media_type": "application/json",
+            "schema_id": "hee3.receipt/1:MutantPageV1"
+          },
+          "planned_mutants": 1
+        }
+      ],
+      "next": {
+        "value": null,
+        "unavailable_reason": "end_of_inventory"
+      }
+    },
+    "MutantPageV1": {
+      "page_index": 0,
+      "page_count": 1,
+      "row_count": 1,
+      "total_rows": 1,
+      "rows": [
+        {
+          "mutant_id": "fixture-mutant",
+          "campaign_id": "fixture-campaign",
+          "baseline_subject_sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+          "diff": {
+            "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+            "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+            "byte_length": 1,
+            "media_type": "application/octet-stream",
+            "schema_id": "hee3.raw/1"
+          },
+          "expected_detector": "fixture-equality",
+          "observed_detector": {
+            "value": "fixture-equality",
+            "unavailable_reason": null
+          },
+          "outcome": "caught",
+          "executed": true,
+          "reason": "Fictional intended detector.",
+          "raw_evidence_refs": [
+            {
+              "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+              "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+              "byte_length": 0,
+              "media_type": "application/octet-stream",
+              "schema_id": "hee3.raw/1"
+            }
+          ],
+          "review_ref": {
+            "value": null,
+            "unavailable_reason": "Fictional unavailable value."
+          }
+        }
+      ],
+      "next": {
+        "value": null,
+        "unavailable_reason": "end_of_inventory"
+      }
+    },
+    "AssumptionPageV1": {
+      "page_index": 0,
+      "page_count": 1,
+      "row_count": 1,
+      "total_rows": 1,
+      "rows": [
+        {
+          "assumption_id": "fixture-assumption",
+          "shared_with": [
+            "fixture-author"
+          ],
+          "statement": "Schema and fixture authorship are shared.",
+          "evidence": [
+            {
+              "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+              "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+              "byte_length": 0,
+              "media_type": "application/octet-stream",
+              "schema_id": "hee3.raw/1"
+            }
+          ]
+        }
+      ],
+      "next": {
+        "value": null,
+        "unavailable_reason": "end_of_inventory"
+      }
+    },
+    "FindingPageV1": {
+      "page_index": 0,
+      "page_count": 1,
+      "row_count": 1,
+      "total_rows": 1,
+      "rows": [
+        {
+          "finding_id": "fixture-finding",
+          "owner_id": "fixture-owner",
+          "scope": "Fictional boundary.",
+          "material": true,
+          "disposition": "fixed",
+          "rationale": "Fictional finding disposition.",
+          "evidence": [
+            {
+              "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+              "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+              "byte_length": 0,
+              "media_type": "application/octet-stream",
+              "schema_id": "hee3.raw/1"
+            }
+          ],
+          "pre_fix_evidence": [
+            {
+              "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+              "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+              "byte_length": 0,
+              "media_type": "application/octet-stream",
+              "schema_id": "hee3.raw/1"
+            }
+          ],
+          "post_fix_evidence": [
+            {
+              "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+              "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+              "byte_length": 0,
+              "media_type": "application/octet-stream",
+              "schema_id": "hee3.raw/1"
+            }
+          ]
+        }
+      ],
+      "next": {
+        "value": null,
+        "unavailable_reason": "end_of_inventory"
+      }
+    },
+    "MissingObjectPageV1": {
+      "page_index": 0,
+      "page_count": 1,
+      "row_count": 1,
+      "total_rows": 1,
+      "rows": [
+        {
+          "artifact_id": "123e4567-e89b-42d3-a456-000000000001",
+          "expected_sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+          "expected_byte_length": 0,
+          "expected_schema_id": "hee3.raw/1",
+          "reason": "Fictional missing byte object descriptor."
+        }
+      ],
+      "next": {
+        "value": null,
+        "unavailable_reason": "end_of_inventory"
+      }
+    }
+  }
+}

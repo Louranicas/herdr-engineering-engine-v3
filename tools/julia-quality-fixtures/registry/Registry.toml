@@ -1,0 +1,5 @@
+name = "HEE3Empty"
+uuid = "d468fc5b-fb25-469c-8d37-6a2e0fa238ac"
+description = "Explicit empty local registry for offline stdlib-only quality fixtures."
+
+[packages]

@@ -1,0 +1,70 @@
+{
+  "schema": 1,
+  "receipt_id": "T01-contracts-scoped-development-20260915T104401Z",
+  "module_id": "contracts",
+  "kind": "testing",
+  "source_kind": "engine_source",
+  "observed_at": "2026-09-15T10:46:05.856545+00:00",
+  "subject_files": {
+    "src/contracts.rs": "261a1ea61a539aa95397b34790ebeccdd90ad6991a457553a361e7d031b43a3b",
+    "src/task.rs": "a9e3696b8397d77e66f8e281a4a5f3d820e3e4eb33cbcbd14d395a6ca6ada007",
+    "tests/t01_contracts.rs": "16f6ef671ca892b260d99b6d2a0bd22996a8c25b40d7869ddad6fc5a79842a39",
+    "tests/t01_task.rs": "9d7eb3daa57f14859a231aeceda98a743f7b493a7c947ad21623ed66920e62bf",
+    "tools/check-t01": "95303d63d62a0429c39a34f36c91ea8c47117bccfce78c822ee135263dca42ee",
+    "evidence/implementation/T01/runs/20260915T104401254542Z/harness-Cargo.toml": "19adf91f3ed5bea161b641641189d223a73ef7a5104e8ff55a306734c5c43722",
+    "evidence/implementation/T01/runs/20260915T104401254542Z/harness-Cargo.lock": "9ce655c0a81c57b5fdfac9aeba175d5c51aa379bc86a0e65565924c9de699495",
+    "evidence/implementation/T01/runs/20260915T104401254542Z/decimal-oracle.json": "0a181b71b8cb6bdce47adbb7dcc9e0d92f332c48eae8a24507234e0346f8354e",
+    "evidence/implementation/T01/runs/20260915T104401254542Z/results.json": "4a62fd4035c04b30bbc6867685f72d710e64f0b0880ccd05ac69e7c8361704c4"
+  },
+  "acceptance": {
+    "T01": "65fcefcca9548c85274c540f520faea4c9e8665ed9aea473a12916fb32ff3bb3"
+  },
+  "mandatory_checks": [
+    "t01-scoped-contracts-default-debug",
+    "t01-scoped-contracts-default-release",
+    "t01-scoped-contracts-no-default-debug",
+    "t01-scoped-contracts-no-default-release"
+  ],
+  "checks": [
+    {
+      "id": "t01-scoped-contracts-default-debug",
+      "outcome": "pass",
+      "executed": 24,
+      "skipped": 0,
+      "log": {
+        "path": "evidence/implementation/T01/runs/20260915T104401254542Z/default-debug-tests.stdout",
+        "sha256": "8f1be148cf95276da9ac0947ee87f8ebac56d658f6ecbb4a1b8261d7dd5ad46d"
+      }
+    },
+    {
+      "id": "t01-scoped-contracts-default-release",
+      "outcome": "pass",
+      "executed": 24,
+      "skipped": 0,
+      "log": {
+        "path": "evidence/implementation/T01/runs/20260915T104401254542Z/default-release-tests.stdout",
+        "sha256": "2f6024decd1f4d5ce63f93ed1cd858ac7b440267596d25bdb5d6ba0351267e57"
+      }
+    },
+    {
+      "id": "t01-scoped-contracts-no-default-debug",
+      "outcome": "pass",
+      "executed": 24,
+      "skipped": 0,
+      "log": {
+        "path": "evidence/implementation/T01/runs/20260915T104401254542Z/no-default-debug-tests.stdout",
+        "sha256": "1419dafba0bf61cf612af7df051b1f976773c2853a6008430f77c22317f1a362"
+      }
+    },
+    {
+      "id": "t01-scoped-contracts-no-default-release",
+      "outcome": "pass",
+      "executed": 24,
+      "skipped": 0,
+      "log": {
+        "path": "evidence/implementation/T01/runs/20260915T104401254542Z/no-default-release-tests.stdout",
+        "sha256": "89b6d0b8325bd855db93eebc68b922b1c0f021af35d11c8c81612669fd80239e"
+      }
+    }
+  ]
+}

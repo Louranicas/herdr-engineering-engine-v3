@@ -1,0 +1,816 @@
+{
+  "schema": 1,
+  "id": "HEE3-COMPLETION-001",
+  "revision": 1,
+  "base_plan_sha256": "f998a2a692185a9e2df8d1025277f0c949fd877cc8c8e2926d4a3f7f794f4792",
+  "authority": "User-directed normative completion convention; accepted code is factual primary at its admitted revision. This document cannot grant coding authority or admit modules.",
+  "authorization": {
+    "operator": "Luke",
+    "trigger": "start coding",
+    "state": "awaiting explicit operator instruction",
+    "quoted_trigger_is_authorization": false
+  },
+  "admission_validator_available": false,
+  "accepted_modules": [],
+  "definition": "A module is fully complete only for an explicit version/profile and exact admitted subject when every applicable mandatory gate and owning atlas criterion passes with current evidence, non-applicability is justified without waiving requirements, independent acceptance is retained and corpus convergence is verified. Future ideas are outside that bounded claim.",
+  "universal_gates": [
+    {
+      "id": "G01",
+      "title": "Scope, authority and applicability",
+      "requirement": "Luke has issued an actual, unquoted start coding instruction for the selected work. Freeze the module version, declared profile, requirements, interfaces, task dependencies and supported environments before interpreting results.",
+      "evidence": "Scoped operator instruction, requirement/task/profile matrix, immutable candidate identity and change rationale.",
+      "refusal": "A quoted trigger, self-authorized scope expansion, unknown profile or omitted mandatory requirement refuses admission."
+    },
+    {
+      "id": "G02",
+      "title": "Complete supported behavior",
+      "requirement": "Every required operation has substantive implementation with real typed signatures, documented inputs/results/errors and meaningful consumer examples. No TODO, placeholder, panic or no-op substitutes for promised behavior. Internal implementation remains private unless an actual consumer contract requires exposure.",
+      "evidence": "Code-derived interface inventory and consumer compatibility fixtures covering every normative operation and supported version.",
+      "refusal": "An omitted operation, undocumented incompatible change or empty success path fails; intentionally unsupported behavior must return its declared refusal."
+    },
+    {
+      "id": "G03",
+      "title": "Boundary and ownership correctness",
+      "requirement": "Use the existing module owner for each state machine and semantic action. Validate capabilities, identities, versions, payload bounds and budgets before the hazard. Carry cancellation, deadlines, errors and provenance through request and return paths.",
+      "evidence": "Boundary tests and cross-module traces for valid input, denied scope, malformed input, stale identity, concurrency and lost reply.",
+      "refusal": "Duplicate semantic owners, bypass adapters, cyclic build dependencies or unknown effects presented as success block completion."
+    },
+    {
+      "id": "G04",
+      "title": "Meaningful testing and detector qualification",
+      "requirement": "Meet the existing minimum of 50 distinct qualifying primary-module cases. Cover actual requirements and independent oracles, not count padding. Exercise assimilation faults and benign mirrors, mutation sensitivity, applicable property/fuzz/concurrency/recovery and consumer integration.",
+      "evidence": "Exact case IDs and primary owners, full subject/profile matrix, raw outcomes, intended-reason fault/benign results and nonempty mutation dispositions under the active testing standard.",
+      "refusal": "Zero/skipped/duplicate/filler cases, missing denominator, dead detector, changed oracle merely to pass or unmeasured mandatory profile cannot qualify."
+    },
+    {
+      "id": "G05",
+      "title": "Zero diagnostic quality baseline",
+      "requirement": "All applicable build, format, pedantic lint, test, documentation and compatibility checks complete with zero baseline warnings and errors. Rust includes pedantic Clippy and rustdoc on admitted profiles; Julia/package/shell checks match their actual supported surfaces.",
+      "evidence": "Pinned toolchain and dependency/feature/target matrix with decisive producer status and retained raw diagnostics; follow TESTING_STANDARD exactly.",
+      "refusal": "Suppressions, reduced profiles, discarded stderr, successful tee/display or broad allows cannot erase an unresolved warning or required check."
+    },
+    {
+      "id": "G06",
+      "title": "Security and supply-chain closure",
+      "requirement": "Review the actual trust boundaries, dependencies, secrets, grants, parsing, filesystem/UDS custody, external process lifetime and update path. Reproduce and repair material findings on the integrated subject; recheck the fix.",
+      "evidence": "Bound threat model, dependency/license/provenance inventory, negative-control security results, reviewer dispositions and residual risk owner/scope.",
+      "refusal": "An unreviewed material finding, unbounded resource path, privilege bypass, unauthenticated completion producer or green scanner with failed controls blocks the applicable claim."
+    },
+    {
+      "id": "G07",
+      "title": "Recovery and durable obligations",
+      "requirement": "For state/effectful modules, prove crash, replay, cancellation, timeout, restart, ambiguous effect and cleanup behavior. Libraries expose explicit errors without pretending to own daemon recovery. Retain reservations and unresolved obligations until actual reconciliation.",
+      "evidence": "Fault-injected restart/replay traces, stable operation identities, independent readback and resource/obligation conservation checks.",
+      "refusal": "Process exit or listener health alone cannot prove task acceptance, effect completion, cleanup or useful service recovery."
+    },
+    {
+      "id": "G08",
+      "title": "Data, migration and compatibility",
+      "requirement": "For every persistent format or migration, declare version/checksum/read-write compatibility, exclusive custody and atomicity. Test fresh, upgrade, restart and independent restore; freeze released history. Nonpersistent modules explain why the migration subcheck is inapplicable.",
+      "evidence": "Exact source/schema/migration subject, disposable database/dataset fixtures, checksum mismatch refusal, backup/restore integrity and compatibility readback.",
+      "refusal": "A mutable released migration, missing admission-aware anchor freeze, data loss or restore that drops pending obligations blocks release of the affected profile."
+    },
+    {
+      "id": "G09",
+      "title": "Measured performance and resource fitness",
+      "requirement": "Declare relevant latency/tail, memory, queue/fan-out, cost and numerical accuracy/uncertainty budgets before judging the candidate. Use representative workloads, complete denominators and an appropriate baseline. A small static package need not invent a GPU or throughput benchmark.",
+      "evidence": "Workload/environment/build identities, predeclared thresholds and observed distributions/uncertainty including failures; justified per-subcheck non-applicability.",
+      "refusal": "Missing measurements, post-hoc favorable thresholds, hidden failures or a top-7% claim without a defined comparison population cannot pass."
+    },
+    {
+      "id": "G10",
+      "title": "Maintainability and bounded complexity",
+      "requirement": "Retain focused modules, clear names/types/invariants and one owner per behavior. Each new dependency, crate, trait, service, socket or scheduler must solve a present contract or explicitly approved need. Prefer existing seams; remove dead paths and duplicated policy.",
+      "evidence": "Reviewer comparison of before/after dependency topology, public surface, runtime components, configuration and operational cost, with concrete requirement witnesses.",
+      "refusal": "Speculative frameworks, duplicate state machines, undocumented coupling or abstractions justified only by imagined scale block the proposed change until simplified or explicitly justified."
+    },
+    {
+      "id": "G11",
+      "title": "Operational and consumer readiness",
+      "requirement": "Supply reproducible build/package/install instructions for the admitted profile, useful observability, bounded logs/redaction, owned resources, shutdown, diagnosis, backup/restore and rollback dispositions. A library documents consumer integration; it does not require a daemon.",
+      "evidence": "Runbook inventory and rehearsed applicable procedures on the candidate, installed-artifact/configuration identity where deployment is claimed, useful independent readback and failure exits.",
+      "refusal": "Unrun critical runbook, hidden prerequisite, unsupported command, unbounded retry, missing cleanup owner or assumed successful installation prevents the corresponding readiness/deployment claim."
+    },
+    {
+      "id": "G12",
+      "title": "Full-corpus and entry-point convergence",
+      "requirement": "README, quick start, public interfaces, tests, migration comments/sidecars, runbooks, Justfile, module contracts, atlas/vault/ultra map and master indices agree with admitted code and current requirements. All relevant anchors return in both directions.",
+      "evidence": "Matching publication generation/output hashes, expected module/path/recipe inventories, exact projection checks and live native graph readback after the evidence is retained.",
+      "refusal": "Stale generated wrapper, broken anchor, missing return route or documentation claiming unavailable behavior blocks documentation closure; it never reverses an already-observed external effect."
+    },
+    {
+      "id": "G13",
+      "title": "Independent acceptance and truthful state",
+      "requirement": "A qualified admission collector and responsible reviewer bind all applicable gate evidence to the exact candidate, profile, standard revisions and dependency/fixture/environment subjects. Child reports are candidates; the parent verifies integration.",
+      "evidence": "Evidence manifest with independent producer/reviewer identity, raw logs/artifacts, explicit gate dispositions, unresolved effects and acceptance identity. Separate assembled-codebase release admission.",
+      "refusal": "V1 observations, a model statement, source presence, aggregate test count or corpus PASS cannot admit a module. The collector is unavailable in this edition."
+    }
+  ],
+  "modules": [
+    {
+      "id": "contracts",
+      "completion_id": "HEE3-DONE-contracts",
+      "state": "unassessed; comment stub",
+      "gates": [
+        "G01",
+        "G02",
+        "G03",
+        "G04",
+        "G05",
+        "G06",
+        "G07",
+        "G08",
+        "G09",
+        "G10",
+        "G11",
+        "G12",
+        "G13"
+      ],
+      "outcome": "Typed request/result/error and identity/version contracts round-trip without losing semantics across declared consumers.",
+      "integrated_scenario": "Send a valid versioned request through two declared consumer projections and compare typed identity, errors and cancellation fields.",
+      "fault_and_benign": "Reject oversized/malformed or incompatible payload before allocation/dispatch; accept the bounded compatible counterpart.",
+      "complexity_boundary": "No registry, transport listener or task scheduler in the contract library.",
+      "interface_id": "HEE3-IF-contracts",
+      "operation_obligations": [
+        "Validate an envelope",
+        "Represent outcomes",
+        "Negotiate compatibility"
+      ]
+    },
+    {
+      "id": "task",
+      "completion_id": "HEE3-DONE-task",
+      "state": "unassessed; comment stub",
+      "gates": [
+        "G01",
+        "G02",
+        "G03",
+        "G04",
+        "G05",
+        "G06",
+        "G07",
+        "G08",
+        "G09",
+        "G10",
+        "G11",
+        "G12",
+        "G13"
+      ],
+      "outcome": "One durable task lifecycle performs admit → execute → verify → repair/escalate → reverify → accept, with correct terminal and pending states.",
+      "integrated_scenario": "Submit once, lose the reply, read back the same task, repair a failed candidate and accept only the verified subject.",
+      "fault_and_benign": "Late result, cancellation/acceptance race and exhausted budget never create duplicate effects or false acceptance; valid current result can advance.",
+      "complexity_boundary": "Task state is not duplicated in adapters, panes or workflow packages.",
+      "interface_id": "HEE3-IF-task",
+      "operation_obligations": [
+        "Preview and admit",
+        "Read and request cancellation",
+        "Advance or resolve"
+      ]
+    },
+    {
+      "id": "store",
+      "completion_id": "HEE3-DONE-store",
+      "state": "unassessed; comment stub",
+      "gates": [
+        "G01",
+        "G02",
+        "G03",
+        "G04",
+        "G05",
+        "G06",
+        "G07",
+        "G08",
+        "G09",
+        "G10",
+        "G11",
+        "G12",
+        "G13"
+      ],
+      "outcome": "Transactional ledger preserves task, lease, reservation, event and evidence invariants across concurrent access, migration and restore.",
+      "integrated_scenario": "Fresh database, supported upgrade and independent backup restore preserve all outstanding obligations and committed events.",
+      "fault_and_benign": "Crash between coupled writes yields all-or-nothing state; checksum mismatch and unsupported schema refuse before mutation; valid history migrates.",
+      "complexity_boundary": "One ledger authority; no second persistence engine or mutable released migration history.",
+      "interface_id": "HEE3-IF-store",
+      "operation_obligations": [
+        "Commit ledger transition",
+        "Read consistent state",
+        "Apply or inspect schema history"
+      ]
+    },
+    {
+      "id": "roster",
+      "completion_id": "HEE3-DONE-roster",
+      "state": "unassessed; comment stub",
+      "gates": [
+        "G01",
+        "G02",
+        "G03",
+        "G04",
+        "G05",
+        "G06",
+        "G07",
+        "G08",
+        "G09",
+        "G10",
+        "G11",
+        "G12",
+        "G13"
+      ],
+      "outcome": "Versioned agent, model and service registrations expose capability, provenance, availability and freshness without equating unknown to healthy.",
+      "integrated_scenario": "Register/update/discover a compatible agent/model/service and filter it for a real task with current scoped observations.",
+      "fault_and_benign": "Spoofed identity, conflicting update, disabled record and stale health exclude dispatch; compatible fresh registration remains eligible.",
+      "complexity_boundary": "Roster describes candidates; route selects, service owners supervise and grants authorize.",
+      "interface_id": "HEE3-IF-roster",
+      "operation_obligations": [
+        "Query capability and identity",
+        "Update or disable record",
+        "Reconcile service health"
+      ]
+    },
+    {
+      "id": "route",
+      "completion_id": "HEE3-DONE-route",
+      "state": "unassessed; comment stub",
+      "gates": [
+        "G01",
+        "G02",
+        "G03",
+        "G04",
+        "G05",
+        "G06",
+        "G07",
+        "G08",
+        "G09",
+        "G10",
+        "G11",
+        "G12",
+        "G13"
+      ],
+      "outcome": "Policy chooses an eligible model/worker using task constraints and measured quality, cost, latency and failure evidence with explainable fallback.",
+      "integrated_scenario": "Compare eligible candidates under a declared task workload and budget; reproduce decision/tie-break and retain explanation plus rejected alternatives.",
+      "fault_and_benign": "Unknown/unsupported capability, stale evaluation or forbidden data location cannot be selected; valid constrained fallback does not relax grants.",
+      "complexity_boundary": "No universal best-model claim; selection is conditional on available models, evidence and constraints.",
+      "interface_id": "HEE3-IF-route",
+      "operation_obligations": [
+        "Filter eligible recipes",
+        "Rank and explain",
+        "Evaluate fallback"
+      ]
+    },
+    {
+      "id": "budget",
+      "completion_id": "HEE3-DONE-budget",
+      "state": "unassessed; comment stub",
+      "gates": [
+        "G01",
+        "G02",
+        "G03",
+        "G04",
+        "G05",
+        "G06",
+        "G07",
+        "G08",
+        "G09",
+        "G10",
+        "G11",
+        "G12",
+        "G13"
+      ],
+      "outcome": "Reservations and actual usage conserve limits across concurrent work, retries, verification, context processing and uncertain effects.",
+      "integrated_scenario": "Reserve, dispatch, report delayed usage, reconcile and release exactly once across parent and child work.",
+      "fault_and_benign": "Concurrent oversubscription, duplicate usage, failed worker and uncertain cancellation keep liabilities visible; valid settled work releases safely.",
+      "complexity_boundary": "Do not create independent budget counters in each wrapper or omit checker/context cost.",
+      "interface_id": "HEE3-IF-budget",
+      "operation_obligations": [
+        "Reserve resources",
+        "Settle or reconcile usage",
+        "Read remaining allocation"
+      ]
+    },
+    {
+      "id": "worker",
+      "completion_id": "HEE3-DONE-worker",
+      "state": "unassessed; comment stub",
+      "gates": [
+        "G01",
+        "G02",
+        "G03",
+        "G04",
+        "G05",
+        "G06",
+        "G07",
+        "G08",
+        "G09",
+        "G10",
+        "G11",
+        "G12",
+        "G13"
+      ],
+      "outcome": "Replaceable admitted adapters execute bounded model work with actual model/process identity, stream custody, cancellation and retained result evidence.",
+      "integrated_scenario": "Run an admitted Pi/native fixture, collect bounded output/usage and reconcile the same assignment after a lost response.",
+      "fault_and_benign": "Wrong model, partial/oversized frame, hostile output, timeout or surviving writable child fails or remains pending; valid result retains provenance.",
+      "complexity_boundary": "No vendor assumptions in task ownership; adapter launch never grants broader access.",
+      "interface_id": "HEE3-IF-worker",
+      "operation_obligations": [
+        "Start an admitted attempt",
+        "Observe activity and result",
+        "Cancel and settle"
+      ]
+    },
+    {
+      "id": "check",
+      "completion_id": "HEE3-DONE-check",
+      "state": "unassessed; comment stub",
+      "gates": [
+        "G01",
+        "G02",
+        "G03",
+        "G04",
+        "G05",
+        "G06",
+        "G07",
+        "G08",
+        "G09",
+        "G10",
+        "G11",
+        "G12",
+        "G13"
+      ],
+      "outcome": "Acceptance checks have qualified detectors and complete exact-subject evidence; forged, empty, stale or wrong-profile proof cannot become success.",
+      "integrated_scenario": "A known faulty candidate fails for the intended reason, its benign mirror passes, and a repaired integrated candidate is reverified against the same criteria.",
+      "fault_and_benign": "Mutate fixture identity, case inventory, profile, producer status or raw log; reject each without accepting an aggregate count.",
+      "complexity_boundary": "The full admission collector must be implemented and qualified before this module is accepted; no self-declared trust.",
+      "interface_id": "HEE3-IF-check",
+      "operation_obligations": [
+        "Prepare protected verification",
+        "Collect criterion observations",
+        "Report qualification gaps"
+      ]
+    },
+    {
+      "id": "recovery",
+      "completion_id": "HEE3-DONE-recovery",
+      "state": "unassessed; comment stub",
+      "gates": [
+        "G01",
+        "G02",
+        "G03",
+        "G04",
+        "G05",
+        "G06",
+        "G07",
+        "G08",
+        "G09",
+        "G10",
+        "G11",
+        "G12",
+        "G13"
+      ],
+      "outcome": "Restart reconciles durable task/effect/process identities, leases and reservations without blindly repeating uncertain work.",
+      "integrated_scenario": "Recover a crashed coordinator with pending worker/service effects, inspect actual ownership and settle only observed obligations.",
+      "fault_and_benign": "PID reuse, restored epoch, stale result and partial cleanup do not attach to the wrong work; a live owned child is recognized.",
+      "complexity_boundary": "Use existing owners and durable ledger; no parallel supervisor or unconditional kill/retry loop.",
+      "interface_id": "HEE3-IF-recovery",
+      "operation_obligations": [
+        "Inventory outstanding obligations",
+        "Reconcile and clean up",
+        "Rebuild delivery/state view"
+      ]
+    },
+    {
+      "id": "cohort",
+      "completion_id": "HEE3-DONE-cohort",
+      "state": "unassessed; comment stub",
+      "gates": [
+        "G01",
+        "G02",
+        "G03",
+        "G04",
+        "G05",
+        "G06",
+        "G07",
+        "G08",
+        "G09",
+        "G10",
+        "G11",
+        "G12",
+        "G13"
+      ],
+      "outcome": "Bounded specialist threads maintain shared brief revisions, separate write/resource ownership, dissent and evidence-aware parent joins.",
+      "integrated_scenario": "Split independent work, return compatible child results, detect an integration failure and repair/reverify the joined parent subject.",
+      "fault_and_benign": "Overlapping writes, stale brief, missing child or contradictory evidence prevents parent success; disjoint valid work can converge.",
+      "complexity_boundary": "No second scheduler or majority vote replacing proof; synergy must show useful integration, not agent count.",
+      "interface_id": "HEE3-IF-cohort",
+      "operation_obligations": [
+        "Plan and assign bounded work",
+        "Read thread and collect candidates",
+        "Join or revise work"
+      ]
+    },
+    {
+      "id": "context",
+      "completion_id": "HEE3-DONE-context",
+      "state": "unassessed; comment stub",
+      "gates": [
+        "G01",
+        "G02",
+        "G03",
+        "G04",
+        "G05",
+        "G06",
+        "G07",
+        "G08",
+        "G09",
+        "G10",
+        "G11",
+        "G12",
+        "G13"
+      ],
+      "outcome": "Context packets are scoped, bounded and reproducible, preserving source identities, gaps and bidirectional dependency/return context.",
+      "integrated_scenario": "Assemble a permitted module/task packet, update one source and identify affected consumers while accounting for selection/compaction cost.",
+      "fault_and_benign": "Injection text, unsafe path, recursive expansion and stale/missing dependency stay denied or visible as gaps; valid bounded references remain usable.",
+      "complexity_boundary": "Do not load whole vaults by default or treat source procedures as execution grants.",
+      "interface_id": "HEE3-IF-context",
+      "operation_obligations": [
+        "Assemble context",
+        "Refresh or compare packet",
+        "Report context cost"
+      ]
+    },
+    {
+      "id": "notify",
+      "completion_id": "HEE3-DONE-notify",
+      "state": "unassessed; comment stub",
+      "gates": [
+        "G01",
+        "G02",
+        "G03",
+        "G04",
+        "G05",
+        "G06",
+        "G07",
+        "G08",
+        "G09",
+        "G10",
+        "G11",
+        "G12",
+        "G13"
+      ],
+      "outcome": "Committed events reach permitted subscribers with durable delivery identity, bounded backlog and truthful gap/replay semantics.",
+      "integrated_scenario": "Commit task state plus outbox, deliver/replay after lost acknowledgement and observe one logical recipient obligation.",
+      "fault_and_benign": "Pre-commit delivery, wrong visibility, expired/restored cursor and slow consumer cannot corrupt task state; valid resync works.",
+      "complexity_boundary": "Notifications do not become a task-state owner or redispatch engine effects.",
+      "interface_id": "HEE3-IF-notify",
+      "operation_obligations": [
+        "Subscribe or replay",
+        "Deliver and acknowledge",
+        "Read delivery obligation"
+      ]
+    },
+    {
+      "id": "service",
+      "completion_id": "HEE3-DONE-service",
+      "state": "unassessed; comment stub",
+      "gates": [
+        "G01",
+        "G02",
+        "G03",
+        "G04",
+        "G05",
+        "G06",
+        "G07",
+        "G08",
+        "G09",
+        "G10",
+        "G11",
+        "G12",
+        "G13"
+      ],
+      "outcome": "Registered binaries, daemons, libraries and numerical services expose useful health and delegated owner-controlled lifecycle with effect readback.",
+      "integrated_scenario": "Inspect the registered owner, perform an admitted bounded probe/action and reconcile its durable operation/job identity.",
+      "fault_and_benign": "Unauthorized action, wrong unit, useless-but-listening service and lost reply never imply healthy completion; valid useful probe succeeds.",
+      "complexity_boundary": "Delegate to established lifecycle owners such as systemd/Podman; do not introduce a competing supervisor.",
+      "interface_id": "HEE3-IF-service",
+      "operation_obligations": [
+        "Inspect or probe",
+        "Delegate lifecycle action",
+        "Read back lifecycle effect"
+      ]
+    },
+    {
+      "id": "herdr",
+      "completion_id": "HEE3-DONE-herdr",
+      "state": "unassessed; comment stub",
+      "gates": [
+        "G01",
+        "G02",
+        "G03",
+        "G04",
+        "G05",
+        "G06",
+        "G07",
+        "G08",
+        "G09",
+        "G10",
+        "G11",
+        "G12",
+        "G13"
+      ],
+      "outcome": "The multiplexer/client presents truthful task, thread, route and proof state and reconnects through the same versioned action semantics.",
+      "integrated_scenario": "Submit operator intent, lose the pane/client, reconnect by epoch/cursor and navigate the retained task evidence.",
+      "fault_and_benign": "Duplicate submission, stale event, display failure and cancellation do not invent acceptance; valid current state remains visible.",
+      "complexity_boundary": "Panes are clients, not authoritative rosters, schedulers or completion databases.",
+      "interface_id": "HEE3-IF-herdr",
+      "operation_obligations": [
+        "Submit operator intent",
+        "Present task/thread state",
+        "Reconnect or request cancellation"
+      ]
+    },
+    {
+      "id": "numerical",
+      "completion_id": "HEE3-DONE-numerical",
+      "state": "unassessed; comment stub",
+      "gates": [
+        "G01",
+        "G02",
+        "G03",
+        "G04",
+        "G05",
+        "G06",
+        "G07",
+        "G08",
+        "G09",
+        "G10",
+        "G11",
+        "G12",
+        "G13"
+      ],
+      "outcome": "Rust mediates bounded immutable Julia/numerical requests and validates report identity, units, uncertainty, runtime and policy compatibility.",
+      "integrated_scenario": "Send a pinned dataset and recipe, collect a bounded analysis artifact, compare baseline and keep control-state authority in Rust.",
+      "fault_and_benign": "Wrong shape/units, nonfinite/oversized output, stale dataset, crash/cancel or incompatible device rejects the candidate; valid report remains reviewable.",
+      "complexity_boundary": "Optional PyTorch/neural-operator lanes remain evidence-gated and do not create mandatory services.",
+      "interface_id": "HEE3-IF-numerical",
+      "operation_obligations": [
+        "Prepare numerical request",
+        "Exchange and collect",
+        "Validate candidate policy"
+      ]
+    },
+    {
+      "id": "julia",
+      "completion_id": "HEE3-DONE-julia",
+      "state": "unassessed; comment stub",
+      "gates": [
+        "G01",
+        "G02",
+        "G03",
+        "G04",
+        "G05",
+        "G06",
+        "G07",
+        "G08",
+        "G09",
+        "G10",
+        "G11",
+        "G12",
+        "G13"
+      ],
+      "outcome": "Julia analysis produces reproducible routing/cohesion reports with complete denominators, justified tolerances and held-out baseline comparisons.",
+      "integrated_scenario": "Evaluate immutable outcomes including failures/cancellations/unknown usage and reproduce report identity and declared uncertainty.",
+      "fault_and_benign": "Wrong units/shape, data leakage, invalid oracle and out-of-domain operator request fail or use an explicit baseline fallback; in-domain known cases pass.",
+      "complexity_boundary": "Analysis proposes evidence/candidate policy; it never writes grants, leases or task acceptance.",
+      "interface_id": "HEE3-IF-julia",
+      "operation_obligations": [
+        "Evaluate routing outcomes",
+        "Analyse cohesion",
+        "Evaluate optional operator"
+      ]
+    },
+    {
+      "id": "app",
+      "completion_id": "HEE3-DONE-app",
+      "state": "unassessed; comment stub",
+      "gates": [
+        "G01",
+        "G02",
+        "G03",
+        "G04",
+        "G05",
+        "G06",
+        "G07",
+        "G08",
+        "G09",
+        "G10",
+        "G11",
+        "G12",
+        "G13"
+      ],
+      "outcome": "A small composition root exposes one action catalogue through CLI/local serve, validates startup custody and shuts down with obligations retained.",
+      "integrated_scenario": "Start the admitted configuration, exercise a full task through CLI and UDS parity, verify/repair it, reconnect and perform bounded shutdown.",
+      "fault_and_benign": "Bad config, startup race, unavailable dependency, insecure socket and broken-pipe status refuse truthfully; valid useful health is observable.",
+      "complexity_boundary": "Compose existing modules; do not duplicate task, roster, budget or route logic.",
+      "interface_id": "HEE3-IF-app",
+      "operation_obligations": [
+        "Parse and dispatch",
+        "Compose and supervise coordinator",
+        "Report health and shut down"
+      ]
+    },
+    {
+      "id": "actions",
+      "completion_id": "HEE3-DONE-actions",
+      "state": "unassessed; comment stub",
+      "gates": [
+        "G01",
+        "G02",
+        "G03",
+        "G04",
+        "G05",
+        "G06",
+        "G07",
+        "G08",
+        "G09",
+        "G10",
+        "G11",
+        "G12",
+        "G13"
+      ],
+      "outcome": "One versioned catalogue gives caller-visible discovery, typed inspection and dispatch contracts for all 21 declared actions.",
+      "integrated_scenario": "List and inspect permitted actions, invoke one through CLI/tool/UDS and compare semantic result/error/effect identities.",
+      "fault_and_benign": "Hidden action, unknown version, malformed argument and ungranted effect refuse before dispatch; visible compatible action retains identical semantics.",
+      "complexity_boundary": "An advertised action is not an authority grant; wrappers must derive from the same owner.",
+      "interface_id": "HEE3-IF-actions",
+      "operation_obligations": [
+        "List visible capabilities",
+        "Inspect a supported action",
+        "Validate dispatch metadata"
+      ]
+    },
+    {
+      "id": "bash",
+      "completion_id": "HEE3-DONE-bash",
+      "state": "unassessed; comment stub",
+      "gates": [
+        "G01",
+        "G02",
+        "G03",
+        "G04",
+        "G05",
+        "G06",
+        "G07",
+        "G08",
+        "G09",
+        "G10",
+        "G11",
+        "G12",
+        "G13"
+      ],
+      "outcome": "Thin Bash/Just entry points preserve literal arguments, bounded I/O, decisive producer exit and cancellation over existing action semantics.",
+      "integrated_scenario": "Invoke a real admitted action with spaces/metacharacters and chain it through output capture while preserving structured result and failing producer status.",
+      "fault_and_benign": "Command-like input remains data, missing executable/failed pipeline/cancel returns failure, and a valid literal argument round-trips.",
+      "complexity_boundary": "No eval, scheduler, policy fork or hand-edited generated wrapper; future dynamic arguments use qualified literal argv transport.",
+      "interface_id": "HEE3-IF-bash",
+      "operation_obligations": [
+        "Invoke action safely",
+        "Chain bounded commands",
+        "Inspect usage and prerequisites"
+      ]
+    },
+    {
+      "id": "pi_extension",
+      "completion_id": "HEE3-DONE-pi_extension",
+      "state": "unassessed; comment stub",
+      "gates": [
+        "G01",
+        "G02",
+        "G03",
+        "G04",
+        "G05",
+        "G06",
+        "G07",
+        "G08",
+        "G09",
+        "G10",
+        "G11",
+        "G12",
+        "G13"
+      ],
+      "outcome": "A version-pinned replaceable Pi integration registers compatible action tools and carries host call identity, result/error, usage and cancellation.",
+      "integrated_scenario": "Run actual supported host fixtures across tool registration, invocation, rendering, reload and reconnection.",
+      "fault_and_benign": "Stale callback, mismatched host/call version, parallel call contamination and cancel race cannot return another call’s success; current valid calls work.",
+      "complexity_boundary": "Host glue remains unselected until compatibility is qualified; no implicit extra coordinator.",
+      "interface_id": "HEE3-IF-pi_extension",
+      "operation_obligations": [
+        "Register supported tools",
+        "Invoke and render",
+        "Cancel and reconcile lifecycle"
+      ]
+    },
+    {
+      "id": "skills",
+      "completion_id": "HEE3-DONE-skills",
+      "state": "unassessed; comment stub",
+      "gates": [
+        "G01",
+        "G02",
+        "G03",
+        "G04",
+        "G05",
+        "G06",
+        "G07",
+        "G08",
+        "G09",
+        "G10",
+        "G11",
+        "G12",
+        "G13"
+      ],
+      "outcome": "Versioned skills expose purpose, compatible actions and bounded reference graphs without expanding access or rewriting task criteria.",
+      "integrated_scenario": "Discover a supported skill, assemble its scoped instruction packet and update a reviewed revision with affected-consumer provenance.",
+      "fault_and_benign": "Conflicting instructions, retired/stale references, path escape and incompatible action versions refuse or surface gaps; valid pinned skill remains usable.",
+      "complexity_boundary": "Text supplies context, never grants, completion authority or a hidden daemon.",
+      "interface_id": "HEE3-IF-skills",
+      "operation_obligations": [
+        "Discover compatible skill",
+        "Load scoped instructions",
+        "Update a skill revision"
+      ]
+    },
+    {
+      "id": "workflows",
+      "completion_id": "HEE3-DONE-workflows",
+      "state": "unassessed; comment stub",
+      "gates": [
+        "G01",
+        "G02",
+        "G03",
+        "G04",
+        "G05",
+        "G06",
+        "G07",
+        "G08",
+        "G09",
+        "G10",
+        "G11",
+        "G12",
+        "G13"
+      ],
+      "outcome": "Finite versioned procedures use existing task/cohort scheduling and retain stable step identities, bounded retries and independent parent acceptance.",
+      "integrated_scenario": "Validate and execute an admitted DAG, interrupt it after an effect, read back uncertain state and resume to a repaired, reverified parent join.",
+      "fault_and_benign": "Cycles, unknown steps, missing child, budget exhaustion and failed final verifier prevent success; valid settled steps are not repeated.",
+      "complexity_boundary": "One procedure definition projects to Just/CLI/host surfaces; no parallel scheduler or automatic runner compatibility claim.",
+      "interface_id": "HEE3-IF-workflows",
+      "operation_obligations": [
+        "Validate procedure",
+        "Start or resume composition",
+        "Join and close"
+      ]
+    }
+  ],
+  "quality_limits": {
+    "minimum_distinct_cases_per_module": 50,
+    "maximum_baseline_warnings": 0,
+    "maximum_baseline_errors": 0,
+    "top_tail_performance": "ambition only; no percentile claim without a measured comparison population"
+  },
+  "admission_manifest_fields": [
+    "module/version/profile and exact candidate revision or content tree",
+    "operator authorization and scoped requirement/criterion matrix",
+    "standard/interface/recipe/runbook/fixture/dependency/environment hashes",
+    "complete case inventory with primary ownership and raw producer verdicts",
+    "assimilation fault/benign and mutation dispositions",
+    "security review, findings, residual obligations and independent reviewer identity",
+    "applicable gate verdicts and justified non-applicable subchecks",
+    "supported consumer compatibility and integrated parent evidence",
+    "migration/checksum/freeze and operational readback when applicable",
+    "admission identity/time plus current-versus-desired and stale applicability",
+    "corpus generation/outputs and post-admission documentation readback"
+  ],
+  "runbooks": [
+    {
+      "id": "RB01",
+      "name": "Inspect current corpus and scope",
+      "availability": "available documentation procedure",
+      "file": "runbooks/01-inspect.md"
+    },
+    {
+      "id": "RB02",
+      "name": "Verify and publish documentation",
+      "availability": "available documentation procedure",
+      "file": "runbooks/02-publish.md"
+    },
+    {
+      "id": "RB03",
+      "name": "Complete and admit one module",
+      "availability": "planned; coding and qualified collector required",
+      "file": "runbooks/03-module-completion.md"
+    },
+    {
+      "id": "RB04",
+      "name": "Accept migration, assemble and release",
+      "availability": "planned; qualified release and freeze controls required",
+      "file": "runbooks/04-release-recovery.md"
+    }
+  ]
+}

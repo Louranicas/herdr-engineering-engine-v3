@@ -1,0 +1,306 @@
+{
+  "fixture_notice": "All UUIDs, times, paths, profile names, schema IDs and sha256:111... digests are fictional structural fixture values. They identify no published schema, protected run, accepted module or real referenced artifact. Schema-valid means shape only; no reference is resolved or authenticated and no collector has run. Fixtures and tests share schema authorship; independent oracle authorship is not claimed. Module case credits: 0.",
+  "base_fixture": "baseline-pass-shape",
+  "overrides": [
+    {
+      "id": "wrong-protocol",
+      "path": [
+        "protocol"
+      ],
+      "value": "hee3.control",
+      "schema_valid": false
+    },
+    {
+      "id": "wrong-version",
+      "path": [
+        "version"
+      ],
+      "value": 2,
+      "schema_valid": false
+    },
+    {
+      "id": "wrong-serialization",
+      "path": [
+        "serialization"
+      ],
+      "value": "canonical-json",
+      "schema_valid": false
+    },
+    {
+      "id": "uppercase-uuid",
+      "path": [
+        "identity",
+        "run_id"
+      ],
+      "value": "123E4567-E89B-42D3-A456-000000000001",
+      "schema_valid": false
+    },
+    {
+      "id": "nil-uuid",
+      "path": [
+        "identity",
+        "run_id"
+      ],
+      "value": "00000000-0000-0000-0000-000000000000",
+      "schema_valid": false
+    },
+    {
+      "id": "zero-generation",
+      "path": [
+        "identity",
+        "generation"
+      ],
+      "value": "0",
+      "schema_valid": false
+    },
+    {
+      "id": "u64-overflow",
+      "path": [
+        "identity",
+        "generation"
+      ],
+      "value": "18446744073709551616",
+      "schema_valid": false
+    },
+    {
+      "id": "u64-final-newline",
+      "path": [
+        "observations",
+        "start_unix_ms"
+      ],
+      "value": "1\n",
+      "schema_valid": false
+    },
+    {
+      "id": "digest-uppercase",
+      "path": [
+        "schema_sha256"
+      ],
+      "value": "sha256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "schema_valid": false
+    },
+    {
+      "id": "non-ascii-name",
+      "path": [
+        "identity",
+        "module_id"
+      ],
+      "value": "ch\u00ebck",
+      "schema_valid": false
+    },
+    {
+      "id": "count-negative",
+      "path": [
+        "cases",
+        "passed"
+      ],
+      "value": -1,
+      "schema_valid": false
+    },
+    {
+      "id": "count-overflow",
+      "path": [
+        "cases",
+        "passed"
+      ],
+      "value": 4294967296,
+      "schema_valid": false
+    },
+    {
+      "id": "count-boolean",
+      "path": [
+        "cases",
+        "passed"
+      ],
+      "value": true,
+      "schema_valid": false
+    },
+    {
+      "id": "count-fraction",
+      "path": [
+        "cases",
+        "passed"
+      ],
+      "value": 0.5,
+      "schema_valid": false
+    },
+    {
+      "id": "boolean-string",
+      "path": [
+        "artifacts",
+        "finalized"
+      ],
+      "value": "true",
+      "schema_valid": false
+    },
+    {
+      "id": "nonexistent-verdict",
+      "path": [
+        "verdict",
+        "state"
+      ],
+      "value": "PASS",
+      "schema_valid": false
+    },
+    {
+      "id": "both-maybe-members-null",
+      "path": [
+        "review"
+      ],
+      "value": {
+        "value": null,
+        "unavailable_reason": null
+      },
+      "schema_valid": false
+    },
+    {
+      "id": "pass-missing-result",
+      "path": [
+        "subjects",
+        "result_subject"
+      ],
+      "value": {
+        "value": null,
+        "unavailable_reason": "Unavailable subject."
+      },
+      "schema_valid": false
+    },
+    {
+      "id": "pass-missing-patch",
+      "path": [
+        "subjects",
+        "seed_to_result_patch"
+      ],
+      "value": {
+        "value": null,
+        "unavailable_reason": "Unavailable patch."
+      },
+      "schema_valid": false
+    },
+    {
+      "id": "pass-missing-stdout",
+      "path": [
+        "observations",
+        "producer",
+        "stdout"
+      ],
+      "value": {
+        "value": null,
+        "unavailable_reason": "Missing required log."
+      },
+      "schema_valid": false
+    },
+    {
+      "id": "pass-timeout",
+      "path": [
+        "observations",
+        "producer",
+        "timeout"
+      ],
+      "value": true,
+      "schema_valid": false
+    },
+    {
+      "id": "pass-empty-selection",
+      "path": [
+        "cases",
+        "selected"
+      ],
+      "value": 0,
+      "schema_valid": false
+    },
+    {
+      "id": "pass-zero-executed",
+      "path": [
+        "cases",
+        "executed"
+      ],
+      "value": 0,
+      "schema_valid": false
+    },
+    {
+      "id": "pass-warning-baseline",
+      "path": [
+        "diagnostics",
+        "warning_count"
+      ],
+      "value": 1,
+      "schema_valid": false
+    },
+    {
+      "id": "pass-error-baseline",
+      "path": [
+        "diagnostics",
+        "error_count"
+      ],
+      "value": 1,
+      "schema_valid": false
+    },
+    {
+      "id": "pass-mismatch",
+      "path": [
+        "diagnostics",
+        "mismatch"
+      ],
+      "value": {
+        "value": "Wrong protected subject.",
+        "unavailable_reason": null
+      },
+      "schema_valid": false
+    },
+    {
+      "id": "pass-truncated-stdout",
+      "path": [
+        "diagnostics",
+        "stdout_truncated"
+      ],
+      "value": true,
+      "schema_valid": false
+    },
+    {
+      "id": "pass-truncated-stderr",
+      "path": [
+        "diagnostics",
+        "stderr_truncated"
+      ],
+      "value": true,
+      "schema_valid": false
+    },
+    {
+      "id": "pass-unfinalized",
+      "path": [
+        "artifacts",
+        "finalized"
+      ],
+      "value": false,
+      "schema_valid": false
+    },
+    {
+      "id": "pass-incomplete-availability",
+      "path": [
+        "availability",
+        "state"
+      ],
+      "value": "incomplete",
+      "schema_valid": false
+    },
+    {
+      "id": "pass-missing-availability",
+      "path": [
+        "availability",
+        "state"
+      ],
+      "value": "missing",
+      "schema_valid": false
+    },
+    {
+      "id": "wrong-retention-policy",
+      "path": [
+        "availability",
+        "retention_policy"
+      ],
+      "value": "delete-v1",
+      "schema_valid": false
+    }
+  ]
+}

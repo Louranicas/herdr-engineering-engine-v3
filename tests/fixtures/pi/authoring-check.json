@@ -1,0 +1,30 @@
+{
+  "kind": "hee3.pi-fixture-authoring-check/1",
+  "status": "passed",
+  "checks": [
+    "deterministic regeneration",
+    "source hash and pinned package version verification",
+    "unique IDs and resolvable source/fixture references",
+    "exact record/trace byte identities",
+    "authored JSONL syntax",
+    "trace offset/concatenation agreement",
+    "boundary recipe hashes and arithmetic",
+    "manual usage subset arithmetic",
+    "sentinel equality with parent capture",
+    "scoped capture relocation preserves exact captured bytes",
+    "all 115 record and 11 trace payloads unchanged",
+    "all expectations and boundary recipes unchanged"
+  ],
+  "record_specimens": 115,
+  "trace_specifications": 11,
+  "boundary_recipes": 8,
+  "source_files": 11,
+  "parser_tests_run": 0,
+  "pi_processes_launched_by_fixture_author": 0,
+  "module_case_credits": 0,
+  "manifest_sha256": "031d96c026ab1ff085df1e7be2489a4451680bbd671dd9d6aa59e1ccda038878",
+  "builder_sha256": "28ff293d5890c0bb3fe283f5497fb25aed04671f3b031f06713c7dc73713f855",
+  "readme_sha256": "44d0ea7f062f6e197f74df021d535dfbd68196809ddcb587f784efe8998fcf13",
+  "limits": "Authoring integrity only; no parser, lifecycle, runtime/provider, security-detector or module qualification.",
+  "provenance_change": "Only metadata_capture.path moved to scoped evidence/implementation/T02/sdk-smoke; future regeneration creates a new location-bound provenance snapshot."
+}

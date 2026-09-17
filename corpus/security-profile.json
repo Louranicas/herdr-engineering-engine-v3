@@ -1,0 +1,225 @@
+{
+  "schema": 1,
+  "id": "HEE3-SECURITY-DAYBREAK-001",
+  "revision": 1,
+  "requested_model": "gpt-daybreak-blue-latest",
+  "selection_surface": "/model",
+  "selection_instruction": "In the Codex CLI composer run /model, select the exact Daybreak Blue model ID and an explicitly recorded effort, then inspect /status and effective run metadata before sending the scoped review.",
+  "runtime_enabled": false,
+  "security_qualification": "unassessed; engine implementation unavailable",
+  "completion_authority": false,
+  "silent_fallback_allowed": false,
+  "global_model_config_changed": false,
+  "base_plan_sha256": "f998a2a692185a9e2df8d1025277f0c949fd877cc8c8e2926d4a3f7f794f4792",
+  "scope": "Defensive security review and hardening assistance for every declared module and integrated release; model output is evidence to verify, not acceptance authority. Planning analysis is read-only by default. Reproduction uses explicitly owned disposable targets under actual action authorization; engine repairs, tests, dependencies and release work require Luke’s actual coding instruction and applicable scope.",
+  "modules": [
+    {
+      "id": "contracts",
+      "security_id": "HEE3-SEC-contracts",
+      "focus": "Untrusted schema/frame bounds, compatibility, identity preservation and parser fuzz controls.",
+      "completion_id": "HEE3-DONE-contracts",
+      "fault_and_benign": "Reject oversized/malformed or incompatible payload before allocation/dispatch; accept the bounded compatible counterpart."
+    },
+    {
+      "id": "task",
+      "security_id": "HEE3-SEC-task",
+      "focus": "Unauthorized state transitions, forged/stale acceptance, replay, cancellation/acceptance races and effect custody.",
+      "completion_id": "HEE3-DONE-task",
+      "fault_and_benign": "Late result, cancellation/acceptance race and exhausted budget never create duplicate effects or false acceptance; valid current result can advance."
+    },
+    {
+      "id": "store",
+      "security_id": "HEE3-SEC-store",
+      "focus": "Transaction integrity, migration immutability, concurrent writers, corruption and restored outstanding obligations.",
+      "completion_id": "HEE3-DONE-store",
+      "fault_and_benign": "Crash between coupled writes yields all-or-nothing state; checksum mismatch and unsupported schema refuse before mutation; valid history migrates."
+    },
+    {
+      "id": "roster",
+      "security_id": "HEE3-SEC-roster",
+      "focus": "Spoofed agent/model/service identity, stale health, capability escalation and provenance.",
+      "completion_id": "HEE3-DONE-roster",
+      "fault_and_benign": "Spoofed identity, conflicting update, disabled record and stale health exclude dispatch; compatible fresh registration remains eligible."
+    },
+    {
+      "id": "route",
+      "security_id": "HEE3-SEC-route",
+      "focus": "Eligibility/privacy bypass, silent model substitution, stale evaluations and constrained fallback.",
+      "completion_id": "HEE3-DONE-route",
+      "fault_and_benign": "Unknown/unsupported capability, stale evaluation or forbidden data location cannot be selected; valid constrained fallback does not relax grants."
+    },
+    {
+      "id": "budget",
+      "security_id": "HEE3-SEC-budget",
+      "focus": "Concurrent overcommit, omitted checker/context usage and ambiguous-effect liabilities.",
+      "completion_id": "HEE3-DONE-budget",
+      "fault_and_benign": "Concurrent oversubscription, duplicate usage, failed worker and uncertain cancellation keep liabilities visible; valid settled work releases safely."
+    },
+    {
+      "id": "worker",
+      "security_id": "HEE3-SEC-worker",
+      "focus": "Process/workspace custody, hostile output, real model identity, cancellation and residual writable children.",
+      "completion_id": "HEE3-DONE-worker",
+      "fault_and_benign": "Wrong model, partial/oversized frame, hostile output, timeout or surviving writable child fails or remains pending; valid result retains provenance."
+    },
+    {
+      "id": "check",
+      "security_id": "HEE3-SEC-check",
+      "focus": "Forged evidence, compromised fixtures, invalid denominator and independent verifier/collector custody.",
+      "completion_id": "HEE3-DONE-check",
+      "fault_and_benign": "Mutate fixture identity, case inventory, profile, producer status or raw log; reject each without accepting an aggregate count."
+    },
+    {
+      "id": "recovery",
+      "security_id": "HEE3-SEC-recovery",
+      "focus": "PID reuse, stale epochs, duplicate execution, incomplete cleanup and lost-response readback.",
+      "completion_id": "HEE3-DONE-recovery",
+      "fault_and_benign": "PID reuse, restored epoch, stale result and partial cleanup do not attach to the wrong work; a live owned child is recognized."
+    },
+    {
+      "id": "cohort",
+      "security_id": "HEE3-SEC-cohort",
+      "focus": "Cross-thread write collisions, context/grant contamination, missing/contradictory child evidence and false parent joins.",
+      "completion_id": "HEE3-DONE-cohort",
+      "fault_and_benign": "Overlapping writes, stale brief, missing child or contradictory evidence prevents parent success; disjoint valid work can converge."
+    },
+    {
+      "id": "context",
+      "security_id": "HEE3-SEC-context",
+      "focus": "Prompt injection, unsafe source paths, bounded expansion, data minimization and provenance.",
+      "completion_id": "HEE3-DONE-context",
+      "fault_and_benign": "Injection text, unsafe path, recursive expansion and stale/missing dependency stay denied or visible as gaps; valid bounded references remain usable."
+    },
+    {
+      "id": "notify",
+      "security_id": "HEE3-SEC-notify",
+      "focus": "Visibility leakage, outbox-before-commit, replay/epoch errors and slow subscriber resource abuse.",
+      "completion_id": "HEE3-DONE-notify",
+      "fault_and_benign": "Pre-commit delivery, wrong visibility, expired/restored cursor and slow consumer cannot corrupt task state; valid resync works."
+    },
+    {
+      "id": "service",
+      "security_id": "HEE3-SEC-service",
+      "focus": "Unauthorized lifecycle effects, wrong owner/unit, useful-health spoofing and uncertain replay.",
+      "completion_id": "HEE3-DONE-service",
+      "fault_and_benign": "Unauthorized action, wrong unit, useless-but-listening service and lost reply never imply healthy completion; valid useful probe succeeds."
+    },
+    {
+      "id": "herdr",
+      "security_id": "HEE3-SEC-herdr",
+      "focus": "Client/pane authority confusion, stale UI truth, reconnect/cancel and duplicate submission.",
+      "completion_id": "HEE3-DONE-herdr",
+      "fault_and_benign": "Duplicate submission, stale event, display failure and cancellation do not invent acceptance; valid current state remains visible."
+    },
+    {
+      "id": "numerical",
+      "security_id": "HEE3-SEC-numerical",
+      "focus": "Rust/Julia framing, memory/device bounds, immutable dataset identity, units and untrusted artifacts.",
+      "completion_id": "HEE3-DONE-numerical",
+      "fault_and_benign": "Wrong shape/units, nonfinite/oversized output, stale dataset, crash/cancel or incompatible device rejects the candidate; valid report remains reviewable."
+    },
+    {
+      "id": "julia",
+      "security_id": "HEE3-SEC-julia",
+      "focus": "Numerical oracle validity, data leakage, nonfinite/shape/unit input, out-of-domain behavior and reproducibility.",
+      "completion_id": "HEE3-DONE-julia",
+      "fault_and_benign": "Wrong units/shape, data leakage, invalid oracle and out-of-domain operator request fail or use an explicit baseline fallback; in-domain known cases pass."
+    },
+    {
+      "id": "app",
+      "security_id": "HEE3-SEC-app",
+      "focus": "Local socket permissions/peer custody, startup races, config validation, dependency composition and shutdown.",
+      "completion_id": "HEE3-DONE-app",
+      "fault_and_benign": "Bad config, startup race, unavailable dependency, insecure socket and broken-pipe status refuse truthfully; valid useful health is observable."
+    },
+    {
+      "id": "actions",
+      "security_id": "HEE3-SEC-actions",
+      "focus": "Hidden capability leakage, schema/version drift, ungranted effect and CLI/tool/UDS parity.",
+      "completion_id": "HEE3-DONE-actions",
+      "fault_and_benign": "Hidden action, unknown version, malformed argument and ungranted effect refuse before dispatch; visible compatible action retains identical semantics."
+    },
+    {
+      "id": "bash",
+      "security_id": "HEE3-SEC-bash",
+      "focus": "Literal argv, shell metacharacters, pipeline producer status, environment and cancellation.",
+      "completion_id": "HEE3-DONE-bash",
+      "fault_and_benign": "Command-like input remains data, missing executable/failed pipeline/cancel returns failure, and a valid literal argument round-trips."
+    },
+    {
+      "id": "pi_extension",
+      "security_id": "HEE3-SEC-pi_extension",
+      "focus": "Host/tool version, stale callbacks, cross-call identity, reload and permission parity.",
+      "completion_id": "HEE3-DONE-pi_extension",
+      "fault_and_benign": "Stale callback, mismatched host/call version, parallel call contamination and cancel race cannot return another call’s success; current valid calls work."
+    },
+    {
+      "id": "skills",
+      "security_id": "HEE3-SEC-skills",
+      "focus": "Instruction-as-grant confusion, unsafe references, stale dependencies and bounded source scope.",
+      "completion_id": "HEE3-DONE-skills",
+      "fault_and_benign": "Conflicting instructions, retired/stale references, path escape and incompatible action versions refuse or surface gaps; valid pinned skill remains usable."
+    },
+    {
+      "id": "workflows",
+      "security_id": "HEE3-SEC-workflows",
+      "focus": "Injected steps, cycles, retries after uncertain effects, source/wrapper drift and independent final verification.",
+      "completion_id": "HEE3-DONE-workflows",
+      "fault_and_benign": "Cycles, unknown steps, missing child, budget exhaustion and failed final verifier prevent success; valid settled steps are not repeated."
+    }
+  ],
+  "stages": [
+    {
+      "id": "S01",
+      "name": "Threat model before implementation",
+      "gate": "G03/G06",
+      "result": "Bound module/data/trust/effect surfaces, threats and intended-fault/benign controls."
+    },
+    {
+      "id": "S02",
+      "name": "Review the actual candidate",
+      "gate": "G04/G05/G06",
+      "result": "Inspect exact code/interface/dependency/config/test subject; reproduce candidate findings in admitted disposable scope."
+    },
+    {
+      "id": "S03",
+      "name": "Repair and reverify",
+      "gate": "G04/G06/G07",
+      "result": "Authorized implementation owner repairs; independent deterministic tests and reviewer recheck bind the changed integrated subject."
+    },
+    {
+      "id": "S04",
+      "name": "Integrated release and migration review",
+      "gate": "G06/G08/G11/G13",
+      "result": "Close applicable T17/T18/T25-T27 obligations, installation/recovery and migration immutability findings; separate admission remains required."
+    }
+  ],
+  "receipt_fields": [
+    "requested model alias and effective model/revision when exposed; unknown stays unknown",
+    "Codex version, session/worker identity, reasoning effort, selection observation and review_model override disposition",
+    "exact candidate/criteria/interface/standard/dependency/config/fixture identities",
+    "bounded review scope, allowed effects/resources and threat-model revision",
+    "reproducible finding, location, impact, intended fault and benign control",
+    "repair identity, independent raw results and re-verification disposition",
+    "remaining uncertainty/material findings, reviewer identity and acceptance authority separation",
+    "Structured identity observation: requested_model, selection_surface, selection_observed, effective_model, effective_revision if exposed, effort, review_model_override, observation_source, identity_verdict. A launch-time override or delegated agent invocation is not interactive /model evidence. Unknown fields remain null, never inferred.",
+    "Repair binding: pre-fix finding subject digest, post-fix candidate digest, exact repair diff/range, affected dependency/config/fixture/harness identities, finding-to-test mapping and regression-selection rationale. Rerun affected qualifications and integrated regressions; material subject/profile changes invalidate earlier applicability.",
+    "Security profile revision/hash plus completion/interface standard hashes; retain independent review and exact evidence for an intentional profile revision. The editable semantic baseline is a drift tripwire, not authenticated admission."
+  ],
+  "sources": [
+    "https://developers.openai.com/api/docs/models/gpt-daybreak-blue-latest",
+    "https://learn.chatgpt.com/docs/models",
+    "https://learn.chatgpt.com/docs/developer-commands?surface=cli"
+  ],
+  "base_completion_sha256": "860dc3c4021b780b94ddcb8b9af22c4fd09fe3590e7785de0bcf5a3b5025c3ea",
+  "base_interfaces_sha256": "089e6c05bbe6f53db1c473153d26638028b2e3c8f99d99967d8f0e7baa97bb8d",
+  "selection_observation": {
+    "selection_observed": false,
+    "effective_model": null,
+    "effective_revision": null,
+    "effort": null,
+    "review_model_override": null,
+    "observation_source": null,
+    "identity_verdict": "requested only; interactive picker not evidenced"
+  }
+}

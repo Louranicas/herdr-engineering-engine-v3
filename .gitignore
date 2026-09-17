@@ -1,0 +1,17 @@
+# Build output — regenerable, 110 MB
+/target/
+
+# Derived graph sidecar — 492 MB, byte-identical copies also exist in the atlas and the vault.
+# Regenerate with `./tools/corpus-sync --graph`; it is an analysis projection, not a source.
+/corpus/graphify-out/
+
+# Retained verification evidence — 285 MB of captured runs. Historical records of test
+# executions, not source. The receipts that matter are indexed by corpus/evidence-index.json.
+/evidence/
+
+# Vendored offline build inputs (crate archives, sqlite amalgamation) — fetched, not authored.
+/tools/rust-offline-inputs/
+/tools/sqlite-inputs/
+
+__pycache__/
+*.pyc

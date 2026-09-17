@@ -1,0 +1,632 @@
+{
+  "schema": 1,
+  "id": "HEE3-INTERFACES-001",
+  "revision": 1,
+  "reviewed_on": "2026-09-15",
+  "base_plan_sha256": "f998a2a692185a9e2df8d1025277f0c949fd877cc8c8e2926d4a3f7f794f4792",
+  "status": "active authority convention and planned interface contracts",
+  "admission_validator_available": false,
+  "accepted_interfaces": [],
+  "authority": "Completed, accepted code modules and the assembled accepted codebase are the primary source of truth for implemented behavior and supported interfaces at their exact accepted revision. The atlas and active standards retain intended requirements and acceptance obligations. Current comment stubs establish locations and proposals only; scoped observations are not completion admission.",
+  "sections": [
+    {
+      "title": "Meaning of a publicly accessible interface",
+      "body": "Every module must present a documented, discoverable, versioned interface to its named consumers. Public means supported consumer access: an internal Rust facade, Julia API, CLI, typed tool action, local Unix socket, stdio exchange or package schema. It does not require exposing private helpers or adding TCP/HTTP listeners. Use the minimum language visibility that makes the supported boundary callable. External Rust crate consumers require an accessible library target and re-export path; the current binary/comment stubs do not provide one. Julia exported/public names and docstrings describe supported use; exports do not isolate code. Exact symbols and host registration signatures must be chosen and tested during authorized implementation, then reflected from accepted source."
+    },
+    {
+      "title": "Authority follows accepted implementation",
+      "body": "Lifecycle: planned_stub → implementation_candidate → accepted_module. Packaging and deployment are separate observations; accepted does not imply installed. A candidate may become accepted only through an admitted completion record binding module ID, source/test/fixture/dependency/toolchain digests, public-interface and migration identities, applicable task and standard revisions, full ≥50-case/zero-warning qualification, assimilation/mutation evidence, integration/security dispositions and owner/reviewer admission. Source changes invalidate applicability until re-admitted. The assembled codebase requires its own integrated release acceptance; a sum of module results or child successes cannot substitute. No admission collector is implemented in this documentation tooling; accepted_interfaces is empty and must remain empty until a separately verified admission path exists."
+    },
+    {
+      "title": "Resolve divergence without rewriting facts",
+      "body": "For accepted code, publish current interface facts from its exact source/schema/migration subject and keep desired changes alongside them. A defect remains a defect even if code exhibits it. Requirements, security constraints and testing floors are not weakened to match a failing implementation. Record current-versus-desired drift, affected callers/callees, change owner, repair or explicitly authorized requirement revision, and re-verification. Never generate runtime code from a stale atlas, infer acceptance from filesystem presence, or silently edit a released migration. Historical source captures and receipts retain their original bytes and scope."
+    },
+    {
+      "title": "Required contract fields for every supported entry point",
+      "body": "Before acceptance record: stable interface and operation ID; owner and intended audience; source symbol/schema path; signature and typed input/output schema with examples; errors and unknown-effect semantics; capabilities and credential custody; maximum sizes, queue/backpressure and deadline; idempotency key/replay/readback; cancellation and settlement; concurrency and workspace/resource ownership; compatibility/deprecation range; evidence and diagnostic references; exact admitted revision. Reuse the existing numbered APIs, IPC and actions. The per-module operations below are semantic design obligations, not newly invented callable symbols. Their mapped API/action notes supply existing detailed protocol contracts. Any missing concrete field blocks interface acceptance."
+    },
+    {
+      "title": "Discoverability, documentation and compatibility gates",
+      "body": "Rust modules need rustdoc for the supported facade, examples and caller compile checks across admitted targets/features; where rustdoc or other applicable checks emit baseline warnings/errors, qualification fails. Julia needs supported entry-point docstrings, deliberate exports or version-appropriate public declarations, contract examples and qualified package loading. CLI/actions need help/inspect output, input/result/error schemas and literal-value examples that agree across CLI, UDS and tool projections. Bash, Pi, skills and workflows need versioned manifest/entry-point and compatibility documentation. Private implementation details stay private. Check both directions of each integration: caller assumptions and callee guarantees, returned evidence/error/usage and cancellation. A breaking change requires explicit version/migration and affected-consumer testing."
+    },
+    {
+      "title": "Local transport and capability boundaries",
+      "body": "Keep each existing IPC endpoint under its declared lifecycle owner and custody. Public documentation does not authorize a world-readable/writable Unix socket, worker access to the operator socket, or Internet service. Any future transport addition requires a separate accepted contract for bind identity, authentication/authorization, credentials, resource limits, failure/readback and deployment evidence. Current interface mappings remain proposals; no listener, RPC or service is installed by this corpus update."
+    },
+    {
+      "title": "Update loop and proof of completion",
+      "body": "Inspect exact candidate and accepted revision → compare requirements and interface contracts → implement only authorized changes → execute relevant checks → retain independently collected observations → repair/escalate → reverify → obtain completion admission → project current code facts into atlas/vault/ultra map and master indexes → publish with matching hashes and live link readback. Preserve current and desired views separately. Until the admission collector exists, corpus-sync can verify navigation, hashes and declared observation consistency only. Documentation completion must never be reported as module or release completion."
+    }
+  ],
+  "modules": [
+    {
+      "id": "contracts",
+      "interface_id": "HEE3-IF-contracts",
+      "status": "planned_interface",
+      "surface": "Rust types and validation facade shared by declared consumers; serializable boundary schemas through existing APIs.",
+      "operations": [
+        {
+          "intent": "Validate an envelope",
+          "inputs": "Schema version; task, attempt, generation, caller and correlation identities; bounded payload",
+          "outputs": "Validated typed envelope or field-specific rejection"
+        },
+        {
+          "intent": "Represent outcomes",
+          "inputs": "Known lifecycle observation, error category and evidence reference",
+          "outputs": "Stable discriminated result preserving denied, failed, cancelled and unknown distinctions"
+        },
+        {
+          "intent": "Negotiate compatibility",
+          "inputs": "Producer/consumer version and declared capabilities",
+          "outputs": "Supported subset or explicit incompatibility"
+        }
+      ],
+      "errors_and_limits": "Bound lengths, integer ranges and enum variants; reject missing identity and ambiguous encodings before effects. Unknown versions are not guessed.",
+      "effects_and_concurrency": "Pure constructors/validation. No database, grants, process control or state acceptance. Changes propagate to all wire consumers through explicit compatibility review.",
+      "required_proof": "Round-trip and malformed schema cases; old/new consumer fixtures; non-lossy error and identity projection; fuzz/property campaign on parsing bounds."
+    },
+    {
+      "id": "task",
+      "interface_id": "HEE3-IF-task",
+      "status": "planned_interface",
+      "surface": "Rust task coordinator facade; operator and tool access exclusively through admitted actions and app transports.",
+      "operations": [
+        {
+          "intent": "Preview and admit",
+          "inputs": "Caller capability, task specification, acceptance revision, limits and idempotency key",
+          "outputs": "Preview exclusions or durable task/attempt identity and initial state"
+        },
+        {
+          "intent": "Read and request cancellation",
+          "inputs": "Task identity; bounded listing cursor or cancellation request",
+          "outputs": "Committed snapshot/page or acknowledged cancellation obligation"
+        },
+        {
+          "intent": "Advance or resolve",
+          "inputs": "Expected generation, observed worker/checker facts, explicit operator resolution authority",
+          "outputs": "Committed transition with evidence links or conflict/denial"
+        }
+      ],
+      "errors_and_limits": "Bound task/attempt counts and deadlines. Refuse stale generations, incompatible retry bodies and missing grants. Cancellation acknowledgement is not process settlement.",
+      "effects_and_concurrency": "Owns the plan/execute/observe/verify/repair/close loop. Mutations commit through store with conservative budget and retained uncertainty; checker evidence alone does not grant acceptance.",
+      "required_proof": "Boundary acceptance, duplicate submission, lost reply/readback, stale result, verify-repair-verify loop, cancellation and exhausted-budget cases."
+    },
+    {
+      "id": "store",
+      "interface_id": "HEE3-IF-store",
+      "status": "planned_interface",
+      "surface": "Rust ledger transaction facade; SQL files form a versioned schema boundary owned by store, with no direct consumer SQL writes.",
+      "operations": [
+        {
+          "intent": "Commit ledger transition",
+          "inputs": "Expected state/generation, task/attempt facts, reservation deltas, evidence references and outbox events",
+          "outputs": "Atomic commit identity and sequence or conflict with no partial effect"
+        },
+        {
+          "intent": "Read consistent state",
+          "inputs": "Bounded identifiers, cursor, snapshot requirements",
+          "outputs": "Typed rows/events with ledger epoch and pagination"
+        },
+        {
+          "intent": "Apply or inspect schema history",
+          "inputs": "Exclusive writer custody, ordered migration identity/checksum and supported version range",
+          "outputs": "Transactional schema transition or refusal; independently read-back version and integrity"
+        }
+      ],
+      "errors_and_limits": "Bound transactions and busy retry windows. Surface disk full, corruption, constraint failure and unsupported schema explicitly; never turn a failed write into success.",
+      "effects_and_concurrency": "Single logical ledger writer; transactions maintain cross-table invariants and durable outbox. Released migration bytes are immutable. Replay uses durable identities.",
+      "required_proof": "Atomicity and crash recovery; foreign-key/uniqueness constraints; concurrent starters; fresh install/upgrade/restore; migration checksum mismatch and schema readback."
+    },
+    {
+      "id": "roster",
+      "interface_id": "HEE3-IF-roster",
+      "status": "planned_interface",
+      "surface": "Rust roster queries and controlled updates; roster actions are the public projection for model, agent and service records.",
+      "operations": [
+        {
+          "intent": "Query capability and identity",
+          "inputs": "Kind, constraints, locality, version, bounded page and observation cutoff",
+          "outputs": "Declared/observed records with freshness, provenance and explicit unknowns"
+        },
+        {
+          "intent": "Update or disable record",
+          "inputs": "Caller grant, stable record ID, expected revision and validated change",
+          "outputs": "New roster revision or conflict/denial"
+        },
+        {
+          "intent": "Reconcile service health",
+          "inputs": "Registered owner identity and approved probe observation",
+          "outputs": "Dated useful-health observation without acquiring lifecycle authority"
+        }
+      ],
+      "errors_and_limits": "Bound records and cache age; duplicate IDs, unsupported capability claims and stale observations remain visible.",
+      "effects_and_concurrency": "Updates preserve revisions. Discovery cannot grant control, manufacture health or imply that a model is installed or eligible.",
+      "required_proof": "Fresh/stale/unknown separation; capability filtering; concurrent update conflicts; disabled record exclusion; spoofed service/model identity refusal."
+    },
+    {
+      "id": "route",
+      "interface_id": "HEE3-IF-route",
+      "status": "planned_interface",
+      "surface": "Pure Rust eligibility/ranking facade used by task; no independent routing daemon or new public endpoint.",
+      "operations": [
+        {
+          "intent": "Filter eligible recipes",
+          "inputs": "Task class, constraints, roster snapshot, budget and admitted policy revision",
+          "outputs": "Eligible recipes and explicit exclusions"
+        },
+        {
+          "intent": "Rank and explain",
+          "inputs": "Eligible set, dated measured observations and deterministic tie policy",
+          "outputs": "Chosen model/effort/adapter recipe, reasons, uncertainty and fallback order"
+        },
+        {
+          "intent": "Evaluate fallback",
+          "inputs": "Failure category, remaining resources and previous attempt identity",
+          "outputs": "Permitted next recipe or truthful refusal"
+        }
+      ],
+      "errors_and_limits": "No eligible candidate is a normal refusal. Missing measurements stay unknown. Bound search and require deterministic replay inputs.",
+      "effects_and_concurrency": "No dispatch or budget mutation. Julia recommendations are candidates until admitted; baseline survives invalid or stale challengers.",
+      "required_proof": "Eligibility invariants; dominated/unsupported model refusal; stable tie-breaks; stale evaluation, constrained fallback and cost/failure-inclusive comparison."
+    },
+    {
+      "id": "budget",
+      "interface_id": "HEE3-IF-budget",
+      "status": "planned_interface",
+      "surface": "Rust reservation and accounting facade integrated with task/store; typed usage reports from workers/checkers/context/cohorts.",
+      "operations": [
+        {
+          "intent": "Reserve resources",
+          "inputs": "Task/attempt/parent allocation, unit-labelled upper bounds and expected revision",
+          "outputs": "Admitted reservation identity or refusal"
+        },
+        {
+          "intent": "Settle or reconcile usage",
+          "inputs": "Reservation ID, observed usage provenance, uncertainty and worker settlement",
+          "outputs": "Conservative balance, discrepancy and unresolved liability"
+        },
+        {
+          "intent": "Read remaining allocation",
+          "inputs": "Task/thread scope and observation revision",
+          "outputs": "Bounded available, reserved, spent and unknown totals"
+        }
+      ],
+      "errors_and_limits": "Reject negative/nonfinite/incompatible units and overflow. Unknown usage is not zero; insufficient budget is explicit.",
+      "effects_and_concurrency": "Atomic conservation across concurrent parent/child requests; release only with required settlement proof. Retried reports are idempotent by identity.",
+      "required_proof": "Conservation properties; concurrency; retries and delayed usage; compaction/checker costs; abandoned work and uncertain cancellation liability."
+    },
+    {
+      "id": "worker",
+      "interface_id": "HEE3-IF-worker",
+      "status": "planned_interface",
+      "surface": "Rust adapter facade over bounded Pi/native/inference protocols; no access to the operator control socket by default.",
+      "operations": [
+        {
+          "intent": "Start an admitted attempt",
+          "inputs": "Attempt/generation, exact recipe, scoped workspace, limits, credentials and cancellation channel",
+          "outputs": "Start acknowledgement, actual runtime/model identity and capability limits"
+        },
+        {
+          "intent": "Observe activity and result",
+          "inputs": "Framed ordered adapter messages tied to the admitted attempt",
+          "outputs": "Activity, usage, candidate artifact references and classified exit"
+        },
+        {
+          "intent": "Cancel and settle",
+          "inputs": "Attempt/process identity, deadline and cancellation reason",
+          "outputs": "Cancellation acknowledgement, process/workspace settlement proof or explicit unknown"
+        }
+      ],
+      "errors_and_limits": "Frame/stream/size/time bounds and schema negotiation; malformed, duplicated, stale or spoofed messages cannot close a task.",
+      "effects_and_concurrency": "One adapter owns its process lifecycle under coordinator custody. Candidate output is untrusted and never checker evidence. Lost replies require identity readback.",
+      "required_proof": "Pi/native protocol fixtures; launch failures; partial frames; wrong actual model; cancellation races; residual writable process and hostile output isolation."
+    },
+    {
+      "id": "check",
+      "interface_id": "HEE3-IF-check",
+      "status": "planned_interface",
+      "surface": "Rust verifier facade operating on protected fixtures and the exact candidate subject; evidence consumers are task/release admission.",
+      "operations": [
+        {
+          "intent": "Prepare protected verification",
+          "inputs": "Acceptance revision, source/artifact subject, admitted fixture and toolchain identities",
+          "outputs": "Bounded verification plan with independent oracle and collector custody"
+        },
+        {
+          "intent": "Collect criterion observations",
+          "inputs": "Exact execution outputs, profiles, case identities and diagnostics",
+          "outputs": "Per-criterion pass/fail/invalid/unmeasured observations with raw references"
+        },
+        {
+          "intent": "Report qualification gaps",
+          "inputs": "Observation set, module standard and integration obligations",
+          "outputs": "Coverage/subject/diagnostic/assimilation/mutation gaps and candidate disposition"
+        }
+      ],
+      "errors_and_limits": "Wrong-subject, zero-execution, skipped, stale and forged observations cannot pass. Baseline warnings/errors must be zero.",
+      "effects_and_concurrency": "Checker cannot accept its own task or trust worker-authored receipts. Protected output capture and tests are isolated from candidate write authority.",
+      "required_proof": "Forged result and fixture tamper detectors; wrong subject/profile; meaningful 50-case accounting; intended-fault plus benign mirror; full-standard collector qualification remains future work."
+    },
+    {
+      "id": "recovery",
+      "interface_id": "HEE3-IF-recovery",
+      "status": "planned_interface",
+      "surface": "Rust reconciliation facade called by task/app on restart, timeout and uncertain effects.",
+      "operations": [
+        {
+          "intent": "Inventory outstanding obligations",
+          "inputs": "Ledger epoch, active attempts, process/session identities and workspace claims",
+          "outputs": "Reconciliation candidates with custody and uncertainty"
+        },
+        {
+          "intent": "Reconcile and clean up",
+          "inputs": "Trusted process/readback observations and bounded cancellation policy",
+          "outputs": "Settled obligations, pending cleanup or explicit ambiguity"
+        },
+        {
+          "intent": "Rebuild delivery/state view",
+          "inputs": "Committed outbox/event identities and restore epoch",
+          "outputs": "Replay plan without repeating accepted engine effects"
+        }
+      ],
+      "errors_and_limits": "PID alone is insufficient identity. Missing process visibility, lease expiry and timeout cannot establish safe workspace reuse.",
+      "effects_and_concurrency": "Acts through registered lifecycle owners; retains cleanup obligations until verified. Restoration changes epochs and rejects stale observations.",
+      "required_proof": "Crash/restart, PID reuse, partial cleanup, restored epoch, late result, lost acknowledgement and retained reservation cases."
+    },
+    {
+      "id": "cohort",
+      "interface_id": "HEE3-IF-cohort",
+      "status": "planned_interface",
+      "surface": "Rust orchestration facade for specialist threads, assignments, resource claims and parent joins; thread read actions project state.",
+      "operations": [
+        {
+          "intent": "Plan and assign bounded work",
+          "inputs": "Parent acceptance, finite child DAG, roles, revisions, budgets and resource claims",
+          "outputs": "Thread/assignment identities and explicit dependencies"
+        },
+        {
+          "intent": "Read thread and collect candidates",
+          "inputs": "Thread/cursor and child observations tied to current assignment",
+          "outputs": "Bounded state, evidence, dissent and unresolved gaps"
+        },
+        {
+          "intent": "Join or revise work",
+          "inputs": "Required child criteria, context revisions, conflict and final-verifier disposition",
+          "outputs": "Parent integration candidate, repair plan or blocked join"
+        }
+      ],
+      "errors_and_limits": "Bound concurrency, fan-out, token/time budgets and retries. Detect cycles, stale briefs, duplicate ownership and write conflicts.",
+      "effects_and_concurrency": "One coordinator owns assignment/join; child success never accepts parent. Shared allocation is conserved and workspaces follow explicit custody.",
+      "required_proof": "Disjoint work synergy; stale brief; overlapping writes; missing child; contradictory evidence; dissent preservation; failed join repair and final integrated verification."
+    },
+    {
+      "id": "context",
+      "interface_id": "HEE3-IF-context",
+      "status": "planned_interface",
+      "surface": "Rust bounded context packet facade; consumers are cohort, task and declared skill/worker integration paths.",
+      "operations": [
+        {
+          "intent": "Assemble context",
+          "inputs": "Brief revision, task/role, permitted source IDs, dependency relationships and token/byte budget",
+          "outputs": "Selected references, bounded content, omissions, source and relationship gaps"
+        },
+        {
+          "intent": "Refresh or compare packet",
+          "inputs": "Old/new source revisions, permitted scope and stable context identity",
+          "outputs": "Change/provenance report with affected consumers"
+        },
+        {
+          "intent": "Report context cost",
+          "inputs": "Measured selection/compaction work and usage provenance",
+          "outputs": "Usage fact for budget accounting"
+        }
+      ],
+      "errors_and_limits": "Untrusted source instructions do not grant actions. Bound expansion, path access, recursion and packet size; failed fetches remain gaps.",
+      "effects_and_concurrency": "Read scoped sources; preserve provenance and bidirectional dependency/return context. No silent expansion of access or evidence authority.",
+      "required_proof": "Budget cutoffs; stale source; omitted dependency; prompt-injection boundary; denied path; reproducible packet ordering and cost inclusion."
+    },
+    {
+      "id": "notify",
+      "interface_id": "HEE3-IF-notify",
+      "status": "planned_interface",
+      "surface": "Rust committed-event subscription/delivery facade; events.subscribe is the declared consumer action.",
+      "operations": [
+        {
+          "intent": "Subscribe or replay",
+          "inputs": "Caller visibility, bounded cursor, epoch and backlog limit",
+          "outputs": "Ordered permitted event stream plus gap/resync indication"
+        },
+        {
+          "intent": "Deliver and acknowledge",
+          "inputs": "Committed event ID, recipient identity and durable delivery key",
+          "outputs": "Delivery receipt or pending retry with failure category"
+        },
+        {
+          "intent": "Read delivery obligation",
+          "inputs": "Event/recipient identity and observation cutoff",
+          "outputs": "Delivered/pending/unknown state without task-state invention"
+        }
+      ],
+      "errors_and_limits": "Bound queues and replay windows; slow consumers receive backpressure or resumable gaps. Invalid/restored epoch requires resync.",
+      "effects_and_concurrency": "Outbox begins after ledger commit. Delivery retry never reruns task effects; dedup uses durable event/recipient identity.",
+      "required_proof": "Commit-before-delivery; lost ack, replay dedup, cursor expiry, restored epoch, slow subscriber and visibility filtering."
+    },
+    {
+      "id": "service",
+      "interface_id": "HEE3-IF-service",
+      "status": "planned_interface",
+      "surface": "Rust useful-health and delegated lifecycle facade, projected by service.inspect/probe/action.",
+      "operations": [
+        {
+          "intent": "Inspect or probe",
+          "inputs": "Registered service ID, owner identity, requested useful check and explicit probe admission",
+          "outputs": "Dated useful health, version and owner state"
+        },
+        {
+          "intent": "Delegate lifecycle action",
+          "inputs": "Caller grant, service/unit/action, resource bounds and durable operation key",
+          "outputs": "Owner job identity and accepted/refused/unknown effect"
+        },
+        {
+          "intent": "Read back lifecycle effect",
+          "inputs": "Operation and owner/job identity",
+          "outputs": "Independent observed result, pending state or explicit ambiguity"
+        }
+      ],
+      "errors_and_limits": "Probe bounds include time/resource/network scope. Discovery does not authorize start/stop. Lost reply is not permission to repeat a destructive effect.",
+      "effects_and_concurrency": "Lifecycle ownership remains with the registered binary/daemon/systemd/external owner; service is an adapter, not another supervisor.",
+      "required_proof": "Unauthorized probe/action refusal; wrong unit/owner; lost response readback; apparently live but useless health; replay and conflicting action identity."
+    },
+    {
+      "id": "herdr",
+      "interface_id": "HEE3-IF-herdr",
+      "status": "planned_interface",
+      "surface": "Supported multiplexer/client integration surface calling existing actions/app interfaces; presentation remains a client.",
+      "operations": [
+        {
+          "intent": "Submit operator intent",
+          "inputs": "Typed task context, explicit user constraints and caller authority",
+          "outputs": "Admission/denial and durable task identity"
+        },
+        {
+          "intent": "Present task/thread state",
+          "inputs": "Versioned snapshots, events and evidence references",
+          "outputs": "Status, route explanation, gaps and navigable proof"
+        },
+        {
+          "intent": "Reconnect or request cancellation",
+          "inputs": "Last cursor/epoch and task identity",
+          "outputs": "Rebuilt view or acknowledged cancellation obligation"
+        }
+      ],
+      "errors_and_limits": "Bound UI event buffers and reconnects. Pane title, process exit or rendered done text cannot establish task acceptance.",
+      "effects_and_concurrency": "No second scheduler or authoritative task state in panes. Client loss leaves engine obligations durable.",
+      "required_proof": "Pane loss and reconnect; duplicate UI submission; stale event; explicit cancellation; truthful failure/unknown presentation and proof navigation."
+    },
+    {
+      "id": "numerical",
+      "interface_id": "HEE3-IF-numerical",
+      "status": "planned_interface",
+      "surface": "Rust bounded Julia/numerical request facade and analysis.request/get projection; optional runtimes remain separately admitted.",
+      "operations": [
+        {
+          "intent": "Prepare numerical request",
+          "inputs": "Immutable dataset identity/cutoff, units/schema, recipe/runtime, resource bounds and policy comparison",
+          "outputs": "Validated job identity and input manifest or refusal"
+        },
+        {
+          "intent": "Exchange and collect",
+          "inputs": "Bounded process/stdio/file protocol with pinned Julia or optional runtime",
+          "outputs": "Report/artifact identity, measured cost, uncertainty and classified failure"
+        },
+        {
+          "intent": "Validate candidate policy",
+          "inputs": "Report subject, held-out evidence, baseline and compatibility disposition",
+          "outputs": "Accepted-for-review candidate or rejection preserving current baseline"
+        }
+      ],
+      "errors_and_limits": "Bound memory, device use, files, framing, deadlines and cancellation. Nonfinite values, unit/schema mismatch and stale datasets are explicit failures.",
+      "effects_and_concurrency": "No accepted task-state, grants or lease writes from Julia. PyTorch/tch/LibTorch or neural-operator lanes require their existing admission tasks; no automatic installation.",
+      "required_proof": "Cross-language schema/units; crash/cancel/oversize output; immutable subject; incompatible runtime/device; invalid candidate and baseline retention."
+    },
+    {
+      "id": "julia",
+      "interface_id": "HEE3-IF-julia",
+      "status": "planned_interface",
+      "surface": "Julia HabitatAnalysis module with documented supported entry points and intentional exports/public API; optional operator APIs gated by evidence.",
+      "operations": [
+        {
+          "intent": "Evaluate routing outcomes",
+          "inputs": "Immutable dataset with failures/cancellations/unknown usage, baselines and held-out split",
+          "outputs": "Reproducible comparison with uncertainty, cost and dataset identity"
+        },
+        {
+          "intent": "Analyse cohesion",
+          "inputs": "Thread/assignment outcomes, context revisions and conserved resource accounting",
+          "outputs": "Cohesion/rework/join metrics with exclusions and limitations"
+        },
+        {
+          "intent": "Evaluate optional operator",
+          "inputs": "Declared domain, units, model/runtime identity and out-of-domain policy",
+          "outputs": "Validated operator report or explicit rejection/fallback"
+        }
+      ],
+      "errors_and_limits": "Validate shapes, units, finite domains and resource limits. Record seeds, versions, device determinism and excluded/missing observations.",
+      "effects_and_concurrency": "Produces analysis artifacts/candidate policy only. No grants, leases, task acceptance or control-socket access. Export is a usability contract, not a security boundary.",
+      "required_proof": "Held-out comparison; complete denominator including failure; numerical tolerances justified by domain; wrong shape/units; out-of-domain fallback and runtime reproducibility."
+    },
+    {
+      "id": "app",
+      "interface_id": "HEE3-IF-app",
+      "status": "planned_interface",
+      "surface": "Executable CLI and local serve composition; exposes the existing action catalogue through declared transports.",
+      "operations": [
+        {
+          "intent": "Parse and dispatch",
+          "inputs": "CLI argv or bounded local request, transport/caller identity and action version",
+          "outputs": "Typed action result, stable error category and decisive exit/status"
+        },
+        {
+          "intent": "Compose and supervise coordinator",
+          "inputs": "Validated configuration, ledger location and registered dependencies",
+          "outputs": "Single initialized coordinator or explicit startup refusal"
+        },
+        {
+          "intent": "Report health and shut down",
+          "inputs": "Bounded health request or shutdown signal",
+          "outputs": "Useful service/readiness status and settled/pending shutdown obligations"
+        }
+      ],
+      "errors_and_limits": "No implicit network exposure. Refuse unsupported config/schema and insecure endpoint custody; bound concurrency, payloads and shutdown.",
+      "effects_and_concurrency": "Dependency injection and lifecycle composition only; no duplicated task/roster/budget state machine. CLI, UDS and tools share action semantics.",
+      "required_proof": "CLI/transport semantic parity; startup races; bad config; unavailable dependencies; broken pipe/status; endpoint custody; shutdown and integrated failure/security matrix."
+    },
+    {
+      "id": "actions",
+      "interface_id": "HEE3-IF-actions",
+      "status": "planned_interface",
+      "surface": "Versioned authoritative action catalogue, inspectable schemas and typed dispatch metadata for CLI/Unix/tool projections.",
+      "operations": [
+        {
+          "intent": "List visible capabilities",
+          "inputs": "Caller identity, optional bounded filter/page and catalogue revision",
+          "outputs": "Visible action IDs/versions/purpose and pagination"
+        },
+        {
+          "intent": "Inspect a supported action",
+          "inputs": "Visible stable action ID and requested version",
+          "outputs": "Input/result/error schema, authority, effect, bounds and retry/readback contract"
+        },
+        {
+          "intent": "Validate dispatch metadata",
+          "inputs": "Caller-bound action request and transport context",
+          "outputs": "Typed dispatch to the existing owner or explicit denial/incompatibility"
+        }
+      ],
+      "errors_and_limits": "Reject unknown versions, ambiguous fields and ungranted effects before dispatch. Catalogue visibility is recalculated for caller.",
+      "effects_and_concurrency": "One action definition projects to all transports; wrapper/tool names cannot elevate authority. Does not create another task engine.",
+      "required_proof": "Complete 21-action owner projection; schema drift; unknown/hidden action; denied effect; CLI/tool/UDS parity and literal input preservation."
+    },
+    {
+      "id": "bash",
+      "interface_id": "HEE3-IF-bash",
+      "status": "planned_interface",
+      "surface": "Documented thin Bash/Just command entry points with argv/JSON contracts over existing actions.",
+      "operations": [
+        {
+          "intent": "Invoke action safely",
+          "inputs": "Literal positional/array arguments, bounded JSON and explicit task context",
+          "outputs": "Structured result plus unambiguous producer exit verdict"
+        },
+        {
+          "intent": "Chain bounded commands",
+          "inputs": "Declared input/output contracts, cancellation and timeout propagation",
+          "outputs": "Ordered results and preserved failing producer status"
+        },
+        {
+          "intent": "Inspect usage and prerequisites",
+          "inputs": "Wrapper/version and existing action metadata",
+          "outputs": "Supported options and dependency/version diagnostics"
+        }
+      ],
+      "errors_and_limits": "No eval or reparsing untrusted strings. Bound retries, output and environment inheritance; missing producer is failure.",
+      "effects_and_concurrency": "No scheduler/policy duplication; wrappers do not grant actions. Pipe/tee/display success must not swallow producer failure.",
+      "required_proof": "Whitespace/metacharacters; empty input; stderr/stdout separation; failing producer through pipeline; cancellation and dependency/version mismatch."
+    },
+    {
+      "id": "pi_extension",
+      "interface_id": "HEE3-IF-pi_extension",
+      "status": "planned_interface",
+      "surface": "Versioned Pi-host extension package contract for registration, invocation, rendering and cancellation.",
+      "operations": [
+        {
+          "intent": "Register supported tools",
+          "inputs": "Pinned host/bridge version and action catalogue capability projection",
+          "outputs": "Compatible tool definitions or visible refusal"
+        },
+        {
+          "intent": "Invoke and render",
+          "inputs": "Host call identity, typed arguments, task context and bounded action result",
+          "outputs": "Truthful result/error/usage/evidence presentation"
+        },
+        {
+          "intent": "Cancel and reconcile lifecycle",
+          "inputs": "Host call/task identity, extension generation and cancellation signal",
+          "outputs": "Acknowledgement and final/pending disposition tied to the same call"
+        }
+      ],
+      "errors_and_limits": "Host registration signatures remain unselected until host compatibility is qualified. Reject stale handlers, unknown versions and mismatched call identities.",
+      "effects_and_concurrency": "Pi host glue is a replaceable integration boundary; no second coordinator or implicit privilege. Parallel calls retain separate identities and limits.",
+      "required_proof": "Host fixtures; reload/stale callback; parallel calls; cancel races; rendering failure without verdict loss; schema/version and permission parity."
+    },
+    {
+      "id": "skills",
+      "interface_id": "HEE3-IF-skills",
+      "status": "planned_interface",
+      "surface": "Versioned skill-package manifest, entry instructions and bounded reference contract consumed by context and supported hosts.",
+      "operations": [
+        {
+          "intent": "Discover compatible skill",
+          "inputs": "Stable skill/version, supported action versions and declared references",
+          "outputs": "Manifest/purpose/compatibility or rejection"
+        },
+        {
+          "intent": "Load scoped instructions",
+          "inputs": "Role/task scope, permitted references and context budget",
+          "outputs": "Bounded instruction packet with provenance, omissions and cost"
+        },
+        {
+          "intent": "Update a skill revision",
+          "inputs": "Reviewed content/dependency change and compatibility disposition",
+          "outputs": "New immutable version and affected-consumer/drift record"
+        }
+      ],
+      "errors_and_limits": "Bound reference traversal and reject unsafe paths, missing required dependencies and incompatible actions. Text is not execution approval.",
+      "effects_and_concurrency": "Skills provide instructions, not grants, acceptance or hidden daemons. A loaded skill cannot rewrite task criteria or broaden authority.",
+      "required_proof": "Conflicting/untrusted instruction; missing/stale reference; version pinning; context cutoff; denied scope and revoked/retired skill behavior."
+    },
+    {
+      "id": "workflows",
+      "interface_id": "HEE3-IF-workflows",
+      "status": "planned_interface",
+      "surface": "Versioned finite workflow/procedure schema using existing actions, task and cohort scheduling.",
+      "operations": [
+        {
+          "intent": "Validate procedure",
+          "inputs": "Typed finite steps, dependencies, action versions, acceptance and bounded retry policy",
+          "outputs": "Validated DAG/obligations or cycle/incompatibility refusal"
+        },
+        {
+          "intent": "Start or resume composition",
+          "inputs": "Admitted parent, stable step/child identities, resources and current evidence",
+          "outputs": "Existing scheduler assignments and resumable step state"
+        },
+        {
+          "intent": "Join and close",
+          "inputs": "Required child outcomes, unresolved effects and final integrated verification",
+          "outputs": "Parent completion candidate or repair/block disposition"
+        }
+      ],
+      "errors_and_limits": "Bound fan-out, retries, time and total resources; dynamic text cannot insert unapproved actions. Refuse stale versions or missing steps.",
+      "effects_and_concurrency": "No alternative scheduler. Resume reads committed step identities; never blindly repeats uncertain service/task effects. Final parent acceptance remains independent.",
+      "required_proof": "Cycle and incompatible step; partial resume; uncertain side effect; missing child; resource exhaustion; failed final verifier and repaired end-to-end join."
+    }
+  ],
+  "primary_sources": [
+    {
+      "title": "Rust Reference: visibility and privacy",
+      "url": "https://doc.rust-lang.org/reference/visibility-and-privacy.html",
+      "use": "Visibility must include an accessible ancestor or re-export path; choose consumer-scoped visibility."
+    },
+    {
+      "title": "The rustdoc book",
+      "url": "https://doc.rust-lang.org/rustdoc/what-is-rustdoc.html",
+      "use": "Document supported Rust APIs from source and inspect the resulting crate documentation."
+    },
+    {
+      "title": "Julia manual: modules",
+      "url": "https://docs.julialang.org/en/v1/manual/modules/",
+      "use": "Document supported module names, exports and public interface separately from access-control boundaries."
+    }
+  ]
+}

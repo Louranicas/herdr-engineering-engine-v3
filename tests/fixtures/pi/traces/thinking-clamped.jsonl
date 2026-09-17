@@ -1,0 +1,2 @@
+{"id":"fixture-set_thinking_level","type":"response","command":"set_thinking_level","success":true}
+{"id":"fixture-get_state","type":"response","command":"get_state","success":true,"data":{"thinkingLevel":"off","isStreaming":false,"isCompacting":false,"steeringMode":"all","followUpMode":"one-at-a-time","sessionId":"fixture-session-001","autoCompactionEnabled":false,"messageCount":0,"pendingMessageCount":0}}

@@ -1,0 +1,547 @@
+#!/usr/bin/env python3
+"""Run the declared package quality matrix on a copied development subject.
+
+TH-DEV only: compiler, test and package-hook output remains candidate-controlled.
+This records development observations; T06 owns the protected admission collector.
+"""
+import argparse
+import datetime
+import hashlib
+from importlib.machinery import SourceFileLoader
+from importlib.util import module_from_spec, spec_from_loader
+import json
+import os
+from pathlib import Path
+import re
+import shutil
+import sys
+import tempfile
+import time
+import tomllib
+
+sys.dont_write_bytecode = True
+from development_process import run_bounded
+
+ROOT = Path(__file__).resolve().parents[1]
+_offline_loader = SourceFileLoader("hee3_rust_offline", str(ROOT / "tools/rust-offline.py"))
+_offline_spec = spec_from_loader(_offline_loader.name, _offline_loader)
+rust_offline = module_from_spec(_offline_spec)
+_offline_loader.exec_module(rust_offline)
+_sqlite_loader = SourceFileLoader("hee3_sqlite_static", str(ROOT / "tools/sqlite-static.py"))
+_sqlite_spec = spec_from_loader(_sqlite_loader.name, _sqlite_loader)
+sqlite_static = module_from_spec(_sqlite_spec)
+_sqlite_loader.exec_module(sqlite_static)
+TOOLCHAIN = "1.98.0"
+STREAM_LIMIT = 8 * 1024 * 1024
+TASK_LIMIT = 1200
+CLEANUP_RESERVE = 300
+INVENTORY_FILE_LIMIT = 4096
+INVENTORY_BYTE_LIMIT = 512 * 1024 * 1024
+UNSUPPORTED_CARGO_INPUTS = ("build.rs", ".cargo", "examples", "benches")
+RUST_OFFLINE_BUNDLE = "tools/rust-offline-inputs"
+T03_IMPLEMENTATION_PATHS = ("src/worker/mod.rs", "src/worker/inference.rs")
+T04_IMPLEMENTATION_PATHS = ("src/store.rs", "src/store/artifact.rs", "src/store/backup.rs",
+                            "src/store/schema.rs", "migrations/001.sql", "tests/t04_store.rs")
+# Reviewed independent T04 unit suite: 68 cases. Source discovery or emitted
+# counts cannot lower this gate; None remains an explicit pending-state refusal.
+T04_TEST_COUNT = 68
+T05_IMPLEMENTATION_PATHS = (
+    "src/contracts/roster.rs", "src/roster.rs", "src/store/roster.rs", "src/store/roster/attempts.rs",
+    "tests/t05_roster.rs", "tests/t05_codec.rs", "tests/t05_store.rs",
+    "config/models.toml", "config/agents.toml",
+)
+T05_TARGET_COUNTS = {"t05_roster": 29, "t05_codec": 12}
+# Independent release: 35 functions (32 roster-primary, 3 store-secondary).
+# This is a fixed execution inventory, not module-admission case credit.
+T05_STORE_TEST_COUNT = 35
+T05_FEATURES = {
+    "equivalent": ("1.0.2", []),
+    "hashbrown": ("0.17.1", []),
+    "indexmap": ("2.14.2", ["std"]),
+    "libsqlite3-sys": ("0.38.2", ["bundled_bindings", "default", "min_sqlite_version_3_34_1", "pkg-config", "vcpkg"]),
+    "rusqlite": ("0.40.2", ["backup", "hooks", "modern_sqlite"]),
+    "rustix": ("1.1.4", ["alloc", "default", "fs", "process", "rand", "std"]),
+    "serde_spanned": ("1.1.1", ["alloc", "serde", "std"]),
+    "toml": ("1.1.5+spec-1.1.0", ["display", "parse", "serde", "std"]),
+    "toml_datetime": ("1.1.1+spec-1.1.0", ["alloc", "serde", "std"]),
+    "toml_parser": ("1.1.3+spec-1.1.0", ["alloc", "std"]),
+    "toml_writer": ("1.1.2+spec-1.1.0", ["alloc", "std"]),
+    "winnow": ("1.0.4", []),
+}
+
+
+def has_t05(root):
+    manifest = tomllib.loads((root / "Cargo.toml").read_text()) if (root / "Cargo.toml").is_file() else {}
+    return ("toml" in manifest.get("dependencies", {}) or any(
+        target.get("name") in T05_TARGET_COUNTS for target in manifest.get("test", [])
+    ) or any((root / name).exists() or (root / name).is_symlink()
+             for name in ("src/contracts/roster.rs", "src/store/roster.rs", "tests/t05_store.rs", "tests/t05_codec.rs", "tests/t05_roster.rs")))
+
+
+def validate_t05_features(metadata):
+    """Compare resolved metadata with the reviewed T05 package/feature tuple."""
+    raw_nodes = metadata["resolve"]["nodes"]
+    nodes = {node["id"]: node for node in raw_nodes}
+    if len(nodes) != len(raw_nodes):
+        raise ValueError("Duplicate resolved T05 metadata node")
+    for name, (version, features) in T05_FEATURES.items():
+        packages = [package for package in metadata["packages"] if package["name"] == name]
+        if (len(packages) != 1 or packages[0]["version"] != version
+                or packages[0]["id"] not in nodes
+                or sorted(nodes[packages[0]["id"]]["features"]) != features):
+            raise ValueError("Reviewed T05 resolved features differ: " + name)
+
+
+def has_t04(root):
+    manifest = tomllib.loads((root / "Cargo.toml").read_text()) if (root / "Cargo.toml").is_file() else {}
+    return ("rusqlite" in manifest.get("dependencies", {}) or any(
+        (root / name).exists() or (root / name).is_symlink()
+        for name in (*T04_IMPLEMENTATION_PATHS[1:4], "tests/t04_store.rs")
+    ))
+
+
+def require_work_time(deadline, stage):
+    if time.monotonic() >= deadline:
+        raise TimeoutError("Work deadline reached before " + stage)
+
+
+def tree_files(root, relative_root, deadline, suffix=None, allow_internal_symlinks=False):
+    files = []
+    total = 0
+    base = root / relative_root
+    for path in base.rglob("*"):
+        require_work_time(deadline, "inventory " + relative_root)
+        if path.is_symlink():
+            target = path.resolve(strict=True)
+            if (not allow_internal_symlinks or not target.is_relative_to(base.resolve())
+                    or not target.is_file()):
+                raise ValueError("Symlink is unsupported in quality inventory: " + str(path))
+        if not path.is_file() or (suffix is not None and path.suffix != suffix):
+            continue
+        total += path.stat().st_size
+        files.append(str(path.relative_to(root)))
+        if len(files) > INVENTORY_FILE_LIMIT or total > INVENTORY_BYTE_LIMIT:
+            raise ValueError("Quality inventory bound exceeded: " + relative_root)
+    return files
+
+
+def identity_digest(path):
+    if not path.is_symlink():
+        return digest(path)
+    identity = hashlib.sha256()
+    identity.update(b"symlink\0")
+    identity.update(os.readlink(path).encode())
+    identity.update(b"\0")
+    identity.update(bytes.fromhex(digest(path.resolve(strict=True))))
+    return identity.hexdigest()
+
+
+_JULIA_PRECOMPILE_LINES = (
+    re.compile(r"Precompiling packages\.\.\."),
+    re.compile(r"\s+\d+(?:\.\d+)? ms  ✓ .+(?: \(serial\))?"),
+    re.compile(r"\s+\d+ (?:dependency|dependencies) successfully precompiled in \d+ seconds?(?:\. \d+ already precompiled\.)?"),
+)
+
+
+def validate_julia_precompile_stderr(text):
+    for line in text.splitlines():
+        if line and not any(pattern.fullmatch(line) for pattern in _JULIA_PRECOMPILE_LINES):
+            raise ValueError("Unexpected Julia baseline stderr: " + line)
+
+
+def refuse_unsupported_cargo_inputs(root):
+    for name in UNSUPPORTED_CARGO_INPUTS:
+        if (root / name).exists() or (root / name).is_symlink():
+            raise ValueError("Unsupported Cargo input path: " + name)
+
+
+def quality_subject_paths(root, deadline, rust_only):
+    required = ["Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "tools/check-quality",
+                "tools/development_process.py", "tools/rust-offline.py", "tools/sqlite-static.py", "tools/check-store-mutations", "tests/t25_process.py",
+                "tests/t25_quality.py"]
+    required += [name for directory in ("src", "tests") for name in tree_files(root, directory, deadline, ".rs")]
+    required += tree_files(root, RUST_OFFLINE_BUNDLE, deadline)
+    if (root / "tests/t02_pi.rs").is_file():
+        required += tree_files(root, "tests/fixtures/pi", deadline)
+        required += ["evidence/implementation/T02/sdk-smoke/metadata-benign.stdout"]
+    if (root / "tests/t02_transport.rs").is_file():
+        required += ["development/transport_process.py"]
+    if (root / "tests/t03_contract.rs").is_file():
+        required += T03_IMPLEMENTATION_PATHS
+    if has_t04(root):
+        required += [*T04_IMPLEMENTATION_PATHS, sqlite_static.ARCHIVE_NAME]
+    if has_t05(root):
+        required += [*T05_IMPLEMENTATION_PATHS, *T04_IMPLEMENTATION_PATHS, sqlite_static.ARCHIVE_NAME,
+                     "tools/check-store-mutations"]
+    if not rust_only:
+        required += tree_files(root, "julia", deadline)
+        required += ["tools/julia-quality.jl"]
+        required += tree_files(root, "tools/julia-quality-fixtures", deadline)
+        required += tree_files(root, "tools/julia-format", deadline)
+    return sorted(set(required))
+
+
+def refuse_ancestor_cargo_configuration(work):
+    # Cargo also searches ancestor .cargo directories despite private CARGO_HOME.
+    for ancestor in work.parents:
+        for name in ("config", "config.toml"):
+            path = ancestor / ".cargo" / name
+            if path.exists() or path.is_symlink():
+                raise ValueError("Ambient ancestor Cargo configuration: " + str(path))
+
+
+def rust_test_expectations(root):
+    """Fixed reviewed counts; candidate source never determines the test floor."""
+    manifest = tomllib.loads((root / "Cargo.toml").read_text())
+    targets = manifest.get("test", [])
+    names = [target.get("name") for target in targets]
+    roster_present = has_t05(root)
+    store_present = has_t04(root) or roster_present
+    has_t03 = store_present or "t03_contract" in names or (root / "tests/t03_contract.rs").is_file()
+    has_t02 = has_t03 or any(name in names for name in ("t02_pi", "t02_transport")) or any(
+        (root / name).is_file() for name in ("tests/t02_pi.rs", "tests/t02_transport.rs")
+    )
+    required = {"t01_contracts": "tests/t01_contracts.rs", "t01_task": "tests/t01_task.rs"}
+    if has_t02:
+        required.update({"t02_pi": "tests/t02_pi.rs", "t02_transport": "tests/t02_transport.rs"})
+    if has_t03:
+        required["t03_contract"] = "tests/t03_contract.rs"
+        for path in T03_IMPLEMENTATION_PATHS:
+            if not (root / path).is_file() or (root / path).is_symlink():
+                raise ValueError("Missing or substituted required T03 source: " + path)
+    if roster_present:
+        required.update({name: "tests/" + name + ".rs" for name in T05_TARGET_COUNTS})
+        for path in T05_IMPLEMENTATION_PATHS:
+            if not (root / path).is_file() or (root / path).is_symlink():
+                raise ValueError("Missing or substituted required T05 source: " + path)
+    for name, path in required.items():
+        matches = [target for target in targets if target.get("name") == name]
+        if (len(matches) != 1 or matches[0].get("path") != path or not (root / path).is_file()
+                or (name in ("t03_contract", *T05_TARGET_COUNTS) and matches[0].get("harness", True) is not True)):
+            raise ValueError("Missing or substituted required Rust test target: " + name)
+    counts = [24, 27, 60] if has_t02 else [24, 27]
+    if has_t03:
+        counts.append(34)
+    if store_present:
+        for path in T04_IMPLEMENTATION_PATHS:
+            if not (root / path).is_file() or (root / path).is_symlink():
+                raise ValueError("Missing or substituted required T04 source: " + path)
+        if type(T04_TEST_COUNT) is not int or T04_TEST_COUNT <= 0:
+            raise ValueError("Reviewed T04 library-unit test count is pending")
+        counts.append(T04_TEST_COUNT)
+    unit_counts = {}
+    if roster_present:
+        if type(T05_STORE_TEST_COUNT) is not int or T05_STORE_TEST_COUNT <= 0:
+            raise ValueError("Reviewed T05 library-unit test count is pending")
+        included = re.compile(r'#\[cfg\(test\)\]\s*#\[path\s*=\s*"\.\./tests/t05_store\.rs"\]\s*mod\s+roster_tests\s*;')
+        if len(included.findall((root / "src/store.rs").read_text())) != 1:
+            raise ValueError("Missing or substituted T05 library-unit test include")
+        counts[-1] += T05_STORE_TEST_COUNT
+        counts.extend(T05_TARGET_COUNTS.values())
+        unit_counts = {"store::tests::": T04_TEST_COUNT, "store::roster_tests::": T05_STORE_TEST_COUNT}
+    return {"has_t02": has_t02, "has_t03": has_t03, "has_t04": store_present, "has_t05": roster_present,
+            "test_counts": counts, "unit_test_counts": unit_counts, "doctest_count": 2 if has_t02 else 1}
+
+
+def require_rust_test_summaries(stdout, expectations, label):
+    for count in expectations["test_counts"]:
+        pattern = (rf"^test result: ok\. {count} passed; 0 failed; 0 ignored; "
+                   r"0 measured; 0 filtered out; finished in .+$")
+        if len(re.findall(pattern, stdout, flags=re.MULTILINE)) != 1:
+            raise ValueError("Missing/changed/filtered required Rust test count " + str(count) + ": " + label)
+    for prefix, count in expectations.get("unit_test_counts", {}).items():
+        names = re.findall(r"^test (" + re.escape(prefix) + r"\S+) \.\.\. ok$", stdout, flags=re.MULTILINE)
+        if len(names) != count or len(set(names)) != count:
+            raise ValueError("Missing/changed required Rust unit namespace " + prefix + ": " + label)
+    marker = "T02_TRANSPORT_FINITE_CONTROLS: 5 passed; TH-DEV only"
+    if expectations["has_t02"] and stdout.splitlines().count(marker) != 1:
+        raise ValueError("Missing or duplicate T02 transport controls: " + label)
+
+
+def merge_exception_observation(row, error):
+    observation = getattr(error, "result", getattr(error, "bounded_process_result", None))
+    if observation is None:
+        row["observation_missing"] = True
+        return False
+    row.update(observation)
+    return True
+
+
+def apply_workspace_cleanup_status(report):
+    if report.get("workspace_cleanup_complete") is False and report.get("status", "").startswith("pass"):
+        report["status"] = "failed workspace cleanup"
+
+
+def finalize_run(report, output, work, process_cleanup_complete, task_deadline, origin, propagating_error):
+    report["elapsed_seconds"] = time.monotonic() - origin
+    report["process_cleanup_complete"] = process_cleanup_complete
+    report["cleanup_complete"] = process_cleanup_complete
+    if work is not None and process_cleanup_complete:
+        cleanup_paths = {stream: output / ("workspace-cleanup." + stream) for stream in ("stdout", "stderr")}
+        cleanup_row = {"argv": ["/usr/bin/rm", "-rf", "--", str(work)]}
+        report["workspace_cleanup"] = cleanup_row
+        try:
+            cleanup_result = run_bounded(
+                cleanup_row["argv"], ROOT,
+                {"PATH": "/usr/bin:/bin", "LC_ALL": "C"},
+                cleanup_paths["stdout"], cleanup_paths["stderr"],
+                task_deadline, command_timeout=CLEANUP_RESERVE,
+                stream_limit=STREAM_LIMIT,
+            )
+            cleanup_row.update(cleanup_result)
+        except BaseException as cleanup_error:
+            merge_exception_observation(cleanup_row, cleanup_error)
+            cleanup_row["error"] = f"{type(cleanup_error).__name__}: {cleanup_error}"
+        for stream, path in cleanup_paths.items():
+            if path.is_file():
+                cleanup_row[stream] = {"path": path.name, "sha256": digest(path), "bytes": path.stat().st_size}
+        report["workspace_removed"] = not work.exists()
+        report["workspace_cleanup_complete"] = bool(
+            cleanup_row.get("cleanup_complete") and cleanup_row.get("exit_code") == 0
+            and not cleanup_row.get("timed_out") and not cleanup_row.get("output_limit_exceeded")
+            and not cleanup_row.get("descendants_detected") and not cleanup_row.get("supervisor_error")
+            and not cleanup_row.get("observation_missing") and not cleanup_row.get("error")
+            and report["workspace_removed"]
+        )
+        if not report["workspace_cleanup_complete"]:
+            report["cleanup_obligation"] = "Workspace removal failed or exceeded its cleanup bound"
+    elif work is not None:
+        report["workspace_removed"] = False
+        report["workspace_cleanup_complete"] = False
+        report["cleanup_obligation"] = "Retain owned workspace until live child custody is settled"
+    if report["status"] == "running":
+        report["status"] = "failed or interrupted development checks"
+    apply_workspace_cleanup_status(report)
+    (output / "results.json").write_text(json.dumps(report, indent=2) + "\n")
+    print(output / "results.json", flush=True)
+    if report.get("workspace_cleanup_complete") is False and propagating_error is None:
+        raise RuntimeError("Workspace cleanup did not complete")
+
+
+def digest(path):
+    with path.open("rb") as source:
+        return hashlib.file_digest(source, "sha256").hexdigest()
+
+
+def main():
+    origin = time.monotonic()
+    work_deadline = origin + TASK_LIMIT - CLEANUP_RESERVE
+    task_deadline = origin + TASK_LIMIT
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--rust-only", action="store_true", help="scoped Rust development observation; does not close the full T25 matrix")
+    arguments = parser.parse_args()
+    stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    output = ROOT / ("evidence/implementation/T05/quality-runs" if has_t05(ROOT) else "evidence/implementation/T25/runs") / stamp
+    output.mkdir(parents=True, mode=0o700)
+    refuse_unsupported_cargo_inputs(ROOT)
+    rust_offline.validate_bundle(ROOT / "Cargo.lock", ROOT / RUST_OFFLINE_BUNDLE, work_deadline)
+    test_expectations = rust_test_expectations(ROOT)
+    required = quality_subject_paths(ROOT, work_deadline, arguments.rust_only)
+    subject = {}
+    subject_bytes = 0
+    for name in sorted(set(required)):
+        require_work_time(work_deadline, "subject hashing")
+        path = ROOT / name
+        if path.is_symlink() or not path.is_file():
+            raise ValueError("Unsupported subject input: " + name)
+        subject_bytes += path.stat().st_size
+        if len(subject) >= INVENTORY_FILE_LIMIT or subject_bytes > INVENTORY_BYTE_LIMIT:
+            raise ValueError("Subject inventory bound exceeded")
+        subject[name] = digest(path)
+    report = {
+        "scope": "T25 package quality development checks; no qualification or admission",
+        "profile": "TH-DEV", "languages": ["rust"] if arguments.rust_only else ["rust", "julia"],
+        "subject_files": subject, "commands": [], "status": "running",
+        "output": str(output), "module_admission": False,
+        "limits": "Owned scratch, offline package resolution and fixed commands; no hostile filesystem/cgroup/evidence custody qualification.",
+        "rust_dependency_policy": "Only copied lock-checksummed archives and generated private Cargo directory source; no registry/index/cache lookup. Cargo offline does not deny arbitrary build-script network effects.",
+        "rust_test_expectations": test_expectations,
+        "task_limit_seconds": TASK_LIMIT, "cleanup_reserve_seconds": CLEANUP_RESERVE,
+        "work_deadline_seconds": TASK_LIMIT - CLEANUP_RESERVE,
+        "inventory_file_limit": INVENTORY_FILE_LIMIT,
+        "inventory_byte_limit": INVENTORY_BYTE_LIMIT,
+        "stream_limit_bytes": STREAM_LIMIT,
+    }
+    work = None
+    cleanup_complete = True
+    try:
+        compiler = Path.home() / ".rustup/toolchains/1.98.0-x86_64-unknown-linux-gnu/bin/rustc"
+        binaries = {name: compiler.parent / name for name in ("rustc", "rustdoc", "cargo", "rustfmt", "cargo-clippy", "clippy-driver")}
+        require_work_time(work_deadline, "executable inventory")
+        report["executables"] = {name: {"path": str(path), "sha256": digest(path)} for name, path in binaries.items()}
+        report["executables"]["python"] = {"path": sys.executable, "sha256": digest(Path(sys.executable))}
+        work = Path(tempfile.mkdtemp(prefix="hee3-quality-"))
+        report["workspace"] = str(work)
+        for name in subject:
+            require_work_time(work_deadline, "subject copy")
+            destination = work / name
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(ROOT / name, destination)
+            if digest(destination) != subject[name]:
+                raise ValueError("Subject copy differs before execution: " + name)
+        refuse_ancestor_cargo_configuration(work)
+        dependency_inventory = rust_offline.materialize(
+            work / "Cargo.lock", work / RUST_OFFLINE_BUNDLE,
+            work / "rust-vendor", work / "cargo-home", work_deadline,
+        )
+        report["rust_offline_dependencies"] = dependency_inventory
+        env = {
+            "PATH": str(compiler.parent) + ":/usr/bin:/bin", "LC_ALL": "C",
+            "TMPDIR": str(work), "CARGO_HOME": str(work / "cargo-home"),
+            "CARGO_TARGET_DIR": str(work / "target"), "CARGO_BUILD_JOBS": "2",
+            "CARGO_NET_OFFLINE": "true", "RUSTUP_TOOLCHAIN": TOOLCHAIN,
+            "RUSTC": str(binaries["rustc"]), "RUSTDOC": str(binaries["rustdoc"]),
+            "RUSTFMT": str(binaries["rustfmt"]), "RUSTFLAGS": "-Dwarnings",
+            "RUSTDOCFLAGS": "-Dwarnings",
+            "PYTHONDONTWRITEBYTECODE": "1", "PYTHONWARNINGS": "error",
+        }
+        report["environment"] = env.copy()
+
+        def run(label, argv, expected=0, required_text=None, required_stream="stdout", command_env=None):
+            nonlocal cleanup_complete
+            row = {"id": label, "argv": argv, "expected_exit_code": expected, "environment": (command_env or env).copy()}
+            report["commands"].append(row)
+            paths = {stream: output / (label + "." + stream) for stream in ("stdout", "stderr")}
+            try:
+                result = run_bounded(argv, work, command_env or env, paths["stdout"], paths["stderr"], work_deadline, stream_limit=STREAM_LIMIT)
+                row.update(result)
+            except BaseException as error:
+                if not merge_exception_observation(row, error):
+                    cleanup_complete = False
+                row["error"] = f"{type(error).__name__}: {error}"
+                raise
+            finally:
+                if row.get("started") and not row.get("cleanup_complete"):
+                    cleanup_complete = False
+                for stream, path in paths.items():
+                    if path.is_file():
+                        row[stream] = {"path": path.name, "sha256": digest(path), "bytes": path.stat().st_size}
+                (output / "results.json").write_text(json.dumps(report, indent=2) + "\n")
+            texts = {}
+            for stream, path in paths.items():
+                with path.open("rb") as raw:
+                    data = raw.read(STREAM_LIMIT + 1)
+                if len(data) > STREAM_LIMIT:
+                    raise ValueError("Retained stream exceeds limit: " + label)
+                texts[stream] = data.decode("utf-8", errors="strict")
+            if (row["exit_code"] != expected or row["timed_out"] or row["output_limit_exceeded"]
+                    or not row["cleanup_complete"] or row["descendants_detected"]
+                    or not row["started"] or (required_text is not None and required_text not in texts[required_stream])):
+                raise ValueError("Unexpected quality outcome: " + label)
+            print(label + ": exit " + str(row["exit_code"]), flush=True)
+            return texts
+
+        run("process-controls", [sys.executable, "-W", "error", "tests/t25_process.py"], required_text="17 tests")
+        run("quality-integration-controls", [sys.executable, "-W", "error", "tests/t25_quality.py"], required_text="Ran 43 tests", required_stream="stderr")
+        run("rustc-identity", [str(compiler), "-vV"], required_text="rustc 1.98.0 ")
+        cargo = str(binaries["cargo"])
+        metadata = run("offline-dependency-resolution", [cargo, "metadata", "--locked", "--offline", "--format-version=1"])
+        if test_expectations["has_t05"]:
+            validate_t05_features(json.loads(metadata["stdout"]))
+        if test_expectations["has_t04"]:
+            sqlite_static.validate_features(json.loads(metadata["stdout"]))
+            report["sqlite_static"] = {}
+            env.update(sqlite_static.build(
+                work / sqlite_static.ARCHIVE_NAME, work / "sqlite-private", work_deadline,
+                run, report["sqlite_static"],
+            ))
+            report["environment"] = env.copy()
+        run("format", [cargo, "fmt", "--all", "--", "--check"])
+        for features, flags in (("default", []), ("no-default", ["--no-default-features"])):
+            for profile, profile_flags in (("debug", []), ("release", ["--release"])):
+                label = features + "-" + profile
+                common = ["--workspace", "--locked", "--offline", *flags, *profile_flags]
+                run(label + "-clippy", [cargo, "clippy", *common, "--all-targets", "--", "-D", "warnings", "-D", "clippy::pedantic"])
+                raw = run(label + "-tests", [cargo, "test", *common, "--all-targets"])["stdout"]
+                require_rust_test_summaries(raw, test_expectations, label)
+                doc_raw = run(label + "-doctests", [cargo, "test", *common, "--doc"])["stdout"]
+                require_rust_test_summaries(
+                    doc_raw, {"test_counts": [test_expectations["doctest_count"]], "has_t02": False},
+                    label + "-doctests",
+                )
+        # Otherwise valid code triggers one known pedantic rule. It is checked
+        # separately so a compiler/format failure cannot steal lint credit.
+        fixture = work / "lint-control.rs"
+        fixture.write_text("pub fn sum(left: i32, right: i32) -> i32 { left + right }\n")
+        run("lint-fault", [str(binaries["clippy-driver"]), "--edition=2024", "--crate-type=lib", str(fixture), "-Dclippy::must_use_candidate"], expected=1, required_text="this function could have a `#[must_use]` attribute", required_stream="stderr")
+        fixture.write_text("#[must_use]\npub fn sum(left: i32, right: i32) -> i32 { left + right }\n")
+        run("lint-benign", [str(binaries["clippy-driver"]), "--edition=2024", "--crate-type=lib", str(fixture), "-Dwarnings", "-Dclippy::pedantic"])
+        if not arguments.rust_only:
+            julia = Path.home() / ".julia/juliaup/julia-1.12.7+0.x64.linux.gnu/bin/julia"
+            report["executables"]["julia"] = {"path": str(julia), "sha256": digest(julia)}
+            depot = work / "julia-depot"
+            registry = depot / "registries/HEE3Empty/Registry.toml"
+            registry.parent.mkdir(parents=True)
+            shutil.copyfile(work / "tools/julia-quality-fixtures/registry/Registry.toml", registry)
+            julia_env = {
+                "PATH": "/usr/bin:/bin", "LC_ALL": "C", "TMPDIR": str(work),
+                "JULIA_DEPOT_PATH": str(depot), "JULIA_LOAD_PATH": "@:@stdlib",
+                "JULIA_PKG_OFFLINE": "true", "JULIA_PKG_SERVER": "",
+                "JULIA_PKG_PRECOMPILE_AUTO": "0", "JULIA_NUM_THREADS": "1",
+                "OPENBLAS_NUM_THREADS": "1", "OMP_NUM_THREADS": "1", "MKL_NUM_THREADS": "1",
+            }
+            prefix = [str(julia), "--startup-file=no", "--history-file=no", "--check-bounds=yes", "--depwarn=error", "--threads=1"]
+            controls = {
+                "baseline": {"passed": 1}, "assertion": {"failed": 1},
+                "warning": {"passed": 1, "warnings": 1}, "skip": {"skipped": 1},
+                "broken": {"broken": 1}, "bounds": {"errors": 1},
+                "deprecation": {"errors": 1}, "empty": {},
+            }
+            for mode, expected_counts in controls.items():
+                streams = run("julia-" + mode, [*prefix, "--project=" + str(work / "julia"), "tools/julia-quality.jl", mode], expected=0 if mode == "baseline" else 1, command_env=julia_env)
+                raw = streams["stdout"]
+                begin, end = "HEE3_JULIA_TEST_SUMMARY_BEGIN\n", "HEE3_JULIA_TEST_SUMMARY_END"
+                if raw.count(begin) != 1 or raw.count(end) != 1:
+                    raise ValueError("Missing or duplicate Julia summary: " + mode)
+                summary = tomllib.loads(raw.split(begin)[1].split(end)[0])
+                report["commands"][-1]["producer_summary"] = summary
+                for key in ("passed", "failed", "errors", "skipped", "broken", "warnings", "error_logs"):
+                    if summary[key] != expected_counts.get(key, 0):
+                        raise ValueError("Wrong Julia control detector: " + mode + "/" + key)
+                if (summary["mode"] != mode or summary["baseline_checks_passed"] != (mode == "baseline")
+                        or summary["selected_results"] != (0 if mode == "empty" else 1)):
+                    raise ValueError("Wrong Julia control identity/count: " + mode)
+                if mode == "baseline":
+                    validate_julia_precompile_stderr(streams["stderr"])
+                for field in ("test_project", "test_manifest"):
+                    if hashlib.sha256(summary[field + "_toml"].encode()).hexdigest() != summary[field + "_sha256"]:
+                        raise ValueError("Julia test dependency report differs")
+                for control, marker in (("bounds", "BoundsError"), ("deprecation", "HEE3_EXPECTED_DEPRECATION_CONTROL")):
+                    if mode == control and marker not in raw:
+                        raise ValueError("Julia error is not the intended control: " + mode)
+            # Tool-only packages are copied from separately resolved exact setup;
+            # the acceptance recipe never installs/resolves or inherits a depot.
+            seed = Path.home() / ".cache/hee3-quality/julia-format-depot/packages"
+            tool_names = tree_files(seed.parent, seed.name, work_deadline, allow_internal_symlinks=True)
+            tool_subject = {}
+            for relative in tool_names:
+                require_work_time(work_deadline, "formatter package inventory")
+                name = str(Path(relative).relative_to(seed.name))
+                tool_subject[name] = identity_digest(seed / name)
+            if not tool_subject:
+                raise ValueError("Pinned formatter package cache is missing")
+            shutil.copytree(seed, depot / "packages", symlinks=True)
+            report["formatter_packages_sha256"] = tool_subject
+            julia_files = sorted(name for name in subject if name.endswith(".jl"))
+            run("julia-format", [*prefix, "--compiled-modules=no", "--pkgimages=no", "--project=" + str(work / "tools/julia-format"), "tools/julia-format/check.jl", *julia_files], command_env=julia_env, required_text='fault_and_benign_controls = "pass"')
+            for name, expected_hash in tool_subject.items():
+                require_work_time(work_deadline, "formatter package verification")
+                if identity_digest(seed / name) != expected_hash or identity_digest(depot / "packages" / name) != expected_hash:
+                    raise ValueError("Formatter tool subject changed: " + name)
+        for name in subject:
+            require_work_time(work_deadline, "subject verification")
+            if digest(ROOT / name) != subject[name] or digest(work / name) != subject[name]:
+                raise ValueError("Subject changed during quality checks: " + name)
+        rust_offline.verify_materialized(work / "rust-vendor", work / "cargo-home", dependency_inventory, work_deadline)
+        if test_expectations["has_t04"]:
+            sqlite_static.verify(work / "sqlite-private", report["sqlite_static"], work_deadline)
+        report["status"] = "pass scoped development checks"
+    except BaseException as error:
+        report["error"] = f"{type(error).__name__}: {error}"
+        raise
+    finally:
+        finalize_run(report, output, work, cleanup_complete, task_deadline, origin, sys.exception())
+
+
+if __name__ == "__main__":
+    main()

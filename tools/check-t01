@@ -1,0 +1,216 @@
+#!/usr/bin/env python3
+"""Reproduce scoped T01 development checks; never issue module admission."""
+import datetime
+import atexit
+import hashlib
+import json
+import os
+from pathlib import Path
+import random
+import re
+import shutil
+import signal
+import subprocess
+import tempfile
+
+ROOT = Path(__file__).resolve().parents[1]
+TOOLCHAIN = "1.98.0"
+INPUTS = ("src/contracts.rs", "src/task.rs", "tests/t01_contracts.rs", "tests/t01_task.rs")
+MANIFEST = '''[package]
+name = "habitat-engine"
+version = "0.0.0"
+edition = "2024"
+publish = false
+[workspace]
+[features]
+default = []
+[profile.release]
+opt-level = 2
+overflow-checks = true
+panic = "unwind"
+lto = "thin"
+codegen-units = 1
+debug = "line-tables-only"
+'''
+
+
+def sha(data):
+    return hashlib.sha256(data).hexdigest()
+
+
+def decimal_oracle(value):
+    # Deliberately independent of the Rust checked multiply/add algorithm.
+    if value == "":
+        return "Err(ScalarError::Empty)"
+    if re.fullmatch("[0-9]+", value) is None:
+        return "Err(ScalarError::InvalidCharacter)"
+    if len(value) > 1 and value[0] == "0":
+        return "Err(ScalarError::LeadingZero)"
+    number = int(value)
+    return f"Ok({number:_}_u64)" if number < 2**64 else "Err(ScalarError::Overflow)"
+
+
+def main():
+    stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    output = ROOT / "evidence/implementation/T01/runs" / stamp
+    output.mkdir(parents=True)
+    source = {name: (ROOT / name).read_bytes() for name in INPUTS}
+    subject = {name: sha(data) for name, data in source.items()}
+    subject["tools/check-t01"] = sha(Path(__file__).read_bytes())
+    receipt = {"scope": "T01 scalar and pure loop development checks; no qualification or admission",
+               "subject_files": subject, "toolchain": TOOLCHAIN, "commands": [],
+               "mutations": [], "status": "running", "output": str(output)}
+
+    def finalize():
+        if receipt["status"] == "running":
+            receipt["status"] = "failed or interrupted development checks"
+        (output / "results.json").write_text(json.dumps(receipt, indent=2) + "\n")
+
+    atexit.register(finalize)
+    rustup = Path.home() / ".cargo/bin/rustup"
+    compiler = Path(subprocess.check_output([str(rustup), "which", "--toolchain", TOOLCHAIN, "rustc"], timeout=30).decode().strip()).resolve()
+    tool_bin = compiler.parent
+    binaries = {name: tool_bin / name for name in
+                ("rustc", "rustdoc", "cargo", "rustfmt", "cargo-clippy", "clippy-driver")}
+    receipt["executables"] = {}
+    for name, binary in binaries.items():
+        with binary.open("rb") as stream:
+            digest = hashlib.file_digest(stream, "sha256").hexdigest()
+        receipt["executables"][name] = {"path": str(binary), "sha256": digest}
+    (output / "harness-Cargo.toml").write_text(MANIFEST)
+    rng = random.Random(0x544F31)
+    vectors = ["", "0", "00", "01", str(2**64 - 1), str(2**64),
+               "0" * 400, "9" * 400, "9" * 400 + "x", "00x", "+0", "-1",
+               " 1", "1\n", "1\x00", "١", "１"]
+    vectors += [str(rng.randrange(2**80)) for _ in range(256)]
+    vectors += [str(rng.randrange(2**64)) for _ in range(256)]
+    vectors += [str(2**power + delta) for power in range(1, 65) for delta in (-1, 0, 1)]
+    oracle = [(value, decimal_oracle(value)) for value in vectors]
+    (output / "decimal-oracle.json").write_text(json.dumps(oracle, ensure_ascii=True, indent=2) + "\n")
+    oracle_source = ['use habitat_engine::contracts::{parse_u64_decimal, ScalarError};',
+                     "struct Case { input: &'static [u8], expected: Result<u64, ScalarError> }",
+                     'static CASES: &[Case] = &[']
+    for value, expected in oracle:
+        literal = ",".join(str(byte) for byte in value.encode())
+        oracle_source.append(f'Case {{ input: &[{literal}], expected: {expected} }},')
+    oracle_source.append('];\n#[test] fn arbitrary_precision_decimal_oracle() {\n'
+                         'for case in CASES { assert_eq!(parse_u64_decimal(std::str::from_utf8(case.input).unwrap()), case.expected); }\n}')
+    with tempfile.TemporaryDirectory(prefix="hee-t01-") as scratch:
+        work = Path(scratch)
+        for name, data in source.items():
+            dest = work / name
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(data)
+        (work / "Cargo.toml").write_text(MANIFEST)
+        (work / "src/lib.rs").write_text('#![forbid(unsafe_code)]\npub mod contracts;\npub mod task;\n')
+        (work / "tests/t01_decimal_oracle.rs").write_text("\n".join(oracle_source) + "\n")
+        # Keep user Cargo config, credentials, caches and injected flags out of this
+        # dependency-free build. Rustup selects the already installed exact toolchain.
+        env = {key: value for key, value in os.environ.items()
+               if not key.startswith(("CARGO_", "RUST"))}
+        env.update(CARGO_HOME=str(work / "cargo-home"), CARGO_TARGET_DIR=str(work / "target"),
+                   CARGO_BUILD_JOBS="2", PATH=str(tool_bin) + ":/usr/bin:/bin",
+                   RUSTC=str(binaries["rustc"]), RUSTDOC=str(binaries["rustdoc"]),
+                   RUSTFMT=str(binaries["rustfmt"]),
+                   RUSTUP_TOOLCHAIN=TOOLCHAIN, RUSTFLAGS="-Dwarnings", RUSTDOCFLAGS="-Dwarnings")
+        receipt["build_environment"] = {key: env[key] for key in
+                                        ("CARGO_HOME", "CARGO_TARGET_DIR", "RUSTUP_TOOLCHAIN", "RUSTFLAGS", "RUSTDOCFLAGS")}
+
+        def run(label, args, expected=0):
+            args = [str(binaries[args[0]]), *args[1:]]
+            timed_out = False
+            process = subprocess.Popen(args, cwd=work, env=env, stdout=subprocess.PIPE,
+                                       stderr=subprocess.PIPE, start_new_session=True)
+            try:
+                stdout, stderr = process.communicate(timeout=180)
+            except (subprocess.TimeoutExpired, KeyboardInterrupt):
+                timed_out = True
+                try:
+                    os.killpg(process.pid, signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
+                try:
+                    stdout, stderr = process.communicate(timeout=5)
+                except subprocess.TimeoutExpired:
+                    try:
+                        os.killpg(process.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                    stdout, stderr = process.communicate(timeout=5)
+            result = subprocess.CompletedProcess(args, process.returncode, stdout, stderr)
+            (output / f"{label}.stdout").write_bytes(result.stdout)
+            (output / f"{label}.stderr").write_bytes(result.stderr)
+            receipt["commands"].append({"id": label, "argv": args, "exit_code": result.returncode,
+                                        "expected_exit_code": expected, "timed_out_or_interrupted": timed_out})
+            if result.returncode != expected or timed_out:
+                receipt["status"] = "failed development check"
+            (output / "results.json").write_text(json.dumps(receipt, indent=2) + "\n")
+            print(f"{label}: exit {result.returncode}", flush=True)
+            if result.returncode != expected or timed_out:
+                raise RuntimeError(f"{label}: expected {expected}; see {output}")
+            return result
+
+        identity = run("rustc-identity", ["rustc", "--version", "--verbose"])
+        if not identity.stdout.startswith(b"rustc 1.98.0 "):
+            raise RuntimeError("observed compiler does not match the selected toolchain")
+        run("cargo-identity", ["cargo", "--version"])
+        run("rustfmt-identity", ["rustfmt", "--version"])
+        run("clippy-identity", ["cargo", "clippy", "--version"])
+        run("lock", ["cargo", "generate-lockfile", "--offline"])
+        shutil.copyfile(work / "Cargo.lock", output / "harness-Cargo.lock")
+        # Format only the generated oracle. Authored source/tests are checked as-is.
+        run("format-oracle", ["rustfmt", "--edition", "2024", "tests/t01_decimal_oracle.rs"])
+        run("format", ["cargo", "fmt", "--all", "--", "--check"])
+        for feature, flags in (("default", []), ("no-default", ["--no-default-features"])):
+            for profile, profile_flags in (("debug", []), ("release", ["--release"])):
+                common = ["--workspace", "--locked", "--offline", *flags, *profile_flags]
+                prefix = f"{feature}-{profile}"
+                run(prefix + "-clippy", ["cargo", "clippy", *common, "--all-targets", "--", "-D", "warnings", "-D", "clippy::pedantic"])
+                run(prefix + "-tests", ["cargo", "test", *common, "--all-targets"])
+                run(prefix + "-docs", ["cargo", "test", *common, "--doc"])
+        mutations = [
+            ("decimal-invalid-suffix", "src/contracts.rs", "input.bytes().all(", "input.bytes().take(20).all("),
+            ("decimal-leading-zero", "src/contracts.rs", "input.len() > 1", "input.len() > 2"),
+            ("generation-overflow", "src/contracts.rs", "self.value().checked_add(1)", "Some(self.value().wrapping_add(1))"),
+            ("cleanup-reserve", "src/task.rs", "elapsed >= TASK_LIMIT.saturating_sub(CLEANUP_RESERVE)", "elapsed > TASK_LIMIT.saturating_sub(CLEANUP_RESERVE)"),
+            ("repeat-progress", "src/task.rs", "satisfied_criteria & !self.ever_satisfied == 0", "satisfied_criteria == 0"),
+            ("cancel-bypass", "src/task.rs", "if self.cancelled {", "if false && self.cancelled {"),
+            ("clock-high-water", "src/task.rs", "            self.elapsed = elapsed;", "            // Intentionally omit refused-call clock high-water."),
+        ]
+        expected_failures = {
+            "decimal-invalid-suffix": "invalid_suffix_takes_precedence_over_overflow",
+            "decimal-leading-zero": "leading_zero_refuses_even_when_magnitude_would_overflow",
+            "generation-overflow": "generation_advances_without_wrapping",
+            "cleanup-reserve": "cleanup_reserve_starts_at_exactly_fifteen_minutes",
+            "repeat-progress": "reappearing_old_criterion_does_not_count_as_new_progress",
+            "cancel-bypass": "cancellation_before_dispatch_is_permanent_and_idempotent",
+            "clock-high-water": "observed_deadline_cannot_be_reopened_by_rewinding_time",
+        }
+        for label, name, before, after in mutations:
+            original = source[name].decode()
+            if original.count(before) != 1:
+                raise RuntimeError(f"mutation {label}: target must occur exactly once")
+            changed = original.replace(before, after)
+            (output / f"mutant-{label}.rs").write_text(changed)
+            (work / name).write_text(changed)
+            env["CARGO_TARGET_DIR"] = str(work / ("target-mutant-" + label))
+            result = run("mutant-" + label, ["cargo", "test", "--locked", "--offline", "--tests"], expected=101)
+            intended = f"test {expected_failures[label]} ... FAILED".encode()
+            if intended not in result.stdout or b"could not compile" in result.stderr:
+                raise RuntimeError(f"mutation {label} did not fail its intended behavioral oracle")
+            receipt["mutations"].append({"id": label, "file": name, "before": before,
+                                         "after": after, "sha256": sha(changed.encode()), "outcome": "caught",
+                                         "expected_failing_test": expected_failures[label]})
+            (work / name).write_bytes(source[name])
+    for name, digest in subject.items():
+        if sha((ROOT / name).read_bytes()) != digest:
+            raise RuntimeError(f"source changed while testing: {name}")
+    receipt["status"] = "pass scoped development checks"
+    receipt["decimal_oracle_vectors"] = len(vectors)
+    receipt["qualification"] = "unassessed; full module cases, custody, integration and collector remain required"
+    (output / "results.json").write_text(json.dumps(receipt, indent=2) + "\n")
+    print(output)
+
+
+if __name__ == "__main__":
+    main()

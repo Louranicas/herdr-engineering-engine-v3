@@ -1,0 +1,61 @@
+{
+  "schema": 1,
+  "description": "Assess retained module observations without executing code or changing task state.\n\nRegistry: corpus/evidence-index.json = {schema: 1, receipts: [{path, sha256}]}.\nReceipt paths must be relative JSON files below corpus/receipts; every referenced\nfile is relative to code_root, regular, and reached without following symlinks.\n\nStrict receipt fields: schema=1, receipt_id, module_id, kind (testing, hardening,\ndeployment), source_kind=\"engine_source\", observed_at (timezone-bearing ISO 8601),\nsubject_files={relative_path: sha256}, acceptance={task_id: sha256 of exact UTF-8\nacceptance text}, mandatory_checks=[check_id], checks=[{id, outcome, executed,\nskipped, log: {path, sha256}}]. All declared mandatory checks must occur once,\npass, execute a positive number of cases and skip none. The module's primary\nstub_path must belong to the subject and contain non-comment body outside the\nHEE3-ANCHORS-BEGIN/END block. Body presence is not proof of implementation.\n\nHardening additionally requires hardening={threat_model: file_ref, findings:\n[{id, disposition: \"fixed\"|\"accepted_limitation\", authority, evidence:file_ref}]}.\nAn explicit empty findings list records the producer's no-findings claim.\nDeployment additionally requires deployment={environment, installed_artifact:\n{path,sha256}, installed_config:{path,sha256}, readback:file_ref}. Installed paths\nare absolute identity labels, never opened by this helper. Hashed readback JSON\nmust contain exactly schema=1, environment, installed_artifact, installed_config,\nobserved_at, outcome=\"pass\" matching the receipt's declared identities and time.\n\nMissing files are unavailable; changed bytes or acceptance are stale; incomplete\nor non-qualifying claims are unqualified. Current_observation means consistency\nwith the declared subject only, not authenticated origin, runtime certification,\nor task acceptance. The newest observation per kind controls its summary; ties\nfail conservatively. Unattributable registry entries prevent a current summary.\nAll historical claims remain in evidence. assess snapshots an aware assessment\ncutoff (current UTC by default, or an injected as_of datetime). Future-dated\nobservations are unqualified. No age expiry or current-health claim is inferred.\n",
+  "status_dimensions": [
+    "testing",
+    "hardening",
+    "deployment"
+  ],
+  "outcomes": [
+    "current_observation",
+    "stale",
+    "unavailable",
+    "unqualified"
+  ],
+  "index_example": {
+    "schema": 1,
+    "receipts": [
+      {
+        "path": "corpus/receipts/example.json",
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+      }
+    ]
+  },
+  "testing_receipt_example": {
+    "schema": 1,
+    "receipt_id": "example-only",
+    "module_id": "task",
+    "kind": "testing",
+    "source_kind": "engine_source",
+    "observed_at": "2026-09-15T00:00:00+00:00",
+    "subject_files": {
+      "src/task.rs": "0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    "acceptance": {
+      "T01": "0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    "mandatory_checks": [
+      "task-tests"
+    ],
+    "checks": [
+      {
+        "id": "task-tests",
+        "outcome": "pass",
+        "executed": 3,
+        "skipped": 0,
+        "log": {
+          "path": "corpus/receipts/raw/check.log",
+          "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+        }
+      }
+    ]
+  },
+  "limits": {
+    "file_bytes": 8388608,
+    "receipts": 1024,
+    "subject_files_per_receipt": 128,
+    "checks_per_receipt": 128
+  },
+  "assessment_time_policy": "assess(..., as_of=aware_datetime) optionally injects a timezone-aware cutoff; default current UTC is captured once. Future observations are unqualified and retained. The cutoff is omitted from the returned module model. No age expiry or current-health claim is inferred.",
+  "authority": "Observations never edit atlas task state or confer acceptance/deployment authority."
+}
