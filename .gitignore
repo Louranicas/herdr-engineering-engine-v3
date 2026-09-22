@@ -7,7 +7,21 @@
 
 # Retained verification evidence — 285 MB of captured runs. Historical records of test
 # executions, not source. The receipts that matter are indexed by corpus/evidence-index.json.
-/evidence/
+# `/evidence/*` rather than `/evidence/`: git cannot re-include a file inside an excluded
+# directory, and the one file below is SOURCE -- the survivor audit and the check-quality
+# required-file list read it, so ignoring it made a clone of main fail its own gate.
+/evidence/*
+!/evidence/mutation-equivalences.json
+# A recorded real-SDK output that tests/t02_pi.rs reads by this path: a fixture the world
+# produced, so it cannot be regenerated from source. Each parent must be re-included and
+# its siblings excluded again, level by level -- git will not look inside an excluded dir.
+!/evidence/implementation/
+/evidence/implementation/*
+!/evidence/implementation/T02/
+/evidence/implementation/T02/*
+!/evidence/implementation/T02/sdk-smoke/
+/evidence/implementation/T02/sdk-smoke/*
+!/evidence/implementation/T02/sdk-smoke/metadata-benign.stdout
 
 # Vendored offline build inputs (crate archives, sqlite amalgamation) — fetched, not authored.
 /tools/rust-offline-inputs/

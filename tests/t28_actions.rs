@@ -1071,6 +1071,38 @@ fn a_malformed_declared_tool_name_is_refused() -> Outcome {
 }
 
 #[test]
+fn every_tool_refusal_renders_its_own_diagnostic() {
+    // Whole values, one per variant: `contains` or a non-empty check would pass a renderer
+    // that returned one fixed string, and the mutation run over tools.rs found exactly that
+    // gap -- `name` replaced by "xyzzy" and `fmt` replaced by an empty write both survived.
+    let rendered: Vec<(String, &str)> = [
+        ToolRefusal::DuplicateToolName,
+        ToolRefusal::MalformedToolName,
+        ToolRefusal::UnexpectedToolNameShape,
+    ]
+    .into_iter()
+    .map(|refusal| (refusal.to_string(), refusal.name()))
+    .collect();
+    assert_eq!(
+        rendered,
+        [
+            (
+                "two actions project to one tool name".to_owned(),
+                "two actions project to one tool name"
+            ),
+            (
+                "tool name is empty or over the length bound".to_owned(),
+                "tool name is empty or over the length bound"
+            ),
+            (
+                "tool name is not lowercase with underscores".to_owned(),
+                "tool name is not lowercase with underscores"
+            ),
+        ]
+    );
+}
+
+#[test]
 fn every_omission_ground_has_a_distinct_name() {
     let names: Vec<&str> = [
         Omitted::NoToolName,

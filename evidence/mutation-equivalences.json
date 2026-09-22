@@ -1,0 +1,68 @@
+{
+ "schema": "hee3.mutation.equivalences.v1",
+ "scope": "Mutants argued equivalent, with the argument. Declares nothing about coverage and admits no module.",
+ "rule": "A survivor is admitted ONLY by a declaration here. Every declaration needs an argument about the reachable domain and a falsifier -- what would make it stop being equivalent. A declaration without both is refused, because a well-written justification is what disguises a shortcut.",
+ "equivalences": [
+  {
+   "id": "budget-select-fallback-tiebreak",
+   "file": "src/budget.rs",
+   "function": "Ledger::select_fallback",
+   "mutants": [
+    "replace < with <= in Ledger::select_fallback"
+   ],
+   "argument": "Candidate identities in one selection are pairwise distinct: select_fallback returns Refusal::DuplicateCandidate before any comparison runs. Every compared tuple (cost, identity) therefore differs in at least its second component, and `a < b` differs from `a <= b` only when a == b, which is unreachable.",
+   "falsifier": "select_fallback admitting two candidates with one identity, or the tie-break dropping its identity term.",
+   "pinned_by": [
+    "two_candidates_sharing_one_identity_are_refused",
+    "distinct_identities_at_one_price_are_admitted"
+   ],
+   "history": "Reported as a live survivor by mutation shard B on 2026-09-22 when the duplicate refusal did not yet exist. It was NOT equivalent then: two candidates sharing a cost and an identity still differ in privacy or tools, so the two operators chose a different capability set by argument order. The refusal was added; the equivalence is a consequence, not an argument made to dismiss it."
+  },
+  {
+   "id": "cohort-closes-cycle-unreachable",
+   "file": "src/cohort.rs",
+   "function": "Cohort::closes_cycle",
+   "mutants": [
+    "replace Cohort::closes_cycle -> bool with false",
+    "replace == with != in Cohort::closes_cycle"
+   ],
+   "argument": "Cohort::assign refuses a dependency naming a thread that is not already assigned (Refusal::UnknownDependency) and a self-dependency (Refusal::SelfDependency). A thread can therefore only depend on work that already exists, so the dependency graph is acyclic by construction and closes_cycle returns false on every reachable input.",
+   "falsifier": "assign admitting a forward reference -- a dependency on a thread not yet assigned. The guard is kept for exactly that day: it is what stops the walk from running forever.",
+   "pinned_by": [
+    "the_cycle_guard_is_unreachable_and_that_is_the_point"
+   ],
+   "history": "Argued in that test's own doc comment before the sweep found it. This file exists so the reconciliation is a check rather than a reader remembering to look."
+  },
+  {
+   "id": "cohort-claims-are-disjoint-unreachable-false",
+   "file": "src/cohort.rs",
+   "function": "Cohort::claims_are_disjoint",
+   "mutants": [
+    "replace Cohort::claims_are_disjoint -> bool with true"
+   ],
+   "argument": "Cohort::new is the only constructor, Thread is a private struct, and the sole threads.push is inside Cohort::assign, which refuses a claim overlapping a live one (Refusal::ClaimConflict). Every reachable cohort therefore satisfies the predicate, so the function returns true on every input the public API can produce and a body of `true` computes the same function.",
+   "falsifier": "Any constructor that builds a Cohort without going through assign -- the read-back-from-storage path the docstring is kept for. The moment one exists, the false arm is reachable and this declaration must be deleted rather than amended.",
+   "pinned_by": [
+    "any_one_conflicting_claim_refuses_the_whole_assignment",
+    "disjointness_holds_across_the_whole_cohort",
+    "the_cycle_guard_is_unreachable_and_that_is_the_point"
+   ],
+   "history": "Found undeclared by tools/check-mutation-survivors on 2026-09-22, which refused the run. Ten existing assertions all read `assert!(cohort.claims_are_disjoint())` -- the identity value -- so a body of `true` passed every one of them (F129). The docstring said the predicate existed 'so a cohort read back from storage can be checked'; no such constructor exists, and that sentence was corrected in the same change rather than left reading as a capability."
+  },
+  {
+   "id": "tools-accounts-for-every-action-unreachable-false",
+   "file": "src/worker/tools.rs",
+   "function": "Projection::accounts_for_every_action",
+   "mutants": [
+    "replace Projection::accounts_for_every_action -> bool with true"
+   ],
+   "argument": "Projection's fields are private and `project` is its only constructor. `project` visits every action of Catalogue::all() exactly once and each visit either returns Err (no Projection exists), pushes one ToolDefinition, or pushes one Omission -- every branch of the loop body ends in exactly one of the three. So for every reachable Projection, tools.len() + omissions.len() == Catalogue::all().len(), and the method's `false` result is unreachable: replacing the body with `true` changes no observable value.",
+   "falsifier": "A second constructor for Projection (a Default, a From, a pub field, a builder), or a branch in `project` that continues without pushing, e.g. an action skipped by a new filter. Either makes `false` reachable and this declaration wrong.",
+   "pinned_by": [
+    "every_catalogue_action_is_either_offered_or_omitted_by_name",
+    "a_caller_that_cannot_see_an_owner_is_not_offered_its_tools"
+   ],
+   "history": "Reported as a live survivor by the first mutation run over src/worker/tools.rs on 2026-09-23 (39 mutants: 26 caught, 4 missed, 9 unviable). The other three survivors -- Refusal::name and its Display -- were real gaps and are killed by every_tool_refusal_renders_its_own_diagnostic."
+  }
+ ]
+}

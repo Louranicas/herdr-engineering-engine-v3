@@ -1,0 +1,182 @@
+#!/usr/bin/env python3
+"""Neuter each rule of `hee3 chain` and require the test named for it to notice.
+
+Two populations, because the runner has two kinds of rule:
+
+  * SITES -- every `refuse(...)` and `finish(...)` call in the embedded chain runner, read
+    from its syntax tree. A refusal site neutered to `None` lets a bad spec through; a
+    finish site neutered lets a stopped chain carry on. Enumerated from the source, not from
+    a list, so a site added tomorrow is in the denominator tomorrow.
+  * PLANTS -- the rules that are not a call: the process group, the budget arithmetic, the
+    TERM-to-KILL escalation, the scratch trap. These are named by hand, each with the test
+    that must fail. An author's list is a floor, not a census, which is why the sites are
+    not on it.
+
+Every mutant runs in a disposable copy of the three paths the suite reads, so an
+interrupted sweep cannot leave the live wrapper mutated, and four run at once.
+
+Run: python3 tools/check-bash-sites
+"""
+
+import ast
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+WRAPPER = "integrations/bash/hee3"
+COPIED = (WRAPPER, "tests/bash_wrapper.py", "schemas/actions/control-v1.schema.json")
+BUDGET_S = 900
+WORKERS = 4
+
+# (name, exact fragment, replacement, tests of which at least one must fail). Each fragment
+# must occur exactly once; a plant whose anchor has drifted is reported, never skipped.
+PLANTS = (
+    ("no-static-check", '    if returncode != 0:\n        refuse(f"step {step[\'id\']!r} was refused',
+     '    if False:\n        refuse(f"step {step[\'id\']!r} was refused',
+     ("test_an_unknown_action_in_a_late_step_stops_the_chain_before_the_first",)),
+    ("input-not-counted-upfront", '            *(f"{name}=" for name in step["inputs"])]',
+     "            ]", ("test_an_input_counts_toward_the_argument_bound_before_anything_runs",)),
+    ("no-process-group", "start_new_session=True)", "start_new_session=False)",
+     ("test_a_step_that_outruns_its_budget_is_stopped_with_its_descendants",)),
+    ("step-budget-ignored", 'if step_s < left else (left, "chain")', 'if False else (left, "chain")',
+     ("test_the_step_is_told_its_budget",)),
+    ("budget-not-propagated", "HEE3_TIMEOUT_MS=str(max(1, int(budget * 1000))))",
+     "HEE3_TIMEOUT_MS_X=str(max(1, int(budget * 1000))))", ("test_the_step_is_told_its_budget",)),
+    ("no-kill-escalation", "            signal_group(proc, signal.SIGKILL)\n", "            pass\n",
+     ("test_a_step_that_ignores_term_is_killed_within_the_grace",)),
+    ("chain-budget-not-enforced", '        if left <= 0:\n            outcome = "timeout"',
+     '        if False:\n            outcome = "timeout"',
+     ("test_a_step_that_outruns_its_budget_is_stopped_with_its_descendants",)),
+    ("duplicate-keys-kept", "object_pairs_hook=unique_keys, ", "",
+     ("test_a_duplicated_key_in_the_spec_is_refused",)),
+    ("bool-is-a-budget", "if type(value) is not int or not 1 <= value <= ceiling:",
+     "if not isinstance(value, int) or not 1 <= value <= ceiling:",
+     ("test_budgets_are_bounded_from_both_sides",)),
+    ("not-run-off-by-one", '"not_run": [step["id"] for step in steps[len(ran):]]',
+     '"not_run": [step["id"] for step in steps[len(ran) + 1:]]',
+     ("test_a_step_after_a_failure_is_never_invoked",
+      "test_the_failing_producers_status_is_the_chains_status")),
+    ("signal-does-not-outrank", '    if STATE["signal"] is not None:\n        record["outcome"] = "cancelled"',
+     '    if False:\n        record["outcome"] = "cancelled"', ("test_sigterm_cancels_with_143",)),
+    ("equals-in-name-allowed", 'if not isinstance(name, str) or not name or "=" in name:',
+     "if not isinstance(name, str) or not name:",
+     ("test_an_equals_sign_in_an_argument_name_is_refused",)),
+    ("utf8-unchecked", "    if not utf8:\n", "    if False:\n",
+     ("test_stdout_that_is_not_utf8_is_a_contract_failure",)),
+    ("spec-bound-lifted", "    if len(data) > max_spec_bytes:", "    if False:",
+     ("test_a_spec_over_the_byte_bound_is_refused",)),
+    ("provides-unchecked", "            if missing:\n                record",
+     "            if False:\n                record",
+     ("test_a_declared_field_that_is_absent_is_a_contract_failure",)),
+    ("failed-status-flattened", 'finish("failed", status, sid,', 'finish("failed", 1, sid,',
+     ("test_the_failing_producers_status_is_the_chains_status",)),
+    ("producer-not-required-upfront", "    producer >/dev/null\n", "\n",
+     ("test_a_missing_producer_runs_nothing",)),
+    ("scratch-trap-on-return", "trap \"rm -rf -- '$scratch'\" EXIT",
+     "trap \"rm -rf -- '$scratch'\" RETURN",
+     ("test_a_terminated_invocation_removes_its_scratch_directory",)),
+)
+
+RUNNER = re.compile(r"runner=\$\(cat <<'PY'\n(.*?)\nPY\n\)", re.S)
+
+
+def runner_span(text):
+    """The embedded runner and its offset in the wrapper; refuse if there is not exactly one."""
+    found = list(RUNNER.finditer(text))
+    if len(found) != 1:
+        raise SystemExit(f"expected one embedded runner, found {len(found)}; the "
+                         "enumeration is broken, not the wrapper")
+    return found[0].group(1), found[0].start(1)
+
+
+def sites(text):
+    """Every refuse(...) and finish(...) call in the runner, as absolute offsets.
+
+    From the syntax tree: a call spanning several lines has no single textual form, and a
+    pattern that missed one would shrink the denominator in the flattering direction.
+    """
+    source, base = runner_span(text)
+    starts = [0]
+    for line in source.splitlines(keepends=True):
+        starts.append(starts[-1] + len(line))
+    found = []
+    for node in ast.walk(ast.parse(source)):
+        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                and node.func.id in ("refuse", "finish")):
+            begin = base + starts[node.lineno - 1] + node.col_offset
+            end = base + starts[node.end_lineno - 1] + node.end_col_offset
+            line = text.count("\n", 0, begin) + 1
+            found.append((begin, end, f"line {line} {node.func.id}"))
+    return sorted(found)
+
+
+def run_suite(text):
+    """Run the suite against `text` in a disposable copy; return (rc, failing test names)."""
+    with tempfile.TemporaryDirectory(prefix="hee3-bash-sites-") as scratch:
+        root = Path(scratch)
+        for relative in COPIED:
+            (root / relative).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(ROOT / relative, root / relative)
+        (root / WRAPPER).write_text(text)
+        try:
+            result = subprocess.run([sys.executable, "-W", "error", "tests/bash_wrapper.py"],
+                                    cwd=root, capture_output=True, text=True, check=False,
+                                    timeout=BUDGET_S)
+        except subprocess.TimeoutExpired:
+            return None, set()
+        output = result.stdout + result.stderr
+        return result.returncode, set(re.findall(r"^(?:FAIL|ERROR): (\w+)", output, re.M))
+
+
+def main():
+    original = (ROOT / WRAPPER).read_text()
+    rc, failing = run_suite(original)
+    if rc != 0:
+        raise SystemExit(f"the suite is not green before the sweep (rc={rc}): {sorted(failing)}")
+
+    jobs = []
+    for begin, end, label in sites(original):
+        jobs.append(("site", label, original[:begin] + "None" + original[end:], None))
+    drifted = []
+    for name, fragment, replacement, tests in PLANTS:
+        if original.count(fragment) != 1:
+            drifted.append(name)
+            continue
+        jobs.append(("plant", name, original.replace(fragment, replacement), tests))
+    if not any(kind == "site" for kind, *_ in jobs):
+        raise SystemExit("no refuse/finish sites found; the enumeration is broken")
+
+    with ThreadPoolExecutor(max_workers=WORKERS) as pool:
+        outcomes = list(pool.map(lambda job: run_suite(job[2]), jobs))
+
+    survivors = []
+    for (kind, label, _, tests), (rc, failing) in zip(jobs, outcomes):
+        if rc is None:
+            verdict = f"SURVIVED (hung past {BUDGET_S}s; a hang is not a kill)"
+        elif rc == 0:
+            verdict = "SURVIVED"
+        elif tests is not None and not failing.intersection(tests):
+            verdict = f"SURVIVED (failed, but not in {', '.join(tests)})"
+        else:
+            verdict = "killed"
+        if verdict != "killed":
+            survivors.append(label)
+        print(f"  {kind:5} {label:40} {verdict}", flush=True)
+
+    site_count = sum(kind == "site" for kind, *_ in jobs)
+    plant_count = len(jobs) - site_count
+    print(f"\nsites={site_count} plants={plant_count} killed={len(jobs) - len(survivors)} "
+          f"survived={len(survivors)} drifted={len(drifted)}")
+    for name in drifted:
+        print(f"  DRIFTED plant {name}: its fragment no longer occurs exactly once")
+    ok = not survivors and not drifted
+    print("verdict=" + ("PASS" if ok else "FAIL"))
+    return 0 if ok else 1
+
+
+sys.exit(main())

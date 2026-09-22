@@ -18,8 +18,10 @@
 #   * A missing producer is a failure, never an empty success. A wrapper that prints nothing
 #     and exits 0 because the thing it wraps was absent is the worst outcome available.
 #
-# Exit codes: 0 producer succeeded; 2 usage; 3 missing producer; 4 bounds; otherwise the
-# producer's own code, passed through unchanged.
+# Exit codes: 0 producer succeeded; 2 usage; 3 missing producer; 4 bounds; 5 chain timeout;
+# 6 chain output contract; 128+n cancelled by signal n; otherwise the producer's own code,
+# passed through unchanged. A code alone cannot tell a producer's 5 from a chain timeout --
+# the chain's final `summary` record on stdout is the decisive verdict, and names which.
 set -euo pipefail
 
 readonly HEE3_WRAPPER_VERSION=1
@@ -30,6 +32,17 @@ readonly MAX_OUTPUT_BYTES=1048576
 readonly EXIT_USAGE=2
 readonly EXIT_NO_PRODUCER=3
 readonly EXIT_BOUNDS=4
+readonly EXIT_TIMEOUT=5
+readonly EXIT_CONTRACT=6
+
+# Chain bounds. A chain is at most MAX_STEPS ordinary invocations, so its output is bounded by
+# MAX_STEPS times MAX_OUTPUT_BYTES plus the records around them.
+readonly MAX_STEPS=16
+readonly MAX_SPEC_BYTES=65536
+readonly MAX_CHAIN_MS=3600000
+readonly GRACE_MS=2000      # TERM to KILL, and KILL to giving up, each
+readonly CHECK_MS=10000     # one step's --check; a local encode, never a producer call
+readonly SLICE_MS=100       # how often a waiting chain looks for a cancellation
 
 # Diagnostics go to stderr, results to stdout. A caller that redirects one must still be able
 # to read the other; merging them is how a parser ends up reading a warning as a result.
@@ -44,6 +57,9 @@ usage() {
     cat <<'USAGE'
 hee3 <action> [name=value ...]     invoke one admitted action
 hee3 --actions                     list the actions this wrapper can name
+hee3 --check <action> [name=value ...]
+                                   print the request that would be sent; send nothing
+hee3 chain <spec.json | ->         run a declared sequence of actions, in order
 hee3 --inspect <action>            that action's arguments and the producer it needs
 hee3 --version                     wrapper version and producer diagnostics
 
@@ -113,7 +129,11 @@ sys.stdout.write("\n")
 ' "$action" "$@"
 }
 
-invoke() {
+# The one door every request passes: bounds, admission, encoding. `invoke` sends what this
+# prints; `--check` prints it and sends nothing; `chain` asks it about every step before the
+# first step runs. A second copy of these rules in the chain runner would agree with this one
+# only while somebody kept it agreeing.
+check_request() {
     local action=$1
     shift
     (( $# <= MAX_ARGS )) || fail "$EXIT_BOUNDS" "$# arguments against a limit of $MAX_ARGS"
@@ -123,9 +143,17 @@ invoke() {
             fail "$EXIT_BOUNDS" "an argument is ${#pair} bytes against a limit of $MAX_VALUE_BYTES"
     done
     is_admitted "$action" || fail "$EXIT_USAGE" "unknown action: $action"
+    build_request "$action" "$@" || fail "$EXIT_USAGE" "could not build the request"
+}
 
+invoke() {
+    local action=$1
+    shift
     local request bin status=0
-    request=$(build_request "$action" "$@") || fail "$EXIT_USAGE" "could not build the request"
+    # `fail` inside `$(...)` exits only the substitution's subshell, so its code is carried
+    # out explicitly; `|| status=$?` keeps `set -e` from discarding which refusal it was.
+    request=$(check_request "$action" "$@") || status=$?
+    (( status == 0 )) || exit "$status"
     bin=$(producer)
 
     # The producer's stdout is bounded by head, in the stream, so an unbounded producer is
@@ -141,8 +169,16 @@ invoke() {
     # killed for exceeding the bound, so the LAST element is exactly the wrong one to read.
     local scratch
     scratch=$(mktemp -d) || fail "$EXIT_BOUNDS" "could not create a scratch directory"
+    # EXIT rather than RETURN, with the three cancelling signals turned into exits: bash runs
+    # no trap at all when an untrapped signal kills it, so a cancelled invocation used to
+    # leave its scratch directory behind. 128+n keeps "killed by a signal" legible to the
+    # caller. Bash defers the trap until the foreground pipeline ends, and the producer in
+    # that pipeline received the same signal when it was sent to the process group.
     # shellcheck disable=SC2064  # the path is expanded now, deliberately: $scratch is local.
-    trap "rm -rf -- '$scratch'" RETURN
+    trap "rm -rf -- '$scratch'" EXIT
+    trap 'exit 129' HUP
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
     set +e
     printf '%s' "$request" | "$bin" "$action" | head -c "$MAX_OUTPUT_BYTES" >"$scratch/out"
     local -a stages=("${PIPESTATUS[@]}")
@@ -162,6 +198,374 @@ invoke() {
         printf 'hee3: producer exited %s for action %s\n' "$status" "$action" >&2
     fi
     return "$status"
+}
+
+# A chain is a declared, ordered list of steps; each step is one ordinary invocation of THIS
+# file, so every rule above -- bounds, admission, literal encoding, PIPESTATUS -- applies to
+# it through the same code rather than a copy. The runner adds only what a sequence needs:
+#
+#   * every step is checked through `--check` before the first one runs, so a refusal at
+#     step 3 cannot arrive after step 1 has had its effect;
+#   * a step's input is a named string field of an EARLIER step's declared JSON output,
+#     passed on as one literal `name=value` argument -- never spliced into a command;
+#   * one budget bounds the whole chain, a step may declare a smaller one, and the budget in
+#     force is handed to the step as HEE3_TIMEOUT_MS;
+#   * each step runs in its own process group, so a timeout or a cancellation stops the
+#     producer and anything it started, not just the wrapper in front of it;
+#   * the first step that fails ends the chain, its own status is the chain's status, and
+#     the steps after it are named as not run rather than left to be inferred.
+#
+# It schedules nothing: no retries, no parallelism, no step the spec did not name.
+chain() {
+    (( $# == 1 )) || fail "$EXIT_USAGE" "chain takes exactly one spec path, or - for stdin"
+    # Refused here, before anything is read or checked: a chain whose first step would exit 3
+    # is a chain that should not have started.
+    producer >/dev/null
+    local runner
+    runner=$(cat <<'PY'
+import json, os, signal, subprocess, sys, time
+
+(wrapper, spec_path, max_steps, max_spec_bytes, max_chain_ms, max_args, exit_usage,
+ exit_timeout, exit_contract, grace_ms, check_ms, slice_ms) = sys.argv[1:13]
+(max_steps, max_spec_bytes, max_chain_ms, max_args, exit_usage, exit_timeout, exit_contract,
+ grace_ms, check_ms, slice_ms) = map(int, (max_steps, max_spec_bytes, max_chain_ms, max_args,
+                                           exit_usage, exit_timeout, exit_contract, grace_ms,
+                                           check_ms, slice_ms))
+ID_CHARS = frozenset("abcdefghijklmnopqrstuvwxyz0123456789_-")
+MAX_ID = 64
+STATE = {"proc": None, "signal": None}
+
+
+def say(message):
+    print(f"hee3: chain: {message}", file=sys.stderr, flush=True)
+
+
+def refuse(message, code=exit_usage):
+    say(message)
+    sys.exit(code)
+
+
+# Cancellation. The handler never raises: an exception thrown from a signal handler lands at
+# an arbitrary bytecode, including inside the cleanup that is meant to answer it. It records
+# the signal and forwards TERM to the running step's process group; the loop that waits on
+# the step polls the record, so the wait is bounded by one slice, not by the step's budget.
+def on_signal(signum, _frame):
+    if STATE["signal"] is not None:
+        return
+    STATE["signal"] = signum
+    if STATE["proc"] is not None:
+        signal_group(STATE["proc"], signal.SIGTERM)
+
+
+def signal_group(proc, sig):
+    try:
+        os.killpg(proc.pid, sig)
+    except ProcessLookupError:
+        pass
+
+
+for _sig in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM):
+    signal.signal(_sig, on_signal)
+
+
+def settle(proc):
+    """TERM has been sent. Wait the grace, then KILL the group and wait once more.
+
+    Bounded both times: a descendant that left the group and holds the pipe open must not
+    turn a timeout into a hang. Returns (stdout, settled)."""
+    for escalate in (False, True):
+        if escalate:
+            signal_group(proc, signal.SIGKILL)
+        try:
+            return proc.communicate(timeout=grace_ms / 1000)[0], True
+        except subprocess.TimeoutExpired:
+            continue
+    return b"", False
+
+
+def run_child(argv, budget_s, env):
+    deadline = time.monotonic() + budget_s
+    proc = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, env=env,
+                            start_new_session=True)
+    STATE["proc"] = proc
+    # A signal that arrived while Popen was forking found no process to forward to.
+    if STATE["signal"] is not None:
+        signal_group(proc, signal.SIGTERM)
+    outcome, out = "done", b""
+    while True:
+        if STATE["signal"] is not None:
+            outcome = "cancelled"
+            break
+        left = deadline - time.monotonic()
+        if left <= 0:
+            outcome = "timeout"
+            break
+        try:
+            out = proc.communicate(timeout=min(slice_ms / 1000, left))[0]
+            break
+        except subprocess.TimeoutExpired:
+            continue
+    STATE["proc"] = None
+    settled = True
+    if outcome != "done":
+        signal_group(proc, signal.SIGTERM)
+        out, settled = settle(proc)
+    return outcome, proc.returncode, out or b"", settled
+
+
+def status_of(returncode):
+    if returncode is None:
+        return None
+    return returncode if returncode >= 0 else 128 - returncode
+
+
+# The spec. Acquired with its bound: read one byte past the limit, never the whole input
+# first and a length check after.
+def acquire(path):
+    try:
+        if path == "-":
+            data = sys.stdin.buffer.read(max_spec_bytes + 1)
+        else:
+            with open(path, "rb") as handle:
+                data = handle.read(max_spec_bytes + 1)
+    except OSError as error:
+        refuse(f"cannot read the spec {path}: {error.strerror}")
+    if len(data) > max_spec_bytes:
+        refuse(f"the spec is over {max_spec_bytes} bytes")
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError:
+        refuse("the spec is not UTF-8")
+
+
+def unique_keys(pairs):
+    seen = {}
+    for key, value in pairs:
+        if key in seen:
+            raise ValueError(f"key {key!r} appears twice")
+        seen[key] = value
+    return seen
+
+
+def reject_constant(name):
+    raise ValueError(f"non-finite number {name}")
+
+
+def parse(text):
+    # A duplicated key is two answers to one question; json.loads keeps the last silently.
+    return json.loads(text, object_pairs_hook=unique_keys, parse_constant=reject_constant)
+
+
+def exact_keys(value, where, required, optional=()):
+    if not isinstance(value, dict):
+        refuse(f"{where} is not an object")
+    missing = [key for key in required if key not in value]
+    if missing:
+        refuse(f"{where} lacks {', '.join(missing)}")
+    unknown = sorted(set(value) - set(required) - set(optional))
+    if unknown:
+        refuse(f"{where} has unknown key(s) {', '.join(unknown)}")
+
+
+def milliseconds(value, where, ceiling):
+    # type(), not isinstance(): True is an int, and a budget of `true` is not a budget.
+    if type(value) is not int or not 1 <= value <= ceiling:
+        refuse(f"{where} must be an integer from 1 to {ceiling}")
+    return value
+
+
+def argument_name(name, where):
+    # `=` inside a name would be re-split by the request builder into a different name and
+    # value. That is the encoding this runner performs, so the rule is this runner's.
+    if not isinstance(name, str) or not name or "=" in name:
+        refuse(f"{where}: argument name {name!r} must be a non-empty string without '='")
+
+
+try:
+    spec = parse(acquire(spec_path))
+except ValueError as error:
+    refuse(f"the spec is not valid JSON: {error}")
+exact_keys(spec, "the spec", ("protocol", "version", "timeout_ms", "steps"))
+if spec["protocol"] != "hee3.chain":
+    refuse(f"protocol must be hee3.chain, not {spec['protocol']!r}")
+if type(spec["version"]) is not int or spec["version"] != 1:
+    refuse(f"version {spec['version']!r} is not supported; this wrapper reads version 1")
+chain_ms = milliseconds(spec["timeout_ms"], "timeout_ms", max_chain_ms)
+steps = spec["steps"]
+if not isinstance(steps, list) or not 1 <= len(steps) <= max_steps:
+    refuse(f"steps must be a list of 1 to {max_steps} steps")
+
+declared = {}
+for index, step in enumerate(steps):
+    where = f"step {index}"
+    exact_keys(step, where, ("id", "action"),
+               ("arguments", "inputs", "output", "provides", "timeout_ms"))
+    sid = step["id"]
+    if (not isinstance(sid, str) or not 1 <= len(sid) <= MAX_ID
+            or not set(sid) <= ID_CHARS):
+        refuse(f"{where}: id must be 1 to {MAX_ID} of [a-z0-9_-]")
+    if sid in declared:
+        refuse(f"{where}: id {sid!r} is used twice")
+    where = f"step {sid!r}"
+    if not isinstance(step["action"], str):
+        refuse(f"{where}: action must be a string")
+    arguments = step.setdefault("arguments", {})
+    if not isinstance(arguments, dict):
+        refuse(f"{where}: arguments must be an object")
+    for name, value in arguments.items():
+        argument_name(name, where)
+        if not isinstance(value, str):
+            refuse(f"{where}: argument {name!r} must be a string; values are literal text")
+    output = step.setdefault("output", "text")
+    if output not in ("text", "json"):
+        refuse(f"{where}: output must be text or json")
+    provides = step.setdefault("provides", [])
+    if (not isinstance(provides, list) or len(provides) > max_args
+            or not all(isinstance(field, str) and field for field in provides)
+            or len(set(provides)) != len(provides)):
+        refuse(f"{where}: provides must be a list of at most {max_args} distinct field names")
+    if provides and output != "json":
+        refuse(f"{where}: only a json output can provide fields")
+    inputs = step.setdefault("inputs", {})
+    if not isinstance(inputs, dict):
+        refuse(f"{where}: inputs must be an object")
+    for name, source in inputs.items():
+        argument_name(name, where)
+        if name in arguments:
+            refuse(f"{where}: {name!r} is both a literal argument and an input")
+        exact_keys(source, f"{where} input {name!r}", ("step", "field"))
+        if not isinstance(source["step"], str) or not isinstance(source["field"], str):
+            refuse(f"{where}: input {name!r} step and field must be strings")
+        origin = declared.get(source["step"])
+        if origin is None:
+            refuse(f"{where}: input {name!r} names {source['step']!r}, which is not an "
+                   "earlier step")
+        if source["field"] not in origin["provides"]:
+            refuse(f"{where}: input {name!r} reads {source['field']!r}, which step "
+                   f"{source['step']!r} does not declare in provides")
+    if "timeout_ms" in step:
+        milliseconds(step["timeout_ms"], f"{where}: timeout_ms", chain_ms)
+    declared[sid] = step
+
+# Every step through the one door before any step runs. An input's value is not known yet,
+# so its argument is checked by name with an empty value; its size is checked again, by the
+# same door, when the step runs.
+for step in steps:
+    argv = ["bash", wrapper, "--check", step["action"],
+            *(f"{name}={value}" for name, value in step["arguments"].items()),
+            *(f"{name}=" for name in step["inputs"])]
+    outcome, returncode, _, _ = run_child(argv, check_ms / 1000, dict(os.environ))
+    if STATE["signal"] is not None:
+        refuse("cancelled before any step ran", 128 + STATE["signal"])
+    if outcome != "done":
+        refuse(f"checking step {step['id']!r} did not finish in {check_ms} ms")
+    if returncode != 0:
+        refuse(f"step {step['id']!r} was refused before any step ran",
+               status_of(returncode))
+
+
+def emit(record):
+    try:
+        sys.stdout.write(json.dumps(record, sort_keys=True, ensure_ascii=False) + "\n")
+        sys.stdout.flush()
+    except BrokenPipeError:
+        # Nobody is reading the results, so no later step's result can be delivered either.
+        sys.stderr.write("hee3: chain: stdout closed; stopping\n")
+        os._exit(141)
+
+
+ran = []
+
+
+def finish(outcome, status, failed=None, detail=None, limit=None):
+    summary = {"kind": "summary", "outcome": outcome, "status": status, "ran": ran,
+               "not_run": [step["id"] for step in steps[len(ran):]],
+               "failed_step": failed}
+    if detail is not None:
+        summary["detail"] = detail
+    if limit is not None:
+        summary["limit"] = limit
+    emit(summary)
+    if outcome != "ok":
+        say(f"{outcome} at step {failed!r}: {detail}" if failed else f"{outcome}: {detail}")
+    sys.exit(status)
+
+
+chain_deadline = time.monotonic() + chain_ms / 1000
+produced = {}
+for index, step in enumerate(steps):
+    sid = step["id"]
+    if STATE["signal"] is not None:
+        finish("cancelled", 128 + STATE["signal"], detail="cancelled between steps")
+    left = chain_deadline - time.monotonic()
+    if left <= 0:
+        finish("timeout", exit_timeout, sid, "the chain budget was spent before this step",
+               "chain")
+    step_s = step.get("timeout_ms", chain_ms) / 1000
+    budget, limit = (step_s, "step") if step_s < left else (left, "chain")
+    pairs = [f"{name}={value}" for name, value in step["arguments"].items()]
+    pairs += [f"{name}={produced[source['step']][source['field']]}"
+              for name, source in step["inputs"].items()]
+    env = dict(os.environ, HEE3_CHAIN_STEP=sid,
+               HEE3_TIMEOUT_MS=str(max(1, int(budget * 1000))))
+    ran.append(sid)
+    outcome, returncode, out, settled = run_child(["bash", wrapper, step["action"], *pairs],
+                                                  budget, env)
+    record = {"kind": "step", "index": index, "step": sid, "action": step["action"],
+              "status": status_of(returncode)}
+    if not settled:
+        record["settled"] = False
+    try:
+        record["stdout"], utf8 = out.decode("utf-8"), True
+    except UnicodeDecodeError:
+        record["stdout"], utf8 = out.decode("utf-8", errors="replace"), False
+    # A signal outranks what the step did after it: a step that died of the TERM we
+    # forwarded is a cancelled step, not a failing producer.
+    if STATE["signal"] is not None:
+        record["outcome"] = "cancelled"
+        emit(record)
+        finish("cancelled", 128 + STATE["signal"], sid,
+               f"signal {signal.Signals(STATE['signal']).name}")
+    if outcome == "timeout":
+        record["outcome"] = "timeout"
+        emit(record)
+        finish("timeout", exit_timeout, sid,
+               f"no result within {int(budget * 1000)} ms", limit)
+    status = record["status"]
+    if status != 0:
+        record["outcome"] = "failed"
+        emit(record)
+        finish("failed", status, sid, f"producer exited {status}")
+    if not utf8:
+        record["outcome"] = "contract"
+        emit(record)
+        finish("contract", exit_contract, sid, "stdout is not UTF-8")
+    if step["output"] == "json":
+        try:
+            result = parse(record["stdout"])
+        except ValueError as error:
+            record["outcome"] = "contract"
+            emit(record)
+            finish("contract", exit_contract, sid, f"declared json output is not JSON: {error}")
+        if step["provides"]:
+            missing = [field for field in step["provides"]
+                       if not isinstance(result, dict) or not isinstance(result.get(field), str)]
+            if missing:
+                record["outcome"] = "contract"
+                emit(record)
+                finish("contract", exit_contract, sid,
+                       f"declared field(s) absent or not a string: {', '.join(missing)}")
+        record["result"] = result
+        produced[sid] = result
+    record["outcome"] = "ok"
+    emit(record)
+
+finish("ok", 0)
+PY
+)
+    exec python3 -c "$runner" "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)/$(basename -- "${BASH_SOURCE[0]}")" "$1" \
+        "$MAX_STEPS" "$MAX_SPEC_BYTES" "$MAX_CHAIN_MS" "$MAX_ARGS" \
+        "$EXIT_USAGE" "$EXIT_TIMEOUT" "$EXIT_CONTRACT" "$GRACE_MS" "$CHECK_MS" "$SLICE_MS"
 }
 
 inspect() {
@@ -194,6 +598,11 @@ main() {
         --inspect)
             (( $# == 2 )) || fail "$EXIT_USAGE" "--inspect takes exactly one action"
             inspect "$2"; exit 0 ;;
+        --check)
+            (( $# >= 2 )) || fail "$EXIT_USAGE" "--check takes an action and its arguments"
+            shift
+            check_request "$@"; exit 0 ;;
+        chain) shift; chain "$@" ;;
         -*) fail "$EXIT_USAGE" "unknown option: $1" ;;
     esac
     invoke "$@"

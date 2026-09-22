@@ -8,6 +8,8 @@ one it cannot name simply does not run.
 
 ```
 hee3 <action> [name=value ...]     invoke one admitted action
+hee3 chain <spec.json | ->         run a declared sequence of actions, in order
+hee3 --check <action> [...]        print the request that would be sent; send nothing
 hee3 --actions                     list the actions this wrapper can name
 hee3 --inspect <action>            that action's prerequisites and the bounds in force
 hee3 --version                     wrapper version and producer diagnostics
@@ -61,6 +63,66 @@ newlines, so a producer emitting `{}\n\n\n` had one silently removed. The wrappe
 the file and adds a final newline only when the producer did not end with one. A wrapper that
 edits its producer's bytes is not reporting its producer's result.
 
+## Chains
+
+`hee3 chain <spec.json | ->` runs a declared, ordered list of actions. Each step is one
+ordinary invocation of this same file, so every rule above — bounds, admission, literal
+encoding, `PIPESTATUS` — reaches a chained step through the same code, not a copy of it.
+
+```json
+{"protocol": "hee3.chain", "version": 1, "timeout_ms": 20000,
+ "steps": [
+   {"id": "find", "action": "task.list", "arguments": {"state": "running"},
+    "output": "json", "provides": ["task_id"]},
+   {"id": "get", "action": "task.get",
+    "inputs": {"task_id": {"step": "find", "field": "task_id"}}, "timeout_ms": 5000}]}
+```
+
+**Declared contracts, checked twice.** Before the first step runs, the whole spec is
+validated — unknown keys, duplicate keys, a boolean where a budget belongs, an input that reads
+a later step or a field its source does not declare in `provides` — and every step is put
+through `hee3 --check`, the same door `invoke` uses. A refusal at step 3 therefore cannot
+arrive after step 1 has had its effect. After each step, its declared output is checked
+against what it actually produced: a `json` step must print one JSON document, and every
+field it `provides` must be present and a string. Coercing `5` to `"5"` would be the wrapper
+deciding what the producer meant, so it refuses instead.
+
+**Inputs stay literal.** A step's input is a named string field of an earlier step's output,
+passed on as one `name=value` argument — never spliced into a command, and bounded by the same
+8 KiB rule when it is sent.
+
+**Ordered results.** One JSON record per step, printed as each finishes, then a `summary`:
+
+```
+{"kind": "step", "index": 1, "step": "get", "action": "task.get", "status": 0, "outcome": "ok", "stdout": "..."}
+{"kind": "summary", "outcome": "failed", "status": 7, "failed_step": "get", "ran": ["find", "get"], "not_run": ["close"], "detail": "producer exited 7"}
+```
+
+The first step that does not succeed ends the chain. The steps after it are **named** in
+`not_run`, rather than left for a reader to infer from their absence.
+
+**Timeout and cancellation.** `timeout_ms` bounds the whole chain; a step may declare a
+smaller budget. The budget in force is handed to the step as `HEE3_TIMEOUT_MS`. Each step
+runs in its own process group, so a timeout or a `SIGINT`/`SIGTERM`/`SIGHUP` to the chain
+stops the producer *and anything it started*. The group gets `TERM`, then `KILL` after a
+2-second grace, and a step that still will not settle is marked `"settled": false` rather
+than waited on forever. A signal outranks what the step did after it: a step that died of the
+`TERM` the chain forwarded is reported as cancelled, not as a failing producer.
+
+| Outcome | Exit | Meaning |
+|---|---|---|
+| `ok` | 0 | every step succeeded and met its declared output |
+| `failed` | the step's own status | a producer failed; its code is passed through unchanged |
+| `timeout` | 5 | a step or the chain outran its budget (`limit` says which) |
+| `contract` | 6 | a step succeeded but did not produce what it declared |
+| `cancelled` | 128+n | the chain received signal n |
+
+An exit code alone cannot tell a producer's own `5` from a chain timeout. The `summary`
+record is the decisive verdict; the code is a convenience.
+
+`hee3 --check <action> [name=value ...]` prints the request that `invoke` would send and sends
+nothing, and needs no producer.
+
 ## Bounds
 
 | Bound | Value | On overrun |
@@ -68,19 +130,25 @@ edits its producer's bytes is not reporting its producer's result.
 | arguments | 64 | exit 4 |
 | bytes per `name=value` | 8192 | exit 4 |
 | producer stdout | 1 MiB | bounded in the stream; the producer's own status is reported |
+| chain steps | 16 | exit 2, before any step runs |
+| chain spec | 64 KiB | exit 2; read one byte past the bound, never the whole input first |
+| chain budget | 1 ms – 1 h | exit 2 when out of range; exit 5 when spent |
 
 Each bound is checked from both sides: 64 arguments must be accepted and 65 refused, or only
 the refusing half was ever tested.
 
 Exit codes: `0` producer succeeded · `2` usage · `3` missing producer · `4` bounds ·
+`5` chain timeout · `6` chain output contract · `128+n` cancelled by signal n ·
 otherwise the producer's own code, unchanged.
 
 ## Scope
 
 `shellcheck` is not installed in this habitat, so the syntax check here is `bash -n`, which
-cannot see a missing `]`. That gap is stated rather than papered over; the 53 cases in
+cannot see a missing `]`. That gap is stated rather than papered over; the 100 cases in
 `tests/bash_wrapper.py` drive the real script end to end against real producer fixtures,
-which is the stronger evidence available today.
+which is the stronger evidence available today. The chain runner was checked by 18
+planted mutants, one per rule, each required to fail the test named for it: 18 killed.
+The rules were enumerated by the author, so that is a floor, not a census.
 
 The suite invokes the wrapper as `bash integrations/bash/hee3`, not by executing it. The
 corpus publisher owns this file's mode — it is listed in `corpus/publication-outputs.json`

@@ -517,7 +517,7 @@ def refuse_unsupported_cargo_inputs(root):
 def quality_subject_paths(root, deadline, rust_only):
     required = ["Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "tools/check-quality",
                 "tools/development_process.py", "tools/rust-offline.py", "tools/sqlite-static.py", "tools/check-store-mutations", "tests/t25_process.py",
-                "tests/t25_quality.py", "tools/check-workflow-sites", "tools/check-skill-sites", "tools/check-pi-sites",
+                "tests/t25_quality.py", "tools/check-workflow-sites", "tools/check-skill-sites", "tools/check-pi-sites", "tools/check-bash-sites",
                 "tools/check-mutation-survivors"]
     required += [name for directory in ("src", "tests") for name in tree_files(root, directory, deadline, ".rs")]
     required += tree_files(root, RUST_OFFLINE_BUNDLE, deadline)
@@ -571,7 +571,8 @@ def quality_subject_paths(root, deadline, rust_only):
         required += tree_files(root, directory, deadline)
     required += ["tests/procedure_schema.py", "tests/skill_schema.py", "tests/bash_wrapper.py",
                  "tests/pi_extension.py", "tests/mutation_survivors.py",
-                 "tools/check-mutation-survivors", "evidence/mutation-equivalences.json"]
+                 "tools/check-mutation-survivors", "evidence/mutation-equivalences.json",
+                 "tools/check-bash-sites"]
     if not rust_only or has_t21(root):
         required += tree_files(root, "julia", deadline)
         required += ["tools/julia-quality.jl"]
@@ -1014,7 +1015,9 @@ def main():
         run("skill-site-sweep", [sys.executable, "tools/check-skill-sites"],
             required_text="sites=15 killed=15 survived=0")
         run("bash-wrapper-controls", [sys.executable, "-W", "error", "tests/bash_wrapper.py"],
-            required_text="run=53 failures=0 errors=0")
+            required_text="run=115 failures=0 errors=0")
+        run("bash-site-sweep", [sys.executable, "tools/check-bash-sites"],
+            required_text="sites=37 plants=18 killed=55 survived=0 drifted=0")
         run("pi-extension-controls", [sys.executable, "-W", "error", "tests/pi_extension.py"],
             required_text="run=34 failures=0 errors=0")
         run("pi-site-sweep", [sys.executable, "tools/check-pi-sites"],
