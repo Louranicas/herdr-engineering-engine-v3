@@ -10,7 +10,7 @@
   "completion_authority": false,
   "silent_fallback_allowed": false,
   "global_model_config_changed": false,
-  "base_plan_sha256": "9c8fcbc0a67c6a25dc98fea8dc8af6312b34649768a7b6c618ec21d999f839fd",
+  "base_plan_sha256": "c280a547b058df5b414b18c81a64153633d48b94671fc397ece02ec1cefed160",
   "scope": "Defensive security review and hardening assistance for every declared module and integrated release; model output is evidence to verify, not acceptance authority. Planning analysis is read-only by default. Reproduction uses explicitly owned disposable targets under actual action authorization; engine repairs, tests, dependencies and release work require Luke’s actual coding instruction and applicable scope.",
   "modules": [
     {
@@ -211,8 +211,8 @@
     "https://learn.chatgpt.com/docs/models",
     "https://learn.chatgpt.com/docs/developer-commands?surface=cli"
   ],
-  "base_completion_sha256": "a36374a796816c1ea4c85c3292d376942fe9da226d714012b87da2588f598594",
-  "base_interfaces_sha256": "c8a96767e52cf8b309ef5fc5ab968a1e875b0d97ab7d62aaec6f96f1d8436557",
+  "base_completion_sha256": "cd84afe35f99245f89e6d097ade8b59314fb378eef77385a3c6b271596705c75",
+  "base_interfaces_sha256": "70f8a696de7ea69018d752380855f76b2f3732510cc8d8caabac310d1a19a84e",
   "selection_observation": {
     "selection_observed": false,
     "effective_model": null,

@@ -506,6 +506,14 @@ Exact current bytes are inventoried without inserting managed comments. These ar
 | [tests/t13_service.rs](file:///var/home/herdr-engineering-engine-v3/tests/t13_service.rs) | service | T13 |
 | [tests/t21_analysis.rs](file:///var/home/herdr-engineering-engine-v3/tests/t21_analysis.rs) | numerical | T21 |
 | [tests/t21_process.rs](file:///var/home/herdr-engineering-engine-v3/tests/t21_process.rs) | numerical | T21 |
+| [tests/t09_route.rs](file:///var/home/herdr-engineering-engine-v3/tests/t09_route.rs) | route | T09 |
+| [tests/t11_notify.rs](file:///var/home/herdr-engineering-engine-v3/tests/t11_notify.rs) | notify | T11 |
+| [tests/t11_context.rs](file:///var/home/herdr-engineering-engine-v3/tests/t11_context.rs) | context | T11 |
+| [tests/t22_cohort.rs](file:///var/home/herdr-engineering-engine-v3/tests/t22_cohort.rs) | cohort | T22 |
+| [tests/t28_actions.rs](file:///var/home/herdr-engineering-engine-v3/tests/t28_actions.rs) | actions | T28 |
+| [tests/t16_herdr.rs](file:///var/home/herdr-engineering-engine-v3/tests/t16_herdr.rs) | herdr | T16 |
+| [tests/fixtures/route/fixture.json](file:///var/home/herdr-engineering-engine-v3/tests/fixtures/route/fixture.json) | route | T09 |
+| [tests/fixtures/route/known-answers.json](file:///var/home/herdr-engineering-engine-v3/tests/fixtures/route/known-answers.json) | route | T09 |
 
 ## Lifecycle observations
 
@@ -515,20 +523,20 @@ Exact current bytes are inventoried without inserting managed comments. These ar
 | task | engine_source | stale | unqualified | unqualified |
 | store | engine_source | unqualified | unqualified | unqualified |
 | roster | engine_source | unqualified | unqualified | unqualified |
-| route | comment_stub | unqualified | unqualified | unqualified |
-| budget | comment_stub | unqualified | unqualified | unqualified |
+| route | engine_source | unqualified | unqualified | unqualified |
+| budget | engine_source | unqualified | unqualified | unqualified |
 | worker | engine_source | unqualified | unqualified | unqualified |
 | check | engine_source | unqualified | unqualified | unqualified |
 | recovery | engine_source | unqualified | unqualified | unqualified |
-| cohort | comment_stub | unqualified | unqualified | unqualified |
-| context | comment_stub | unqualified | unqualified | unqualified |
-| notify | comment_stub | unqualified | unqualified | unqualified |
+| cohort | engine_source | unqualified | unqualified | unqualified |
+| context | engine_source | unqualified | unqualified | unqualified |
+| notify | engine_source | unqualified | unqualified | unqualified |
 | service | engine_source | unqualified | unqualified | unqualified |
-| herdr | comment_stub | unqualified | unqualified | unqualified |
+| herdr | engine_source | unqualified | unqualified | unqualified |
 | numerical | engine_source | unqualified | unqualified | unqualified |
 | julia | engine_source | unqualified | unqualified | unqualified |
 | app | engine_source | unqualified | unqualified | unqualified |
-| actions | comment_stub | unqualified | unqualified | unqualified |
+| actions | engine_source | unqualified | unqualified | unqualified |
 | bash | comment_stub | unqualified | unqualified | unqualified |
 | pi_extension | comment_stub | unqualified | unqualified | unqualified |
 | skills | comment_stub | unqualified | unqualified | unqualified |

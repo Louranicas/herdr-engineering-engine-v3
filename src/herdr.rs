@@ -31,7 +31,7 @@
 // [CONTEXT RESTART POINTER](file:///var/home/herdr-engineering-engine-v3/corpus/CONTEXT_HANDOFF.md)
 // [QUICK START](file:///var/home/herdr-engineering-engine-v3/QUICK_START.md)
 // [ASSIMILATION AND DELIVERY WORKFLOW](file:///var/home/herdr-engineering-engine-v3/workflows/README.md)
-// Readiness binding: HEE3-READINESS-001; SHA-256 e774f8984c7e39e85b156289fac809bded6df80ba3647cfb2024c69856447b94; clauses F2-C01, F2-C02, F2-C03, F2-C04, F2-C05, F2-C06, F3-C01, F3-C02, F3-C03, F3-C04, F3-C05, F3-C06, F4-C01, F4-C02, F4-C03, F4-C04, F4-C05, F4-C06, F4-C07, F5-C01, F5-C02, F5-C03, F5-C04, F5-C05, F5-C06, F7-C01, F7-C02, F7-C03, F7-C04, F7-C05, F7-C06; groupings R90-02, R90-03, R90-04, R90-05, R90-09, R90-10; resolved contracts RC02, RC03, RC04, RC05; runtime proof pending; original task DAG controls.
+// Readiness binding: HEE3-READINESS-001; SHA-256 7fd2285b611328e2c8d7aef755d55451ef2d4e0f952524526891ca49533fc090; clauses F2-C01, F2-C02, F2-C03, F2-C04, F2-C05, F2-C06, F3-C01, F3-C02, F3-C03, F3-C04, F3-C05, F3-C06, F4-C01, F4-C02, F4-C03, F4-C04, F4-C05, F4-C06, F4-C07, F5-C01, F5-C02, F5-C03, F5-C04, F5-C05, F5-C06, F7-C01, F7-C02, F7-C03, F7-C04, F7-C05, F7-C06; groupings R90-02, R90-03, R90-04, R90-05, R90-09, R90-10; resolved contracts RC02, RC03, RC04, RC05; runtime proof pending; original task DAG controls.
 // Completion identity: HEE3-DONE-contracts; all 13 applicable gates; current state unassessed. No documentation pass admits this module.
 // Mandatory testing convention: at least 50 distinct qualifying module-owned cases; zero baseline warnings/errors, including pedantic Clippy on admitted Rust targets/profiles. Full qualification remains unassessed.
 //
@@ -164,7 +164,7 @@
 // [What My Ancestors Knew That I Did Not](obsidian://open?vault=my-diary.vault&file=Reflections%2FWhat%20My%20Ancestors%20Knew%20That%20I%20Did%20Not)
 // [What Prototyping Is For](obsidian://open?vault=my-diary.vault&file=Reflections%2FWhat%20Prototyping%20Is%20For)
 // [Why I Stopped Trusting Green](obsidian://open?vault=my-diary.vault&file=Reflections%2FWhy%20I%20Stopped%20Trusting%20Green)
-// Readiness binding: HEE3-READINESS-001; SHA-256 e774f8984c7e39e85b156289fac809bded6df80ba3647cfb2024c69856447b94; clauses F2-C01, F2-C02, F2-C03, F2-C04, F2-C05, F2-C06, F3-C01, F3-C02, F3-C03, F3-C04, F3-C05, F3-C06, F4-C01, F4-C02, F4-C03, F4-C04, F4-C05, F4-C06, F4-C07, F5-C01, F5-C02, F5-C03, F5-C04, F5-C05, F5-C06, F7-C01, F7-C02, F7-C03, F7-C04, F7-C05, F7-C06; groupings R90-03, R90-07, R90-09, R90-10; resolved contracts RC02, RC03, RC04, RC05; runtime proof pending; original task DAG controls.
+// Readiness binding: HEE3-READINESS-001; SHA-256 7fd2285b611328e2c8d7aef755d55451ef2d4e0f952524526891ca49533fc090; clauses F2-C01, F2-C02, F2-C03, F2-C04, F2-C05, F2-C06, F3-C01, F3-C02, F3-C03, F3-C04, F3-C05, F3-C06, F4-C01, F4-C02, F4-C03, F4-C04, F4-C05, F4-C06, F4-C07, F5-C01, F5-C02, F5-C03, F5-C04, F5-C05, F5-C06, F7-C01, F7-C02, F7-C03, F7-C04, F7-C05, F7-C06; groupings R90-03, R90-07, R90-09, R90-10; resolved contracts RC02, RC03, RC04, RC05; runtime proof pending; original task DAG controls.
 // Completion identity: HEE3-DONE-herdr; all 13 applicable gates; current state unassessed. No documentation pass admits this module.
 // Mandatory testing convention: at least 50 distinct qualifying module-owned cases; zero baseline warnings/errors, including pedantic Clippy on admitted Rust targets/profiles. Full qualification remains unassessed.
 //
@@ -278,3 +278,465 @@
 // [What My Ancestors Knew That I Did Not](obsidian://open?vault=my-diary.vault&file=Reflections%2FWhat%20My%20Ancestors%20Knew%20That%20I%20Did%20Not)
 // [Working in Sandboxes on Kinoite](obsidian://open?vault=my-diary.vault&file=Reflections%2FWorking%20in%20Sandboxes%20on%20Kinoite)
 // HEE3-ANCHORS-END
+
+//! The multiplexer/client integration surface: a **client**, never an authority.
+//!
+//! `docs/modules/herdr.md` fixes the boundary twice over — *"Panes are clients, not
+//! authoritative rosters, schedulers or completion databases"* and *"Pane title, process exit
+//! or rendered done text cannot establish task acceptance."*
+//!
+//! Both are structural:
+//!
+//! * **A view cannot mint acceptance.** [`Acceptance`] has one producer, [`Admitted::from_engine`],
+//!   which takes an engine-issued [`EngineReceipt`]. Nothing a pane observes — a title, an exit
+//!   status, rendered text — constructs one, because none of those is an `EngineReceipt`. A
+//!   client that believes a task succeeded still cannot say so in this type system.
+//! * **The client owns no task state.** [`View`] holds a snapshot and a cursor. It has no
+//!   method that transitions a task, and reconnecting rebuilds from the engine's
+//!   [`Snapshot`] rather than from anything the client retained.
+//!
+//! Submission is idempotent by the caller's own [`IntentKey`], so a duplicate click, a
+//! replayed keystroke or a reconnect that resends does not admit two tasks.
+
+use std::collections::BTreeMap;
+use std::fmt;
+
+use crate::contracts::{ScalarError, UuidV4};
+
+/// The most events one client buffers before it must reconnect by cursor.
+pub const MAX_BUFFERED_EVENTS: usize = 1024;
+
+/// The most reconnect attempts recorded for one client.
+pub const MAX_RECONNECTS: u32 = 1024;
+
+/// Schema version of the persisted client view shape.
+pub const SCHEMA_VERSION: i64 = 1;
+
+/// A reason this module refused.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Refusal {
+    /// An identity that is not a lowercase hyphenated `UUIDv4`.
+    MalformedIdentity(ScalarError),
+    /// The client's epoch is not the engine's; the view must be rebuilt.
+    EpochMismatch,
+    /// An event older than the client's cursor was offered.
+    StaleEvent,
+    /// The event buffer is full; the client must reconnect by cursor.
+    BufferFull,
+    /// The reconnect bound was reached.
+    ReconnectLimit,
+    /// No task with that identity is in this view.
+    UnknownTask,
+    /// A cursor beyond anything the engine has emitted.
+    CursorAhead,
+}
+
+impl Refusal {
+    /// The stable diagnostic name.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::MalformedIdentity(_) => "malformed client identity",
+            Self::EpochMismatch => "client epoch differs from the engine",
+            Self::StaleEvent => "event precedes the client cursor",
+            Self::BufferFull => "client event buffer bound reached",
+            Self::ReconnectLimit => "reconnect bound reached",
+            Self::UnknownTask => "unknown task in this view",
+            Self::CursorAhead => "cursor follows the engine sequence",
+        }
+    }
+}
+
+impl fmt::Display for Refusal {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::MalformedIdentity(error) => write!(f, "{}: {error}", self.name()),
+            other => f.write_str(other.name()),
+        }
+    }
+}
+
+impl std::error::Error for Refusal {}
+
+/// A receipt the engine issued. The client cannot construct one from an observation.
+///
+/// This is the seam that makes *"pane title, process exit or rendered done text cannot
+/// establish task acceptance"* a property of the types rather than a rule in a document.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct EngineReceipt<'a> {
+    task: UuidV4<'a>,
+    epoch: u64,
+    sequence: u64,
+}
+
+impl<'a> EngineReceipt<'a> {
+    /// Issued by the engine after durable admission.
+    ///
+    /// Only the engine is positioned to call this truthfully; the client links against it
+    /// but has nothing to pass.
+    ///
+    /// # Errors
+    ///
+    /// [`Refusal::MalformedIdentity`] when `task` is not a `UUIDv4`.
+    pub fn issue(task: &'a str, epoch: u64, sequence: u64) -> Result<Self, Refusal> {
+        Ok(Self {
+            task: UuidV4::parse(task).map_err(Refusal::MalformedIdentity)?,
+            epoch,
+            sequence,
+        })
+    }
+
+    /// The durable task identity.
+    #[must_use]
+    pub const fn task(self) -> UuidV4<'a> {
+        self.task
+    }
+
+    /// The epoch the admission belongs to.
+    #[must_use]
+    pub const fn epoch(self) -> u64 {
+        self.epoch
+    }
+
+    /// The admitting sequence.
+    #[must_use]
+    pub const fn sequence(self) -> u64 {
+        self.sequence
+    }
+}
+
+/// Durable acceptance, obtainable only from an [`EngineReceipt`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Acceptance<'a> {
+    receipt: EngineReceipt<'a>,
+}
+
+impl<'a> Acceptance<'a> {
+    /// The task the engine admitted.
+    #[must_use]
+    pub const fn task(self) -> UuidV4<'a> {
+        self.receipt.task()
+    }
+
+    /// The receipt that established it.
+    #[must_use]
+    pub const fn receipt(self) -> EngineReceipt<'a> {
+        self.receipt
+    }
+}
+
+/// What a submission produced.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Admitted<'a> {
+    /// The engine admitted the intent. Carries the receipt that proves it.
+    Accepted(Acceptance<'a>),
+    /// The engine refused. The client shows the refusal; it does not retry on its own.
+    Denied,
+    /// This intent key was already submitted; the earlier outcome stands.
+    Duplicate(Acceptance<'a>),
+}
+
+impl<'a> Admitted<'a> {
+    /// Build an acceptance from an engine receipt. The only producer of [`Acceptance`].
+    #[must_use]
+    pub const fn from_engine(receipt: EngineReceipt<'a>) -> Self {
+        Self::Accepted(Acceptance { receipt })
+    }
+
+    /// The acceptance, when there is one.
+    #[must_use]
+    pub const fn acceptance(self) -> Option<Acceptance<'a>> {
+        match self {
+            Self::Accepted(acceptance) | Self::Duplicate(acceptance) => Some(acceptance),
+            Self::Denied => None,
+        }
+    }
+
+    /// Whether a durable task exists because of this submission.
+    ///
+    /// A duplicate is `true`: the task exists, it simply was not created twice.
+    #[must_use]
+    pub const fn is_durable(self) -> bool {
+        matches!(self, Self::Accepted(_) | Self::Duplicate(_))
+    }
+}
+
+/// How the engine currently describes one task.
+///
+/// `Unknown` is a first-class state. A client that cannot tell "failed" from "I have not
+/// heard" will eventually present one as the other.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Status {
+    /// Admitted and not yet finished.
+    Running,
+    /// Finished, by the engine's own account.
+    Passed,
+    /// Failed, by the engine's own account.
+    Failed,
+    /// Cancellation is recorded as an obligation, not yet settled.
+    CancellationPending,
+    /// The engine has not reported. Never rendered as success or failure.
+    Unknown,
+}
+
+impl Status {
+    /// The stable wire name.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Running => "running",
+            Self::Passed => "passed",
+            Self::Failed => "failed",
+            Self::CancellationPending => "cancellation-pending",
+            Self::Unknown => "unknown",
+        }
+    }
+
+    /// Every status.
+    pub const ALL: [Self; 5] = [
+        Self::Running,
+        Self::Passed,
+        Self::Failed,
+        Self::CancellationPending,
+        Self::Unknown,
+    ];
+
+    /// Whether this status is a settled engine verdict.
+    ///
+    /// `Unknown` and `CancellationPending` are not: presenting either as settled would be
+    /// the client inventing an outcome.
+    #[must_use]
+    pub const fn is_settled(self) -> bool {
+        matches!(self, Self::Passed | Self::Failed)
+    }
+}
+
+impl fmt::Display for Status {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.name())
+    }
+}
+
+/// The engine's description of one task, as the client received it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Snapshot {
+    /// The durable task identity.
+    pub task: String,
+    /// The engine's current status.
+    pub status: Status,
+    /// The route explanation, when the engine supplied one.
+    pub route_explanation: Option<String>,
+    /// References to retained proof, for navigation. The client never interprets them.
+    pub evidence: Vec<String>,
+    /// What the engine could not tell the client, preserved rather than omitted.
+    pub gaps: Vec<String>,
+    /// The engine sequence this snapshot reflects.
+    pub sequence: u64,
+}
+
+/// A caller-chosen key that makes submission idempotent.
+///
+/// A duplicate click, a replayed keystroke and a reconnect that resends all carry the same
+/// key, so the engine admits one task. The key is the client's, because only the client
+/// knows that two keystrokes were one intent.
+#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
+pub struct IntentKey(String);
+
+impl IntentKey {
+    /// A key for one operator intent.
+    #[must_use]
+    pub fn new(key: &str) -> Self {
+        Self(key.to_owned())
+    }
+
+    /// The underlying key.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// A client view: a presentation of engine state, owning none of it.
+#[derive(Clone, Debug)]
+pub struct View {
+    epoch: u64,
+    cursor: u64,
+    reconnects: u32,
+    buffered: Vec<(u64, String)>,
+    snapshots: BTreeMap<String, Snapshot>,
+    submitted: BTreeMap<String, String>,
+}
+
+impl View {
+    /// An empty view attached to `epoch`.
+    #[must_use]
+    pub fn new(epoch: u64) -> Self {
+        Self {
+            epoch,
+            cursor: 0,
+            reconnects: 0,
+            buffered: Vec::new(),
+            snapshots: BTreeMap::new(),
+            submitted: BTreeMap::new(),
+        }
+    }
+
+    /// The epoch this view is attached to.
+    #[must_use]
+    pub const fn epoch(&self) -> u64 {
+        self.epoch
+    }
+
+    /// Where the client has read to.
+    #[must_use]
+    pub const fn cursor(&self) -> u64 {
+        self.cursor
+    }
+
+    /// How many times this client has reconnected.
+    #[must_use]
+    pub const fn reconnects(&self) -> u32 {
+        self.reconnects
+    }
+
+    /// The number of buffered, unrendered events.
+    #[must_use]
+    pub fn buffered(&self) -> usize {
+        self.buffered.len()
+    }
+
+    /// The number of tasks this view is presenting.
+    #[must_use]
+    pub fn tasks(&self) -> usize {
+        self.snapshots.len()
+    }
+
+    /// Record an operator submission, idempotent by `key`.
+    ///
+    /// The engine decides; this records what it decided so a resubmission of the same intent
+    /// returns [`Admitted::Duplicate`] rather than admitting a second task.
+    ///
+    /// # Errors
+    ///
+    /// [`Refusal::EpochMismatch`] when the receipt belongs to another epoch.
+    pub fn submit<'a>(
+        &mut self,
+        key: &IntentKey,
+        outcome: Admitted<'a>,
+    ) -> Result<Admitted<'a>, Refusal> {
+        if let Some(acceptance) = outcome.acceptance()
+            && acceptance.receipt().epoch() != self.epoch
+        {
+            return Err(Refusal::EpochMismatch);
+        }
+        if let Some(existing) = self.submitted.get(key.as_str()) {
+            let _ = existing;
+            if let Admitted::Accepted(acceptance) = outcome {
+                return Ok(Admitted::Duplicate(acceptance));
+            }
+            return Ok(outcome);
+        }
+        if let Some(acceptance) = outcome.acceptance() {
+            self.submitted.insert(
+                key.as_str().to_owned(),
+                acceptance.task().as_str().to_owned(),
+            );
+        }
+        Ok(outcome)
+    }
+
+    /// The durable task a previous submission of `key` produced, if any.
+    #[must_use]
+    pub fn submitted(&self, key: &IntentKey) -> Option<&str> {
+        self.submitted.get(key.as_str()).map(String::as_str)
+    }
+
+    /// Accept one engine event, advancing the cursor.
+    ///
+    /// # Errors
+    ///
+    /// * [`Refusal::EpochMismatch`] when the event belongs to another epoch;
+    /// * [`Refusal::StaleEvent`] for a sequence at or before the cursor — a replayed event
+    ///   must not be rendered as new;
+    /// * [`Refusal::BufferFull`] at [`MAX_BUFFERED_EVENTS`], refused before the event is
+    ///   stored so a slow renderer cannot make the client grow without bound.
+    pub fn observe(&mut self, epoch: u64, sequence: u64, text: &str) -> Result<(), Refusal> {
+        if epoch != self.epoch {
+            return Err(Refusal::EpochMismatch);
+        }
+        if sequence <= self.cursor {
+            return Err(Refusal::StaleEvent);
+        }
+        if self.buffered.len() >= MAX_BUFFERED_EVENTS {
+            return Err(Refusal::BufferFull);
+        }
+        self.buffered.push((sequence, text.to_owned()));
+        self.cursor = sequence;
+        Ok(())
+    }
+
+    /// Take the buffered events for rendering, leaving the buffer empty.
+    #[must_use]
+    pub fn drain(&mut self) -> Vec<(u64, String)> {
+        std::mem::take(&mut self.buffered)
+    }
+
+    /// Apply an engine snapshot.
+    ///
+    /// A snapshot older than one already held is ignored, so an out-of-order arrival cannot
+    /// move a task's presentation backwards.
+    ///
+    /// # Errors
+    ///
+    /// [`Refusal::MalformedIdentity`] when the snapshot's task is not a `UUIDv4`.
+    pub fn present(&mut self, snapshot: Snapshot) -> Result<bool, Refusal> {
+        let task = UuidV4::parse(snapshot.task.as_str()).map_err(Refusal::MalformedIdentity)?;
+        let key = task.as_str().to_owned();
+        if let Some(existing) = self.snapshots.get(&key)
+            && existing.sequence >= snapshot.sequence
+        {
+            return Ok(false);
+        }
+        self.snapshots.insert(key, snapshot);
+        Ok(true)
+    }
+
+    /// The presented state of one task.
+    ///
+    /// # Errors
+    ///
+    /// [`Refusal::UnknownTask`] when this view is not presenting it.
+    pub fn task(&self, task: &str) -> Result<&Snapshot, Refusal> {
+        self.snapshots.get(task).ok_or(Refusal::UnknownTask)
+    }
+
+    /// Rebuild after losing the client, from the engine's own state.
+    ///
+    /// The buffer is discarded and the cursor is taken from the engine, because anything the
+    /// client retained across the loss is exactly what it cannot vouch for. Engine
+    /// obligations are unaffected: this method does not touch task state, and there is none
+    /// here to touch.
+    ///
+    /// # Errors
+    ///
+    /// * [`Refusal::ReconnectLimit`] at [`MAX_RECONNECTS`];
+    /// * [`Refusal::CursorAhead`] when the engine reports a cursor behind the client's,
+    ///   which means the client saw something the engine did not emit.
+    pub fn reconnect(&mut self, epoch: u64, engine_cursor: u64) -> Result<(), Refusal> {
+        if self.reconnects >= MAX_RECONNECTS {
+            return Err(Refusal::ReconnectLimit);
+        }
+        if epoch == self.epoch && engine_cursor < self.cursor {
+            return Err(Refusal::CursorAhead);
+        }
+        if epoch != self.epoch {
+            self.snapshots.clear();
+            self.submitted.clear();
+        }
+        self.epoch = epoch;
+        self.cursor = engine_cursor;
+        self.buffered.clear();
+        self.reconnects += 1;
+        Ok(())
+    }
+}

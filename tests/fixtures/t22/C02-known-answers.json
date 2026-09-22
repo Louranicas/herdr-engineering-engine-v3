@@ -1,0 +1,36 @@
+{
+ "request_sha256": "sha256:efb85bab512ea7b07279cf8c96bba5265c788ae498a1c198210fd53ee5ac70c5",
+ "counts": {
+  "threads": "6",
+  "required": "5",
+  "met": "3",
+  "unmet": "1",
+  "dissent": "2",
+  "indeterminate": "0",
+  "rework": "2",
+  "unknown_cost": "0"
+ },
+ "rates": {
+  "met": 0.5,
+  "dissent": 0.3333333333333333,
+  "rework": 0.3333333333333333,
+  "error": 0.16666666666666666,
+  "of": "6"
+ },
+ "allocation_accounted_tokens": "7000",
+ "comparison": {
+  "cohort_cost_tokens": "5000",
+  "cohort_errors": "1",
+  "cohort_disagreement": "2",
+  "cohort_rework": "2",
+  "cost_delta_tokens": "2000",
+  "errors_delta": "-2",
+  "rework_delta": "-1"
+ },
+ "overlapping_claims": [
+  "00000020-0000-4000-8000-000000000000 00000021-0000-4000-8000-000000000000"
+ ],
+ "excluded": [
+  "none"
+ ]
+}

@@ -16,7 +16,7 @@ Declared build dependencies: contracts. Declared consumers: app, bash, pi_extens
 
 Own one semantic action catalogue projected to CLI, Unix API and LLM tools. Model-provided risk/approval fields cannot grant authority; same fixtures must produce equivalent decisions across surfaces.
 
-[Adopted readiness requirements and evidence roadmap](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Delivery%2FReadiness%2FIndex) · [Codebase readiness plan](file:///var/home/herdr-engineering-engine-v3/docs/readiness-plan.md) · [Six resolved design contracts](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Delivery%2FContracts%2FIndex) · [Concrete contract decisions](file:///var/home/herdr-engineering-engine-v3/docs/contract-decisions.md). Binding: `HEE3-READINESS-001` / `e774f8984c7e39e85b156289fac809bded6df80ba3647cfb2024c69856447b94`. Adoption is complete; the required engine proof is pending.
+[Adopted readiness requirements and evidence roadmap](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Delivery%2FReadiness%2FIndex) · [Codebase readiness plan](file:///var/home/herdr-engineering-engine-v3/docs/readiness-plan.md) · [Six resolved design contracts](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Delivery%2FContracts%2FIndex) · [Concrete contract decisions](file:///var/home/herdr-engineering-engine-v3/docs/contract-decisions.md). Binding: `HEE3-READINESS-001` / `7fd2285b611328e2c8d7aef755d55451ef2d4e0f952524526891ca49533fc090`. Adoption is complete; the required engine proof is pending.
 
 | Applicable facet / criterion IDs | Primary contract owners |
 | --- | --- |
@@ -64,9 +64,9 @@ Every operation inherits the catalogue requirements for caller capability, ident
 
 ### Accepted current interface and implementation
 
-Observed source kind: `comment_stub`. Accepted current interface: **unavailable**. No completion admission collector is implemented. A source body would be an implementation candidate, not automatically an accepted module. After verified admission exists, exact accepted source/schema and tests govern current interface facts; intended changes remain in the atlas.
+Observed source kind: `engine_source`. Accepted current interface: **unavailable**. No completion admission collector is implemented. A source body would be an implementation candidate, not automatically an accepted module. After verified admission exists, exact accepted source/schema and tests govern current interface facts; intended changes remain in the atlas.
 
-Convention SHA-256: `c8a96767e52cf8b309ef5fc5ab968a1e875b0d97ab7d62aaec6f96f1d8436557`. This binding proves which documentation convention is projected, not runtime correctness.
+Convention SHA-256: `70f8a696de7ea69018d752380855f76b2f3732510cc8d8caabac310d1a19a84e`. This binding proves which documentation convention is projected, not runtime correctness.
 
 ## Fully-complete contract
 
@@ -74,7 +74,7 @@ Convention SHA-256: `c8a96767e52cf8b309ef5fc5ab968a1e875b0d97ab7d62aaec6f96f1d84
 
 [Concrete module outcome, failure controls and admission checklist](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Standards%2FCompletion%2FDONE-actions) · [Corpus architecture and update schematics](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Schematics%2FCorpus%2FIndex) · [Open clickable drawings](file:///var/home/herdr-engineering-engine-v3/docs/corpus-schematics.html) · [Fully-complete standard](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Standards%2FModule%20Completion) · [Justfile and runbooks](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Operations%2FJustfiles%20and%20Runbooks) · [Context handoff](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Context%20Handoff) · [Executive summary](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Executive%20Summary) · [Daybreak security profile](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Security%2FDaybreak%20Profile) · [Graphify full corpus](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Graphify%2FIndex) · [Adopted readiness requirements and evidence roadmap](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Delivery%2FReadiness%2FIndex) · [Codebase readiness plan](file:///var/home/herdr-engineering-engine-v3/docs/readiness-plan.md) · [Six resolved design contracts](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Delivery%2FContracts%2FIndex) · [Concrete contract decisions](file:///var/home/herdr-engineering-engine-v3/docs/contract-decisions.md)
 
-Completion standard SHA-256: `a36374a796816c1ea4c85c3292d376942fe9da226d714012b87da2588f598594`. All 13 gates apply; only an inapplicable subcheck may be explicitly justified.
+Completion standard SHA-256: `cd84afe35f99245f89e6d097ade8b59314fb378eef77385a3c6b271596705c75`. All 13 gates apply; only an inapplicable subcheck may be explicitly justified.
 
 **Required finished behavior:** One versioned catalogue gives caller-visible discovery, typed inspection and dispatch contracts for all 21 declared actions.
 
@@ -117,7 +117,7 @@ These are scoped design and review obligations. Their engine detectors remain un
 
 Bind assimilation, mutation sensitivity, lint coverage and raw evidence to the exact candidate. Property iterations, assertions, retries, lint findings and mutant runs do not multiply case credits. The current observation schema does not establish this qualification.
 
-Standard: `HEE3-TEST-STD-001`; SHA-256: `14a29dad1d089bc529ff9a132e5f80d5195e81aba2c2c0a07229e1c7c8960b09`. Full-standard qualification: **unassessed; collector/validator not implemented**.
+Standard: `HEE3-TEST-STD-001`; SHA-256: `f6174830e03fbe54fa3312e4a157fd4b00255aab412067ac3829c50eb73d60e3`. Full-standard qualification: **unassessed; collector/validator not implemented**.
 
 Module priorities: command/tool schema equivalence; method authority and effect classification; idempotency/readback/correlation; hostile arguments and consistent errors.
 
@@ -175,6 +175,7 @@ Module priorities: command/tool schema equivalence; method authority and effect 
 | schemas/actions/generate_control_schema.py | actions | authored candidate / T01 | Closed control schema, generator or structural fixture checks; byte and authority gaps remain runtime-owned. |
 | schemas/actions/control-v1.schema.json | actions | authored candidate / T01 | Closed control schema, generator or structural fixture checks; byte and authority gaps remain runtime-owned. |
 | tests/control_schema.py | actions | authored candidate / T01 | Closed control schema, generator or structural fixture checks; byte and authority gaps remain runtime-owned. |
+| tests/t28_actions.rs | actions | authored candidate / T28 | Declared Rust integration target for the versioned action catalogue, compared against the plan spine. |
 
 ## Delivery, verification and hardening contracts
 
@@ -212,7 +213,7 @@ Dependencies: T08, T10, T14. Atlas task state: `idle`.
 
 [Owning task and current atlas state](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Delivery%2FTasks%2FTASK-T16)
 
-Dependencies: T07, T11, T13. Atlas task state: `idle`.
+Dependencies: T07, T11, T13. Atlas task state: `wip`.
 
 **Acceptance:** Task cards show owner, model, state, spend and outcome; pane closure does not erase task state; reconnect resynchronises; event gap/poll fallback and user cancel are exercised on the actual public Herdr API. Display the current loop iteration, failing criterion, remaining budget, completion evidence and notification state. The captured Herdr protocol has live events without durable replay cursors. Qualify resubscription and coherent snapshot reconciliation; do not claim gap-free Herdr history.
 
@@ -292,7 +293,7 @@ Dependencies: T15, T17, T18, T25, T26, T28, T29. Atlas task state: `idle`.
 
 [Owning task and current atlas state](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Delivery%2FTasks%2FTASK-T28)
 
-Dependencies: T03, T05, T06, T09, T25, T26. Atlas task state: `idle`.
+Dependencies: T03, T05, T06, T09, T25, T26. Atlas task state: `wip`.
 
 **Acceptance:** One action definition drives CLI/Unix schemas and one selected LLM-tool adapter. Bounded discovery/inspection/preview, scoped invocation, identity/idempotency and evidence readback work end to end. Denial remains denial across transports; untrusted workers receive no operator socket; generated projections cannot drift. task.get and analysis.get support their own principal-scoped admission-key readback; service.inspect can query the lifecycle operation key without confusing current health with historic effect. events.subscribe without a cursor provides a bounded coherent bootstrap snapshot plus high-water cursor. Distinguish request correlation from durable idempotency. Base Pi RPC does not supply the engine tool callback path; qualify the actual inherited channel or maintained bridge. Template-produced requests preserve literal typed values at the action boundary; model-emitted risk or approval fields never confer effect authority.
 
@@ -302,7 +303,7 @@ Dependencies: T03, T05, T06, T09, T25, T26. Atlas task state: `idle`.
 
 [Owning task and current atlas state](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Delivery%2FTasks%2FTASK-T29)
 
-Dependencies: T21, T22, T25, T26, T28. Atlas task state: `idle`.
+Dependencies: T21, T22, T25, T26, T28. Atlas task state: `wip`.
 
 **Acceptance:** Thin updatable packages share action/procedure identity and preserve authority, arguments, producer exit status, cancellation and evidence. Pi errors/parallel calls/reload and effective tool-set readback are qualified; skills disclose bounded context. Two typed compositions close their real return paths. Version switching preserves active attempts and rollback; no separate scheduler or silent self-update. Keep the admitted package/protocol tuple pinned through every active attempt. Revoked/reloaded tool handlers cannot retain effect authority. No custom Pi-host glue is selected until its concrete packaging need is established. Each integration renders its owned template once, then passes literal typed data rather than copying/re-templating procedure bodies. Focused fixtures include braces, quotes, newlines, dollar signs and leading dashes, with exact final argv/JSON and producer-status checks. Preserve source and relationship coverage with whole-workflow context accounting. Source-change reports cannot advance accepted compatibility/source baselines.
 

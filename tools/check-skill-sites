@@ -1,0 +1,86 @@
+#!/usr/bin/env python3
+"""Neuter each refusal site in skills/load_skill.py and require a test to notice.
+
+A case per refusal CODE is not a case per SITE: this loader raises ten codes from fifteen
+places, so five codes have a neighbour that can answer for them. `refusal_sites()` counting
+ten would read as complete while five sites sat unpinned.
+
+Each site is rewritten to a no-op in turn and `tests/skill_schema.py` is re-run. A site
+whose neuter leaves the suite green is a survivor: behaviour nothing pins down.
+
+Run: python3 tools/check-skill-sites
+"""
+
+import ast
+import subprocess
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+SOURCE = ROOT / "skills/load_skill.py"
+TESTS = ROOT / "tests/skill_schema.py"
+
+
+def sites(text):
+    """Every `refuse(...)` call, as (line, column, end_column), from the syntax tree.
+
+    Read from the tree rather than by regular expression: a call spanning several lines has
+    no single textual form, and a pattern that missed one would shrink the denominator
+    silently, in the flattering direction.
+    """
+    found = []
+    for node in ast.walk(ast.parse(text)):
+        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                and node.func.id == "refuse"):
+            found.append((node.lineno, node.col_offset, node.end_lineno, node.end_col_offset,
+                          node.args[0].value if node.args and isinstance(node.args[0], ast.Constant)
+                          else "?"))
+    return sorted(found)
+
+
+def neuter(text, site):
+    """Replace one call with `None`, keeping every other byte."""
+    line_no, col, end_line, end_col, _ = site
+    lines = text.splitlines(keepends=True)
+    head = lines[line_no - 1][:col]
+    tail = lines[end_line - 1][end_col:]
+    return "".join(lines[: line_no - 1]) + head + "None" + tail + "".join(lines[end_line:])
+
+
+def run_tests():
+    return subprocess.run([sys.executable, "-W", "error", str(TESTS)],
+                          capture_output=True, text=True, check=False)
+
+
+def main():
+    original = SOURCE.read_text()
+    all_sites = sites(original)
+    if not all_sites:
+        raise SystemExit("no refusal sites found; the enumeration is broken, not the module")
+    before = run_tests()
+    if before.returncode != 0:
+        raise SystemExit("the suite is not green before the sweep:\n" + before.stdout + before.stderr)
+
+    survivors = []
+    try:
+        for index, site in enumerate(all_sites, 1):
+            SOURCE.write_text(neuter(original, site))
+            result = run_tests()
+            SOURCE.write_text(original)
+            status = "killed" if result.returncode != 0 else "SURVIVED"
+            if result.returncode == 0:
+                survivors.append(site)
+            print(f"  {index:2}/{len(all_sites)} line {site[0]:4} refuse({site[4]!r}) {status}",
+                  flush=True)
+    finally:
+        SOURCE.write_text(original)
+
+    print(f"\nsites={len(all_sites)} killed={len(all_sites) - len(survivors)} "
+          f"survived={len(survivors)}")
+    for site in survivors:
+        print(f"  SURVIVOR {SOURCE.name}:{site[0]} refuse({site[4]!r})")
+    print("verdict=" + ("PASS" if not survivors else "FAIL"))
+    return 0 if not survivors else 1
+
+
+sys.exit(main())

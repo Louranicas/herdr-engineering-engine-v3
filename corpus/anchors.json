@@ -6,44 +6,44 @@
     "vault": "/var/mnt/STORAGE-10TB/fedora-obsidian-vaults/herdr-engineering-engine-v3.vault",
     "codebase": "/var/home/herdr-engineering-engine-v3"
   },
-  "source_plan_sha256": "9c8fcbc0a67c6a25dc98fea8dc8af6312b34649768a7b6c618ec21d999f839fd",
-  "catalogue_sha256": "b1aa1c49784262d4609ed565a0cf5e326508ff7047a0afae923330cfdca2c78d",
+  "source_plan_sha256": "c280a547b058df5b414b18c81a64153633d48b94671fc397ece02ec1cefed160",
+  "catalogue_sha256": "8a96e05fe0f32f7cc21d0b1dda2df5f1b0a934d9216acfb4b7d510a476e36025",
   "readiness": {
     "id": "HEE3-READINESS-001",
-    "sha256": "e774f8984c7e39e85b156289fac809bded6df80ba3647cfb2024c69856447b94",
+    "sha256": "7fd2285b611328e2c8d7aef755d55451ef2d4e0f952524526891ca49533fc090",
     "note": "Delivery/Readiness/Index.md",
     "engine_proof": "pending",
     "scores_promoted": false
   },
   "security_profile": {
     "id": "HEE3-SECURITY-DAYBREAK-001",
-    "sha256": "03303308bedfa6e35a6b70363038bc9b43b305f409005f9e90f7af74b3d9e4c4",
+    "sha256": "c5acbfc49b2334670b027a914590c28e5d0f7dc0fdc62928d475d3804476057f",
     "requested_model": "gpt-daybreak-blue-latest",
     "runtime_enabled": false,
     "qualification": "unassessed"
   },
   "completion": {
     "id": "HEE3-COMPLETION-001",
-    "sha256": "a36374a796816c1ea4c85c3292d376942fe9da226d714012b87da2588f598594",
+    "sha256": "cd84afe35f99245f89e6d097ade8b59314fb378eef77385a3c6b271596705c75",
     "note": "Standards/Module Completion.md",
     "admission_validator_available": false,
     "accepted_modules": []
   },
   "testing_standard": {
     "id": "HEE3-TEST-STD-001",
-    "sha256": "14a29dad1d089bc529ff9a132e5f80d5195e81aba2c2c0a07229e1c7c8960b09",
+    "sha256": "f6174830e03fbe54fa3312e4a157fd4b00255aab412067ac3829c50eb73d60e3",
     "note": "Standards/Module Testing.md"
   },
   "learnings": {
     "id": "HEE3-LEARNINGS-001",
-    "sha256": "1707365309089f3e11d756ede5afecc61170062149b60123a64e06ff461a1b7d",
+    "sha256": "508c49bbab24e8359ca589b61f72c95371c5b15e79772629a4b351e61138d076",
     "note": "Learnings/Index.md",
     "sources": 13,
     "lessons": 14
   },
   "public_interfaces": {
     "id": "HEE3-INTERFACES-001",
-    "sha256": "c8a96767e52cf8b309ef5fc5ab968a1e875b0d97ab7d62aaec6f96f1d8436557",
+    "sha256": "70f8a696de7ea69018d752380855f76b2f3732510cc8d8caabac310d1a19a84e",
     "note": "Interfaces/Module Public Contracts.md",
     "admission_validator_available": false,
     "accepted_modules": []
@@ -1062,8 +1062,15 @@
           "validation_cmd": "Proposed, not implemented: habitat-engine-check case T10 --fixture-root <disposable-fixtures>",
           "validator_available": false,
           "acceptance": "Concurrent reservations cannot exceed configured bounds; retries/checking/compaction are included; unknown usage is visible; hard-ceiling tasks reject incompatible accounting; fallback cannot cross privacy or tool constraints.",
-          "state": "idle",
-          "evidence": [],
+          "state": "wip",
+          "evidence": [
+            {
+              "path": "evidence/implementation-T10-20260922/progress.json",
+              "sha256": "f2c91f4cad414c67f44a1f9d2fbb15eb2c16c9fabfececc155a19d121b5a278f",
+              "task_id": "T10",
+              "scope": "implementation_candidate"
+            }
+          ],
           "research_refs": [
             "C13",
             "A11"
@@ -1084,8 +1091,15 @@
           "validation_cmd": "Proposed, not implemented: habitat-engine-check case T11 --fixture-root <disposable-fixtures>",
           "validator_available": false,
           "acceptance": "Context is bounded to task needs; actionable wakes are deduplicated/batched; controlled idle and repeated unchanged events cause zero model requests; summaries and compaction usage are accounted for. Context records distinguish required source-file coverage from task-critical call/dependency/ownership relationship coverage. Expose each gap and account for discovery, supplemental reads and repeated context as well as final packet size.",
-          "state": "idle",
-          "evidence": [],
+          "state": "wip",
+          "evidence": [
+            {
+              "path": "evidence/implementation-T11-20260922/progress.json",
+              "sha256": "37fee8762915d1aa1e381e40a847127213b4563944d957b398bd853a5da81700",
+              "task_id": "T11",
+              "scope": "implementation_candidate"
+            }
+          ],
           "research_refs": [
             "D18",
             "H12",
@@ -1160,8 +1174,15 @@
           "validation_cmd": "Proposed, not implemented: habitat-engine-check case T16 --fixture-root <disposable-fixtures>",
           "validator_available": false,
           "acceptance": "Task cards show owner, model, state, spend and outcome; pane closure does not erase task state; reconnect resynchronises; event gap/poll fallback and user cancel are exercised on the actual public Herdr API. Display the current loop iteration, failing criterion, remaining budget, completion evidence and notification state. The captured Herdr protocol has live events without durable replay cursors. Qualify resubscription and coherent snapshot reconciliation; do not claim gap-free Herdr history.",
-          "state": "idle",
-          "evidence": [],
+          "state": "wip",
+          "evidence": [
+            {
+              "path": "evidence/implementation-T16-20260922/progress.json",
+              "sha256": "07d9a882b30922ebdb5526220ec0bf620f3731b6a8dd3c0fdd2ca14b39fb2ac7",
+              "task_id": "T16",
+              "scope": "implementation_candidate"
+            }
+          ],
           "research_refs": [
             "D19",
             "H10",
@@ -1318,8 +1339,15 @@
           "validation_cmd": "Proposed, not implemented: habitat-engine-check case T22 --fixture-root <disposable-fixtures>",
           "validator_available": false,
           "acceptance": "Roles share a versioned objective, distinct artifact ownership and bounded messages. Cross-agent resource conflicts and stale-generation callbacks are rejected. Compare one-worker and specialist-cohort outcomes including cost, errors, disagreement and rework; idle cohorts stop. Persist logical thread identity, versioned mailbox obligations and parent join requirements; protect shared interface/lockfile ownership and recover orchestrator loss without duplicate dispatch. Enforce one conserved parent/child allocation tree. Waiting parents release resources children require. Semantic cross-module calls remain mediated by the composition root and current action authority. Thread briefs preserve the task-critical relationships needed by the receiving specialist; a list of included files alone cannot prove adequate context. Narrow the question explicitly when required coverage exceeds its bound.",
-          "state": "idle",
-          "evidence": [],
+          "state": "wip",
+          "evidence": [
+            {
+              "path": "evidence/implementation-T22-20260922/progress.json",
+              "sha256": "52581890273ef104b38ab29093d51872e1378d9b3989e3f1e5ce3c6b2da0e443",
+              "task_id": "T22",
+              "scope": "implementation_candidate"
+            }
+          ],
           "research_refs": [
             "S02",
             "S09",
@@ -1459,8 +1487,15 @@
           "validation_cmd": "Proposed, not implemented: habitat-engine-check case T28 --fixture-root <disposable-fixtures>",
           "validator_available": false,
           "acceptance": "One action definition drives CLI/Unix schemas and one selected LLM-tool adapter. Bounded discovery/inspection/preview, scoped invocation, identity/idempotency and evidence readback work end to end. Denial remains denial across transports; untrusted workers receive no operator socket; generated projections cannot drift. task.get and analysis.get support their own principal-scoped admission-key readback; service.inspect can query the lifecycle operation key without confusing current health with historic effect. events.subscribe without a cursor provides a bounded coherent bootstrap snapshot plus high-water cursor. Distinguish request correlation from durable idempotency. Base Pi RPC does not supply the engine tool callback path; qualify the actual inherited channel or maintained bridge. Template-produced requests preserve literal typed values at the action boundary; model-emitted risk or approval fields never confer effect authority.",
-          "state": "idle",
-          "evidence": [],
+          "state": "wip",
+          "evidence": [
+            {
+              "path": "evidence/implementation-T28-20260922/progress.json",
+              "sha256": "b37953dfabfceef80d1eea7aebe0e250158c88b30aeb0a5d6e06c76cff226a1e",
+              "task_id": "T28",
+              "scope": "implementation_candidate"
+            }
+          ],
           "research_refs": [
             "A11",
             "A12",
@@ -1489,8 +1524,15 @@
           "validation_cmd": "Proposed, not implemented: habitat-engine-check case T29 --fixture-root <disposable-fixtures>",
           "validator_available": false,
           "acceptance": "Thin updatable packages share action/procedure identity and preserve authority, arguments, producer exit status, cancellation and evidence. Pi errors/parallel calls/reload and effective tool-set readback are qualified; skills disclose bounded context. Two typed compositions close their real return paths. Version switching preserves active attempts and rollback; no separate scheduler or silent self-update. Keep the admitted package/protocol tuple pinned through every active attempt. Revoked/reloaded tool handlers cannot retain effect authority. No custom Pi-host glue is selected until its concrete packaging need is established. Each integration renders its owned template once, then passes literal typed data rather than copying/re-templating procedure bodies. Focused fixtures include braces, quotes, newlines, dollar signs and leading dashes, with exact final argv/JSON and producer-status checks. Preserve source and relationship coverage with whole-workflow context accounting. Source-change reports cannot advance accepted compatibility/source baselines.",
-          "state": "idle",
-          "evidence": [],
+          "state": "wip",
+          "evidence": [
+            {
+              "path": "evidence/implementation-T29-20260922/progress.json",
+              "sha256": "d23d0145a056cf3dd3a3f86f534734826a3e52e4c47157162ee1e3af2dd13461",
+              "task_id": "T29",
+              "scope": "implementation_candidate"
+            }
+          ],
           "research_refs": [
             "B02",
             "B03",
@@ -3419,11 +3461,72 @@
           ],
           "reason": "T06 current single-engine development composition and source-bound controls; no module, task or deployment admission.",
           "task_id": "T06"
+        },
+        {
+          "path": "tests/t09_route.rs",
+          "owner": "route",
+          "modules": [
+            "route",
+            "contracts"
+          ],
+          "reason": "Declared Rust integration target for deterministic eligibility and routing; pure policy, no model call.",
+          "task_id": "T09"
+        },
+        {
+          "path": "tests/t11_notify.rs",
+          "owner": "notify",
+          "modules": [
+            "notify",
+            "contracts"
+          ],
+          "reason": "Declared Rust integration target for committed-event subscription and delivery obligations.",
+          "task_id": "T11"
+        },
+        {
+          "path": "tests/t11_context.rs",
+          "owner": "context",
+          "modules": [
+            "context",
+            "contracts",
+            "budget"
+          ],
+          "reason": "Declared Rust integration target for bounded reproducible context packets and their accounted cost.",
+          "task_id": "T11"
+        },
+        {
+          "path": "tests/t22_cohort.rs",
+          "owner": "cohort",
+          "modules": [
+            "cohort",
+            "contracts"
+          ],
+          "reason": "Declared Rust integration target for bounded specialist threads, disjoint write ownership and parent joins.",
+          "task_id": "T22"
+        },
+        {
+          "path": "tests/t28_actions.rs",
+          "owner": "actions",
+          "modules": [
+            "actions",
+            "contracts"
+          ],
+          "reason": "Declared Rust integration target for the versioned action catalogue, compared against the plan spine.",
+          "task_id": "T28"
+        },
+        {
+          "path": "tests/t16_herdr.rs",
+          "owner": "herdr",
+          "modules": [
+            "herdr",
+            "contracts"
+          ],
+          "reason": "Declared Rust integration target for the multiplexer client surface; presentation only, no authority.",
+          "task_id": "T16"
         }
       ],
       "readiness": {
         "id": "HEE3-READINESS-001",
-        "sha256": "e774f8984c7e39e85b156289fac809bded6df80ba3647cfb2024c69856447b94",
+        "sha256": "7fd2285b611328e2c8d7aef755d55451ef2d4e0f952524526891ca49533fc090",
         "facets": [
           "F2",
           "F3",
@@ -3482,7 +3585,7 @@
       },
       "testing_standard": {
         "standard_id": "HEE3-TEST-STD-001",
-        "standard_sha256": "14a29dad1d089bc529ff9a132e5f80d5195e81aba2c2c0a07229e1c7c8960b09",
+        "standard_sha256": "f6174830e03fbe54fa3312e4a157fd4b00255aab412067ac3829c50eb73d60e3",
         "minimum_qualifying_cases": 50,
         "maximum_baseline_warnings": 0,
         "maximum_baseline_errors": 0,
@@ -3498,7 +3601,7 @@
       },
       "public_interface": {
         "convention_id": "HEE3-INTERFACES-001",
-        "convention_sha256": "c8a96767e52cf8b309ef5fc5ab968a1e875b0d97ab7d62aaec6f96f1d8436557",
+        "convention_sha256": "70f8a696de7ea69018d752380855f76b2f3732510cc8d8caabac310d1a19a84e",
         "accepted_current_interface": null,
         "admission_validator_available": false,
         "profile": {
@@ -3530,7 +3633,7 @@
       },
       "completion": {
         "standard_id": "HEE3-COMPLETION-001",
-        "standard_sha256": "a36374a796816c1ea4c85c3292d376942fe9da226d714012b87da2588f598594",
+        "standard_sha256": "cd84afe35f99245f89e6d097ade8b59314fb378eef77385a3c6b271596705c75",
         "state": "unassessed",
         "admission_validator_available": false,
         "profile": {
@@ -3566,7 +3669,7 @@
       },
       "security_review": {
         "requested_model": "gpt-daybreak-blue-latest",
-        "profile_sha256": "03303308bedfa6e35a6b70363038bc9b43b305f409005f9e90f7af74b3d9e4c4",
+        "profile_sha256": "c5acbfc49b2334670b027a914590c28e5d0f7dc0fdc62928d475d3804476057f",
         "runtime_enabled": false,
         "completion_authority": false,
         "silent_fallback_allowed": false,
@@ -3580,7 +3683,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "1707365309089f3e11d756ede5afecc61170062149b60123a64e06ff461a1b7d",
+        "convention_sha256": "508c49bbab24e8359ca589b61f72c95371c5b15e79772629a4b351e61138d076",
         "lessons": [
           "LRN01",
           "LRN03",
@@ -4857,8 +4960,15 @@
           "validation_cmd": "Proposed, not implemented: habitat-engine-check case T10 --fixture-root <disposable-fixtures>",
           "validator_available": false,
           "acceptance": "Concurrent reservations cannot exceed configured bounds; retries/checking/compaction are included; unknown usage is visible; hard-ceiling tasks reject incompatible accounting; fallback cannot cross privacy or tool constraints.",
-          "state": "idle",
-          "evidence": [],
+          "state": "wip",
+          "evidence": [
+            {
+              "path": "evidence/implementation-T10-20260922/progress.json",
+              "sha256": "f2c91f4cad414c67f44a1f9d2fbb15eb2c16c9fabfececc155a19d121b5a278f",
+              "task_id": "T10",
+              "scope": "implementation_candidate"
+            }
+          ],
           "research_refs": [
             "C13",
             "A11"
@@ -5033,8 +5143,15 @@
           "validation_cmd": "Proposed, not implemented: habitat-engine-check case T22 --fixture-root <disposable-fixtures>",
           "validator_available": false,
           "acceptance": "Roles share a versioned objective, distinct artifact ownership and bounded messages. Cross-agent resource conflicts and stale-generation callbacks are rejected. Compare one-worker and specialist-cohort outcomes including cost, errors, disagreement and rework; idle cohorts stop. Persist logical thread identity, versioned mailbox obligations and parent join requirements; protect shared interface/lockfile ownership and recover orchestrator loss without duplicate dispatch. Enforce one conserved parent/child allocation tree. Waiting parents release resources children require. Semantic cross-module calls remain mediated by the composition root and current action authority. Thread briefs preserve the task-critical relationships needed by the receiving specialist; a list of included files alone cannot prove adequate context. Narrow the question explicitly when required coverage exceeds its bound.",
-          "state": "idle",
-          "evidence": [],
+          "state": "wip",
+          "evidence": [
+            {
+              "path": "evidence/implementation-T22-20260922/progress.json",
+              "sha256": "52581890273ef104b38ab29093d51872e1378d9b3989e3f1e5ce3c6b2da0e443",
+              "task_id": "T22",
+              "scope": "implementation_candidate"
+            }
+          ],
           "research_refs": [
             "S02",
             "S09",
@@ -5153,8 +5270,15 @@
           "validation_cmd": "Proposed, not implemented: habitat-engine-check case T29 --fixture-root <disposable-fixtures>",
           "validator_available": false,
           "acceptance": "Thin updatable packages share action/procedure identity and preserve authority, arguments, producer exit status, cancellation and evidence. Pi errors/parallel calls/reload and effective tool-set readback are qualified; skills disclose bounded context. Two typed compositions close their real return paths. Version switching preserves active attempts and rollback; no separate scheduler or silent self-update. Keep the admitted package/protocol tuple pinned through every active attempt. Revoked/reloaded tool handlers cannot retain effect authority. No custom Pi-host glue is selected until its concrete packaging need is established. Each integration renders its owned template once, then passes literal typed data rather than copying/re-templating procedure bodies. Focused fixtures include braces, quotes, newlines, dollar signs and leading dashes, with exact final argv/JSON and producer-status checks. Preserve source and relationship coverage with whole-workflow context accounting. Source-change reports cannot advance accepted compatibility/source baselines.",
-          "state": "idle",
-          "evidence": [],
+          "state": "wip",
+          "evidence": [
+            {
+              "path": "evidence/implementation-T29-20260922/progress.json",
+              "sha256": "d23d0145a056cf3dd3a3f86f534734826a3e52e4c47157162ee1e3af2dd13461",
+              "task_id": "T29",
+              "scope": "implementation_candidate"
+            }
+          ],
           "research_refs": [
             "B02",
             "B03",
@@ -6693,7 +6817,7 @@
       ],
       "readiness": {
         "id": "HEE3-READINESS-001",
-        "sha256": "e774f8984c7e39e85b156289fac809bded6df80ba3647cfb2024c69856447b94",
+        "sha256": "7fd2285b611328e2c8d7aef755d55451ef2d4e0f952524526891ca49533fc090",
         "facets": [
           "F1",
           "F2",
@@ -6759,7 +6883,7 @@
       },
       "testing_standard": {
         "standard_id": "HEE3-TEST-STD-001",
-        "standard_sha256": "14a29dad1d089bc529ff9a132e5f80d5195e81aba2c2c0a07229e1c7c8960b09",
+        "standard_sha256": "f6174830e03fbe54fa3312e4a157fd4b00255aab412067ac3829c50eb73d60e3",
         "minimum_qualifying_cases": 50,
         "maximum_baseline_warnings": 0,
         "maximum_baseline_errors": 0,
@@ -6775,7 +6899,7 @@
       },
       "public_interface": {
         "convention_id": "HEE3-INTERFACES-001",
-        "convention_sha256": "c8a96767e52cf8b309ef5fc5ab968a1e875b0d97ab7d62aaec6f96f1d8436557",
+        "convention_sha256": "70f8a696de7ea69018d752380855f76b2f3732510cc8d8caabac310d1a19a84e",
         "accepted_current_interface": null,
         "admission_validator_available": false,
         "profile": {
@@ -6807,7 +6931,7 @@
       },
       "completion": {
         "standard_id": "HEE3-COMPLETION-001",
-        "standard_sha256": "a36374a796816c1ea4c85c3292d376942fe9da226d714012b87da2588f598594",
+        "standard_sha256": "cd84afe35f99245f89e6d097ade8b59314fb378eef77385a3c6b271596705c75",
         "state": "unassessed",
         "admission_validator_available": false,
         "profile": {
@@ -6843,7 +6967,7 @@
       },
       "security_review": {
         "requested_model": "gpt-daybreak-blue-latest",
-        "profile_sha256": "03303308bedfa6e35a6b70363038bc9b43b305f409005f9e90f7af74b3d9e4c4",
+        "profile_sha256": "c5acbfc49b2334670b027a914590c28e5d0f7dc0fdc62928d475d3804476057f",
         "runtime_enabled": false,
         "completion_authority": false,
         "silent_fallback_allowed": false,
@@ -6857,7 +6981,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "1707365309089f3e11d756ede5afecc61170062149b60123a64e06ff461a1b7d",
+        "convention_sha256": "508c49bbab24e8359ca589b61f72c95371c5b15e79772629a4b351e61138d076",
         "lessons": [
           "LRN01",
           "LRN04",
@@ -9616,7 +9740,7 @@
       ],
       "readiness": {
         "id": "HEE3-READINESS-001",
-        "sha256": "e774f8984c7e39e85b156289fac809bded6df80ba3647cfb2024c69856447b94",
+        "sha256": "7fd2285b611328e2c8d7aef755d55451ef2d4e0f952524526891ca49533fc090",
         "facets": [
           "F2",
           "F3",
@@ -9685,7 +9809,7 @@
       },
       "testing_standard": {
         "standard_id": "HEE3-TEST-STD-001",
-        "standard_sha256": "14a29dad1d089bc529ff9a132e5f80d5195e81aba2c2c0a07229e1c7c8960b09",
+        "standard_sha256": "f6174830e03fbe54fa3312e4a157fd4b00255aab412067ac3829c50eb73d60e3",
         "minimum_qualifying_cases": 50,
         "maximum_baseline_warnings": 0,
         "maximum_baseline_errors": 0,
@@ -9701,7 +9825,7 @@
       },
       "public_interface": {
         "convention_id": "HEE3-INTERFACES-001",
-        "convention_sha256": "c8a96767e52cf8b309ef5fc5ab968a1e875b0d97ab7d62aaec6f96f1d8436557",
+        "convention_sha256": "70f8a696de7ea69018d752380855f76b2f3732510cc8d8caabac310d1a19a84e",
         "accepted_current_interface": null,
         "admission_validator_available": false,
         "profile": {
@@ -9733,7 +9857,7 @@
       },
       "completion": {
         "standard_id": "HEE3-COMPLETION-001",
-        "standard_sha256": "a36374a796816c1ea4c85c3292d376942fe9da226d714012b87da2588f598594",
+        "standard_sha256": "cd84afe35f99245f89e6d097ade8b59314fb378eef77385a3c6b271596705c75",
         "state": "unassessed",
         "admission_validator_available": false,
         "profile": {
@@ -9769,7 +9893,7 @@
       },
       "security_review": {
         "requested_model": "gpt-daybreak-blue-latest",
-        "profile_sha256": "03303308bedfa6e35a6b70363038bc9b43b305f409005f9e90f7af74b3d9e4c4",
+        "profile_sha256": "c5acbfc49b2334670b027a914590c28e5d0f7dc0fdc62928d475d3804476057f",
         "runtime_enabled": false,
         "completion_authority": false,
         "silent_fallback_allowed": false,
@@ -9783,7 +9907,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "1707365309089f3e11d756ede5afecc61170062149b60123a64e06ff461a1b7d",
+        "convention_sha256": "508c49bbab24e8359ca589b61f72c95371c5b15e79772629a4b351e61138d076",
         "lessons": [
           "LRN04",
           "LRN05",
@@ -11471,7 +11595,7 @@
       ],
       "readiness": {
         "id": "HEE3-READINESS-001",
-        "sha256": "e774f8984c7e39e85b156289fac809bded6df80ba3647cfb2024c69856447b94",
+        "sha256": "7fd2285b611328e2c8d7aef755d55451ef2d4e0f952524526891ca49533fc090",
         "facets": [
           "F2",
           "F3",
@@ -11528,7 +11652,7 @@
       },
       "testing_standard": {
         "standard_id": "HEE3-TEST-STD-001",
-        "standard_sha256": "14a29dad1d089bc529ff9a132e5f80d5195e81aba2c2c0a07229e1c7c8960b09",
+        "standard_sha256": "f6174830e03fbe54fa3312e4a157fd4b00255aab412067ac3829c50eb73d60e3",
         "minimum_qualifying_cases": 50,
         "maximum_baseline_warnings": 0,
         "maximum_baseline_errors": 0,
@@ -11544,7 +11668,7 @@
       },
       "public_interface": {
         "convention_id": "HEE3-INTERFACES-001",
-        "convention_sha256": "c8a96767e52cf8b309ef5fc5ab968a1e875b0d97ab7d62aaec6f96f1d8436557",
+        "convention_sha256": "70f8a696de7ea69018d752380855f76b2f3732510cc8d8caabac310d1a19a84e",
         "accepted_current_interface": null,
         "admission_validator_available": false,
         "profile": {
@@ -11576,7 +11700,7 @@
       },
       "completion": {
         "standard_id": "HEE3-COMPLETION-001",
-        "standard_sha256": "a36374a796816c1ea4c85c3292d376942fe9da226d714012b87da2588f598594",
+        "standard_sha256": "cd84afe35f99245f89e6d097ade8b59314fb378eef77385a3c6b271596705c75",
         "state": "unassessed",
         "admission_validator_available": false,
         "profile": {
@@ -11612,7 +11736,7 @@
       },
       "security_review": {
         "requested_model": "gpt-daybreak-blue-latest",
-        "profile_sha256": "03303308bedfa6e35a6b70363038bc9b43b305f409005f9e90f7af74b3d9e4c4",
+        "profile_sha256": "c5acbfc49b2334670b027a914590c28e5d0f7dc0fdc62928d475d3804476057f",
         "runtime_enabled": false,
         "completion_authority": false,
         "silent_fallback_allowed": false,
@@ -11626,7 +11750,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "1707365309089f3e11d756ede5afecc61170062149b60123a64e06ff461a1b7d",
+        "convention_sha256": "508c49bbab24e8359ca589b61f72c95371c5b15e79772629a4b351e61138d076",
         "lessons": [
           "LRN05",
           "LRN08",
@@ -12316,8 +12440,15 @@
           "validation_cmd": "Proposed, not implemented: habitat-engine-check case T10 --fixture-root <disposable-fixtures>",
           "validator_available": false,
           "acceptance": "Concurrent reservations cannot exceed configured bounds; retries/checking/compaction are included; unknown usage is visible; hard-ceiling tasks reject incompatible accounting; fallback cannot cross privacy or tool constraints.",
-          "state": "idle",
-          "evidence": [],
+          "state": "wip",
+          "evidence": [
+            {
+              "path": "evidence/implementation-T10-20260922/progress.json",
+              "sha256": "f2c91f4cad414c67f44a1f9d2fbb15eb2c16c9fabfececc155a19d121b5a278f",
+              "task_id": "T10",
+              "scope": "implementation_candidate"
+            }
+          ],
           "research_refs": [
             "C13",
             "A11"
@@ -13059,11 +13190,39 @@
             "route"
           ],
           "reason": "Optional operator evidence declares domain, held-out tests, fallback and actual decision value; rejection preserves baseline routing."
+        },
+        {
+          "path": "tests/t09_route.rs",
+          "owner": "route",
+          "modules": [
+            "route",
+            "contracts"
+          ],
+          "reason": "Declared Rust integration target for deterministic eligibility and routing; pure policy, no model call.",
+          "task_id": "T09"
+        },
+        {
+          "path": "tests/fixtures/route/fixture.json",
+          "owner": "route",
+          "modules": [
+            "route"
+          ],
+          "reason": "Declared routing fixture: recipes, tasks and constraints for the eligibility cases.",
+          "task_id": "T09"
+        },
+        {
+          "path": "tests/fixtures/route/known-answers.json",
+          "owner": "route",
+          "modules": [
+            "route"
+          ],
+          "reason": "Declared routing known-answer table; answers come from the fixture, not from the implementation.",
+          "task_id": "T09"
         }
       ],
       "readiness": {
         "id": "HEE3-READINESS-001",
-        "sha256": "e774f8984c7e39e85b156289fac809bded6df80ba3647cfb2024c69856447b94",
+        "sha256": "7fd2285b611328e2c8d7aef755d55451ef2d4e0f952524526891ca49533fc090",
         "facets": [
           "F1",
           "F2",
@@ -13127,7 +13286,7 @@
       },
       "testing_standard": {
         "standard_id": "HEE3-TEST-STD-001",
-        "standard_sha256": "14a29dad1d089bc529ff9a132e5f80d5195e81aba2c2c0a07229e1c7c8960b09",
+        "standard_sha256": "f6174830e03fbe54fa3312e4a157fd4b00255aab412067ac3829c50eb73d60e3",
         "minimum_qualifying_cases": 50,
         "maximum_baseline_warnings": 0,
         "maximum_baseline_errors": 0,
@@ -13143,7 +13302,7 @@
       },
       "public_interface": {
         "convention_id": "HEE3-INTERFACES-001",
-        "convention_sha256": "c8a96767e52cf8b309ef5fc5ab968a1e875b0d97ab7d62aaec6f96f1d8436557",
+        "convention_sha256": "70f8a696de7ea69018d752380855f76b2f3732510cc8d8caabac310d1a19a84e",
         "accepted_current_interface": null,
         "admission_validator_available": false,
         "profile": {
@@ -13175,7 +13334,7 @@
       },
       "completion": {
         "standard_id": "HEE3-COMPLETION-001",
-        "standard_sha256": "a36374a796816c1ea4c85c3292d376942fe9da226d714012b87da2588f598594",
+        "standard_sha256": "cd84afe35f99245f89e6d097ade8b59314fb378eef77385a3c6b271596705c75",
         "state": "unassessed",
         "admission_validator_available": false,
         "profile": {
@@ -13211,7 +13370,7 @@
       },
       "security_review": {
         "requested_model": "gpt-daybreak-blue-latest",
-        "profile_sha256": "03303308bedfa6e35a6b70363038bc9b43b305f409005f9e90f7af74b3d9e4c4",
+        "profile_sha256": "c5acbfc49b2334670b027a914590c28e5d0f7dc0fdc62928d475d3804476057f",
         "runtime_enabled": false,
         "completion_authority": false,
         "silent_fallback_allowed": false,
@@ -13225,7 +13384,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "1707365309089f3e11d756ede5afecc61170062149b60123a64e06ff461a1b7d",
+        "convention_sha256": "508c49bbab24e8359ca589b61f72c95371c5b15e79772629a4b351e61138d076",
         "lessons": [
           "LRN05",
           "LRN08",
@@ -13248,7 +13407,7 @@
         "engine_detectors": "unqualified"
       },
       "observations": {
-        "source_kind": "comment_stub",
+        "source_kind": "engine_source",
         "evidence": [],
         "limitations": [
           "Record consistency is not producer authentication, runtime certification or task acceptance.",
@@ -13331,6 +13490,10 @@
         {
           "path": "Delivery/Tasks/TASK-T10.md",
           "kind": "task"
+        },
+        {
+          "path": "Delivery/Tasks/TASK-T11.md",
+          "kind": "implementation support task"
         },
         {
           "path": "Delivery/Tasks/TASK-T12.md",
@@ -13945,8 +14108,15 @@
           "validation_cmd": "Proposed, not implemented: habitat-engine-check case T10 --fixture-root <disposable-fixtures>",
           "validator_available": false,
           "acceptance": "Concurrent reservations cannot exceed configured bounds; retries/checking/compaction are included; unknown usage is visible; hard-ceiling tasks reject incompatible accounting; fallback cannot cross privacy or tool constraints.",
-          "state": "idle",
-          "evidence": [],
+          "state": "wip",
+          "evidence": [
+            {
+              "path": "evidence/implementation-T10-20260922/progress.json",
+              "sha256": "f2c91f4cad414c67f44a1f9d2fbb15eb2c16c9fabfececc155a19d121b5a278f",
+              "task_id": "T10",
+              "scope": "implementation_candidate"
+            }
+          ],
           "research_refs": [
             "C13",
             "A11"
@@ -14121,8 +14291,15 @@
           "validation_cmd": "Proposed, not implemented: habitat-engine-check case T22 --fixture-root <disposable-fixtures>",
           "validator_available": false,
           "acceptance": "Roles share a versioned objective, distinct artifact ownership and bounded messages. Cross-agent resource conflicts and stale-generation callbacks are rejected. Compare one-worker and specialist-cohort outcomes including cost, errors, disagreement and rework; idle cohorts stop. Persist logical thread identity, versioned mailbox obligations and parent join requirements; protect shared interface/lockfile ownership and recover orchestrator loss without duplicate dispatch. Enforce one conserved parent/child allocation tree. Waiting parents release resources children require. Semantic cross-module calls remain mediated by the composition root and current action authority. Thread briefs preserve the task-critical relationships needed by the receiving specialist; a list of included files alone cannot prove adequate context. Narrow the question explicitly when required coverage exceeds its bound.",
-          "state": "idle",
-          "evidence": [],
+          "state": "wip",
+          "evidence": [
+            {
+              "path": "evidence/implementation-T22-20260922/progress.json",
+              "sha256": "52581890273ef104b38ab29093d51872e1378d9b3989e3f1e5ce3c6b2da0e443",
+              "task_id": "T22",
+              "scope": "implementation_candidate"
+            }
+          ],
           "research_refs": [
             "S02",
             "S09",
@@ -14264,8 +14441,15 @@
           "validation_cmd": "Proposed, not implemented: habitat-engine-check case T29 --fixture-root <disposable-fixtures>",
           "validator_available": false,
           "acceptance": "Thin updatable packages share action/procedure identity and preserve authority, arguments, producer exit status, cancellation and evidence. Pi errors/parallel calls/reload and effective tool-set readback are qualified; skills disclose bounded context. Two typed compositions close their real return paths. Version switching preserves active attempts and rollback; no separate scheduler or silent self-update. Keep the admitted package/protocol tuple pinned through every active attempt. Revoked/reloaded tool handlers cannot retain effect authority. No custom Pi-host glue is selected until its concrete packaging need is established. Each integration renders its owned template once, then passes literal typed data rather than copying/re-templating procedure bodies. Focused fixtures include braces, quotes, newlines, dollar signs and leading dashes, with exact final argv/JSON and producer-status checks. Preserve source and relationship coverage with whole-workflow context accounting. Source-change reports cannot advance accepted compatibility/source baselines.",
-          "state": "idle",
-          "evidence": [],
+          "state": "wip",
+          "evidence": [
+            {
+              "path": "evidence/implementation-T29-20260922/progress.json",
+              "sha256": "d23d0145a056cf3dd3a3f86f534734826a3e52e4c47157162ee1e3af2dd13461",
+              "task_id": "T29",
+              "scope": "implementation_candidate"
+            }
+          ],
           "research_refs": [
             "B02",
             "B03",
@@ -14281,7 +14465,38 @@
           ]
         }
       ],
-      "implementation_tasks": [],
+      "implementation_tasks": [
+        {
+          "id": "T11",
+          "intent": "Minimise repeated context and noisy supervision",
+          "deps": [
+            "T06",
+            "T10"
+          ],
+          "route": "Runtime engineer",
+          "proposed_paths": [
+            "src/context.rs",
+            "src/notify.rs"
+          ],
+          "validation_cmd": "Proposed, not implemented: habitat-engine-check case T11 --fixture-root <disposable-fixtures>",
+          "validator_available": false,
+          "acceptance": "Context is bounded to task needs; actionable wakes are deduplicated/batched; controlled idle and repeated unchanged events cause zero model requests; summaries and compaction usage are accounted for. Context records distinguish required source-file coverage from task-critical call/dependency/ownership relationship coverage. Expose each gap and account for discovery, supplemental reads and repeated context as well as final packet size.",
+          "state": "wip",
+          "evidence": [
+            {
+              "path": "evidence/implementation-T11-20260922/progress.json",
+              "sha256": "37fee8762915d1aa1e381e40a847127213b4563944d957b398bd853a5da81700",
+              "task_id": "T11",
+              "scope": "implementation_candidate"
+            }
+          ],
+          "research_refs": [
+            "D18",
+            "H12",
+            "A10"
+          ]
+        }
+      ],
       "reference_limits": "Durable concurrent transactions, reconciliation idempotency, actual provider overrun and whole-workflow metering need production integration.",
       "support_paths": [
         {
@@ -14785,11 +15000,22 @@
             "budget"
           ],
           "reason": "Conditional operator experiments compare a declared function/field domain with simple predictors and full scheduling/resource costs."
+        },
+        {
+          "path": "tests/t11_context.rs",
+          "owner": "context",
+          "modules": [
+            "context",
+            "contracts",
+            "budget"
+          ],
+          "reason": "Declared Rust integration target for bounded reproducible context packets and their accounted cost.",
+          "task_id": "T11"
         }
       ],
       "readiness": {
         "id": "HEE3-READINESS-001",
-        "sha256": "e774f8984c7e39e85b156289fac809bded6df80ba3647cfb2024c69856447b94",
+        "sha256": "7fd2285b611328e2c8d7aef755d55451ef2d4e0f952524526891ca49533fc090",
         "facets": [
           "F1",
           "F2",
@@ -14855,7 +15081,7 @@
       },
       "testing_standard": {
         "standard_id": "HEE3-TEST-STD-001",
-        "standard_sha256": "14a29dad1d089bc529ff9a132e5f80d5195e81aba2c2c0a07229e1c7c8960b09",
+        "standard_sha256": "f6174830e03fbe54fa3312e4a157fd4b00255aab412067ac3829c50eb73d60e3",
         "minimum_qualifying_cases": 50,
         "maximum_baseline_warnings": 0,
         "maximum_baseline_errors": 0,
@@ -14871,7 +15097,7 @@
       },
       "public_interface": {
         "convention_id": "HEE3-INTERFACES-001",
-        "convention_sha256": "c8a96767e52cf8b309ef5fc5ab968a1e875b0d97ab7d62aaec6f96f1d8436557",
+        "convention_sha256": "70f8a696de7ea69018d752380855f76b2f3732510cc8d8caabac310d1a19a84e",
         "accepted_current_interface": null,
         "admission_validator_available": false,
         "profile": {
@@ -14903,7 +15129,7 @@
       },
       "completion": {
         "standard_id": "HEE3-COMPLETION-001",
-        "standard_sha256": "a36374a796816c1ea4c85c3292d376942fe9da226d714012b87da2588f598594",
+        "standard_sha256": "cd84afe35f99245f89e6d097ade8b59314fb378eef77385a3c6b271596705c75",
         "state": "unassessed",
         "admission_validator_available": false,
         "profile": {
@@ -14939,7 +15165,7 @@
       },
       "security_review": {
         "requested_model": "gpt-daybreak-blue-latest",
-        "profile_sha256": "03303308bedfa6e35a6b70363038bc9b43b305f409005f9e90f7af74b3d9e4c4",
+        "profile_sha256": "c5acbfc49b2334670b027a914590c28e5d0f7dc0fdc62928d475d3804476057f",
         "runtime_enabled": false,
         "completion_authority": false,
         "silent_fallback_allowed": false,
@@ -14953,7 +15179,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "1707365309089f3e11d756ede5afecc61170062149b60123a64e06ff461a1b7d",
+        "convention_sha256": "508c49bbab24e8359ca589b61f72c95371c5b15e79772629a4b351e61138d076",
         "lessons": [
           "LRN08",
           "LRN09",
@@ -14972,7 +15198,7 @@
         "engine_detectors": "unqualified"
       },
       "observations": {
-        "source_kind": "comment_stub",
+        "source_kind": "engine_source",
         "evidence": [],
         "limitations": [
           "Record consistency is not producer authentication, runtime certification or task acceptance.",
@@ -16006,8 +16232,15 @@
           "validation_cmd": "Proposed, not implemented: habitat-engine-check case T10 --fixture-root <disposable-fixtures>",
           "validator_available": false,
           "acceptance": "Concurrent reservations cannot exceed configured bounds; retries/checking/compaction are included; unknown usage is visible; hard-ceiling tasks reject incompatible accounting; fallback cannot cross privacy or tool constraints.",
-          "state": "idle",
-          "evidence": [],
+          "state": "wip",
+          "evidence": [
+            {
+              "path": "evidence/implementation-T10-20260922/progress.json",
+              "sha256": "f2c91f4cad414c67f44a1f9d2fbb15eb2c16c9fabfececc155a19d121b5a278f",
+              "task_id": "T10",
+              "scope": "implementation_candidate"
+            }
+          ],
           "research_refs": [
             "C13",
             "A11"
@@ -16179,8 +16412,15 @@
           "validation_cmd": "Proposed, not implemented: habitat-engine-check case T22 --fixture-root <disposable-fixtures>",
           "validator_available": false,
           "acceptance": "Roles share a versioned objective, distinct artifact ownership and bounded messages. Cross-agent resource conflicts and stale-generation callbacks are rejected. Compare one-worker and specialist-cohort outcomes including cost, errors, disagreement and rework; idle cohorts stop. Persist logical thread identity, versioned mailbox obligations and parent join requirements; protect shared interface/lockfile ownership and recover orchestrator loss without duplicate dispatch. Enforce one conserved parent/child allocation tree. Waiting parents release resources children require. Semantic cross-module calls remain mediated by the composition root and current action authority. Thread briefs preserve the task-critical relationships needed by the receiving specialist; a list of included files alone cannot prove adequate context. Narrow the question explicitly when required coverage exceeds its bound.",
-          "state": "idle",
-          "evidence": [],
+          "state": "wip",
+          "evidence": [
+            {
+              "path": "evidence/implementation-T22-20260922/progress.json",
+              "sha256": "52581890273ef104b38ab29093d51872e1378d9b3989e3f1e5ce3c6b2da0e443",
+              "task_id": "T22",
+              "scope": "implementation_candidate"
+            }
+          ],
           "research_refs": [
             "S02",
             "S09",
@@ -16299,8 +16539,15 @@
           "validation_cmd": "Proposed, not implemented: habitat-engine-check case T28 --fixture-root <disposable-fixtures>",
           "validator_available": false,
           "acceptance": "One action definition drives CLI/Unix schemas and one selected LLM-tool adapter. Bounded discovery/inspection/preview, scoped invocation, identity/idempotency and evidence readback work end to end. Denial remains denial across transports; untrusted workers receive no operator socket; generated projections cannot drift. task.get and analysis.get support their own principal-scoped admission-key readback; service.inspect can query the lifecycle operation key without confusing current health with historic effect. events.subscribe without a cursor provides a bounded coherent bootstrap snapshot plus high-water cursor. Distinguish request correlation from durable idempotency. Base Pi RPC does not supply the engine tool callback path; qualify the actual inherited channel or maintained bridge. Template-produced requests preserve literal typed values at the action boundary; model-emitted risk or approval fields never confer effect authority.",
-          "state": "idle",
-          "evidence": [],
+          "state": "wip",
+          "evidence": [
+            {
+              "path": "evidence/implementation-T28-20260922/progress.json",
+              "sha256": "b37953dfabfceef80d1eea7aebe0e250158c88b30aeb0a5d6e06c76cff226a1e",
+              "task_id": "T28",
+              "scope": "implementation_candidate"
+            }
+          ],
           "research_refs": [
             "A11",
             "A12",
@@ -16329,8 +16576,15 @@
           "validation_cmd": "Proposed, not implemented: habitat-engine-check case T29 --fixture-root <disposable-fixtures>",
           "validator_available": false,
           "acceptance": "Thin updatable packages share action/procedure identity and preserve authority, arguments, producer exit status, cancellation and evidence. Pi errors/parallel calls/reload and effective tool-set readback are qualified; skills disclose bounded context. Two typed compositions close their real return paths. Version switching preserves active attempts and rollback; no separate scheduler or silent self-update. Keep the admitted package/protocol tuple pinned through every active attempt. Revoked/reloaded tool handlers cannot retain effect authority. No custom Pi-host glue is selected until its concrete packaging need is established. Each integration renders its owned template once, then passes literal typed data rather than copying/re-templating procedure bodies. Focused fixtures include braces, quotes, newlines, dollar signs and leading dashes, with exact final argv/JSON and producer-status checks. Preserve source and relationship coverage with whole-workflow context accounting. Source-change reports cannot advance accepted compatibility/source baselines.",
-          "state": "idle",
-          "evidence": [],
+          "state": "wip",
+          "evidence": [
+            {
+              "path": "evidence/implementation-T29-20260922/progress.json",
+              "sha256": "d23d0145a056cf3dd3a3f86f534734826a3e52e4c47157162ee1e3af2dd13461",
+              "task_id": "T29",
+              "scope": "implementation_candidate"
+            }
+          ],
           "research_refs": [
             "B02",
             "B03",
@@ -19610,7 +19864,7 @@
       ],
       "readiness": {
         "id": "HEE3-READINESS-001",
-        "sha256": "e774f8984c7e39e85b156289fac809bded6df80ba3647cfb2024c69856447b94",
+        "sha256": "7fd2285b611328e2c8d7aef755d55451ef2d4e0f952524526891ca49533fc090",
         "facets": [
           "F2",
           "F3",
@@ -19671,7 +19925,7 @@
       },
       "testing_standard": {
         "standard_id": "HEE3-TEST-STD-001",
-        "standard_sha256": "14a29dad1d089bc529ff9a132e5f80d5195e81aba2c2c0a07229e1c7c8960b09",
+        "standard_sha256": "f6174830e03fbe54fa3312e4a157fd4b00255aab412067ac3829c50eb73d60e3",
         "minimum_qualifying_cases": 50,
         "maximum_baseline_warnings": 0,
         "maximum_baseline_errors": 0,
@@ -19687,7 +19941,7 @@
       },
       "public_interface": {
         "convention_id": "HEE3-INTERFACES-001",
-        "convention_sha256": "c8a96767e52cf8b309ef5fc5ab968a1e875b0d97ab7d62aaec6f96f1d8436557",
+        "convention_sha256": "70f8a696de7ea69018d752380855f76b2f3732510cc8d8caabac310d1a19a84e",
         "accepted_current_interface": null,
         "admission_validator_available": false,
         "profile": {
@@ -19719,7 +19973,7 @@
       },
       "completion": {
         "standard_id": "HEE3-COMPLETION-001",
-        "standard_sha256": "a36374a796816c1ea4c85c3292d376942fe9da226d714012b87da2588f598594",
+        "standard_sha256": "cd84afe35f99245f89e6d097ade8b59314fb378eef77385a3c6b271596705c75",
         "state": "unassessed",
         "admission_validator_available": false,
         "profile": {
@@ -19755,7 +20009,7 @@
       },
       "security_review": {
         "requested_model": "gpt-daybreak-blue-latest",
-        "profile_sha256": "03303308bedfa6e35a6b70363038bc9b43b305f409005f9e90f7af74b3d9e4c4",
+        "profile_sha256": "c5acbfc49b2334670b027a914590c28e5d0f7dc0fdc62928d475d3804476057f",
         "runtime_enabled": false,
         "completion_authority": false,
         "silent_fallback_allowed": false,
@@ -19769,7 +20023,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "1707365309089f3e11d756ede5afecc61170062149b60123a64e06ff461a1b7d",
+        "convention_sha256": "508c49bbab24e8359ca589b61f72c95371c5b15e79772629a4b351e61138d076",
         "lessons": [
           "LRN03",
           "LRN05",
@@ -20628,8 +20882,15 @@
           "validation_cmd": "Proposed, not implemented: habitat-engine-check case T10 --fixture-root <disposable-fixtures>",
           "validator_available": false,
           "acceptance": "Concurrent reservations cannot exceed configured bounds; retries/checking/compaction are included; unknown usage is visible; hard-ceiling tasks reject incompatible accounting; fallback cannot cross privacy or tool constraints.",
-          "state": "idle",
-          "evidence": [],
+          "state": "wip",
+          "evidence": [
+            {
+              "path": "evidence/implementation-T10-20260922/progress.json",
+              "sha256": "f2c91f4cad414c67f44a1f9d2fbb15eb2c16c9fabfececc155a19d121b5a278f",
+              "task_id": "T10",
+              "scope": "implementation_candidate"
+            }
+          ],
           "research_refs": [
             "C13",
             "A11"
@@ -25110,7 +25371,7 @@
       ],
       "readiness": {
         "id": "HEE3-READINESS-001",
-        "sha256": "e774f8984c7e39e85b156289fac809bded6df80ba3647cfb2024c69856447b94",
+        "sha256": "7fd2285b611328e2c8d7aef755d55451ef2d4e0f952524526891ca49533fc090",
         "facets": [
           "F2",
           "F3",
@@ -25180,7 +25441,7 @@
       },
       "testing_standard": {
         "standard_id": "HEE3-TEST-STD-001",
-        "standard_sha256": "14a29dad1d089bc529ff9a132e5f80d5195e81aba2c2c0a07229e1c7c8960b09",
+        "standard_sha256": "f6174830e03fbe54fa3312e4a157fd4b00255aab412067ac3829c50eb73d60e3",
         "minimum_qualifying_cases": 50,
         "maximum_baseline_warnings": 0,
         "maximum_baseline_errors": 0,
@@ -25196,7 +25457,7 @@
       },
       "public_interface": {
         "convention_id": "HEE3-INTERFACES-001",
-        "convention_sha256": "c8a96767e52cf8b309ef5fc5ab968a1e875b0d97ab7d62aaec6f96f1d8436557",
+        "convention_sha256": "70f8a696de7ea69018d752380855f76b2f3732510cc8d8caabac310d1a19a84e",
         "accepted_current_interface": null,
         "admission_validator_available": false,
         "profile": {
@@ -25228,7 +25489,7 @@
       },
       "completion": {
         "standard_id": "HEE3-COMPLETION-001",
-        "standard_sha256": "a36374a796816c1ea4c85c3292d376942fe9da226d714012b87da2588f598594",
+        "standard_sha256": "cd84afe35f99245f89e6d097ade8b59314fb378eef77385a3c6b271596705c75",
         "state": "unassessed",
         "admission_validator_available": false,
         "profile": {
@@ -25264,7 +25525,7 @@
       },
       "security_review": {
         "requested_model": "gpt-daybreak-blue-latest",
-        "profile_sha256": "03303308bedfa6e35a6b70363038bc9b43b305f409005f9e90f7af74b3d9e4c4",
+        "profile_sha256": "c5acbfc49b2334670b027a914590c28e5d0f7dc0fdc62928d475d3804476057f",
         "runtime_enabled": false,
         "completion_authority": false,
         "silent_fallback_allowed": false,
@@ -25278,7 +25539,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "1707365309089f3e11d756ede5afecc61170062149b60123a64e06ff461a1b7d",
+        "convention_sha256": "508c49bbab24e8359ca589b61f72c95371c5b15e79772629a4b351e61138d076",
         "lessons": [
           "LRN01",
           "LRN02",
@@ -26650,7 +26911,7 @@
       ],
       "readiness": {
         "id": "HEE3-READINESS-001",
-        "sha256": "e774f8984c7e39e85b156289fac809bded6df80ba3647cfb2024c69856447b94",
+        "sha256": "7fd2285b611328e2c8d7aef755d55451ef2d4e0f952524526891ca49533fc090",
         "facets": [
           "F2",
           "F3",
@@ -26718,7 +26979,7 @@
       },
       "testing_standard": {
         "standard_id": "HEE3-TEST-STD-001",
-        "standard_sha256": "14a29dad1d089bc529ff9a132e5f80d5195e81aba2c2c0a07229e1c7c8960b09",
+        "standard_sha256": "f6174830e03fbe54fa3312e4a157fd4b00255aab412067ac3829c50eb73d60e3",
         "minimum_qualifying_cases": 50,
         "maximum_baseline_warnings": 0,
         "maximum_baseline_errors": 0,
@@ -26734,7 +26995,7 @@
       },
       "public_interface": {
         "convention_id": "HEE3-INTERFACES-001",
-        "convention_sha256": "c8a96767e52cf8b309ef5fc5ab968a1e875b0d97ab7d62aaec6f96f1d8436557",
+        "convention_sha256": "70f8a696de7ea69018d752380855f76b2f3732510cc8d8caabac310d1a19a84e",
         "accepted_current_interface": null,
         "admission_validator_available": false,
         "profile": {
@@ -26766,7 +27027,7 @@
       },
       "completion": {
         "standard_id": "HEE3-COMPLETION-001",
-        "standard_sha256": "a36374a796816c1ea4c85c3292d376942fe9da226d714012b87da2588f598594",
+        "standard_sha256": "cd84afe35f99245f89e6d097ade8b59314fb378eef77385a3c6b271596705c75",
         "state": "unassessed",
         "admission_validator_available": false,
         "profile": {
@@ -26802,7 +27063,7 @@
       },
       "security_review": {
         "requested_model": "gpt-daybreak-blue-latest",
-        "profile_sha256": "03303308bedfa6e35a6b70363038bc9b43b305f409005f9e90f7af74b3d9e4c4",
+        "profile_sha256": "c5acbfc49b2334670b027a914590c28e5d0f7dc0fdc62928d475d3804476057f",
         "runtime_enabled": false,
         "completion_authority": false,
         "silent_fallback_allowed": false,
@@ -26816,7 +27077,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "1707365309089f3e11d756ede5afecc61170062149b60123a64e06ff461a1b7d",
+        "convention_sha256": "508c49bbab24e8359ca589b61f72c95371c5b15e79772629a4b351e61138d076",
         "lessons": [
           "LRN05",
           "LRN06",
@@ -27604,8 +27865,15 @@
           "validation_cmd": "Proposed, not implemented: habitat-engine-check case T10 --fixture-root <disposable-fixtures>",
           "validator_available": false,
           "acceptance": "Concurrent reservations cannot exceed configured bounds; retries/checking/compaction are included; unknown usage is visible; hard-ceiling tasks reject incompatible accounting; fallback cannot cross privacy or tool constraints.",
-          "state": "idle",
-          "evidence": [],
+          "state": "wip",
+          "evidence": [
+            {
+              "path": "evidence/implementation-T10-20260922/progress.json",
+              "sha256": "f2c91f4cad414c67f44a1f9d2fbb15eb2c16c9fabfececc155a19d121b5a278f",
+              "task_id": "T10",
+              "scope": "implementation_candidate"
+            }
+          ],
           "research_refs": [
             "C13",
             "A11"
@@ -27626,8 +27894,15 @@
           "validation_cmd": "Proposed, not implemented: habitat-engine-check case T11 --fixture-root <disposable-fixtures>",
           "validator_available": false,
           "acceptance": "Context is bounded to task needs; actionable wakes are deduplicated/batched; controlled idle and repeated unchanged events cause zero model requests; summaries and compaction usage are accounted for. Context records distinguish required source-file coverage from task-critical call/dependency/ownership relationship coverage. Expose each gap and account for discovery, supplemental reads and repeated context as well as final packet size.",
-          "state": "idle",
-          "evidence": [],
+          "state": "wip",
+          "evidence": [
+            {
+              "path": "evidence/implementation-T11-20260922/progress.json",
+              "sha256": "37fee8762915d1aa1e381e40a847127213b4563944d957b398bd853a5da81700",
+              "task_id": "T11",
+              "scope": "implementation_candidate"
+            }
+          ],
           "research_refs": [
             "D18",
             "H12",
@@ -27803,8 +28078,15 @@
           "validation_cmd": "Proposed, not implemented: habitat-engine-check case T22 --fixture-root <disposable-fixtures>",
           "validator_available": false,
           "acceptance": "Roles share a versioned objective, distinct artifact ownership and bounded messages. Cross-agent resource conflicts and stale-generation callbacks are rejected. Compare one-worker and specialist-cohort outcomes including cost, errors, disagreement and rework; idle cohorts stop. Persist logical thread identity, versioned mailbox obligations and parent join requirements; protect shared interface/lockfile ownership and recover orchestrator loss without duplicate dispatch. Enforce one conserved parent/child allocation tree. Waiting parents release resources children require. Semantic cross-module calls remain mediated by the composition root and current action authority. Thread briefs preserve the task-critical relationships needed by the receiving specialist; a list of included files alone cannot prove adequate context. Narrow the question explicitly when required coverage exceeds its bound.",
-          "state": "idle",
-          "evidence": [],
+          "state": "wip",
+          "evidence": [
+            {
+              "path": "evidence/implementation-T22-20260922/progress.json",
+              "sha256": "52581890273ef104b38ab29093d51872e1378d9b3989e3f1e5ce3c6b2da0e443",
+              "task_id": "T22",
+              "scope": "implementation_candidate"
+            }
+          ],
           "research_refs": [
             "S02",
             "S09",
@@ -27923,8 +28205,15 @@
           "validation_cmd": "Proposed, not implemented: habitat-engine-check case T29 --fixture-root <disposable-fixtures>",
           "validator_available": false,
           "acceptance": "Thin updatable packages share action/procedure identity and preserve authority, arguments, producer exit status, cancellation and evidence. Pi errors/parallel calls/reload and effective tool-set readback are qualified; skills disclose bounded context. Two typed compositions close their real return paths. Version switching preserves active attempts and rollback; no separate scheduler or silent self-update. Keep the admitted package/protocol tuple pinned through every active attempt. Revoked/reloaded tool handlers cannot retain effect authority. No custom Pi-host glue is selected until its concrete packaging need is established. Each integration renders its owned template once, then passes literal typed data rather than copying/re-templating procedure bodies. Focused fixtures include braces, quotes, newlines, dollar signs and leading dashes, with exact final argv/JSON and producer-status checks. Preserve source and relationship coverage with whole-workflow context accounting. Source-change reports cannot advance accepted compatibility/source baselines.",
-          "state": "idle",
-          "evidence": [],
+          "state": "wip",
+          "evidence": [
+            {
+              "path": "evidence/implementation-T29-20260922/progress.json",
+              "sha256": "d23d0145a056cf3dd3a3f86f534734826a3e52e4c47157162ee1e3af2dd13461",
+              "task_id": "T29",
+              "scope": "implementation_candidate"
+            }
+          ],
           "research_refs": [
             "B02",
             "B03",
@@ -28417,11 +28706,21 @@
             "workflows"
           ],
           "reason": "Release evidence aggregates exact-subject qualification receipts; aggregation cannot create or replace module proof."
+        },
+        {
+          "path": "tests/t22_cohort.rs",
+          "owner": "cohort",
+          "modules": [
+            "cohort",
+            "contracts"
+          ],
+          "reason": "Declared Rust integration target for bounded specialist threads, disjoint write ownership and parent joins.",
+          "task_id": "T22"
         }
       ],
       "readiness": {
         "id": "HEE3-READINESS-001",
-        "sha256": "e774f8984c7e39e85b156289fac809bded6df80ba3647cfb2024c69856447b94",
+        "sha256": "7fd2285b611328e2c8d7aef755d55451ef2d4e0f952524526891ca49533fc090",
         "facets": [
           "F2",
           "F3",
@@ -28478,7 +28777,7 @@
       },
       "testing_standard": {
         "standard_id": "HEE3-TEST-STD-001",
-        "standard_sha256": "14a29dad1d089bc529ff9a132e5f80d5195e81aba2c2c0a07229e1c7c8960b09",
+        "standard_sha256": "f6174830e03fbe54fa3312e4a157fd4b00255aab412067ac3829c50eb73d60e3",
         "minimum_qualifying_cases": 50,
         "maximum_baseline_warnings": 0,
         "maximum_baseline_errors": 0,
@@ -28494,7 +28793,7 @@
       },
       "public_interface": {
         "convention_id": "HEE3-INTERFACES-001",
-        "convention_sha256": "c8a96767e52cf8b309ef5fc5ab968a1e875b0d97ab7d62aaec6f96f1d8436557",
+        "convention_sha256": "70f8a696de7ea69018d752380855f76b2f3732510cc8d8caabac310d1a19a84e",
         "accepted_current_interface": null,
         "admission_validator_available": false,
         "profile": {
@@ -28526,7 +28825,7 @@
       },
       "completion": {
         "standard_id": "HEE3-COMPLETION-001",
-        "standard_sha256": "a36374a796816c1ea4c85c3292d376942fe9da226d714012b87da2588f598594",
+        "standard_sha256": "cd84afe35f99245f89e6d097ade8b59314fb378eef77385a3c6b271596705c75",
         "state": "unassessed",
         "admission_validator_available": false,
         "profile": {
@@ -28562,7 +28861,7 @@
       },
       "security_review": {
         "requested_model": "gpt-daybreak-blue-latest",
-        "profile_sha256": "03303308bedfa6e35a6b70363038bc9b43b305f409005f9e90f7af74b3d9e4c4",
+        "profile_sha256": "c5acbfc49b2334670b027a914590c28e5d0f7dc0fdc62928d475d3804476057f",
         "runtime_enabled": false,
         "completion_authority": false,
         "silent_fallback_allowed": false,
@@ -28576,7 +28875,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "1707365309089f3e11d756ede5afecc61170062149b60123a64e06ff461a1b7d",
+        "convention_sha256": "508c49bbab24e8359ca589b61f72c95371c5b15e79772629a4b351e61138d076",
         "lessons": [
           "LRN07",
           "LRN08",
@@ -28598,7 +28897,7 @@
         "engine_detectors": "unqualified"
       },
       "observations": {
-        "source_kind": "comment_stub",
+        "source_kind": "engine_source",
         "evidence": [],
         "limitations": [
           "Record consistency is not producer authentication, runtime certification or task acceptance.",
@@ -29213,8 +29512,15 @@
           "validation_cmd": "Proposed, not implemented: habitat-engine-check case T10 --fixture-root <disposable-fixtures>",
           "validator_available": false,
           "acceptance": "Concurrent reservations cannot exceed configured bounds; retries/checking/compaction are included; unknown usage is visible; hard-ceiling tasks reject incompatible accounting; fallback cannot cross privacy or tool constraints.",
-          "state": "idle",
-          "evidence": [],
+          "state": "wip",
+          "evidence": [
+            {
+              "path": "evidence/implementation-T10-20260922/progress.json",
+              "sha256": "f2c91f4cad414c67f44a1f9d2fbb15eb2c16c9fabfececc155a19d121b5a278f",
+              "task_id": "T10",
+              "scope": "implementation_candidate"
+            }
+          ],
           "research_refs": [
             "C13",
             "A11"
@@ -29235,8 +29541,15 @@
           "validation_cmd": "Proposed, not implemented: habitat-engine-check case T11 --fixture-root <disposable-fixtures>",
           "validator_available": false,
           "acceptance": "Context is bounded to task needs; actionable wakes are deduplicated/batched; controlled idle and repeated unchanged events cause zero model requests; summaries and compaction usage are accounted for. Context records distinguish required source-file coverage from task-critical call/dependency/ownership relationship coverage. Expose each gap and account for discovery, supplemental reads and repeated context as well as final packet size.",
-          "state": "idle",
-          "evidence": [],
+          "state": "wip",
+          "evidence": [
+            {
+              "path": "evidence/implementation-T11-20260922/progress.json",
+              "sha256": "37fee8762915d1aa1e381e40a847127213b4563944d957b398bd853a5da81700",
+              "task_id": "T11",
+              "scope": "implementation_candidate"
+            }
+          ],
           "research_refs": [
             "D18",
             "H12",
@@ -29386,8 +29699,15 @@
           "validation_cmd": "Proposed, not implemented: habitat-engine-check case T22 --fixture-root <disposable-fixtures>",
           "validator_available": false,
           "acceptance": "Roles share a versioned objective, distinct artifact ownership and bounded messages. Cross-agent resource conflicts and stale-generation callbacks are rejected. Compare one-worker and specialist-cohort outcomes including cost, errors, disagreement and rework; idle cohorts stop. Persist logical thread identity, versioned mailbox obligations and parent join requirements; protect shared interface/lockfile ownership and recover orchestrator loss without duplicate dispatch. Enforce one conserved parent/child allocation tree. Waiting parents release resources children require. Semantic cross-module calls remain mediated by the composition root and current action authority. Thread briefs preserve the task-critical relationships needed by the receiving specialist; a list of included files alone cannot prove adequate context. Narrow the question explicitly when required coverage exceeds its bound.",
-          "state": "idle",
-          "evidence": [],
+          "state": "wip",
+          "evidence": [
+            {
+              "path": "evidence/implementation-T22-20260922/progress.json",
+              "sha256": "52581890273ef104b38ab29093d51872e1378d9b3989e3f1e5ce3c6b2da0e443",
+              "task_id": "T22",
+              "scope": "implementation_candidate"
+            }
+          ],
           "research_refs": [
             "S02",
             "S09",
@@ -29506,8 +29826,15 @@
           "validation_cmd": "Proposed, not implemented: habitat-engine-check case T29 --fixture-root <disposable-fixtures>",
           "validator_available": false,
           "acceptance": "Thin updatable packages share action/procedure identity and preserve authority, arguments, producer exit status, cancellation and evidence. Pi errors/parallel calls/reload and effective tool-set readback are qualified; skills disclose bounded context. Two typed compositions close their real return paths. Version switching preserves active attempts and rollback; no separate scheduler or silent self-update. Keep the admitted package/protocol tuple pinned through every active attempt. Revoked/reloaded tool handlers cannot retain effect authority. No custom Pi-host glue is selected until its concrete packaging need is established. Each integration renders its owned template once, then passes literal typed data rather than copying/re-templating procedure bodies. Focused fixtures include braces, quotes, newlines, dollar signs and leading dashes, with exact final argv/JSON and producer-status checks. Preserve source and relationship coverage with whole-workflow context accounting. Source-change reports cannot advance accepted compatibility/source baselines.",
-          "state": "idle",
-          "evidence": [],
+          "state": "wip",
+          "evidence": [
+            {
+              "path": "evidence/implementation-T29-20260922/progress.json",
+              "sha256": "d23d0145a056cf3dd3a3f86f534734826a3e52e4c47157162ee1e3af2dd13461",
+              "task_id": "T29",
+              "scope": "implementation_candidate"
+            }
+          ],
           "research_refs": [
             "B02",
             "B03",
@@ -29963,11 +30290,22 @@
             "workflows"
           ],
           "reason": "Release evidence aggregates exact-subject qualification receipts; aggregation cannot create or replace module proof."
+        },
+        {
+          "path": "tests/t11_context.rs",
+          "owner": "context",
+          "modules": [
+            "context",
+            "contracts",
+            "budget"
+          ],
+          "reason": "Declared Rust integration target for bounded reproducible context packets and their accounted cost.",
+          "task_id": "T11"
         }
       ],
       "readiness": {
         "id": "HEE3-READINESS-001",
-        "sha256": "e774f8984c7e39e85b156289fac809bded6df80ba3647cfb2024c69856447b94",
+        "sha256": "7fd2285b611328e2c8d7aef755d55451ef2d4e0f952524526891ca49533fc090",
         "facets": [
           "F2",
           "F3",
@@ -30025,7 +30363,7 @@
       },
       "testing_standard": {
         "standard_id": "HEE3-TEST-STD-001",
-        "standard_sha256": "14a29dad1d089bc529ff9a132e5f80d5195e81aba2c2c0a07229e1c7c8960b09",
+        "standard_sha256": "f6174830e03fbe54fa3312e4a157fd4b00255aab412067ac3829c50eb73d60e3",
         "minimum_qualifying_cases": 50,
         "maximum_baseline_warnings": 0,
         "maximum_baseline_errors": 0,
@@ -30041,7 +30379,7 @@
       },
       "public_interface": {
         "convention_id": "HEE3-INTERFACES-001",
-        "convention_sha256": "c8a96767e52cf8b309ef5fc5ab968a1e875b0d97ab7d62aaec6f96f1d8436557",
+        "convention_sha256": "70f8a696de7ea69018d752380855f76b2f3732510cc8d8caabac310d1a19a84e",
         "accepted_current_interface": null,
         "admission_validator_available": false,
         "profile": {
@@ -30073,7 +30411,7 @@
       },
       "completion": {
         "standard_id": "HEE3-COMPLETION-001",
-        "standard_sha256": "a36374a796816c1ea4c85c3292d376942fe9da226d714012b87da2588f598594",
+        "standard_sha256": "cd84afe35f99245f89e6d097ade8b59314fb378eef77385a3c6b271596705c75",
         "state": "unassessed",
         "admission_validator_available": false,
         "profile": {
@@ -30109,7 +30447,7 @@
       },
       "security_review": {
         "requested_model": "gpt-daybreak-blue-latest",
-        "profile_sha256": "03303308bedfa6e35a6b70363038bc9b43b305f409005f9e90f7af74b3d9e4c4",
+        "profile_sha256": "c5acbfc49b2334670b027a914590c28e5d0f7dc0fdc62928d475d3804476057f",
         "runtime_enabled": false,
         "completion_authority": false,
         "silent_fallback_allowed": false,
@@ -30123,7 +30461,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "1707365309089f3e11d756ede5afecc61170062149b60123a64e06ff461a1b7d",
+        "convention_sha256": "508c49bbab24e8359ca589b61f72c95371c5b15e79772629a4b351e61138d076",
         "lessons": [
           "LRN03",
           "LRN08",
@@ -30148,7 +30486,7 @@
         "engine_detectors": "unqualified"
       },
       "observations": {
-        "source_kind": "comment_stub",
+        "source_kind": "engine_source",
         "evidence": [],
         "limitations": [
           "Record consistency is not producer authentication, runtime certification or task acceptance.",
@@ -30855,8 +31193,15 @@
           "validation_cmd": "Proposed, not implemented: habitat-engine-check case T11 --fixture-root <disposable-fixtures>",
           "validator_available": false,
           "acceptance": "Context is bounded to task needs; actionable wakes are deduplicated/batched; controlled idle and repeated unchanged events cause zero model requests; summaries and compaction usage are accounted for. Context records distinguish required source-file coverage from task-critical call/dependency/ownership relationship coverage. Expose each gap and account for discovery, supplemental reads and repeated context as well as final packet size.",
-          "state": "idle",
-          "evidence": [],
+          "state": "wip",
+          "evidence": [
+            {
+              "path": "evidence/implementation-T11-20260922/progress.json",
+              "sha256": "37fee8762915d1aa1e381e40a847127213b4563944d957b398bd853a5da81700",
+              "task_id": "T11",
+              "scope": "implementation_candidate"
+            }
+          ],
           "research_refs": [
             "D18",
             "H12",
@@ -31504,11 +31849,21 @@
             "workflows"
           ],
           "reason": "Release evidence aggregates exact-subject qualification receipts; aggregation cannot create or replace module proof."
+        },
+        {
+          "path": "tests/t11_notify.rs",
+          "owner": "notify",
+          "modules": [
+            "notify",
+            "contracts"
+          ],
+          "reason": "Declared Rust integration target for committed-event subscription and delivery obligations.",
+          "task_id": "T11"
         }
       ],
       "readiness": {
         "id": "HEE3-READINESS-001",
-        "sha256": "e774f8984c7e39e85b156289fac809bded6df80ba3647cfb2024c69856447b94",
+        "sha256": "7fd2285b611328e2c8d7aef755d55451ef2d4e0f952524526891ca49533fc090",
         "facets": [
           "F2",
           "F3",
@@ -31576,7 +31931,7 @@
       },
       "testing_standard": {
         "standard_id": "HEE3-TEST-STD-001",
-        "standard_sha256": "14a29dad1d089bc529ff9a132e5f80d5195e81aba2c2c0a07229e1c7c8960b09",
+        "standard_sha256": "f6174830e03fbe54fa3312e4a157fd4b00255aab412067ac3829c50eb73d60e3",
         "minimum_qualifying_cases": 50,
         "maximum_baseline_warnings": 0,
         "maximum_baseline_errors": 0,
@@ -31592,7 +31947,7 @@
       },
       "public_interface": {
         "convention_id": "HEE3-INTERFACES-001",
-        "convention_sha256": "c8a96767e52cf8b309ef5fc5ab968a1e875b0d97ab7d62aaec6f96f1d8436557",
+        "convention_sha256": "70f8a696de7ea69018d752380855f76b2f3732510cc8d8caabac310d1a19a84e",
         "accepted_current_interface": null,
         "admission_validator_available": false,
         "profile": {
@@ -31624,7 +31979,7 @@
       },
       "completion": {
         "standard_id": "HEE3-COMPLETION-001",
-        "standard_sha256": "a36374a796816c1ea4c85c3292d376942fe9da226d714012b87da2588f598594",
+        "standard_sha256": "cd84afe35f99245f89e6d097ade8b59314fb378eef77385a3c6b271596705c75",
         "state": "unassessed",
         "admission_validator_available": false,
         "profile": {
@@ -31660,7 +32015,7 @@
       },
       "security_review": {
         "requested_model": "gpt-daybreak-blue-latest",
-        "profile_sha256": "03303308bedfa6e35a6b70363038bc9b43b305f409005f9e90f7af74b3d9e4c4",
+        "profile_sha256": "c5acbfc49b2334670b027a914590c28e5d0f7dc0fdc62928d475d3804476057f",
         "runtime_enabled": false,
         "completion_authority": false,
         "silent_fallback_allowed": false,
@@ -31674,7 +32029,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "1707365309089f3e11d756ede5afecc61170062149b60123a64e06ff461a1b7d",
+        "convention_sha256": "508c49bbab24e8359ca589b61f72c95371c5b15e79772629a4b351e61138d076",
         "lessons": [
           "LRN01",
           "LRN03",
@@ -31693,7 +32048,7 @@
         "engine_detectors": "unqualified"
       },
       "observations": {
-        "source_kind": "comment_stub",
+        "source_kind": "engine_source",
         "evidence": [],
         "limitations": [
           "Record consistency is not producer authentication, runtime certification or task acceptance.",
@@ -33237,7 +33592,7 @@
       ],
       "readiness": {
         "id": "HEE3-READINESS-001",
-        "sha256": "e774f8984c7e39e85b156289fac809bded6df80ba3647cfb2024c69856447b94",
+        "sha256": "7fd2285b611328e2c8d7aef755d55451ef2d4e0f952524526891ca49533fc090",
         "facets": [
           "F2",
           "F3",
@@ -33306,7 +33661,7 @@
       },
       "testing_standard": {
         "standard_id": "HEE3-TEST-STD-001",
-        "standard_sha256": "14a29dad1d089bc529ff9a132e5f80d5195e81aba2c2c0a07229e1c7c8960b09",
+        "standard_sha256": "f6174830e03fbe54fa3312e4a157fd4b00255aab412067ac3829c50eb73d60e3",
         "minimum_qualifying_cases": 50,
         "maximum_baseline_warnings": 0,
         "maximum_baseline_errors": 0,
@@ -33322,7 +33677,7 @@
       },
       "public_interface": {
         "convention_id": "HEE3-INTERFACES-001",
-        "convention_sha256": "c8a96767e52cf8b309ef5fc5ab968a1e875b0d97ab7d62aaec6f96f1d8436557",
+        "convention_sha256": "70f8a696de7ea69018d752380855f76b2f3732510cc8d8caabac310d1a19a84e",
         "accepted_current_interface": null,
         "admission_validator_available": false,
         "profile": {
@@ -33354,7 +33709,7 @@
       },
       "completion": {
         "standard_id": "HEE3-COMPLETION-001",
-        "standard_sha256": "a36374a796816c1ea4c85c3292d376942fe9da226d714012b87da2588f598594",
+        "standard_sha256": "cd84afe35f99245f89e6d097ade8b59314fb378eef77385a3c6b271596705c75",
         "state": "unassessed",
         "admission_validator_available": false,
         "profile": {
@@ -33390,7 +33745,7 @@
       },
       "security_review": {
         "requested_model": "gpt-daybreak-blue-latest",
-        "profile_sha256": "03303308bedfa6e35a6b70363038bc9b43b305f409005f9e90f7af74b3d9e4c4",
+        "profile_sha256": "c5acbfc49b2334670b027a914590c28e5d0f7dc0fdc62928d475d3804476057f",
         "runtime_enabled": false,
         "completion_authority": false,
         "silent_fallback_allowed": false,
@@ -33404,7 +33759,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "1707365309089f3e11d756ede5afecc61170062149b60123a64e06ff461a1b7d",
+        "convention_sha256": "508c49bbab24e8359ca589b61f72c95371c5b15e79772629a4b351e61138d076",
         "lessons": [
           "LRN06",
           "LRN07",
@@ -33994,8 +34349,15 @@
           "validation_cmd": "Proposed, not implemented: habitat-engine-check case T16 --fixture-root <disposable-fixtures>",
           "validator_available": false,
           "acceptance": "Task cards show owner, model, state, spend and outcome; pane closure does not erase task state; reconnect resynchronises; event gap/poll fallback and user cancel are exercised on the actual public Herdr API. Display the current loop iteration, failing criterion, remaining budget, completion evidence and notification state. The captured Herdr protocol has live events without durable replay cursors. Qualify resubscription and coherent snapshot reconciliation; do not claim gap-free Herdr history.",
-          "state": "idle",
-          "evidence": [],
+          "state": "wip",
+          "evidence": [
+            {
+              "path": "evidence/implementation-T16-20260922/progress.json",
+              "sha256": "07d9a882b30922ebdb5526220ec0bf620f3731b6a8dd3c0fdd2ca14b39fb2ac7",
+              "task_id": "T16",
+              "scope": "implementation_candidate"
+            }
+          ],
           "research_refs": [
             "D19",
             "H10",
@@ -34605,11 +34967,21 @@
             "workflows"
           ],
           "reason": "Release evidence aggregates exact-subject qualification receipts; aggregation cannot create or replace module proof."
+        },
+        {
+          "path": "tests/t16_herdr.rs",
+          "owner": "herdr",
+          "modules": [
+            "herdr",
+            "contracts"
+          ],
+          "reason": "Declared Rust integration target for the multiplexer client surface; presentation only, no authority.",
+          "task_id": "T16"
         }
       ],
       "readiness": {
         "id": "HEE3-READINESS-001",
-        "sha256": "e774f8984c7e39e85b156289fac809bded6df80ba3647cfb2024c69856447b94",
+        "sha256": "7fd2285b611328e2c8d7aef755d55451ef2d4e0f952524526891ca49533fc090",
         "facets": [
           "F2",
           "F3",
@@ -34666,7 +35038,7 @@
       },
       "testing_standard": {
         "standard_id": "HEE3-TEST-STD-001",
-        "standard_sha256": "14a29dad1d089bc529ff9a132e5f80d5195e81aba2c2c0a07229e1c7c8960b09",
+        "standard_sha256": "f6174830e03fbe54fa3312e4a157fd4b00255aab412067ac3829c50eb73d60e3",
         "minimum_qualifying_cases": 50,
         "maximum_baseline_warnings": 0,
         "maximum_baseline_errors": 0,
@@ -34682,7 +35054,7 @@
       },
       "public_interface": {
         "convention_id": "HEE3-INTERFACES-001",
-        "convention_sha256": "c8a96767e52cf8b309ef5fc5ab968a1e875b0d97ab7d62aaec6f96f1d8436557",
+        "convention_sha256": "70f8a696de7ea69018d752380855f76b2f3732510cc8d8caabac310d1a19a84e",
         "accepted_current_interface": null,
         "admission_validator_available": false,
         "profile": {
@@ -34714,7 +35086,7 @@
       },
       "completion": {
         "standard_id": "HEE3-COMPLETION-001",
-        "standard_sha256": "a36374a796816c1ea4c85c3292d376942fe9da226d714012b87da2588f598594",
+        "standard_sha256": "cd84afe35f99245f89e6d097ade8b59314fb378eef77385a3c6b271596705c75",
         "state": "unassessed",
         "admission_validator_available": false,
         "profile": {
@@ -34750,7 +35122,7 @@
       },
       "security_review": {
         "requested_model": "gpt-daybreak-blue-latest",
-        "profile_sha256": "03303308bedfa6e35a6b70363038bc9b43b305f409005f9e90f7af74b3d9e4c4",
+        "profile_sha256": "c5acbfc49b2334670b027a914590c28e5d0f7dc0fdc62928d475d3804476057f",
         "runtime_enabled": false,
         "completion_authority": false,
         "silent_fallback_allowed": false,
@@ -34764,7 +35136,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "1707365309089f3e11d756ede5afecc61170062149b60123a64e06ff461a1b7d",
+        "convention_sha256": "508c49bbab24e8359ca589b61f72c95371c5b15e79772629a4b351e61138d076",
         "lessons": [
           "LRN01",
           "LRN08",
@@ -34781,7 +35153,7 @@
         "engine_detectors": "unqualified"
       },
       "observations": {
-        "source_kind": "comment_stub",
+        "source_kind": "engine_source",
         "evidence": [],
         "limitations": [
           "Record consistency is not producer authentication, runtime certification or task acceptance.",
@@ -35849,8 +36221,15 @@
           "validation_cmd": "Proposed, not implemented: habitat-engine-check case T22 --fixture-root <disposable-fixtures>",
           "validator_available": false,
           "acceptance": "Roles share a versioned objective, distinct artifact ownership and bounded messages. Cross-agent resource conflicts and stale-generation callbacks are rejected. Compare one-worker and specialist-cohort outcomes including cost, errors, disagreement and rework; idle cohorts stop. Persist logical thread identity, versioned mailbox obligations and parent join requirements; protect shared interface/lockfile ownership and recover orchestrator loss without duplicate dispatch. Enforce one conserved parent/child allocation tree. Waiting parents release resources children require. Semantic cross-module calls remain mediated by the composition root and current action authority. Thread briefs preserve the task-critical relationships needed by the receiving specialist; a list of included files alone cannot prove adequate context. Narrow the question explicitly when required coverage exceeds its bound.",
-          "state": "idle",
-          "evidence": [],
+          "state": "wip",
+          "evidence": [
+            {
+              "path": "evidence/implementation-T22-20260922/progress.json",
+              "sha256": "52581890273ef104b38ab29093d51872e1378d9b3989e3f1e5ce3c6b2da0e443",
+              "task_id": "T22",
+              "scope": "implementation_candidate"
+            }
+          ],
           "research_refs": [
             "S02",
             "S09",
@@ -36596,7 +36975,7 @@
       ],
       "readiness": {
         "id": "HEE3-READINESS-001",
-        "sha256": "e774f8984c7e39e85b156289fac809bded6df80ba3647cfb2024c69856447b94",
+        "sha256": "7fd2285b611328e2c8d7aef755d55451ef2d4e0f952524526891ca49533fc090",
         "facets": [
           "F1",
           "F2",
@@ -36661,7 +37040,7 @@
       },
       "testing_standard": {
         "standard_id": "HEE3-TEST-STD-001",
-        "standard_sha256": "14a29dad1d089bc529ff9a132e5f80d5195e81aba2c2c0a07229e1c7c8960b09",
+        "standard_sha256": "f6174830e03fbe54fa3312e4a157fd4b00255aab412067ac3829c50eb73d60e3",
         "minimum_qualifying_cases": 50,
         "maximum_baseline_warnings": 0,
         "maximum_baseline_errors": 0,
@@ -36677,7 +37056,7 @@
       },
       "public_interface": {
         "convention_id": "HEE3-INTERFACES-001",
-        "convention_sha256": "c8a96767e52cf8b309ef5fc5ab968a1e875b0d97ab7d62aaec6f96f1d8436557",
+        "convention_sha256": "70f8a696de7ea69018d752380855f76b2f3732510cc8d8caabac310d1a19a84e",
         "accepted_current_interface": null,
         "admission_validator_available": false,
         "profile": {
@@ -36709,7 +37088,7 @@
       },
       "completion": {
         "standard_id": "HEE3-COMPLETION-001",
-        "standard_sha256": "a36374a796816c1ea4c85c3292d376942fe9da226d714012b87da2588f598594",
+        "standard_sha256": "cd84afe35f99245f89e6d097ade8b59314fb378eef77385a3c6b271596705c75",
         "state": "unassessed",
         "admission_validator_available": false,
         "profile": {
@@ -36745,7 +37124,7 @@
       },
       "security_review": {
         "requested_model": "gpt-daybreak-blue-latest",
-        "profile_sha256": "03303308bedfa6e35a6b70363038bc9b43b305f409005f9e90f7af74b3d9e4c4",
+        "profile_sha256": "c5acbfc49b2334670b027a914590c28e5d0f7dc0fdc62928d475d3804476057f",
         "runtime_enabled": false,
         "completion_authority": false,
         "silent_fallback_allowed": false,
@@ -36759,7 +37138,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "1707365309089f3e11d756ede5afecc61170062149b60123a64e06ff461a1b7d",
+        "convention_sha256": "508c49bbab24e8359ca589b61f72c95371c5b15e79772629a4b351e61138d076",
         "lessons": [
           "LRN03",
           "LRN05",
@@ -37728,8 +38107,15 @@
           "validation_cmd": "Proposed, not implemented: habitat-engine-check case T22 --fixture-root <disposable-fixtures>",
           "validator_available": false,
           "acceptance": "Roles share a versioned objective, distinct artifact ownership and bounded messages. Cross-agent resource conflicts and stale-generation callbacks are rejected. Compare one-worker and specialist-cohort outcomes including cost, errors, disagreement and rework; idle cohorts stop. Persist logical thread identity, versioned mailbox obligations and parent join requirements; protect shared interface/lockfile ownership and recover orchestrator loss without duplicate dispatch. Enforce one conserved parent/child allocation tree. Waiting parents release resources children require. Semantic cross-module calls remain mediated by the composition root and current action authority. Thread briefs preserve the task-critical relationships needed by the receiving specialist; a list of included files alone cannot prove adequate context. Narrow the question explicitly when required coverage exceeds its bound.",
-          "state": "idle",
-          "evidence": [],
+          "state": "wip",
+          "evidence": [
+            {
+              "path": "evidence/implementation-T22-20260922/progress.json",
+              "sha256": "52581890273ef104b38ab29093d51872e1378d9b3989e3f1e5ce3c6b2da0e443",
+              "task_id": "T22",
+              "scope": "implementation_candidate"
+            }
+          ],
           "research_refs": [
             "S02",
             "S09",
@@ -38569,7 +38955,7 @@
       ],
       "readiness": {
         "id": "HEE3-READINESS-001",
-        "sha256": "e774f8984c7e39e85b156289fac809bded6df80ba3647cfb2024c69856447b94",
+        "sha256": "7fd2285b611328e2c8d7aef755d55451ef2d4e0f952524526891ca49533fc090",
         "facets": [
           "F1",
           "F2",
@@ -38636,7 +39022,7 @@
       },
       "testing_standard": {
         "standard_id": "HEE3-TEST-STD-001",
-        "standard_sha256": "14a29dad1d089bc529ff9a132e5f80d5195e81aba2c2c0a07229e1c7c8960b09",
+        "standard_sha256": "f6174830e03fbe54fa3312e4a157fd4b00255aab412067ac3829c50eb73d60e3",
         "minimum_qualifying_cases": 50,
         "maximum_baseline_warnings": 0,
         "maximum_baseline_errors": 0,
@@ -38652,7 +39038,7 @@
       },
       "public_interface": {
         "convention_id": "HEE3-INTERFACES-001",
-        "convention_sha256": "c8a96767e52cf8b309ef5fc5ab968a1e875b0d97ab7d62aaec6f96f1d8436557",
+        "convention_sha256": "70f8a696de7ea69018d752380855f76b2f3732510cc8d8caabac310d1a19a84e",
         "accepted_current_interface": null,
         "admission_validator_available": false,
         "profile": {
@@ -38684,7 +39070,7 @@
       },
       "completion": {
         "standard_id": "HEE3-COMPLETION-001",
-        "standard_sha256": "a36374a796816c1ea4c85c3292d376942fe9da226d714012b87da2588f598594",
+        "standard_sha256": "cd84afe35f99245f89e6d097ade8b59314fb378eef77385a3c6b271596705c75",
         "state": "unassessed",
         "admission_validator_available": false,
         "profile": {
@@ -38720,7 +39106,7 @@
       },
       "security_review": {
         "requested_model": "gpt-daybreak-blue-latest",
-        "profile_sha256": "03303308bedfa6e35a6b70363038bc9b43b305f409005f9e90f7af74b3d9e4c4",
+        "profile_sha256": "c5acbfc49b2334670b027a914590c28e5d0f7dc0fdc62928d475d3804476057f",
         "runtime_enabled": false,
         "completion_authority": false,
         "silent_fallback_allowed": false,
@@ -38734,7 +39120,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "1707365309089f3e11d756ede5afecc61170062149b60123a64e06ff461a1b7d",
+        "convention_sha256": "508c49bbab24e8359ca589b61f72c95371c5b15e79772629a4b351e61138d076",
         "lessons": [
           "LRN03",
           "LRN05",
@@ -39644,8 +40030,15 @@
           "validation_cmd": "Proposed, not implemented: habitat-engine-check case T16 --fixture-root <disposable-fixtures>",
           "validator_available": false,
           "acceptance": "Task cards show owner, model, state, spend and outcome; pane closure does not erase task state; reconnect resynchronises; event gap/poll fallback and user cancel are exercised on the actual public Herdr API. Display the current loop iteration, failing criterion, remaining budget, completion evidence and notification state. The captured Herdr protocol has live events without durable replay cursors. Qualify resubscription and coherent snapshot reconciliation; do not claim gap-free Herdr history.",
-          "state": "idle",
-          "evidence": [],
+          "state": "wip",
+          "evidence": [
+            {
+              "path": "evidence/implementation-T16-20260922/progress.json",
+              "sha256": "07d9a882b30922ebdb5526220ec0bf620f3731b6a8dd3c0fdd2ca14b39fb2ac7",
+              "task_id": "T16",
+              "scope": "implementation_candidate"
+            }
+          ],
           "research_refs": [
             "D19",
             "H10",
@@ -39865,8 +40258,15 @@
           "validation_cmd": "Proposed, not implemented: habitat-engine-check case T28 --fixture-root <disposable-fixtures>",
           "validator_available": false,
           "acceptance": "One action definition drives CLI/Unix schemas and one selected LLM-tool adapter. Bounded discovery/inspection/preview, scoped invocation, identity/idempotency and evidence readback work end to end. Denial remains denial across transports; untrusted workers receive no operator socket; generated projections cannot drift. task.get and analysis.get support their own principal-scoped admission-key readback; service.inspect can query the lifecycle operation key without confusing current health with historic effect. events.subscribe without a cursor provides a bounded coherent bootstrap snapshot plus high-water cursor. Distinguish request correlation from durable idempotency. Base Pi RPC does not supply the engine tool callback path; qualify the actual inherited channel or maintained bridge. Template-produced requests preserve literal typed values at the action boundary; model-emitted risk or approval fields never confer effect authority.",
-          "state": "idle",
-          "evidence": [],
+          "state": "wip",
+          "evidence": [
+            {
+              "path": "evidence/implementation-T28-20260922/progress.json",
+              "sha256": "b37953dfabfceef80d1eea7aebe0e250158c88b30aeb0a5d6e06c76cff226a1e",
+              "task_id": "T28",
+              "scope": "implementation_candidate"
+            }
+          ],
           "research_refs": [
             "A11",
             "A12",
@@ -41256,7 +41656,7 @@
       ],
       "readiness": {
         "id": "HEE3-READINESS-001",
-        "sha256": "e774f8984c7e39e85b156289fac809bded6df80ba3647cfb2024c69856447b94",
+        "sha256": "7fd2285b611328e2c8d7aef755d55451ef2d4e0f952524526891ca49533fc090",
         "facets": [
           "F1",
           "F2",
@@ -41334,7 +41734,7 @@
       },
       "testing_standard": {
         "standard_id": "HEE3-TEST-STD-001",
-        "standard_sha256": "14a29dad1d089bc529ff9a132e5f80d5195e81aba2c2c0a07229e1c7c8960b09",
+        "standard_sha256": "f6174830e03fbe54fa3312e4a157fd4b00255aab412067ac3829c50eb73d60e3",
         "minimum_qualifying_cases": 50,
         "maximum_baseline_warnings": 0,
         "maximum_baseline_errors": 0,
@@ -41350,7 +41750,7 @@
       },
       "public_interface": {
         "convention_id": "HEE3-INTERFACES-001",
-        "convention_sha256": "c8a96767e52cf8b309ef5fc5ab968a1e875b0d97ab7d62aaec6f96f1d8436557",
+        "convention_sha256": "70f8a696de7ea69018d752380855f76b2f3732510cc8d8caabac310d1a19a84e",
         "accepted_current_interface": null,
         "admission_validator_available": false,
         "profile": {
@@ -41382,7 +41782,7 @@
       },
       "completion": {
         "standard_id": "HEE3-COMPLETION-001",
-        "standard_sha256": "a36374a796816c1ea4c85c3292d376942fe9da226d714012b87da2588f598594",
+        "standard_sha256": "cd84afe35f99245f89e6d097ade8b59314fb378eef77385a3c6b271596705c75",
         "state": "unassessed",
         "admission_validator_available": false,
         "profile": {
@@ -41418,7 +41818,7 @@
       },
       "security_review": {
         "requested_model": "gpt-daybreak-blue-latest",
-        "profile_sha256": "03303308bedfa6e35a6b70363038bc9b43b305f409005f9e90f7af74b3d9e4c4",
+        "profile_sha256": "c5acbfc49b2334670b027a914590c28e5d0f7dc0fdc62928d475d3804476057f",
         "runtime_enabled": false,
         "completion_authority": false,
         "silent_fallback_allowed": false,
@@ -41432,7 +41832,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "1707365309089f3e11d756ede5afecc61170062149b60123a64e06ff461a1b7d",
+        "convention_sha256": "508c49bbab24e8359ca589b61f72c95371c5b15e79772629a4b351e61138d076",
         "lessons": [
           "LRN01",
           "LRN02",
@@ -42310,8 +42710,15 @@
           "validation_cmd": "Proposed, not implemented: habitat-engine-check case T16 --fixture-root <disposable-fixtures>",
           "validator_available": false,
           "acceptance": "Task cards show owner, model, state, spend and outcome; pane closure does not erase task state; reconnect resynchronises; event gap/poll fallback and user cancel are exercised on the actual public Herdr API. Display the current loop iteration, failing criterion, remaining budget, completion evidence and notification state. The captured Herdr protocol has live events without durable replay cursors. Qualify resubscription and coherent snapshot reconciliation; do not claim gap-free Herdr history.",
-          "state": "idle",
-          "evidence": [],
+          "state": "wip",
+          "evidence": [
+            {
+              "path": "evidence/implementation-T16-20260922/progress.json",
+              "sha256": "07d9a882b30922ebdb5526220ec0bf620f3731b6a8dd3c0fdd2ca14b39fb2ac7",
+              "task_id": "T16",
+              "scope": "implementation_candidate"
+            }
+          ],
           "research_refs": [
             "D19",
             "H10",
@@ -42531,8 +42938,15 @@
           "validation_cmd": "Proposed, not implemented: habitat-engine-check case T28 --fixture-root <disposable-fixtures>",
           "validator_available": false,
           "acceptance": "One action definition drives CLI/Unix schemas and one selected LLM-tool adapter. Bounded discovery/inspection/preview, scoped invocation, identity/idempotency and evidence readback work end to end. Denial remains denial across transports; untrusted workers receive no operator socket; generated projections cannot drift. task.get and analysis.get support their own principal-scoped admission-key readback; service.inspect can query the lifecycle operation key without confusing current health with historic effect. events.subscribe without a cursor provides a bounded coherent bootstrap snapshot plus high-water cursor. Distinguish request correlation from durable idempotency. Base Pi RPC does not supply the engine tool callback path; qualify the actual inherited channel or maintained bridge. Template-produced requests preserve literal typed values at the action boundary; model-emitted risk or approval fields never confer effect authority.",
-          "state": "idle",
-          "evidence": [],
+          "state": "wip",
+          "evidence": [
+            {
+              "path": "evidence/implementation-T28-20260922/progress.json",
+              "sha256": "b37953dfabfceef80d1eea7aebe0e250158c88b30aeb0a5d6e06c76cff226a1e",
+              "task_id": "T28",
+              "scope": "implementation_candidate"
+            }
+          ],
           "research_refs": [
             "A11",
             "A12",
@@ -42561,8 +42975,15 @@
           "validation_cmd": "Proposed, not implemented: habitat-engine-check case T29 --fixture-root <disposable-fixtures>",
           "validator_available": false,
           "acceptance": "Thin updatable packages share action/procedure identity and preserve authority, arguments, producer exit status, cancellation and evidence. Pi errors/parallel calls/reload and effective tool-set readback are qualified; skills disclose bounded context. Two typed compositions close their real return paths. Version switching preserves active attempts and rollback; no separate scheduler or silent self-update. Keep the admitted package/protocol tuple pinned through every active attempt. Revoked/reloaded tool handlers cannot retain effect authority. No custom Pi-host glue is selected until its concrete packaging need is established. Each integration renders its owned template once, then passes literal typed data rather than copying/re-templating procedure bodies. Focused fixtures include braces, quotes, newlines, dollar signs and leading dashes, with exact final argv/JSON and producer-status checks. Preserve source and relationship coverage with whole-workflow context accounting. Source-change reports cannot advance accepted compatibility/source baselines.",
-          "state": "idle",
-          "evidence": [],
+          "state": "wip",
+          "evidence": [
+            {
+              "path": "evidence/implementation-T29-20260922/progress.json",
+              "sha256": "d23d0145a056cf3dd3a3f86f534734826a3e52e4c47157162ee1e3af2dd13461",
+              "task_id": "T29",
+              "scope": "implementation_candidate"
+            }
+          ],
           "research_refs": [
             "B02",
             "B03",
@@ -43098,11 +43519,21 @@
           ],
           "reason": "Closed control schema, generator or structural fixture checks; byte and authority gaps remain runtime-owned.",
           "task_id": "T01"
+        },
+        {
+          "path": "tests/t28_actions.rs",
+          "owner": "actions",
+          "modules": [
+            "actions",
+            "contracts"
+          ],
+          "reason": "Declared Rust integration target for the versioned action catalogue, compared against the plan spine.",
+          "task_id": "T28"
         }
       ],
       "readiness": {
         "id": "HEE3-READINESS-001",
-        "sha256": "e774f8984c7e39e85b156289fac809bded6df80ba3647cfb2024c69856447b94",
+        "sha256": "7fd2285b611328e2c8d7aef755d55451ef2d4e0f952524526891ca49533fc090",
         "facets": [
           "F2",
           "F3",
@@ -43161,7 +43592,7 @@
       },
       "testing_standard": {
         "standard_id": "HEE3-TEST-STD-001",
-        "standard_sha256": "14a29dad1d089bc529ff9a132e5f80d5195e81aba2c2c0a07229e1c7c8960b09",
+        "standard_sha256": "f6174830e03fbe54fa3312e4a157fd4b00255aab412067ac3829c50eb73d60e3",
         "minimum_qualifying_cases": 50,
         "maximum_baseline_warnings": 0,
         "maximum_baseline_errors": 0,
@@ -43177,7 +43608,7 @@
       },
       "public_interface": {
         "convention_id": "HEE3-INTERFACES-001",
-        "convention_sha256": "c8a96767e52cf8b309ef5fc5ab968a1e875b0d97ab7d62aaec6f96f1d8436557",
+        "convention_sha256": "70f8a696de7ea69018d752380855f76b2f3732510cc8d8caabac310d1a19a84e",
         "accepted_current_interface": null,
         "admission_validator_available": false,
         "profile": {
@@ -43209,7 +43640,7 @@
       },
       "completion": {
         "standard_id": "HEE3-COMPLETION-001",
-        "standard_sha256": "a36374a796816c1ea4c85c3292d376942fe9da226d714012b87da2588f598594",
+        "standard_sha256": "cd84afe35f99245f89e6d097ade8b59314fb378eef77385a3c6b271596705c75",
         "state": "unassessed",
         "admission_validator_available": false,
         "profile": {
@@ -43245,7 +43676,7 @@
       },
       "security_review": {
         "requested_model": "gpt-daybreak-blue-latest",
-        "profile_sha256": "03303308bedfa6e35a6b70363038bc9b43b305f409005f9e90f7af74b3d9e4c4",
+        "profile_sha256": "c5acbfc49b2334670b027a914590c28e5d0f7dc0fdc62928d475d3804476057f",
         "runtime_enabled": false,
         "completion_authority": false,
         "silent_fallback_allowed": false,
@@ -43259,7 +43690,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "1707365309089f3e11d756ede5afecc61170062149b60123a64e06ff461a1b7d",
+        "convention_sha256": "508c49bbab24e8359ca589b61f72c95371c5b15e79772629a4b351e61138d076",
         "lessons": [
           "LRN01",
           "LRN02",
@@ -43281,7 +43712,7 @@
         "engine_detectors": "unqualified"
       },
       "observations": {
-        "source_kind": "comment_stub",
+        "source_kind": "engine_source",
         "evidence": [],
         "limitations": [
           "Record consistency is not producer authentication, runtime certification or task acceptance.",
@@ -44058,8 +44489,15 @@
           "validation_cmd": "Proposed, not implemented: habitat-engine-check case T28 --fixture-root <disposable-fixtures>",
           "validator_available": false,
           "acceptance": "One action definition drives CLI/Unix schemas and one selected LLM-tool adapter. Bounded discovery/inspection/preview, scoped invocation, identity/idempotency and evidence readback work end to end. Denial remains denial across transports; untrusted workers receive no operator socket; generated projections cannot drift. task.get and analysis.get support their own principal-scoped admission-key readback; service.inspect can query the lifecycle operation key without confusing current health with historic effect. events.subscribe without a cursor provides a bounded coherent bootstrap snapshot plus high-water cursor. Distinguish request correlation from durable idempotency. Base Pi RPC does not supply the engine tool callback path; qualify the actual inherited channel or maintained bridge. Template-produced requests preserve literal typed values at the action boundary; model-emitted risk or approval fields never confer effect authority.",
-          "state": "idle",
-          "evidence": [],
+          "state": "wip",
+          "evidence": [
+            {
+              "path": "evidence/implementation-T28-20260922/progress.json",
+              "sha256": "b37953dfabfceef80d1eea7aebe0e250158c88b30aeb0a5d6e06c76cff226a1e",
+              "task_id": "T28",
+              "scope": "implementation_candidate"
+            }
+          ],
           "research_refs": [
             "A11",
             "A12",
@@ -44088,8 +44526,15 @@
           "validation_cmd": "Proposed, not implemented: habitat-engine-check case T29 --fixture-root <disposable-fixtures>",
           "validator_available": false,
           "acceptance": "Thin updatable packages share action/procedure identity and preserve authority, arguments, producer exit status, cancellation and evidence. Pi errors/parallel calls/reload and effective tool-set readback are qualified; skills disclose bounded context. Two typed compositions close their real return paths. Version switching preserves active attempts and rollback; no separate scheduler or silent self-update. Keep the admitted package/protocol tuple pinned through every active attempt. Revoked/reloaded tool handlers cannot retain effect authority. No custom Pi-host glue is selected until its concrete packaging need is established. Each integration renders its owned template once, then passes literal typed data rather than copying/re-templating procedure bodies. Focused fixtures include braces, quotes, newlines, dollar signs and leading dashes, with exact final argv/JSON and producer-status checks. Preserve source and relationship coverage with whole-workflow context accounting. Source-change reports cannot advance accepted compatibility/source baselines.",
-          "state": "idle",
-          "evidence": [],
+          "state": "wip",
+          "evidence": [
+            {
+              "path": "evidence/implementation-T29-20260922/progress.json",
+              "sha256": "d23d0145a056cf3dd3a3f86f534734826a3e52e4c47157162ee1e3af2dd13461",
+              "task_id": "T29",
+              "scope": "implementation_candidate"
+            }
+          ],
           "research_refs": [
             "B02",
             "B03",
@@ -44476,7 +44921,7 @@
       ],
       "readiness": {
         "id": "HEE3-READINESS-001",
-        "sha256": "e774f8984c7e39e85b156289fac809bded6df80ba3647cfb2024c69856447b94",
+        "sha256": "7fd2285b611328e2c8d7aef755d55451ef2d4e0f952524526891ca49533fc090",
         "facets": [
           "F2",
           "F3",
@@ -44533,7 +44978,7 @@
       },
       "testing_standard": {
         "standard_id": "HEE3-TEST-STD-001",
-        "standard_sha256": "14a29dad1d089bc529ff9a132e5f80d5195e81aba2c2c0a07229e1c7c8960b09",
+        "standard_sha256": "f6174830e03fbe54fa3312e4a157fd4b00255aab412067ac3829c50eb73d60e3",
         "minimum_qualifying_cases": 50,
         "maximum_baseline_warnings": 0,
         "maximum_baseline_errors": 0,
@@ -44549,7 +44994,7 @@
       },
       "public_interface": {
         "convention_id": "HEE3-INTERFACES-001",
-        "convention_sha256": "c8a96767e52cf8b309ef5fc5ab968a1e875b0d97ab7d62aaec6f96f1d8436557",
+        "convention_sha256": "70f8a696de7ea69018d752380855f76b2f3732510cc8d8caabac310d1a19a84e",
         "accepted_current_interface": null,
         "admission_validator_available": false,
         "profile": {
@@ -44581,7 +45026,7 @@
       },
       "completion": {
         "standard_id": "HEE3-COMPLETION-001",
-        "standard_sha256": "a36374a796816c1ea4c85c3292d376942fe9da226d714012b87da2588f598594",
+        "standard_sha256": "cd84afe35f99245f89e6d097ade8b59314fb378eef77385a3c6b271596705c75",
         "state": "unassessed",
         "admission_validator_available": false,
         "profile": {
@@ -44617,7 +45062,7 @@
       },
       "security_review": {
         "requested_model": "gpt-daybreak-blue-latest",
-        "profile_sha256": "03303308bedfa6e35a6b70363038bc9b43b305f409005f9e90f7af74b3d9e4c4",
+        "profile_sha256": "c5acbfc49b2334670b027a914590c28e5d0f7dc0fdc62928d475d3804476057f",
         "runtime_enabled": false,
         "completion_authority": false,
         "silent_fallback_allowed": false,
@@ -44631,7 +45076,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "1707365309089f3e11d756ede5afecc61170062149b60123a64e06ff461a1b7d",
+        "convention_sha256": "508c49bbab24e8359ca589b61f72c95371c5b15e79772629a4b351e61138d076",
         "lessons": [
           "LRN03",
           "LRN04",
@@ -45507,8 +45952,15 @@
           "validation_cmd": "Proposed, not implemented: habitat-engine-check case T28 --fixture-root <disposable-fixtures>",
           "validator_available": false,
           "acceptance": "One action definition drives CLI/Unix schemas and one selected LLM-tool adapter. Bounded discovery/inspection/preview, scoped invocation, identity/idempotency and evidence readback work end to end. Denial remains denial across transports; untrusted workers receive no operator socket; generated projections cannot drift. task.get and analysis.get support their own principal-scoped admission-key readback; service.inspect can query the lifecycle operation key without confusing current health with historic effect. events.subscribe without a cursor provides a bounded coherent bootstrap snapshot plus high-water cursor. Distinguish request correlation from durable idempotency. Base Pi RPC does not supply the engine tool callback path; qualify the actual inherited channel or maintained bridge. Template-produced requests preserve literal typed values at the action boundary; model-emitted risk or approval fields never confer effect authority.",
-          "state": "idle",
-          "evidence": [],
+          "state": "wip",
+          "evidence": [
+            {
+              "path": "evidence/implementation-T28-20260922/progress.json",
+              "sha256": "b37953dfabfceef80d1eea7aebe0e250158c88b30aeb0a5d6e06c76cff226a1e",
+              "task_id": "T28",
+              "scope": "implementation_candidate"
+            }
+          ],
           "research_refs": [
             "A11",
             "A12",
@@ -45537,8 +45989,15 @@
           "validation_cmd": "Proposed, not implemented: habitat-engine-check case T29 --fixture-root <disposable-fixtures>",
           "validator_available": false,
           "acceptance": "Thin updatable packages share action/procedure identity and preserve authority, arguments, producer exit status, cancellation and evidence. Pi errors/parallel calls/reload and effective tool-set readback are qualified; skills disclose bounded context. Two typed compositions close their real return paths. Version switching preserves active attempts and rollback; no separate scheduler or silent self-update. Keep the admitted package/protocol tuple pinned through every active attempt. Revoked/reloaded tool handlers cannot retain effect authority. No custom Pi-host glue is selected until its concrete packaging need is established. Each integration renders its owned template once, then passes literal typed data rather than copying/re-templating procedure bodies. Focused fixtures include braces, quotes, newlines, dollar signs and leading dashes, with exact final argv/JSON and producer-status checks. Preserve source and relationship coverage with whole-workflow context accounting. Source-change reports cannot advance accepted compatibility/source baselines.",
-          "state": "idle",
-          "evidence": [],
+          "state": "wip",
+          "evidence": [
+            {
+              "path": "evidence/implementation-T29-20260922/progress.json",
+              "sha256": "d23d0145a056cf3dd3a3f86f534734826a3e52e4c47157162ee1e3af2dd13461",
+              "task_id": "T29",
+              "scope": "implementation_candidate"
+            }
+          ],
           "research_refs": [
             "B02",
             "B03",
@@ -45937,7 +46396,7 @@
       ],
       "readiness": {
         "id": "HEE3-READINESS-001",
-        "sha256": "e774f8984c7e39e85b156289fac809bded6df80ba3647cfb2024c69856447b94",
+        "sha256": "7fd2285b611328e2c8d7aef755d55451ef2d4e0f952524526891ca49533fc090",
         "facets": [
           "F2",
           "F3",
@@ -45994,7 +46453,7 @@
       },
       "testing_standard": {
         "standard_id": "HEE3-TEST-STD-001",
-        "standard_sha256": "14a29dad1d089bc529ff9a132e5f80d5195e81aba2c2c0a07229e1c7c8960b09",
+        "standard_sha256": "f6174830e03fbe54fa3312e4a157fd4b00255aab412067ac3829c50eb73d60e3",
         "minimum_qualifying_cases": 50,
         "maximum_baseline_warnings": 0,
         "maximum_baseline_errors": 0,
@@ -46010,7 +46469,7 @@
       },
       "public_interface": {
         "convention_id": "HEE3-INTERFACES-001",
-        "convention_sha256": "c8a96767e52cf8b309ef5fc5ab968a1e875b0d97ab7d62aaec6f96f1d8436557",
+        "convention_sha256": "70f8a696de7ea69018d752380855f76b2f3732510cc8d8caabac310d1a19a84e",
         "accepted_current_interface": null,
         "admission_validator_available": false,
         "profile": {
@@ -46042,7 +46501,7 @@
       },
       "completion": {
         "standard_id": "HEE3-COMPLETION-001",
-        "standard_sha256": "a36374a796816c1ea4c85c3292d376942fe9da226d714012b87da2588f598594",
+        "standard_sha256": "cd84afe35f99245f89e6d097ade8b59314fb378eef77385a3c6b271596705c75",
         "state": "unassessed",
         "admission_validator_available": false,
         "profile": {
@@ -46078,7 +46537,7 @@
       },
       "security_review": {
         "requested_model": "gpt-daybreak-blue-latest",
-        "profile_sha256": "03303308bedfa6e35a6b70363038bc9b43b305f409005f9e90f7af74b3d9e4c4",
+        "profile_sha256": "c5acbfc49b2334670b027a914590c28e5d0f7dc0fdc62928d475d3804476057f",
         "runtime_enabled": false,
         "completion_authority": false,
         "silent_fallback_allowed": false,
@@ -46092,7 +46551,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "1707365309089f3e11d756ede5afecc61170062149b60123a64e06ff461a1b7d",
+        "convention_sha256": "508c49bbab24e8359ca589b61f72c95371c5b15e79772629a4b351e61138d076",
         "lessons": [
           "LRN03",
           "LRN04",
@@ -46699,8 +47158,15 @@
           "validation_cmd": "Proposed, not implemented: habitat-engine-check case T11 --fixture-root <disposable-fixtures>",
           "validator_available": false,
           "acceptance": "Context is bounded to task needs; actionable wakes are deduplicated/batched; controlled idle and repeated unchanged events cause zero model requests; summaries and compaction usage are accounted for. Context records distinguish required source-file coverage from task-critical call/dependency/ownership relationship coverage. Expose each gap and account for discovery, supplemental reads and repeated context as well as final packet size.",
-          "state": "idle",
-          "evidence": [],
+          "state": "wip",
+          "evidence": [
+            {
+              "path": "evidence/implementation-T11-20260922/progress.json",
+              "sha256": "37fee8762915d1aa1e381e40a847127213b4563944d957b398bd853a5da81700",
+              "task_id": "T11",
+              "scope": "implementation_candidate"
+            }
+          ],
           "research_refs": [
             "D18",
             "H12",
@@ -46850,8 +47316,15 @@
           "validation_cmd": "Proposed, not implemented: habitat-engine-check case T22 --fixture-root <disposable-fixtures>",
           "validator_available": false,
           "acceptance": "Roles share a versioned objective, distinct artifact ownership and bounded messages. Cross-agent resource conflicts and stale-generation callbacks are rejected. Compare one-worker and specialist-cohort outcomes including cost, errors, disagreement and rework; idle cohorts stop. Persist logical thread identity, versioned mailbox obligations and parent join requirements; protect shared interface/lockfile ownership and recover orchestrator loss without duplicate dispatch. Enforce one conserved parent/child allocation tree. Waiting parents release resources children require. Semantic cross-module calls remain mediated by the composition root and current action authority. Thread briefs preserve the task-critical relationships needed by the receiving specialist; a list of included files alone cannot prove adequate context. Narrow the question explicitly when required coverage exceeds its bound.",
-          "state": "idle",
-          "evidence": [],
+          "state": "wip",
+          "evidence": [
+            {
+              "path": "evidence/implementation-T22-20260922/progress.json",
+              "sha256": "52581890273ef104b38ab29093d51872e1378d9b3989e3f1e5ce3c6b2da0e443",
+              "task_id": "T22",
+              "scope": "implementation_candidate"
+            }
+          ],
           "research_refs": [
             "S02",
             "S09",
@@ -46970,8 +47443,15 @@
           "validation_cmd": "Proposed, not implemented: habitat-engine-check case T28 --fixture-root <disposable-fixtures>",
           "validator_available": false,
           "acceptance": "One action definition drives CLI/Unix schemas and one selected LLM-tool adapter. Bounded discovery/inspection/preview, scoped invocation, identity/idempotency and evidence readback work end to end. Denial remains denial across transports; untrusted workers receive no operator socket; generated projections cannot drift. task.get and analysis.get support their own principal-scoped admission-key readback; service.inspect can query the lifecycle operation key without confusing current health with historic effect. events.subscribe without a cursor provides a bounded coherent bootstrap snapshot plus high-water cursor. Distinguish request correlation from durable idempotency. Base Pi RPC does not supply the engine tool callback path; qualify the actual inherited channel or maintained bridge. Template-produced requests preserve literal typed values at the action boundary; model-emitted risk or approval fields never confer effect authority.",
-          "state": "idle",
-          "evidence": [],
+          "state": "wip",
+          "evidence": [
+            {
+              "path": "evidence/implementation-T28-20260922/progress.json",
+              "sha256": "b37953dfabfceef80d1eea7aebe0e250158c88b30aeb0a5d6e06c76cff226a1e",
+              "task_id": "T28",
+              "scope": "implementation_candidate"
+            }
+          ],
           "research_refs": [
             "A11",
             "A12",
@@ -47000,8 +47480,15 @@
           "validation_cmd": "Proposed, not implemented: habitat-engine-check case T29 --fixture-root <disposable-fixtures>",
           "validator_available": false,
           "acceptance": "Thin updatable packages share action/procedure identity and preserve authority, arguments, producer exit status, cancellation and evidence. Pi errors/parallel calls/reload and effective tool-set readback are qualified; skills disclose bounded context. Two typed compositions close their real return paths. Version switching preserves active attempts and rollback; no separate scheduler or silent self-update. Keep the admitted package/protocol tuple pinned through every active attempt. Revoked/reloaded tool handlers cannot retain effect authority. No custom Pi-host glue is selected until its concrete packaging need is established. Each integration renders its owned template once, then passes literal typed data rather than copying/re-templating procedure bodies. Focused fixtures include braces, quotes, newlines, dollar signs and leading dashes, with exact final argv/JSON and producer-status checks. Preserve source and relationship coverage with whole-workflow context accounting. Source-change reports cannot advance accepted compatibility/source baselines.",
-          "state": "idle",
-          "evidence": [],
+          "state": "wip",
+          "evidence": [
+            {
+              "path": "evidence/implementation-T29-20260922/progress.json",
+              "sha256": "d23d0145a056cf3dd3a3f86f534734826a3e52e4c47157162ee1e3af2dd13461",
+              "task_id": "T29",
+              "scope": "implementation_candidate"
+            }
+          ],
           "research_refs": [
             "B02",
             "B03",
@@ -47389,7 +47876,7 @@
       ],
       "readiness": {
         "id": "HEE3-READINESS-001",
-        "sha256": "e774f8984c7e39e85b156289fac809bded6df80ba3647cfb2024c69856447b94",
+        "sha256": "7fd2285b611328e2c8d7aef755d55451ef2d4e0f952524526891ca49533fc090",
         "facets": [
           "F2",
           "F3",
@@ -47446,7 +47933,7 @@
       },
       "testing_standard": {
         "standard_id": "HEE3-TEST-STD-001",
-        "standard_sha256": "14a29dad1d089bc529ff9a132e5f80d5195e81aba2c2c0a07229e1c7c8960b09",
+        "standard_sha256": "f6174830e03fbe54fa3312e4a157fd4b00255aab412067ac3829c50eb73d60e3",
         "minimum_qualifying_cases": 50,
         "maximum_baseline_warnings": 0,
         "maximum_baseline_errors": 0,
@@ -47462,7 +47949,7 @@
       },
       "public_interface": {
         "convention_id": "HEE3-INTERFACES-001",
-        "convention_sha256": "c8a96767e52cf8b309ef5fc5ab968a1e875b0d97ab7d62aaec6f96f1d8436557",
+        "convention_sha256": "70f8a696de7ea69018d752380855f76b2f3732510cc8d8caabac310d1a19a84e",
         "accepted_current_interface": null,
         "admission_validator_available": false,
         "profile": {
@@ -47494,7 +47981,7 @@
       },
       "completion": {
         "standard_id": "HEE3-COMPLETION-001",
-        "standard_sha256": "a36374a796816c1ea4c85c3292d376942fe9da226d714012b87da2588f598594",
+        "standard_sha256": "cd84afe35f99245f89e6d097ade8b59314fb378eef77385a3c6b271596705c75",
         "state": "unassessed",
         "admission_validator_available": false,
         "profile": {
@@ -47530,7 +48017,7 @@
       },
       "security_review": {
         "requested_model": "gpt-daybreak-blue-latest",
-        "profile_sha256": "03303308bedfa6e35a6b70363038bc9b43b305f409005f9e90f7af74b3d9e4c4",
+        "profile_sha256": "c5acbfc49b2334670b027a914590c28e5d0f7dc0fdc62928d475d3804476057f",
         "runtime_enabled": false,
         "completion_authority": false,
         "silent_fallback_allowed": false,
@@ -47544,7 +48031,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "1707365309089f3e11d756ede5afecc61170062149b60123a64e06ff461a1b7d",
+        "convention_sha256": "508c49bbab24e8359ca589b61f72c95371c5b15e79772629a4b351e61138d076",
         "lessons": [
           "LRN04",
           "LRN08",
@@ -48209,8 +48696,15 @@
           "validation_cmd": "Proposed, not implemented: habitat-engine-check case T10 --fixture-root <disposable-fixtures>",
           "validator_available": false,
           "acceptance": "Concurrent reservations cannot exceed configured bounds; retries/checking/compaction are included; unknown usage is visible; hard-ceiling tasks reject incompatible accounting; fallback cannot cross privacy or tool constraints.",
-          "state": "idle",
-          "evidence": [],
+          "state": "wip",
+          "evidence": [
+            {
+              "path": "evidence/implementation-T10-20260922/progress.json",
+              "sha256": "f2c91f4cad414c67f44a1f9d2fbb15eb2c16c9fabfececc155a19d121b5a278f",
+              "task_id": "T10",
+              "scope": "implementation_candidate"
+            }
+          ],
           "research_refs": [
             "C13",
             "A11"
@@ -48359,8 +48853,15 @@
           "validation_cmd": "Proposed, not implemented: habitat-engine-check case T22 --fixture-root <disposable-fixtures>",
           "validator_available": false,
           "acceptance": "Roles share a versioned objective, distinct artifact ownership and bounded messages. Cross-agent resource conflicts and stale-generation callbacks are rejected. Compare one-worker and specialist-cohort outcomes including cost, errors, disagreement and rework; idle cohorts stop. Persist logical thread identity, versioned mailbox obligations and parent join requirements; protect shared interface/lockfile ownership and recover orchestrator loss without duplicate dispatch. Enforce one conserved parent/child allocation tree. Waiting parents release resources children require. Semantic cross-module calls remain mediated by the composition root and current action authority. Thread briefs preserve the task-critical relationships needed by the receiving specialist; a list of included files alone cannot prove adequate context. Narrow the question explicitly when required coverage exceeds its bound.",
-          "state": "idle",
-          "evidence": [],
+          "state": "wip",
+          "evidence": [
+            {
+              "path": "evidence/implementation-T22-20260922/progress.json",
+              "sha256": "52581890273ef104b38ab29093d51872e1378d9b3989e3f1e5ce3c6b2da0e443",
+              "task_id": "T22",
+              "scope": "implementation_candidate"
+            }
+          ],
           "research_refs": [
             "S02",
             "S09",
@@ -48479,8 +48980,15 @@
           "validation_cmd": "Proposed, not implemented: habitat-engine-check case T28 --fixture-root <disposable-fixtures>",
           "validator_available": false,
           "acceptance": "One action definition drives CLI/Unix schemas and one selected LLM-tool adapter. Bounded discovery/inspection/preview, scoped invocation, identity/idempotency and evidence readback work end to end. Denial remains denial across transports; untrusted workers receive no operator socket; generated projections cannot drift. task.get and analysis.get support their own principal-scoped admission-key readback; service.inspect can query the lifecycle operation key without confusing current health with historic effect. events.subscribe without a cursor provides a bounded coherent bootstrap snapshot plus high-water cursor. Distinguish request correlation from durable idempotency. Base Pi RPC does not supply the engine tool callback path; qualify the actual inherited channel or maintained bridge. Template-produced requests preserve literal typed values at the action boundary; model-emitted risk or approval fields never confer effect authority.",
-          "state": "idle",
-          "evidence": [],
+          "state": "wip",
+          "evidence": [
+            {
+              "path": "evidence/implementation-T28-20260922/progress.json",
+              "sha256": "b37953dfabfceef80d1eea7aebe0e250158c88b30aeb0a5d6e06c76cff226a1e",
+              "task_id": "T28",
+              "scope": "implementation_candidate"
+            }
+          ],
           "research_refs": [
             "A11",
             "A12",
@@ -48509,8 +49017,15 @@
           "validation_cmd": "Proposed, not implemented: habitat-engine-check case T29 --fixture-root <disposable-fixtures>",
           "validator_available": false,
           "acceptance": "Thin updatable packages share action/procedure identity and preserve authority, arguments, producer exit status, cancellation and evidence. Pi errors/parallel calls/reload and effective tool-set readback are qualified; skills disclose bounded context. Two typed compositions close their real return paths. Version switching preserves active attempts and rollback; no separate scheduler or silent self-update. Keep the admitted package/protocol tuple pinned through every active attempt. Revoked/reloaded tool handlers cannot retain effect authority. No custom Pi-host glue is selected until its concrete packaging need is established. Each integration renders its owned template once, then passes literal typed data rather than copying/re-templating procedure bodies. Focused fixtures include braces, quotes, newlines, dollar signs and leading dashes, with exact final argv/JSON and producer-status checks. Preserve source and relationship coverage with whole-workflow context accounting. Source-change reports cannot advance accepted compatibility/source baselines.",
-          "state": "idle",
-          "evidence": [],
+          "state": "wip",
+          "evidence": [
+            {
+              "path": "evidence/implementation-T29-20260922/progress.json",
+              "sha256": "d23d0145a056cf3dd3a3f86f534734826a3e52e4c47157162ee1e3af2dd13461",
+              "task_id": "T29",
+              "scope": "implementation_candidate"
+            }
+          ],
           "research_refs": [
             "B02",
             "B03",
@@ -48900,7 +49415,7 @@
       ],
       "readiness": {
         "id": "HEE3-READINESS-001",
-        "sha256": "e774f8984c7e39e85b156289fac809bded6df80ba3647cfb2024c69856447b94",
+        "sha256": "7fd2285b611328e2c8d7aef755d55451ef2d4e0f952524526891ca49533fc090",
         "facets": [
           "F2",
           "F3",
@@ -48959,7 +49474,7 @@
       },
       "testing_standard": {
         "standard_id": "HEE3-TEST-STD-001",
-        "standard_sha256": "14a29dad1d089bc529ff9a132e5f80d5195e81aba2c2c0a07229e1c7c8960b09",
+        "standard_sha256": "f6174830e03fbe54fa3312e4a157fd4b00255aab412067ac3829c50eb73d60e3",
         "minimum_qualifying_cases": 50,
         "maximum_baseline_warnings": 0,
         "maximum_baseline_errors": 0,
@@ -48975,7 +49490,7 @@
       },
       "public_interface": {
         "convention_id": "HEE3-INTERFACES-001",
-        "convention_sha256": "c8a96767e52cf8b309ef5fc5ab968a1e875b0d97ab7d62aaec6f96f1d8436557",
+        "convention_sha256": "70f8a696de7ea69018d752380855f76b2f3732510cc8d8caabac310d1a19a84e",
         "accepted_current_interface": null,
         "admission_validator_available": false,
         "profile": {
@@ -49007,7 +49522,7 @@
       },
       "completion": {
         "standard_id": "HEE3-COMPLETION-001",
-        "standard_sha256": "a36374a796816c1ea4c85c3292d376942fe9da226d714012b87da2588f598594",
+        "standard_sha256": "cd84afe35f99245f89e6d097ade8b59314fb378eef77385a3c6b271596705c75",
         "state": "unassessed",
         "admission_validator_available": false,
         "profile": {
@@ -49043,7 +49558,7 @@
       },
       "security_review": {
         "requested_model": "gpt-daybreak-blue-latest",
-        "profile_sha256": "03303308bedfa6e35a6b70363038bc9b43b305f409005f9e90f7af74b3d9e4c4",
+        "profile_sha256": "c5acbfc49b2334670b027a914590c28e5d0f7dc0fdc62928d475d3804476057f",
         "runtime_enabled": false,
         "completion_authority": false,
         "silent_fallback_allowed": false,
@@ -49057,7 +49572,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "1707365309089f3e11d756ede5afecc61170062149b60123a64e06ff461a1b7d",
+        "convention_sha256": "508c49bbab24e8359ca589b61f72c95371c5b15e79772629a4b351e61138d076",
         "lessons": [
           "LRN01",
           "LRN02",
@@ -53908,12 +54423,91 @@
       ],
       "reason": "Source-bound numerical oracle/process/fault controls and finite requests; nested descendant control retains its bounded process owner and original failure observations.",
       "task_id": "T21"
+    },
+    {
+      "path": "tests/t09_route.rs",
+      "owner": "route",
+      "modules": [
+        "route",
+        "contracts"
+      ],
+      "reason": "Declared Rust integration target for deterministic eligibility and routing; pure policy, no model call.",
+      "task_id": "T09"
+    },
+    {
+      "path": "tests/t11_notify.rs",
+      "owner": "notify",
+      "modules": [
+        "notify",
+        "contracts"
+      ],
+      "reason": "Declared Rust integration target for committed-event subscription and delivery obligations.",
+      "task_id": "T11"
+    },
+    {
+      "path": "tests/t11_context.rs",
+      "owner": "context",
+      "modules": [
+        "context",
+        "contracts",
+        "budget"
+      ],
+      "reason": "Declared Rust integration target for bounded reproducible context packets and their accounted cost.",
+      "task_id": "T11"
+    },
+    {
+      "path": "tests/t22_cohort.rs",
+      "owner": "cohort",
+      "modules": [
+        "cohort",
+        "contracts"
+      ],
+      "reason": "Declared Rust integration target for bounded specialist threads, disjoint write ownership and parent joins.",
+      "task_id": "T22"
+    },
+    {
+      "path": "tests/t28_actions.rs",
+      "owner": "actions",
+      "modules": [
+        "actions",
+        "contracts"
+      ],
+      "reason": "Declared Rust integration target for the versioned action catalogue, compared against the plan spine.",
+      "task_id": "T28"
+    },
+    {
+      "path": "tests/t16_herdr.rs",
+      "owner": "herdr",
+      "modules": [
+        "herdr",
+        "contracts"
+      ],
+      "reason": "Declared Rust integration target for the multiplexer client surface; presentation only, no authority.",
+      "task_id": "T16"
+    },
+    {
+      "path": "tests/fixtures/route/fixture.json",
+      "owner": "route",
+      "modules": [
+        "route"
+      ],
+      "reason": "Declared routing fixture: recipes, tasks and constraints for the eligibility cases.",
+      "task_id": "T09"
+    },
+    {
+      "path": "tests/fixtures/route/known-answers.json",
+      "owner": "route",
+      "modules": [
+        "route"
+      ],
+      "reason": "Declared routing known-answer table; answers come from the fixture, not from the implementation.",
+      "task_id": "T09"
     }
   ],
   "implementation_subjects": {
     "src/lib.rs": {
-      "sha256": "a70b7bd386c2175a0998dbb24b4a2dda190644bf64d0225a4e112b768685590c",
-      "bytes": 641
+      "sha256": "4276b15dbb8273e88ee99583faa0ee9e73f95ace672675592c848274551040f5",
+      "bytes": 753
     },
     "Cargo.lock": {
       "sha256": "0dbe885f5d23d05425fb00df5762fa5c0a06042ef0a19848acd07c2e59187bd8",
@@ -54004,8 +54598,8 @@
       "bytes": 6019
     },
     "tools/check-quality": {
-      "sha256": "cf6619caf5e0a7739be9cc695a8315ea69fea3160277928b7af2cff6bd007423",
-      "bytes": 59868
+      "sha256": "6bc64e600e12b661ade0bfc09c11bceb50ac548f13dd33936778ebd470453432",
+      "bytes": 68003
     },
     "tools/development_process.py": {
       "sha256": "e76e3a794193e5df7ee96fabf700113d718527745a0f9a9dba1e04fd5c7baaf3",
@@ -54016,8 +54610,8 @@
       "bytes": 10433
     },
     "tests/t25_quality.py": {
-      "sha256": "9aa30a680773448b64cf1ef2fe02d22dcda167dc58e631f4f2b271368c8b4a60",
-      "bytes": 121720
+      "sha256": "095a9916cf0a1c36dad26b0bfe40a4c92bd2e02d193ce18bb0c58f65c329c628",
+      "bytes": 134464
     },
     "julia/Manifest.toml": {
       "sha256": "097d5028df4e1667a970a8297d41eedb908e0319a0b4154c7ec12548140a9f79",
@@ -55104,8 +55698,8 @@
       "bytes": 9861
     },
     "src/app/mod.rs": {
-      "sha256": "5d184f49dd05e3adb086dc05730dfad30f6a71a09c19e9bf22aae24cb678d167",
-      "bytes": 223
+      "sha256": "092dfaecc20d24d806d28ec53e2c39929c8743e5e1c255f838f8708c3e48b030",
+      "bytes": 240
     },
     "src/app/receipt_import.rs": {
       "sha256": "393bd6b147ebe968ffe29532665c1e542972d9f1ea9708699cc6ef962ba0735d",
@@ -55168,11 +55762,11 @@
       "bytes": 2257
     },
     "src/contracts.rs": {
-      "sha256": "8c9099fb8df82e5067af285a5366a8936e327393a99e9d92e76275806ae9c252",
+      "sha256": "98e3f175164362e51358b4f15c4d77c737eec9a8b17427cd5d4ddf4bb49e2245",
       "bytes": 26327
     },
     "src/main.rs": {
-      "sha256": "ca2a9b2b64ffb0978176e72598331b90d4428f832317ec15a1e5b70993775add",
+      "sha256": "541b4d1334b6743ea78bee5c1285fe0a0e9e7b210e506c3fac06c81821dbd83a",
       "bytes": 24298
     },
     "src/store/staging.rs": {
@@ -55308,8 +55902,8 @@
       "bytes": 3148
     },
     "julia/test/analysis.jl": {
-      "sha256": "e4cee187e7b74d69e733d26c2bf9ebaa0d84596b6c0e8cd52e466251b0059d4f",
-      "bytes": 9561
+      "sha256": "293a00f5538973b021a8d34a5eefcc8dccbb4712acf1e3083db0346d11bcb9df",
+      "bytes": 18932
     },
     "src/numerical/process.rs": {
       "sha256": "4f67c68bdf1116bfb52a6a9dc36de7e4d801566c5b9b89d8f97d92ff58835e4f",
@@ -55358,6 +55952,38 @@
     "tests/t21_process.rs": {
       "sha256": "cc81d248416a4cf2c8f0c742c73fc861326b8511aee5fc0f529e329d3a43a2e1",
       "bytes": 20898
+    },
+    "tests/t09_route.rs": {
+      "sha256": "a7754009ab8cf183fedc4aba8bd6502bfafad4966790a2b4de5120ae03f554f1",
+      "bytes": 83422
+    },
+    "tests/t11_notify.rs": {
+      "sha256": "599161dc7c387c7790e2a1ca0330fa607781c149c03dce6d028075f2863df209",
+      "bytes": 46403
+    },
+    "tests/t11_context.rs": {
+      "sha256": "144c4539091ef2fb204c346b4c92500ccefdb60d2468766544b2e2a090c227b8",
+      "bytes": 46241
+    },
+    "tests/t22_cohort.rs": {
+      "sha256": "41376eb5e4bf87c4f0c03c7f1919fcde4d45ee60bf0c53a35ff2c05ed429d8f5",
+      "bytes": 37484
+    },
+    "tests/t28_actions.rs": {
+      "sha256": "00c4da4bad088fc199610f0e39444eab6cf186c9a0f6a18cde37cc92bd39597b",
+      "bytes": 39824
+    },
+    "tests/t16_herdr.rs": {
+      "sha256": "31183535fc8f3ff932c2b4c859fa45d086a10570655807be9453d06a9ccd4c04",
+      "bytes": 29234
+    },
+    "tests/fixtures/route/fixture.json": {
+      "sha256": "ff85e3a67966d2d1f7fe4142e6f41a728f934974d09efe5acbba94dbd4cd0ec4",
+      "bytes": 6864
+    },
+    "tests/fixtures/route/known-answers.json": {
+      "sha256": "42fdcce315a7fad19e737841a3f2cffb2d1b56160eab987c94e7cc91dbbd265b",
+      "bytes": 8651
     }
   },
   "stub_files": [

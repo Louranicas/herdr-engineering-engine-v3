@@ -85,6 +85,7 @@ Each route below remains available; inclusion here does not mark it read. First 
 | [docs/security-findings.md](file:///var/home/herdr-engineering-engine-v3/docs/security-findings.md) | [app](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Context%2FModules%2FCTX-app) | Integrated finding dispositions record reproductions, fixes, residual risks and exact packaged subjects across existing modules. |
 | [tests/security/](file:///var/home/herdr-engineering-engine-v3/tests/security/README.stub.md) | [app](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Context%2FModules%2FCTX-app) | Security qualification corpus tests the integrated threat model with independent collectors and explicit excluded or unmeasured scope. |
 | [evidence/release/](file:///var/home/herdr-engineering-engine-v3/evidence/release/README.stub.md) | [app](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Context%2FModules%2FCTX-app) | Release evidence aggregates exact-subject qualification receipts; aggregation cannot create or replace module proof. |
+| [tests/t16_herdr.rs](file:///var/home/herdr-engineering-engine-v3/tests/t16_herdr.rs) | [herdr](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Context%2FModules%2FCTX-herdr) | Declared Rust integration target for the multiplexer client surface; presentation only, no authority. |
 
 [Conditional companion skills and exact entrypoints](file:///var/home/herdr-engineering-engine-v3/corpus/agent-skills/hee-module-scout/references/companion-skills.md)
 

@@ -22,8 +22,15 @@ pub mod roster;
 
 pub mod check;
 
+pub mod actions;
 pub mod app;
 
+pub mod budget;
+pub mod cohort;
+pub mod context;
+pub mod herdr;
+pub mod notify;
 pub mod numerical;
 pub mod recovery;
+pub mod route;
 pub mod service;

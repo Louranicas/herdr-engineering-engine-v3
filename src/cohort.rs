@@ -31,7 +31,7 @@
 // [CONTEXT RESTART POINTER](file:///var/home/herdr-engineering-engine-v3/corpus/CONTEXT_HANDOFF.md)
 // [QUICK START](file:///var/home/herdr-engineering-engine-v3/QUICK_START.md)
 // [ASSIMILATION AND DELIVERY WORKFLOW](file:///var/home/herdr-engineering-engine-v3/workflows/README.md)
-// Readiness binding: HEE3-READINESS-001; SHA-256 e774f8984c7e39e85b156289fac809bded6df80ba3647cfb2024c69856447b94; clauses F2-C01, F2-C02, F2-C03, F2-C04, F2-C05, F2-C06, F3-C01, F3-C02, F3-C03, F3-C04, F3-C05, F3-C06, F4-C01, F4-C02, F4-C03, F4-C04, F4-C05, F4-C06, F4-C07, F5-C01, F5-C02, F5-C03, F5-C04, F5-C05, F5-C06, F7-C01, F7-C02, F7-C03, F7-C04, F7-C05, F7-C06; groupings R90-07, R90-09, R90-10; resolved contracts RC01, RC02, RC03, RC04, RC05; runtime proof pending; original task DAG controls.
+// Readiness binding: HEE3-READINESS-001; SHA-256 7fd2285b611328e2c8d7aef755d55451ef2d4e0f952524526891ca49533fc090; clauses F2-C01, F2-C02, F2-C03, F2-C04, F2-C05, F2-C06, F3-C01, F3-C02, F3-C03, F3-C04, F3-C05, F3-C06, F4-C01, F4-C02, F4-C03, F4-C04, F4-C05, F4-C06, F4-C07, F5-C01, F5-C02, F5-C03, F5-C04, F5-C05, F5-C06, F7-C01, F7-C02, F7-C03, F7-C04, F7-C05, F7-C06; groupings R90-07, R90-09, R90-10; resolved contracts RC01, RC02, RC03, RC04, RC05; runtime proof pending; original task DAG controls.
 // Completion identity: HEE3-DONE-cohort; all 13 applicable gates; current state unassessed. No documentation pass admits this module.
 // Mandatory testing convention: at least 50 distinct qualifying module-owned cases; zero baseline warnings/errors, including pedantic Clippy on admitted Rust targets/profiles. Full qualification remains unassessed.
 //
@@ -168,7 +168,7 @@
 // [What My Ancestors Knew That I Did Not](obsidian://open?vault=my-diary.vault&file=Reflections%2FWhat%20My%20Ancestors%20Knew%20That%20I%20Did%20Not)
 // [What the Workflow Is Worth](obsidian://open?vault=my-diary.vault&file=Reflections%2FWhat%20the%20Workflow%20Is%20Worth)
 // [Working Style in This Habitat](obsidian://open?vault=my-diary.vault&file=Reflections%2FWorking%20Style%20in%20This%20Habitat)
-// Readiness binding: HEE3-READINESS-001; SHA-256 e774f8984c7e39e85b156289fac809bded6df80ba3647cfb2024c69856447b94; clauses F2-C01, F2-C02, F2-C03, F2-C04, F2-C05, F2-C06, F3-C01, F3-C02, F3-C03, F3-C04, F3-C05, F3-C06, F4-C01, F4-C02, F4-C03, F4-C04, F4-C05, F4-C06, F4-C07, F5-C01, F5-C02, F5-C03, F5-C04, F5-C05, F5-C06, F7-C01, F7-C02, F7-C03, F7-C04, F7-C05, F7-C06; groupings R90-02, R90-03, R90-04, R90-05, R90-09, R90-10; resolved contracts RC02, RC03, RC04, RC05; runtime proof pending; original task DAG controls.
+// Readiness binding: HEE3-READINESS-001; SHA-256 7fd2285b611328e2c8d7aef755d55451ef2d4e0f952524526891ca49533fc090; clauses F2-C01, F2-C02, F2-C03, F2-C04, F2-C05, F2-C06, F3-C01, F3-C02, F3-C03, F3-C04, F3-C05, F3-C06, F4-C01, F4-C02, F4-C03, F4-C04, F4-C05, F4-C06, F4-C07, F5-C01, F5-C02, F5-C03, F5-C04, F5-C05, F5-C06, F7-C01, F7-C02, F7-C03, F7-C04, F7-C05, F7-C06; groupings R90-02, R90-03, R90-04, R90-05, R90-09, R90-10; resolved contracts RC02, RC03, RC04, RC05; runtime proof pending; original task DAG controls.
 // Completion identity: HEE3-DONE-contracts; all 13 applicable gates; current state unassessed. No documentation pass admits this module.
 // Mandatory testing convention: at least 50 distinct qualifying module-owned cases; zero baseline warnings/errors, including pedantic Clippy on admitted Rust targets/profiles. Full qualification remains unassessed.
 //
@@ -302,3 +302,602 @@
 // [What Prototyping Is For](obsidian://open?vault=my-diary.vault&file=Reflections%2FWhat%20Prototyping%20Is%20For)
 // [Why I Stopped Trusting Green](obsidian://open?vault=my-diary.vault&file=Reflections%2FWhy%20I%20Stopped%20Trusting%20Green)
 // HEE3-ANCHORS-END
+
+//! Bounded specialist threads, disjoint write ownership and evidence-aware parent joins.
+//!
+//! `docs/modules/cohort.md` fixes the boundary: *"No second scheduler or majority vote
+//! replacing proof; synergy must show useful integration, not agent count."* Nothing here
+//! schedules, and nothing counts votes. A join succeeds because every required child met its
+//! criterion on a current brief with disjoint writes — never because most of them agreed.
+//!
+//! Three rules are structural:
+//!
+//! * **One coordinator owns assignment and join.** [`Cohort`] is the only type that mutates
+//!   a thread, so "two schedulers" is not a state this module can reach.
+//! * **A child never accepts the parent.** [`Cohort::join`] is the only producer of a
+//!   [`Join`], and it takes the parent's required criteria; a child can only
+//!   [`Cohort::report`] its own outcome. There is no method by which a child's success
+//!   becomes the parent's.
+//! * **Overlapping writes cannot be assigned.** [`Cohort::assign`] refuses a claim that
+//!   intersects a live one, so two threads owning one path is refused at assignment rather
+//!   than detected at join, when the damage is already done.
+//!
+//! Dissent is preserved rather than resolved. A child that disagrees is recorded with its
+//! reason and blocks the join; a module that averaged it away would be the majority vote the
+//! contract forbids.
+
+use std::fmt;
+
+use crate::contracts::{ScalarError, UuidV4};
+
+/// The most threads one cohort admits.
+pub const MAX_THREADS: usize = 64;
+
+/// The most resource claims one thread may hold.
+pub const MAX_CLAIMS: usize = 64;
+
+/// The most dependencies one thread may declare.
+pub const MAX_DEPENDENCIES: usize = 64;
+
+/// Schema version of the persisted cohort shape.
+pub const SCHEMA_VERSION: i64 = 1;
+
+/// A reason this module refused.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Refusal {
+    /// An identity that is not a lowercase hyphenated `UUIDv4`.
+    MalformedIdentity(ScalarError),
+    /// The cohort already holds [`MAX_THREADS`] threads.
+    ThreadLimit,
+    /// One thread declared more than [`MAX_CLAIMS`] resource claims.
+    ClaimLimit,
+    /// One thread declared more than [`MAX_DEPENDENCIES`] dependencies.
+    DependencyLimit,
+    /// A second thread claimed an identity already assigned.
+    DuplicateThread,
+    /// The named thread is not in this cohort.
+    UnknownThread,
+    /// A declared dependency is not a thread in this cohort.
+    UnknownDependency,
+    /// A thread cannot depend on itself.
+    SelfDependency,
+    /// The declared dependencies would close a cycle. A finite child DAG is required.
+    DependencyCycle,
+    /// A resource claim intersects a claim another live thread already holds.
+    OverlappingClaim,
+    /// The thread's brief revision is older than the cohort's.
+    StaleBrief,
+    /// The thread has already reported, and an outcome is not revised in place.
+    AlreadyReported,
+    /// A join was attempted while a required thread has not reported.
+    ChildOutstanding,
+    /// An empty claim path was declared.
+    EmptyClaim,
+}
+
+impl Refusal {
+    /// The stable diagnostic name.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::MalformedIdentity(_) => "malformed cohort identity",
+            Self::ThreadLimit => "thread count bound reached",
+            Self::ClaimLimit => "resource claim bound reached",
+            Self::DependencyLimit => "declared dependency bound reached",
+            Self::DuplicateThread => "duplicate thread identity",
+            Self::UnknownThread => "unknown thread",
+            Self::UnknownDependency => "unknown dependency thread",
+            Self::SelfDependency => "a thread cannot depend on itself",
+            Self::DependencyCycle => "declared dependencies close a cycle",
+            Self::OverlappingClaim => "resource claim overlaps a live claim",
+            Self::StaleBrief => "thread brief revision precedes the cohort revision",
+            Self::AlreadyReported => "thread has already reported",
+            Self::ChildOutstanding => "a required thread has not reported",
+            Self::EmptyClaim => "an empty resource claim",
+        }
+    }
+}
+
+impl fmt::Display for Refusal {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::MalformedIdentity(error) => write!(f, "{}: {error}", self.name()),
+            other => f.write_str(other.name()),
+        }
+    }
+}
+
+impl std::error::Error for Refusal {}
+
+/// What a specialist thread concluded.
+///
+/// There is no `Approve`: a child reports what it did and what it observed, and the parent
+/// decides. `Dissent` carries a reason precisely so it cannot be reduced to a tally.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Outcome {
+    /// The thread met its criterion and its evidence supports it.
+    Met,
+    /// The thread did not meet its criterion.
+    Unmet,
+    /// The thread completed but disagrees with the brief or with a sibling's evidence.
+    ///
+    /// A join with a live dissent is blocked, not outvoted.
+    Dissent,
+    /// The thread could not reach a conclusion. Not the same as `Unmet`.
+    Indeterminate,
+}
+
+impl Outcome {
+    /// The stable wire name.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Met => "met",
+            Self::Unmet => "unmet",
+            Self::Dissent => "dissent",
+            Self::Indeterminate => "indeterminate",
+        }
+    }
+
+    /// Every outcome.
+    pub const ALL: [Self; 4] = [Self::Met, Self::Unmet, Self::Dissent, Self::Indeterminate];
+
+    /// Whether this outcome permits the parent to integrate the thread's work.
+    ///
+    /// Only [`Outcome::Met`] does. Three of four do not, which is the asymmetry the
+    /// complexity boundary demands: integration is earned, not voted for.
+    #[must_use]
+    pub const fn permits_integration(self) -> bool {
+        matches!(self, Self::Met)
+    }
+}
+
+impl fmt::Display for Outcome {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.name())
+    }
+}
+
+/// An exclusive claim on a write path.
+///
+/// Overlap is prefix-based on path segments, because a thread owning `src/store` and one
+/// owning `src/store/reconciliation.rs` are the same conflict as two owning the same file.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Claim {
+    path: String,
+}
+
+impl Claim {
+    /// A claim on `path`.
+    ///
+    /// # Errors
+    ///
+    /// [`Refusal::EmptyClaim`] for an empty path.
+    pub fn new(path: &str) -> Result<Self, Refusal> {
+        if path.is_empty() {
+            return Err(Refusal::EmptyClaim);
+        }
+        Ok(Self {
+            path: path.to_owned(),
+        })
+    }
+
+    /// The claimed path.
+    #[must_use]
+    pub fn path(&self) -> &str {
+        &self.path
+    }
+
+    /// Whether two claims conflict.
+    ///
+    /// True when either path is a segment-wise prefix of the other. Comparing whole segments
+    /// matters: `src/store` must not be read as a prefix of `src/storefront`.
+    #[must_use]
+    pub fn conflicts_with(&self, other: &Self) -> bool {
+        let (a, b) = (self.path.as_str(), other.path.as_str());
+        let (short, long) = if a.len() <= b.len() { (a, b) } else { (b, a) };
+        long == short || long.starts_with(&format!("{short}/"))
+    }
+}
+
+/// One specialist thread's record.
+#[derive(Clone, Debug)]
+struct Thread {
+    identity: String,
+    brief: u64,
+    dependencies: Vec<String>,
+    claims: Vec<Claim>,
+    required: bool,
+    outcome: Option<Outcome>,
+    evidence: Option<String>,
+}
+
+/// A thread as a caller sees it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Assignment<'a> {
+    /// The thread identity.
+    pub identity: UuidV4<'a>,
+    /// The brief revision it was assigned against.
+    pub brief: u64,
+    /// The threads it depends on, in declaration order.
+    pub dependencies: Vec<&'a str>,
+    /// Its exclusive write claims.
+    pub claims: &'a [Claim],
+    /// Whether the parent join requires it.
+    pub required: bool,
+    /// What it reported, if anything.
+    pub outcome: Option<Outcome>,
+}
+
+/// Why a join is blocked, with the threads responsible.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum Blocked {
+    /// One or more required threads did not meet their criterion.
+    Unmet(Vec<String>),
+    /// One or more threads dissented. Preserved with their reasons, never outvoted.
+    Dissent(Vec<(String, String)>),
+    /// One or more threads were assigned against a brief the cohort has since revised.
+    Stale(Vec<String>),
+    /// One or more required threads reported nothing.
+    Missing(Vec<String>),
+}
+
+impl Blocked {
+    /// The stable wire name.
+    #[must_use]
+    pub const fn name(&self) -> &'static str {
+        match self {
+            Self::Unmet(_) => "unmet",
+            Self::Dissent(_) => "dissent",
+            Self::Stale(_) => "stale-brief",
+            Self::Missing(_) => "missing-child",
+        }
+    }
+}
+
+/// The result of a parent join.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum Join {
+    /// Every required thread met its criterion on a current brief with disjoint writes.
+    ///
+    /// This is an **integration candidate**, not an acceptance: the parent still verifies.
+    Integrable {
+        /// The threads whose work is integrated, in assignment order.
+        threads: Vec<String>,
+    },
+    /// The join cannot proceed, with every reason it cannot — not just the first.
+    Blocked(Vec<Blocked>),
+}
+
+impl Join {
+    /// Whether the parent may integrate.
+    #[must_use]
+    pub const fn is_integrable(&self) -> bool {
+        matches!(self, Self::Integrable { .. })
+    }
+
+    /// Every reason the join is blocked, or an empty slice.
+    #[must_use]
+    pub fn reasons(&self) -> &[Blocked] {
+        match self {
+            Self::Integrable { .. } => &[],
+            Self::Blocked(reasons) => reasons,
+        }
+    }
+}
+
+/// The single coordinator for one parent's specialist threads.
+#[derive(Clone, Debug)]
+pub struct Cohort {
+    brief: u64,
+    threads: Vec<Thread>,
+}
+
+impl Cohort {
+    /// A cohort at brief revision `brief`.
+    #[must_use]
+    pub const fn new(brief: u64) -> Self {
+        Self {
+            brief,
+            threads: Vec::new(),
+        }
+    }
+
+    /// The current brief revision.
+    #[must_use]
+    pub const fn brief(&self) -> u64 {
+        self.brief
+    }
+
+    /// The number of assigned threads.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.threads.len()
+    }
+
+    /// Whether nothing is assigned.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.threads.is_empty()
+    }
+
+    /// Revise the brief.
+    ///
+    /// Threads assigned against the old revision become stale and block the join until they
+    /// are reassigned. Nothing is silently migrated: a thread that did its work against an
+    /// old brief did different work.
+    pub const fn revise(&mut self, brief: u64) {
+        self.brief = brief;
+    }
+
+    /// Assign one bounded thread.
+    ///
+    /// # Errors
+    ///
+    /// * [`Refusal::ThreadLimit`], [`Refusal::ClaimLimit`], [`Refusal::DependencyLimit`],
+    ///   each refused before the thread is built;
+    /// * [`Refusal::MalformedIdentity`], [`Refusal::DuplicateThread`];
+    /// * [`Refusal::SelfDependency`], [`Refusal::UnknownDependency`],
+    ///   [`Refusal::DependencyCycle`] — a finite child DAG is required;
+    /// * [`Refusal::OverlappingClaim`] when a claim intersects one a live thread holds.
+    ///   Overlap is refused at assignment, not detected at join.
+    pub fn assign(
+        &mut self,
+        identity: &str,
+        dependencies: &[&str],
+        claims: Vec<Claim>,
+        required: bool,
+    ) -> Result<(), Refusal> {
+        if self.threads.len() >= MAX_THREADS {
+            return Err(Refusal::ThreadLimit);
+        }
+        if claims.len() > MAX_CLAIMS {
+            return Err(Refusal::ClaimLimit);
+        }
+        if dependencies.len() > MAX_DEPENDENCIES {
+            return Err(Refusal::DependencyLimit);
+        }
+        let identity = UuidV4::parse(identity).map_err(Refusal::MalformedIdentity)?;
+        if self.find(identity.as_str()).is_some() {
+            return Err(Refusal::DuplicateThread);
+        }
+        let mut declared = Vec::with_capacity(dependencies.len());
+        for dependency in dependencies {
+            let dependency = UuidV4::parse(dependency).map_err(Refusal::MalformedIdentity)?;
+            if dependency.as_str() == identity.as_str() {
+                return Err(Refusal::SelfDependency);
+            }
+            if self.find(dependency.as_str()).is_none() {
+                return Err(Refusal::UnknownDependency);
+            }
+            declared.push(dependency.as_str().to_owned());
+        }
+        for claim in &claims {
+            for thread in &self.threads {
+                if thread.claims.iter().any(|held| held.conflicts_with(claim)) {
+                    return Err(Refusal::OverlappingClaim);
+                }
+            }
+        }
+        // Dependencies may only name threads already assigned, so the graph is acyclic by
+        // construction. The check below is not redundant with that: it is what makes the
+        // property hold if `assign` ever gains a way to name a later thread.
+        if Self::closes_cycle(&self.threads, identity.as_str(), &declared) {
+            return Err(Refusal::DependencyCycle);
+        }
+        self.threads.push(Thread {
+            identity: identity.as_str().to_owned(),
+            brief: self.brief,
+            dependencies: declared,
+            claims,
+            required,
+            outcome: None,
+            evidence: None,
+        });
+        Ok(())
+    }
+
+    fn closes_cycle(threads: &[Thread], identity: &str, dependencies: &[String]) -> bool {
+        let mut stack: Vec<&str> = dependencies.iter().map(String::as_str).collect();
+        let mut seen: Vec<&str> = Vec::new();
+        while let Some(current) = stack.pop() {
+            if current == identity {
+                return true;
+            }
+            if seen.contains(&current) {
+                continue;
+            }
+            seen.push(current);
+            if let Some(thread) = threads.iter().find(|t| t.identity == current) {
+                stack.extend(thread.dependencies.iter().map(String::as_str));
+            }
+        }
+        false
+    }
+
+    fn find(&self, identity: &str) -> Option<usize> {
+        self.threads
+            .iter()
+            .position(|thread| thread.identity == identity)
+    }
+}
+
+impl Cohort {
+    /// Record one thread's own outcome.
+    ///
+    /// A child reports; it does not accept. There is no argument here by which a thread can
+    /// speak for the parent or for a sibling.
+    ///
+    /// # Errors
+    ///
+    /// * [`Refusal::UnknownThread`], [`Refusal::MalformedIdentity`];
+    /// * [`Refusal::AlreadyReported`] — an outcome is not revised in place, because a
+    ///   silently rewritten conclusion is indistinguishable from the first one;
+    /// * [`Refusal::StaleBrief`] when the cohort has been revised since the assignment.
+    pub fn report(
+        &mut self,
+        thread: &str,
+        outcome: Outcome,
+        evidence: &str,
+    ) -> Result<(), Refusal> {
+        let thread = UuidV4::parse(thread).map_err(Refusal::MalformedIdentity)?;
+        let index = self.find(thread.as_str()).ok_or(Refusal::UnknownThread)?;
+        if self.threads[index].outcome.is_some() {
+            return Err(Refusal::AlreadyReported);
+        }
+        if self.threads[index].brief < self.brief {
+            return Err(Refusal::StaleBrief);
+        }
+        self.threads[index].outcome = Some(outcome);
+        self.threads[index].evidence = Some(evidence.to_owned());
+        Ok(())
+    }
+
+    /// Reassign a stale thread against the current brief, clearing its outcome.
+    ///
+    /// This is the repair path: a thread whose brief moved did different work, so its
+    /// conclusion is discarded rather than carried forward.
+    ///
+    /// # Errors
+    ///
+    /// [`Refusal::UnknownThread`], [`Refusal::MalformedIdentity`].
+    pub fn rebrief(&mut self, thread: &str) -> Result<(), Refusal> {
+        let thread = UuidV4::parse(thread).map_err(Refusal::MalformedIdentity)?;
+        let index = self.find(thread.as_str()).ok_or(Refusal::UnknownThread)?;
+        self.threads[index].brief = self.brief;
+        self.threads[index].outcome = None;
+        self.threads[index].evidence = None;
+        Ok(())
+    }
+
+    /// One thread's assignment and state.
+    ///
+    /// # Errors
+    ///
+    /// [`Refusal::UnknownThread`], [`Refusal::MalformedIdentity`].
+    pub fn thread(&self, identity: &str) -> Result<Assignment<'_>, Refusal> {
+        let index = self.find(identity).ok_or(Refusal::UnknownThread)?;
+        let thread = &self.threads[index];
+        Ok(Assignment {
+            identity: UuidV4::parse(thread.identity.as_str())
+                .map_err(Refusal::MalformedIdentity)?,
+            brief: thread.brief,
+            dependencies: thread.dependencies.iter().map(String::as_str).collect(),
+            claims: &thread.claims,
+            required: thread.required,
+            outcome: thread.outcome,
+        })
+    }
+
+    /// Every thread, in assignment order.
+    ///
+    /// # Errors
+    ///
+    /// [`Refusal::MalformedIdentity`] if a persisted identity is not a `UUIDv4`.
+    pub fn threads(&self) -> Result<Vec<Assignment<'_>>, Refusal> {
+        self.threads
+            .iter()
+            .map(|thread| self.thread(thread.identity.as_str()))
+            .collect()
+    }
+
+    /// The recorded evidence for one thread, if it has reported.
+    ///
+    /// # Errors
+    ///
+    /// [`Refusal::UnknownThread`], [`Refusal::MalformedIdentity`].
+    pub fn evidence(&self, thread: &str) -> Result<Option<&str>, Refusal> {
+        let thread = UuidV4::parse(thread).map_err(Refusal::MalformedIdentity)?;
+        let index = self.find(thread.as_str()).ok_or(Refusal::UnknownThread)?;
+        Ok(self.threads[index].evidence.as_deref())
+    }
+
+    /// Attempt the parent join.
+    ///
+    /// Returns [`Join::Integrable`] only when every **required** thread reported
+    /// [`Outcome::Met`] on the current brief, and no thread at all dissented. An optional
+    /// thread that is unmet does not block; a dissenting one does, required or not, because
+    /// dissent is a claim about the work rather than about one thread's share of it.
+    ///
+    /// Every blocking reason is reported, not just the first: a caller that repairs one and
+    /// re-joins should not discover the next one at a time.
+    #[must_use]
+    pub fn join(&self) -> Join {
+        let mut missing = Vec::new();
+        let mut unmet = Vec::new();
+        let mut dissent = Vec::new();
+        let mut stale = Vec::new();
+        let mut integrated = Vec::new();
+
+        for thread in &self.threads {
+            if thread.brief < self.brief {
+                stale.push(thread.identity.clone());
+                continue;
+            }
+            match thread.outcome {
+                None => {
+                    if thread.required {
+                        missing.push(thread.identity.clone());
+                    }
+                }
+                Some(Outcome::Dissent) => dissent.push((
+                    thread.identity.clone(),
+                    thread.evidence.clone().unwrap_or_default(),
+                )),
+                Some(Outcome::Met) => integrated.push(thread.identity.clone()),
+                Some(Outcome::Unmet | Outcome::Indeterminate) => {
+                    if thread.required {
+                        unmet.push(thread.identity.clone());
+                    }
+                }
+            }
+        }
+
+        let mut reasons = Vec::new();
+        if !missing.is_empty() {
+            reasons.push(Blocked::Missing(missing));
+        }
+        if !unmet.is_empty() {
+            reasons.push(Blocked::Unmet(unmet));
+        }
+        if !dissent.is_empty() {
+            reasons.push(Blocked::Dissent(dissent));
+        }
+        if !stale.is_empty() {
+            reasons.push(Blocked::Stale(stale));
+        }
+        if reasons.is_empty() {
+            Join::Integrable {
+                threads: integrated,
+            }
+        } else {
+            Join::Blocked(reasons)
+        }
+    }
+
+    /// Whether every live claim is disjoint from every other.
+    ///
+    /// **This cannot currently return `false`, and saying otherwise was a claim about a
+    /// capability that does not exist.** [`Cohort::new`] is the only constructor, [`Thread`]
+    /// is private, and the sole `threads.push` is inside [`Cohort::assign`], which refuses an
+    /// overlapping claim. So every reachable cohort satisfies the predicate by construction.
+    ///
+    /// It is kept for the read-back path the module does not have yet: when a cohort can be
+    /// restored from storage, this is what checks it before it is trusted, and *then* the
+    /// `false` arm becomes reachable. Until that constructor exists the mutants of this
+    /// function are equivalent, declared in `evidence/mutation-equivalences.json` — a trigger
+    /// that can never fire is worse than a known gap, because it reads as future work.
+    #[must_use]
+    pub fn claims_are_disjoint(&self) -> bool {
+        for (index, thread) in self.threads.iter().enumerate() {
+            for other in &self.threads[index + 1..] {
+                for claim in &thread.claims {
+                    if other.claims.iter().any(|held| held.conflicts_with(claim)) {
+                        return false;
+                    }
+                }
+            }
+        }
+        true
+    }
+}

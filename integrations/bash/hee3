@@ -1,0 +1,202 @@
+#!/usr/bin/env bash
+# Thin Bash entry point for HEE3-IF-bash.
+#
+# A wrapper, and nothing more: it builds a request, hands it to the producer, and reports the
+# producer's verdict unchanged. It schedules nothing, retries nothing on its own authority,
+# duplicates no policy, and grants no action -- an action this wrapper can name is one the
+# engine already admits, and one it cannot name simply does not run.
+#
+# Three rules are the whole point of the file:
+#
+#   * No eval, and no re-parsing of untrusted strings. Arguments travel in arrays from argv
+#     to exec. A value containing a space, a quote, a newline, `$(...)` or a semicolon is a
+#     value; there is no path by which it becomes syntax.
+#   * The producer's exit status survives every pipe. A pipeline reports the LAST command's
+#     status, so `producer | tee log` is green whenever `tee` succeeds -- which is always.
+#     Every pipeline here is read through PIPESTATUS, and the producer's element is the
+#     verdict.
+#   * A missing producer is a failure, never an empty success. A wrapper that prints nothing
+#     and exits 0 because the thing it wraps was absent is the worst outcome available.
+#
+# Exit codes: 0 producer succeeded; 2 usage; 3 missing producer; 4 bounds; otherwise the
+# producer's own code, passed through unchanged.
+set -euo pipefail
+
+readonly HEE3_WRAPPER_VERSION=1
+readonly MAX_ARGS=64
+readonly MAX_VALUE_BYTES=8192
+readonly MAX_OUTPUT_BYTES=1048576
+
+readonly EXIT_USAGE=2
+readonly EXIT_NO_PRODUCER=3
+readonly EXIT_BOUNDS=4
+
+# Diagnostics go to stderr, results to stdout. A caller that redirects one must still be able
+# to read the other; merging them is how a parser ends up reading a warning as a result.
+fail() {
+    local code=$1
+    shift
+    printf 'hee3: %s\n' "$*" >&2
+    exit "$code"
+}
+
+usage() {
+    cat <<'USAGE'
+hee3 <action> [name=value ...]     invoke one admitted action
+hee3 --actions                     list the actions this wrapper can name
+hee3 --inspect <action>            that action's arguments and the producer it needs
+hee3 --version                     wrapper version and producer diagnostics
+
+Values are literal. A value is never re-parsed as shell, so spaces, quotes, newlines,
+$(...) and ; are data. Set HEE3_PRODUCER to the producer executable.
+USAGE
+}
+
+# The action vocabulary comes from the schema that defines it. A list maintained here would
+# agree with the engine only while somebody kept it agreeing.
+readonly CATALOGUE="${HEE3_CATALOGUE:-$(dirname -- "${BASH_SOURCE[0]}")/../../schemas/actions/control-v1.schema.json}"
+
+actions() {
+    [[ -r $CATALOGUE ]] || fail "$EXIT_NO_PRODUCER" "action catalogue is unreadable: $CATALOGUE"
+    local names status
+    # Read through PIPESTATUS even here: a python that dies mid-stream must not look like an
+    # empty catalogue, which would make every action name "unknown" rather than report the
+    # real fault.
+    names=$(python3 -c '
+import json, sys
+with open(sys.argv[1], encoding="utf-8") as handle:
+    print("\n".join(json.load(handle)["$defs"]["ActionId"]["enum"]))
+' "$CATALOGUE") || status=$?
+    status=${status:-0}
+    (( status == 0 )) || fail "$EXIT_NO_PRODUCER" "could not read the action catalogue (rc=$status)"
+    [[ -n $names ]] || fail "$EXIT_NO_PRODUCER" "the action catalogue is empty"
+    printf '%s\n' "$names"
+}
+
+is_admitted() {
+    local wanted=$1 name
+    while IFS= read -r name; do
+        [[ $name == "$wanted" ]] && return 0
+    done < <(actions)
+    return 1
+}
+
+producer() {
+    local path=${HEE3_PRODUCER:-}
+    [[ -n $path ]] || fail "$EXIT_NO_PRODUCER" "HEE3_PRODUCER is unset; there is no producer to invoke"
+    [[ -x $path ]] || fail "$EXIT_NO_PRODUCER" "producer is not executable: $path"
+    printf '%s' "$path"
+}
+
+# Build the request with python's json writer rather than string concatenation: a value
+# containing a quote or a backslash must be encoded, and hand-built JSON is where that goes
+# wrong silently.
+build_request() {
+    local action=$1
+    shift
+    python3 -c '
+import json, sys
+action, pairs = sys.argv[1], sys.argv[2:]
+arguments = {}
+for pair in pairs:
+    if "=" not in pair:
+        sys.exit("argument is not name=value: " + repr(pair))
+    name, _, value = pair.partition("=")
+    if not name:
+        sys.exit("argument has an empty name: " + repr(pair))
+    if name in arguments:
+        sys.exit("argument named twice: " + repr(name))
+    arguments[name] = value
+json.dump({"protocol": "hee3.control", "version": 1, "action": action,
+           "arguments": arguments}, sys.stdout, sort_keys=True)
+sys.stdout.write("\n")
+' "$action" "$@"
+}
+
+invoke() {
+    local action=$1
+    shift
+    (( $# <= MAX_ARGS )) || fail "$EXIT_BOUNDS" "$# arguments against a limit of $MAX_ARGS"
+    local pair
+    for pair in "$@"; do
+        (( ${#pair} <= MAX_VALUE_BYTES )) ||
+            fail "$EXIT_BOUNDS" "an argument is ${#pair} bytes against a limit of $MAX_VALUE_BYTES"
+    done
+    is_admitted "$action" || fail "$EXIT_USAGE" "unknown action: $action"
+
+    local request bin status=0
+    request=$(build_request "$action" "$@") || fail "$EXIT_USAGE" "could not build the request"
+    bin=$(producer)
+
+    # The producer's stdout is bounded by head, in the stream, so an unbounded producer is
+    # stopped rather than merely truncated after the fact.
+    #
+    # The pipeline runs HERE, in this shell, and its result goes to a file. It cannot run
+    # inside `$(...)`: a command substitution is a subshell, so the parent's PIPESTATUS
+    # describes the assignment, not the pipeline, and the producer's status is lost. `|| true`
+    # is equally fatal -- it makes `true` the last command and PIPESTATUS becomes `(0)`.
+    # Both were in the first version of this function and ten cases caught them.
+    #
+    # stages[1] is the producer. head exits 0 whether the producer succeeded, failed, or was
+    # killed for exceeding the bound, so the LAST element is exactly the wrong one to read.
+    local scratch
+    scratch=$(mktemp -d) || fail "$EXIT_BOUNDS" "could not create a scratch directory"
+    # shellcheck disable=SC2064  # the path is expanded now, deliberately: $scratch is local.
+    trap "rm -rf -- '$scratch'" RETURN
+    set +e
+    printf '%s' "$request" | "$bin" "$action" | head -c "$MAX_OUTPUT_BYTES" >"$scratch/out"
+    local -a stages=("${PIPESTATUS[@]}")
+    set -e
+    status=${stages[1]:-0}
+
+    # `cat` the file rather than $(...) it: command substitution strips trailing newlines,
+    # so a producer emitting two would have had one silently removed. A wrapper that edits
+    # its producer's bytes is not reporting the producer's result.
+    cat -- "$scratch/out"
+    # A final newline only when the producer did not end with one, so a shell reading this
+    # gets a terminated line without the bytes being changed when they already were.
+    if [[ -s $scratch/out ]] && [[ $(tail -c 1 -- "$scratch/out" | od -An -tu1 | tr -d ' ') != 10 ]]; then
+        printf '\n'
+    fi
+    if (( status != 0 )); then
+        printf 'hee3: producer exited %s for action %s\n' "$status" "$action" >&2
+    fi
+    return "$status"
+}
+
+inspect() {
+    local action=$1
+    is_admitted "$action" || fail "$EXIT_USAGE" "unknown action: $action"
+    printf 'action: %s\n' "$action"
+    printf 'wrapper_version: %s\n' "$HEE3_WRAPPER_VERSION"
+    printf 'catalogue: %s\n' "$CATALOGUE"
+    if [[ -n ${HEE3_PRODUCER:-} && -x ${HEE3_PRODUCER:-} ]]; then
+        printf 'producer: %s\n' "$HEE3_PRODUCER"
+    else
+        # A diagnostic, not a refusal: inspecting what an action needs is exactly what a
+        # caller does when the producer is missing.
+        printf 'producer: ABSENT (set HEE3_PRODUCER)\n'
+    fi
+    printf 'max_args: %s\nmax_value_bytes: %s\nmax_output_bytes: %s\n' \
+        "$MAX_ARGS" "$MAX_VALUE_BYTES" "$MAX_OUTPUT_BYTES"
+}
+
+main() {
+    (( $# >= 1 )) || { usage >&2; exit "$EXIT_USAGE"; }
+    case $1 in
+        --help|-h) usage; exit 0 ;;
+        --version)
+            printf 'wrapper_version: %s\n' "$HEE3_WRAPPER_VERSION"
+            printf 'producer: %s\n' "${HEE3_PRODUCER:-ABSENT}"
+            printf 'catalogue_actions: %s\n' "$(actions | wc -l)"
+            exit 0 ;;
+        --actions) actions; exit 0 ;;
+        --inspect)
+            (( $# == 2 )) || fail "$EXIT_USAGE" "--inspect takes exactly one action"
+            inspect "$2"; exit 0 ;;
+        -*) fail "$EXIT_USAGE" "unknown option: $1" ;;
+    esac
+    invoke "$@"
+}
+
+main "$@"

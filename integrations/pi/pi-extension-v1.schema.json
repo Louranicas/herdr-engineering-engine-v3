@@ -1,0 +1,146 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hee3.local/schemas/integrations/pi-extension-v1.schema.json",
+  "title": "HEE3 Pi host extension package, version 1",
+  "description": "A versioned extension package describing which admitted actions it exposes as host tools, and under which bridge version and generation. It declares no host registration signature: those are unselected until host compatibility is qualified, and this document will not invent them.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "extension_id",
+    "extension_generation",
+    "bridge_version",
+    "tools"
+  ],
+  "properties": {
+    "schema": {
+      "type": "string",
+      "const": "hee3.integrations.pi_extension.v1"
+    },
+    "extension_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[a-z0-9][a-z0-9._-]*$",
+      "description": "Stable identity of this extension."
+    },
+    "extension_generation": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Bumped whenever the package is reloaded. A callback arriving under an older generation is a STALE HANDLER: it is refused, never applied, because a reload's whole purpose is that the previous registration no longer speaks for this extension."
+    },
+    "bridge_version": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "The bridge contract this package was built against. Pinned exactly."
+    },
+    "host_binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {},
+      "description": "SEALED AND EMPTY, deliberately. The host's registration signatures are unselected until host compatibility is qualified; a package declaring one is refused as `host_binding_unqualified` rather than validated against a shape nobody has confirmed."
+    },
+    "tools": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/tool"
+      }
+    }
+  },
+  "$defs": {
+    "tool": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "tool_id",
+        "action",
+        "action_version"
+      ],
+      "properties": {
+        "tool_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-z0-9][a-z0-9._-]*$",
+          "description": "Stable within this extension."
+        },
+        "action": {
+          "type": "string",
+          "enum": [
+            "tools.list",
+            "tools.inspect",
+            "task.preview",
+            "task.submit",
+            "task.get",
+            "task.list",
+            "task.cancel",
+            "task.resolve",
+            "thread.get",
+            "thread.list",
+            "roster.list",
+            "roster.inspect",
+            "roster.update",
+            "roster.disable",
+            "service.inspect",
+            "service.probe",
+            "service.action",
+            "analysis.request",
+            "analysis.get",
+            "events.subscribe",
+            "health"
+          ],
+          "description": "The admitted action this tool exposes. Read from the action catalogue, never retyped: a tool cannot expose an action the engine does not have."
+        },
+        "action_version": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        }
+      }
+    }
+  },
+  "hee3": {
+    "call_states": [
+      "pending",
+      "running",
+      "rendered",
+      "failed",
+      "cancelled",
+      "effect_unknown"
+    ],
+    "refusals": [
+      "host_binding_unqualified",
+      "unknown_bridge_version",
+      "stale_generation",
+      "unknown_call",
+      "call_identity_mismatch",
+      "duplicate_call",
+      "unknown_action",
+      "tool_limit",
+      "parallel_call_limit",
+      "render_limit",
+      "terminal_call"
+    ],
+    "bounds": {
+      "max_tools": 64,
+      "max_parallel_calls": 32,
+      "max_render_bytes": 131072
+    },
+    "action_catalogue": {
+      "source": "schemas/actions/control-v1.schema.json",
+      "count": 21
+    },
+    "unqualified": [
+      "Host registration signatures are unselected until host compatibility is qualified. No shape for them appears in this document.",
+      "No host fixture is executed by this package; nothing here proves the extension loads in a real host."
+    ],
+    "scope": "Describes an extension package and reconciles call lifecycle. Registers nothing with a host, grants no action and admits no module."
+  }
+}

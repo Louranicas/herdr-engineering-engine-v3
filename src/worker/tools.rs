@@ -31,7 +31,7 @@
 // [CONTEXT RESTART POINTER](file:///var/home/herdr-engineering-engine-v3/corpus/CONTEXT_HANDOFF.md)
 // [QUICK START](file:///var/home/herdr-engineering-engine-v3/QUICK_START.md)
 // [ASSIMILATION AND DELIVERY WORKFLOW](file:///var/home/herdr-engineering-engine-v3/workflows/README.md)
-// Readiness binding: HEE3-READINESS-001; SHA-256 e774f8984c7e39e85b156289fac809bded6df80ba3647cfb2024c69856447b94; clauses F2-C01, F2-C02, F2-C03, F2-C04, F2-C05, F2-C06, F3-C01, F3-C02, F3-C03, F3-C04, F3-C05, F3-C06, F4-C01, F4-C02, F4-C03, F4-C04, F4-C05, F4-C06, F4-C07, F5-C01, F5-C02, F5-C03, F5-C04, F5-C05, F5-C06, F7-C01, F7-C02, F7-C03, F7-C04, F7-C05, F7-C06; groupings R90-03, R90-06, R90-07, R90-09, R90-10; resolved contracts RC02, RC03, RC04, RC05, RC06; runtime proof pending; original task DAG controls.
+// Readiness binding: HEE3-READINESS-001; SHA-256 7fd2285b611328e2c8d7aef755d55451ef2d4e0f952524526891ca49533fc090; clauses F2-C01, F2-C02, F2-C03, F2-C04, F2-C05, F2-C06, F3-C01, F3-C02, F3-C03, F3-C04, F3-C05, F3-C06, F4-C01, F4-C02, F4-C03, F4-C04, F4-C05, F4-C06, F4-C07, F5-C01, F5-C02, F5-C03, F5-C04, F5-C05, F5-C06, F7-C01, F7-C02, F7-C03, F7-C04, F7-C05, F7-C06; groupings R90-03, R90-06, R90-07, R90-09, R90-10; resolved contracts RC02, RC03, RC04, RC05, RC06; runtime proof pending; original task DAG controls.
 // Completion identity: HEE3-DONE-actions; all 13 applicable gates; current state unassessed. No documentation pass admits this module.
 // Mandatory testing convention: at least 50 distinct qualifying module-owned cases; zero baseline warnings/errors, including pedantic Clippy on admitted Rust targets/profiles. Full qualification remains unassessed.
 //
@@ -171,7 +171,7 @@
 // [What Prototyping Is For](obsidian://open?vault=my-diary.vault&file=Reflections%2FWhat%20Prototyping%20Is%20For)
 // [What the Workflow Is Worth](obsidian://open?vault=my-diary.vault&file=Reflections%2FWhat%20the%20Workflow%20Is%20Worth)
 // [Why I Stopped Trusting Green](obsidian://open?vault=my-diary.vault&file=Reflections%2FWhy%20I%20Stopped%20Trusting%20Green)
-// Readiness binding: HEE3-READINESS-001; SHA-256 e774f8984c7e39e85b156289fac809bded6df80ba3647cfb2024c69856447b94; clauses F2-C01, F2-C02, F2-C03, F2-C04, F2-C05, F2-C06, F3-C01, F3-C02, F3-C03, F3-C04, F3-C05, F3-C06, F4-C01, F4-C02, F4-C03, F4-C04, F4-C05, F4-C06, F4-C07, F5-C01, F5-C02, F5-C03, F5-C04, F5-C05, F5-C06, F7-C01, F7-C02, F7-C03, F7-C04, F7-C05, F7-C06; groupings R90-02, R90-03, R90-04, R90-05, R90-09, R90-10; resolved contracts RC02, RC03, RC04, RC05; runtime proof pending; original task DAG controls.
+// Readiness binding: HEE3-READINESS-001; SHA-256 7fd2285b611328e2c8d7aef755d55451ef2d4e0f952524526891ca49533fc090; clauses F2-C01, F2-C02, F2-C03, F2-C04, F2-C05, F2-C06, F3-C01, F3-C02, F3-C03, F3-C04, F3-C05, F3-C06, F4-C01, F4-C02, F4-C03, F4-C04, F4-C05, F4-C06, F4-C07, F5-C01, F5-C02, F5-C03, F5-C04, F5-C05, F5-C06, F7-C01, F7-C02, F7-C03, F7-C04, F7-C05, F7-C06; groupings R90-02, R90-03, R90-04, R90-05, R90-09, R90-10; resolved contracts RC02, RC03, RC04, RC05; runtime proof pending; original task DAG controls.
 // Completion identity: HEE3-DONE-contracts; all 13 applicable gates; current state unassessed. No documentation pass admits this module.
 // Mandatory testing convention: at least 50 distinct qualifying module-owned cases; zero baseline warnings/errors, including pedantic Clippy on admitted Rust targets/profiles. Full qualification remains unassessed.
 //
@@ -304,7 +304,7 @@
 // [What My Ancestors Knew That I Did Not](obsidian://open?vault=my-diary.vault&file=Reflections%2FWhat%20My%20Ancestors%20Knew%20That%20I%20Did%20Not)
 // [What Prototyping Is For](obsidian://open?vault=my-diary.vault&file=Reflections%2FWhat%20Prototyping%20Is%20For)
 // [Why I Stopped Trusting Green](obsidian://open?vault=my-diary.vault&file=Reflections%2FWhy%20I%20Stopped%20Trusting%20Green)
-// Readiness binding: HEE3-READINESS-001; SHA-256 e774f8984c7e39e85b156289fac809bded6df80ba3647cfb2024c69856447b94; clauses F2-C01, F2-C02, F2-C03, F2-C04, F2-C05, F2-C06, F3-C01, F3-C02, F3-C03, F3-C04, F3-C05, F3-C06, F4-C01, F4-C02, F4-C03, F4-C04, F4-C05, F4-C06, F4-C07, F5-C01, F5-C02, F5-C03, F5-C04, F5-C05, F5-C06, F7-C01, F7-C02, F7-C03, F7-C04, F7-C05, F7-C06; groupings R90-03, R90-07, R90-09, R90-10; resolved contracts RC02, RC03, RC04, RC05; runtime proof pending; original task DAG controls.
+// Readiness binding: HEE3-READINESS-001; SHA-256 7fd2285b611328e2c8d7aef755d55451ef2d4e0f952524526891ca49533fc090; clauses F2-C01, F2-C02, F2-C03, F2-C04, F2-C05, F2-C06, F3-C01, F3-C02, F3-C03, F3-C04, F3-C05, F3-C06, F4-C01, F4-C02, F4-C03, F4-C04, F4-C05, F4-C06, F4-C07, F5-C01, F5-C02, F5-C03, F5-C04, F5-C05, F5-C06, F7-C01, F7-C02, F7-C03, F7-C04, F7-C05, F7-C06; groupings R90-03, R90-07, R90-09, R90-10; resolved contracts RC02, RC03, RC04, RC05; runtime proof pending; original task DAG controls.
 // Completion identity: HEE3-DONE-pi_extension; all 13 applicable gates; current state unassessed. No documentation pass admits this module.
 // Mandatory testing convention: at least 50 distinct qualifying module-owned cases; zero baseline warnings/errors, including pedantic Clippy on admitted Rust targets/profiles. Full qualification remains unassessed.
 //
@@ -430,7 +430,7 @@
 // [What the Workflow Is Worth](obsidian://open?vault=my-diary.vault&file=Reflections%2FWhat%20the%20Workflow%20Is%20Worth)
 // [Why I Stopped Trusting Green](obsidian://open?vault=my-diary.vault&file=Reflections%2FWhy%20I%20Stopped%20Trusting%20Green)
 // [Working Style in This Habitat](obsidian://open?vault=my-diary.vault&file=Reflections%2FWorking%20Style%20in%20This%20Habitat)
-// Readiness binding: HEE3-READINESS-001; SHA-256 e774f8984c7e39e85b156289fac809bded6df80ba3647cfb2024c69856447b94; clauses F2-C01, F2-C02, F2-C03, F2-C04, F2-C05, F2-C06, F3-C01, F3-C02, F3-C03, F3-C04, F3-C05, F3-C06, F4-C01, F4-C02, F4-C03, F4-C04, F4-C05, F4-C06, F4-C07, F5-C01, F5-C02, F5-C03, F5-C04, F5-C05, F5-C06, F7-C01, F7-C02, F7-C03, F7-C04, F7-C05, F7-C06; groupings R90-02, R90-03, R90-05, R90-06, R90-09, R90-10; resolved contracts RC01, RC02, RC03, RC04, RC05, RC06; runtime proof pending; original task DAG controls.
+// Readiness binding: HEE3-READINESS-001; SHA-256 7fd2285b611328e2c8d7aef755d55451ef2d4e0f952524526891ca49533fc090; clauses F2-C01, F2-C02, F2-C03, F2-C04, F2-C05, F2-C06, F3-C01, F3-C02, F3-C03, F3-C04, F3-C05, F3-C06, F4-C01, F4-C02, F4-C03, F4-C04, F4-C05, F4-C06, F4-C07, F5-C01, F5-C02, F5-C03, F5-C04, F5-C05, F5-C06, F7-C01, F7-C02, F7-C03, F7-C04, F7-C05, F7-C06; groupings R90-02, R90-03, R90-05, R90-06, R90-09, R90-10; resolved contracts RC01, RC02, RC03, RC04, RC05, RC06; runtime proof pending; original task DAG controls.
 // Completion identity: HEE3-DONE-worker; all 13 applicable gates; current state unassessed. No documentation pass admits this module.
 // Mandatory testing convention: at least 50 distinct qualifying module-owned cases; zero baseline warnings/errors, including pedantic Clippy on admitted Rust targets/profiles. Full qualification remains unassessed.
 //
@@ -594,3 +594,256 @@
 // [Working Style in This Habitat](obsidian://open?vault=my-diary.vault&file=Reflections%2FWorking%20Style%20in%20This%20Habitat)
 // [Working in Sandboxes on Kinoite](obsidian://open?vault=my-diary.vault&file=Reflections%2FWorking%20in%20Sandboxes%20on%20Kinoite)
 // HEE3-ANCHORS-END
+
+//! The LLM-tool projection of the action catalogue.
+//!
+//! T28's clause is *"One action definition drives CLI/Unix schemas and one selected LLM-tool
+//! adapter"*, bounded by *"generated projections cannot drift"*. This is the tool half; the
+//! CLI half is the `cli` field on the same [`Action`] and the Unix half is
+//! `schemas/actions/control-v1.schema.json`. All three read the one definition.
+//!
+//! Four properties are structural rather than asserted:
+//!
+//! * **A tool cannot exist for an unadmitted action.** [`ToolDefinition::of`] takes an
+//!   [`Action`], and the only source of one is [`Catalogue`]. There is no constructor from a
+//!   string, so "the adapter invented a tool" is not a state this module can reach.
+//! * **A projection cannot widen.** The definition carries the action's own [`Owner`] and
+//!   [`Effect`]; nothing here can change either, and the caller filter only removes.
+//! * **A name cannot drift.** The tool name is the [`Action::tool`] field, never built by
+//!   string manipulation from the id. A generated name would agree today and diverge the
+//!   first time an id changed shape.
+//! * **Every action is accounted for.** Five of the twenty-one carry no tool name in the plan
+//!   spine. They are OMITTED BY NAME, so `projected + omitted` equals the catalogue and a
+//!   short projection cannot read as a complete one.
+
+use std::fmt;
+
+use crate::actions::{Action, Caller, Catalogue, Effect, Owner};
+
+/// The longest tool name this projection admits.
+///
+/// Chosen to fit the shortest limit among the tool conventions in the plan spine; a name
+/// beyond it is refused here rather than truncated at a boundary where the reader cannot tell
+/// a truncated name from a different one.
+pub const MAX_TOOL_NAME: usize = 64;
+
+/// Why an action carries no tool in this projection.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Omitted {
+    /// The plan spine declares no tool name for it.
+    NoToolName,
+    /// The caller cannot see the owning module.
+    OwnerNotVisible,
+    /// The caller does not hold the effect the action needs.
+    EffectNotHeld,
+}
+
+impl Omitted {
+    /// The stable wire name.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::NoToolName => "no-tool-name",
+            Self::OwnerNotVisible => "owner-not-visible",
+            Self::EffectNotHeld => "effect-not-held",
+        }
+    }
+}
+
+/// Anything that stops a projection being built at all.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Refusal {
+    /// Two catalogue actions project to one tool name.
+    DuplicateToolName,
+    /// A declared tool name is empty or longer than [`MAX_TOOL_NAME`].
+    MalformedToolName,
+    /// A declared tool name is not lowercase alphanumeric with underscores.
+    UnexpectedToolNameShape,
+}
+
+impl Refusal {
+    /// The stable diagnostic name.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::DuplicateToolName => "two actions project to one tool name",
+            Self::MalformedToolName => "tool name is empty or over the length bound",
+            Self::UnexpectedToolNameShape => "tool name is not lowercase with underscores",
+        }
+    }
+}
+
+impl fmt::Display for Refusal {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.name())
+    }
+}
+
+impl std::error::Error for Refusal {}
+
+/// One action, projected as a tool the host may offer.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ToolDefinition {
+    name: &'static str,
+    action: Action,
+}
+
+impl ToolDefinition {
+    /// The projection of `action`, when it declares a tool name.
+    ///
+    /// Returns `None` for an action the spine gives no tool name; the caller records that as
+    /// [`Omitted::NoToolName`] rather than dropping it.
+    ///
+    /// # Errors
+    ///
+    /// [`Refusal::MalformedToolName`] for an empty name or one over [`MAX_TOOL_NAME`];
+    /// [`Refusal::UnexpectedToolNameShape`] for anything outside `[a-z0-9_]`.
+    pub fn of(action: Action) -> Result<Option<Self>, Refusal> {
+        let Some(name) = action.tool else {
+            return Ok(None);
+        };
+        if name.is_empty() || name.len() > MAX_TOOL_NAME {
+            return Err(Refusal::MalformedToolName);
+        }
+        if !name
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
+        {
+            return Err(Refusal::UnexpectedToolNameShape);
+        }
+        Ok(Some(Self { name, action }))
+    }
+
+    /// The tool name, exactly as the spine declares it.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        self.name
+    }
+
+    /// The action this tool projects.
+    #[must_use]
+    pub const fn action(self) -> Action {
+        self.action
+    }
+
+    /// The owning module, carried from the action.
+    #[must_use]
+    pub const fn owner(self) -> Owner {
+        self.action.owner
+    }
+
+    /// The effect invoking it has, carried from the action.
+    #[must_use]
+    pub const fn effect(self) -> Effect {
+        self.action.effect
+    }
+
+    /// Whether invoking this tool changes durable state.
+    ///
+    /// Read from the action's own effect. A host that renders read and mutating tools alike
+    /// is the reason this is on the definition rather than left for a caller to infer.
+    #[must_use]
+    pub const fn mutates(self) -> bool {
+        self.action.effect.mutates()
+    }
+
+    /// The capability sentence a host should show beside the tool.
+    #[must_use]
+    pub const fn capability(self) -> &'static str {
+        self.action.capability
+    }
+}
+
+/// One action left out, with the ground.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Omission {
+    action: Action,
+    reason: Omitted,
+}
+
+impl Omission {
+    /// The action that was not projected.
+    #[must_use]
+    pub const fn action(self) -> Action {
+        self.action
+    }
+
+    /// Why it was not projected.
+    #[must_use]
+    pub const fn reason(self) -> Omitted {
+        self.reason
+    }
+}
+
+/// The whole projection for one caller.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Projection {
+    tools: Vec<ToolDefinition>,
+    omissions: Vec<Omission>,
+}
+
+impl Projection {
+    /// The tools this caller may be offered, in catalogue order.
+    #[must_use]
+    pub fn tools(&self) -> &[ToolDefinition] {
+        &self.tools
+    }
+
+    /// Every action not offered, with its ground.
+    #[must_use]
+    pub fn omissions(&self) -> &[Omission] {
+        &self.omissions
+    }
+
+    /// Whether every catalogue action is accounted for.
+    ///
+    /// The denominator is [`Catalogue::all`], not a literal and not `self`: a count taken
+    /// from the projection itself would be equal by construction and could not see a dropped
+    /// action.
+    #[must_use]
+    pub fn accounts_for_every_action(&self) -> bool {
+        self.tools.len() + self.omissions.len() == Catalogue::all().len()
+    }
+}
+
+/// Project the whole catalogue for `caller`.
+///
+/// Total by construction: every action becomes a tool or an [`Omission`], so a caller can
+/// always tell a narrow projection from a complete one.
+///
+/// # Errors
+///
+/// [`Refusal::DuplicateToolName`] if two actions declare one name, and the name faults from
+/// [`ToolDefinition::of`]. All three are faults in the catalogue itself, not in the caller.
+pub fn project(caller: &Caller) -> Result<Projection, Refusal> {
+    let mut tools: Vec<ToolDefinition> = Vec::new();
+    let mut omissions = Vec::new();
+    for action in Catalogue::all() {
+        let Some(definition) = ToolDefinition::of(*action)? else {
+            omissions.push(Omission {
+                action: *action,
+                reason: Omitted::NoToolName,
+            });
+            continue;
+        };
+        if tools.iter().any(|held| held.name() == definition.name()) {
+            return Err(Refusal::DuplicateToolName);
+        }
+        if !caller.sees(definition.owner()) {
+            omissions.push(Omission {
+                action: *action,
+                reason: Omitted::OwnerNotVisible,
+            });
+            continue;
+        }
+        if !caller.holds(definition.effect()) {
+            omissions.push(Omission {
+                action: *action,
+                reason: Omitted::EffectNotHeld,
+            });
+            continue;
+        }
+        tools.push(definition);
+    }
+    Ok(Projection { tools, omissions })
+}

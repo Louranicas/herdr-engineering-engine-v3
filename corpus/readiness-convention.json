@@ -14,11 +14,11 @@
     "proposal_role": "Historical advisory input; this adopted convention is the maintained owner. Historical proposal hashes and scores do not claim current publication freshness."
   },
   "bound_sources": {
-    "PLAN_habitat_engine.json": "9c8fcbc0a67c6a25dc98fea8dc8af6312b34649768a7b6c618ec21d999f839fd",
-    "TESTING_STANDARD_habitat_engine.json": "14a29dad1d089bc529ff9a132e5f80d5195e81aba2c2c0a07229e1c7c8960b09",
-    "MODULE_INTERFACES_habitat_engine.json": "c8a96767e52cf8b309ef5fc5ab968a1e875b0d97ab7d62aaec6f96f1d8436557",
-    "COMPLETION_STANDARD_habitat_engine.json": "a36374a796816c1ea4c85c3292d376942fe9da226d714012b87da2588f598594",
-    "SECURITY_PROFILE_habitat_engine.json": "03303308bedfa6e35a6b70363038bc9b43b305f409005f9e90f7af74b3d9e4c4",
+    "PLAN_habitat_engine.json": "c280a547b058df5b414b18c81a64153633d48b94671fc397ece02ec1cefed160",
+    "TESTING_STANDARD_habitat_engine.json": "f6174830e03fbe54fa3312e4a157fd4b00255aab412067ac3829c50eb73d60e3",
+    "MODULE_INTERFACES_habitat_engine.json": "70f8a696de7ea69018d752380855f76b2f3732510cc8d8caabac310d1a19a84e",
+    "COMPLETION_STANDARD_habitat_engine.json": "cd84afe35f99245f89e6d097ade8b59314fb378eef77385a3c6b271596705c75",
+    "SECURITY_PROFILE_habitat_engine.json": "c5acbfc49b2334670b027a914590c28e5d0f7dc0fdc62928d475d3804476057f",
     "evidence/final-review-20260915/assessment.md": "2b01b4a81e77929738c21adc43181881dffe05b9dfe66fb989d31ee8afed5b1d",
     "evidence/readiness-adoption-20260915/PLAN_readiness.json": "e9e113691d00d77794af09a092a425d0a2cd30406dee9461045b334de13997ec",
     "evidence/readiness-adoption-20260915/PLAN_readiness.md": "e795395ba7e7f000caaf8156058c863c6bbecc8eee0837306c062ab114633073",
@@ -59,7 +59,13 @@
     "evidence/foundation-T04-20260915/T04-closure.json": "752066ca3e930b4e9612cc815f8a4f56dc0ae943b0ce6d330f7f6352c9600d69",
     "evidence/foundation-T05-20260915/T05-closure.json": "b26693e3a30d628f1b1cb4658d9b6ba59faf79c9ed99bc42ca4bd7573e8b5dc6",
     "evidence/implementation-T07-20260921/progress-3.json": "4e26b521365e5e69de0e63f6f3667ba96b9a25c7b6cf0fb7e3b5ff81387c07f0",
-    "evidence/implementation-T08-20260921/closure-final/T08-closure.json": "8047176b2c07203dfa89909fc23c04f5a02f24a02f99fbd7c31726a435dd53c0"
+    "evidence/implementation-T08-20260921/closure-final/T08-closure.json": "8047176b2c07203dfa89909fc23c04f5a02f24a02f99fbd7c31726a435dd53c0",
+    "evidence/implementation-T10-20260922/progress.json": "f2c91f4cad414c67f44a1f9d2fbb15eb2c16c9fabfececc155a19d121b5a278f",
+    "evidence/implementation-T11-20260922/progress.json": "37fee8762915d1aa1e381e40a847127213b4563944d957b398bd853a5da81700",
+    "evidence/implementation-T22-20260922/progress.json": "52581890273ef104b38ab29093d51872e1378d9b3989e3f1e5ce3c6b2da0e443",
+    "evidence/implementation-T28-20260922/progress.json": "b37953dfabfceef80d1eea7aebe0e250158c88b30aeb0a5d6e06c76cff226a1e",
+    "evidence/implementation-T16-20260922/progress.json": "07d9a882b30922ebdb5526220ec0bf620f3731b6a8dd3c0fdd2ca14b39fb2ac7",
+    "evidence/implementation-T29-20260922/progress.json": "d23d0145a056cf3dd3a3f86f534734826a3e52e4c47157162ee1e3af2dd13461"
   },
   "facets": [
     {

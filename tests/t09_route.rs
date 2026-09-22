@@ -1,0 +1,2471 @@
+//! T09 routing policy cases (`T09-RT-nn`). Every case constructs its inputs as
+//! values, asserts the whole `Route` (arm, reason and the ordered explanation)
+//! and names the acceptance obligation it covers. No model call, I/O or clock
+//! is involved: the age of every availability observation is a value here.
+use habitat_engine::contracts::roster::{Availability, Locality};
+use habitat_engine::route::{
+    ConfigError, Declaration, EvidenceGap, Exclusion, Explanation, Fallback, Figure, Filter, Gap,
+    Invalid, Key, MAX_CANDIDATES, MAX_QUALITY_BASIS_POINTS, MAX_STALENESS_MS, Observation, Policy,
+    PrivacyClass, Ranked, Recipe, Refusal, Route, Rule, Step, Task, TieRule, route,
+};
+use serde_json::{Value, json};
+use std::collections::BTreeSet;
+use std::error::Error;
+
+type Outcome = Result<(), Box<dyn Error>>;
+
+/// The reviewed configuration this battery pins; `Policy::load` is its only reader.
+const CONFIG: &str = include_str!("../config/routes.toml");
+const BASELINE_ID: &str = "09000000-0000-4000-8000-00000000000b";
+const BASELINE_REVISION: &str = "1";
+const ALPHA: &str = "09000000-0000-4000-8000-0000000000a1";
+const BETA: &str = "09000000-0000-4000-8000-0000000000b2";
+const GAMMA: &str = "09000000-0000-4000-8000-0000000000c3";
+const DELTA: &str = "09000000-0000-4000-8000-0000000000d4";
+const CAPS: &[&str] = &["final_output", "identity", "usage"];
+const FINAL_ONLY: &[&str] = &["final_output"];
+const BOUND_MS: u64 = 30_000;
+const FILTER_RULES: [Rule; 7] = [
+    Rule::R02RequiredCapabilities,
+    Rule::R03ContextLimit,
+    Rule::R04PrivacyClass,
+    Rule::R05Availability,
+    Rule::R06CostCeiling,
+    Rule::R07Deadline,
+    Rule::R08QualityFloor,
+];
+
+fn observed(availability: Availability, age_ms: u64) -> Observation {
+    Observation::Observed {
+        availability,
+        age_ms,
+    }
+}
+fn fresh() -> Observation {
+    observed(Availability::Available, 1_000)
+}
+fn baseline() -> Recipe<'static> {
+    Recipe {
+        id: BASELINE_ID,
+        revision: BASELINE_REVISION,
+        capabilities: CAPS,
+        context_limit_tokens: 32_768,
+        locality: Locality::Local,
+        availability: fresh(),
+        cost_microunits: Some(0),
+        quality_basis_points: Some(5_000),
+        latency_ms: Some(1_000),
+    }
+}
+fn recipe(id: &'static str) -> Recipe<'static> {
+    Recipe {
+        id,
+        revision: "7",
+        capabilities: CAPS,
+        context_limit_tokens: 32_768,
+        locality: Locality::Local,
+        availability: fresh(),
+        cost_microunits: Some(100),
+        quality_basis_points: Some(9_000),
+        latency_ms: Some(500),
+    }
+}
+fn task() -> Task<'static> {
+    Task {
+        required_capabilities: FINAL_ONLY,
+        context_tokens: 8_192,
+        privacy: PrivacyClass::LocalOnly,
+        cost_ceiling_microunits: None,
+        deadline_ms: None,
+        quality_floor_basis_points: None,
+    }
+}
+fn policy() -> Result<Policy, ConfigError> {
+    Policy::load(CONFIG, &baseline())
+}
+fn declaration() -> Declaration {
+    Declaration {
+        schema_version: 1,
+        filters: Filter::ALL.iter().map(|f| f.name().to_owned()).collect(),
+        ranking: Key::ALL.iter().map(|k| k.name().to_owned()).collect(),
+        tie: "baseline".to_owned(),
+        staleness_bound_ms: BOUND_MS,
+        baseline: BASELINE_ID.to_owned(),
+    }
+}
+fn declared(mutate: impl FnOnce(&mut Declaration)) -> Result<Policy, ConfigError> {
+    let mut declaration = declaration();
+    mutate(&mut declaration);
+    Policy::declare(declaration, &baseline())
+}
+fn decide(candidates: &[Recipe<'static>]) -> Result<Route<'static>, Box<dyn Error>> {
+    Ok(route(&policy()?, &task(), candidates, &baseline())?)
+}
+fn decide_task(
+    task: &Task<'static>,
+    candidates: &[Recipe<'static>],
+) -> Result<Route<'static>, Box<dyn Error>> {
+    Ok(route(&policy()?, task, candidates, &baseline())?)
+}
+fn chosen<'a>(route: &'a Route<'a>) -> Option<(&'a str, &'a str)> {
+    match route {
+        Route::Chosen {
+            recipe, revision, ..
+        } => Some((recipe, revision)),
+        _ => None,
+    }
+}
+fn fallback<'a>(route: &'a Route<'_>) -> Option<(&'a str, &'a str, &'a Fallback<'a>)> {
+    match route {
+        Route::Baseline {
+            recipe,
+            revision,
+            reason,
+            ..
+        } => Some((recipe, revision, reason)),
+        _ => None,
+    }
+}
+fn refusal<'a>(route: &'a Route<'a>) -> Option<(Refusal<'a>, &'a Fallback<'a>)> {
+    match route {
+        Route::Refused {
+            reason, fallback, ..
+        } => Some((*reason, fallback)),
+        _ => None,
+    }
+}
+fn excluded_by<'a>(route: &'a Route<'a>, recipe: &str) -> Option<(Vec<Rule>, Rule, Exclusion<'a>)> {
+    route
+        .explanation()
+        .steps
+        .iter()
+        .find_map(|step| match step {
+            Step::Excluded {
+                recipe: id,
+                passed,
+                rule,
+                why,
+            } if *id == recipe => Some((passed.clone(), *rule, *why)),
+            _ => None,
+        })
+}
+fn gap_of<'a>(route: &'a Route<'a>, recipe: &str) -> Option<(Vec<Rule>, Rule, Gap)> {
+    route
+        .explanation()
+        .steps
+        .iter()
+        .find_map(|step| match step {
+            Step::Gap {
+                recipe: id,
+                passed,
+                rule,
+                evidence,
+            } if *id == recipe => Some((passed.clone(), *rule, *evidence)),
+            _ => None,
+        })
+}
+fn guarded() -> Step<'static> {
+    Step::Guarded {
+        recipe: BASELINE_ID,
+        passed: FILTER_RULES.to_vec(),
+    }
+}
+fn ranked(recipe: &Recipe<'static>) -> Ranked<'static> {
+    Ranked {
+        recipe: recipe.id,
+        cost_microunits: recipe.cost_microunits.unwrap_or(u64::MAX),
+        quality_basis_points: recipe.quality_basis_points.unwrap_or(0),
+        latency_ms: recipe.latency_ms.unwrap_or(u64::MAX),
+    }
+}
+
+// ---------------------------------------------------------------- configuration
+
+/// T09-RT-01 · the reviewed `config/routes.toml` loads and every declared value is read back:
+/// filter order, ranking order, the tie rule, the staleness bound and the baseline identity.
+#[test]
+fn reviewed_configuration_loads_with_every_declared_value() -> Outcome {
+    let policy = policy()?;
+    assert_eq!(policy.filters(), &Filter::ALL);
+    assert_eq!(policy.ranking(), &[Key::Cost, Key::Quality, Key::Latency]);
+    assert_eq!(policy.tie(), TieRule::Baseline);
+    assert_eq!(policy.tie().name(), "baseline");
+    assert_eq!(policy.staleness_bound_ms(), BOUND_MS);
+    assert_eq!(policy.baseline(), BASELINE_ID);
+    Ok(())
+}
+
+/// T09-RT-02 · an unknown top-level key is refused by name; an unknown key inside the
+/// baseline table is refused by its dotted path.
+#[test]
+fn unknown_keys_are_refused_by_name() {
+    let top = CONFIG.replace("[baseline]", "extra = 1\n[baseline]");
+    assert_eq!(
+        Policy::load(&top, &baseline()),
+        Err(ConfigError::UnknownKey {
+            key: "extra".to_owned()
+        })
+    );
+    let nested = format!("{CONFIG}\nmodel = \"x\"\n");
+    assert_eq!(
+        Policy::load(&nested, &baseline()),
+        Err(ConfigError::UnknownKey {
+            key: "baseline.model".to_owned()
+        })
+    );
+}
+
+/// T09-RT-03 · a missing baseline is refused in each of its three shapes: no `[baseline]`
+/// table, a table without `recipe`, and an empty `recipe`.
+#[test]
+fn missing_baseline_is_refused_in_every_shape() {
+    let without_table = CONFIG.split("[baseline]").next().unwrap_or_default();
+    assert_eq!(
+        Policy::load(without_table, &baseline()),
+        Err(ConfigError::MissingBaseline)
+    );
+    let without_recipe = format!("{without_table}[baseline]\n");
+    assert_eq!(
+        Policy::load(&without_recipe, &baseline()),
+        Err(ConfigError::MissingBaseline)
+    );
+    assert_eq!(
+        declared(|d| d.baseline = String::new()),
+        Err(ConfigError::MissingBaseline)
+    );
+}
+
+/// T09-RT-04 · filter declarations: a duplicate, a missing and an unknown filter are each
+/// refused naming the filter; the world is `Filter::ALL`, not the author's list.
+#[test]
+fn filter_declaration_faults_are_refused_by_name() {
+    assert_eq!(
+        declared(|d| d.filters.push("availability".to_owned())),
+        Err(ConfigError::DuplicateRule {
+            name: "availability".to_owned()
+        })
+    );
+    assert_eq!(
+        declared(|d| {
+            d.filters.retain(|name| name != "deadline");
+        }),
+        Err(ConfigError::MissingRule {
+            name: "deadline".to_owned()
+        })
+    );
+    assert_eq!(
+        declared(|d| d.filters[0] = "budget".to_owned()),
+        Err(ConfigError::UnknownRule {
+            name: "budget".to_owned()
+        })
+    );
+}
+
+/// T09-RT-05 · ranking declarations: a duplicate, a missing and an unknown key are each
+/// refused naming the key; the world is `Key::ALL`.
+#[test]
+fn ranking_declaration_faults_are_refused_by_name() {
+    assert_eq!(
+        declared(|d| d.ranking.push("cost".to_owned())),
+        Err(ConfigError::DuplicateRankingKey {
+            name: "cost".to_owned()
+        })
+    );
+    assert_eq!(
+        declared(|d| d.ranking = vec!["cost".to_owned(), "quality".to_owned()]),
+        Err(ConfigError::MissingRankingKey {
+            name: "latency".to_owned()
+        })
+    );
+    assert_eq!(
+        declared(|d| d.ranking[1] = "speed".to_owned()),
+        Err(ConfigError::UnknownRankingKey {
+            name: "speed".to_owned()
+        })
+    );
+}
+
+/// T09-RT-06 · the tie rule admits only `baseline`; any other spelling is refused by name.
+#[test]
+fn tie_rule_admits_only_baseline() {
+    assert_eq!(
+        declared(|d| d.tie = "lowest_id".to_owned()),
+        Err(ConfigError::UnknownTieRule {
+            name: "lowest_id".to_owned()
+        })
+    );
+    assert_eq!(
+        declared(|d| d.tie = "Baseline".to_owned()),
+        Err(ConfigError::UnknownTieRule {
+            name: "Baseline".to_owned()
+        })
+    );
+}
+
+/// T09-RT-07 · the staleness bound is accepted on `1..=60000` and refused at `0`, `60001` and
+/// below zero, each naming the value; the ceiling is the roster's TTL ceiling.
+#[test]
+fn staleness_bound_is_refused_outside_the_roster_ttl_range() -> Outcome {
+    assert_eq!(
+        declared(|d| d.staleness_bound_ms = 0),
+        Err(ConfigError::StalenessBound { value: 0 })
+    );
+    assert_eq!(
+        declared(|d| d.staleness_bound_ms = MAX_STALENESS_MS + 1),
+        Err(ConfigError::StalenessBound { value: 60_001 })
+    );
+    assert_eq!(
+        declared(|d| d.staleness_bound_ms = MAX_STALENESS_MS)?.staleness_bound_ms(),
+        60_000
+    );
+    assert_eq!(
+        declared(|d| d.staleness_bound_ms = 1)?.staleness_bound_ms(),
+        1
+    );
+    let negative = CONFIG.replace("staleness_bound_ms = 30000", "staleness_bound_ms = -5");
+    assert_eq!(
+        Policy::load(&negative, &baseline()),
+        Err(ConfigError::StalenessBound { value: -5 })
+    );
+    Ok(())
+}
+
+/// T09-RT-08 · a baseline that is not local is ineligible by construction under the local-only
+/// profile and is refused by name, for both `Remote` and `Hybrid`.
+#[test]
+fn baseline_that_is_not_local_is_refused_by_name() {
+    for locality in [Locality::Remote, Locality::Hybrid] {
+        let mut recipe = baseline();
+        recipe.locality = locality;
+        assert_eq!(
+            Policy::load(CONFIG, &recipe),
+            Err(ConfigError::BaselineNotLocal {
+                recipe: BASELINE_ID.to_owned(),
+                locality
+            })
+        );
+    }
+}
+
+/// T09-RT-09 · a baseline lacking a figure the ranking reads is refused naming the first
+/// missing figure in the declared key order (quality before latency when both are absent).
+#[test]
+fn baseline_missing_a_ranking_figure_is_refused_naming_the_first_missing() {
+    let mut both = baseline();
+    both.quality_basis_points = None;
+    both.latency_ms = None;
+    assert_eq!(
+        Policy::load(CONFIG, &both),
+        Err(ConfigError::BaselineMissingFigure {
+            recipe: BASELINE_ID.to_owned(),
+            figure: Figure::Quality
+        })
+    );
+    let mut latency = baseline();
+    latency.latency_ms = None;
+    assert_eq!(
+        Policy::load(CONFIG, &latency),
+        Err(ConfigError::BaselineMissingFigure {
+            recipe: BASELINE_ID.to_owned(),
+            figure: Figure::Latency
+        })
+    );
+    let mut cost = baseline();
+    cost.cost_microunits = None;
+    assert_eq!(
+        Policy::load(CONFIG, &cost),
+        Err(ConfigError::BaselineMissingFigure {
+            recipe: BASELINE_ID.to_owned(),
+            figure: Figure::Cost
+        })
+    );
+}
+
+/// T09-RT-10 · the declared baseline identity is bound to the supplied baseline value: a
+/// different id is refused naming both sides; an invalid declared id is refused as identity.
+#[test]
+fn baseline_identity_is_bound_to_the_supplied_recipe() {
+    let mut other = baseline();
+    other.id = ALPHA;
+    assert_eq!(
+        Policy::load(CONFIG, &other),
+        Err(ConfigError::BaselineMismatch {
+            declared: BASELINE_ID.to_owned(),
+            supplied: ALPHA.to_owned()
+        })
+    );
+    assert_eq!(
+        declared(|d| d.baseline = "caf\u{e9}".to_owned()),
+        Err(ConfigError::BaselineIdentity {
+            recipe: "caf\u{e9}".to_owned()
+        })
+    );
+}
+
+/// T09-RT-11 · malformed TOML, a mistyped value and an unsupported schema version are each
+/// refused by their own name; a missing required key names the key.
+#[test]
+fn syntax_type_schema_and_missing_key_faults_are_distinct() {
+    assert_eq!(
+        Policy::load("filters = [", &baseline()),
+        Err(ConfigError::Syntax)
+    );
+    let mistyped = CONFIG.replace("tie = \"baseline\"", "tie = 1");
+    assert_eq!(
+        Policy::load(&mistyped, &baseline()),
+        Err(ConfigError::WrongType {
+            key: "tie".to_owned()
+        })
+    );
+    let mixed = CONFIG.replace(
+        "ranking = [\"cost\", \"quality\", \"latency\"]",
+        "ranking = [\"cost\", 2]",
+    );
+    assert_eq!(
+        Policy::load(&mixed, &baseline()),
+        Err(ConfigError::WrongType {
+            key: "ranking".to_owned()
+        })
+    );
+    let schema = CONFIG.replace("schema_version = 1", "schema_version = 2");
+    assert_eq!(
+        Policy::load(&schema, &baseline()),
+        Err(ConfigError::SchemaVersion { found: 2 })
+    );
+    let missing = CONFIG.replace("tie = \"baseline\"", "");
+    assert_eq!(
+        Policy::load(&missing, &baseline()),
+        Err(ConfigError::MissingKey {
+            key: "tie".to_owned()
+        })
+    );
+}
+
+/// T09-RT-12 · the values door and the text door validate identically: a declaration built
+/// from `Filter::ALL` and `Key::ALL` names yields the same policy as the reviewed file.
+#[test]
+fn declared_values_and_loaded_text_yield_the_same_policy() -> Outcome {
+    assert_eq!(declared(|_| {})?, policy()?);
+    assert_eq!(
+        Filter::ALL.map(Filter::rule),
+        FILTER_RULES,
+        "filter rules R02..R08 in declared order"
+    );
+    Ok(())
+}
+
+// ------------------------------------------------------------ structural input
+
+/// T09-RT-13 · the candidate set is bounded at the roster's record count: 256 route, 257 refuse
+/// with both numbers.
+#[test]
+fn candidate_count_is_bounded_at_the_roster_limit() -> Outcome {
+    let ids: Vec<String> = (0..=MAX_CANDIDATES)
+        .map(|i| format!("cand-{i:03}"))
+        .collect();
+    let make = |n: usize| -> Vec<Recipe<'_>> {
+        ids[..n]
+            .iter()
+            .map(|id| {
+                let mut recipe = recipe(ALPHA);
+                recipe.id = id.as_str();
+                recipe
+            })
+            .collect()
+    };
+    let policy = policy()?;
+    let full = make(MAX_CANDIDATES);
+    assert!(route(&policy, &task(), &full, &baseline()).is_ok());
+    let over = make(MAX_CANDIDATES + 1);
+    assert_eq!(
+        route(&policy, &task(), &over, &baseline()),
+        Err(Invalid::TooManyCandidates {
+            count: 257,
+            limit: 256
+        })
+    );
+    Ok(())
+}
+
+/// T09-RT-14 · a duplicate candidate identity and a baseline listed among the candidates are
+/// refused by name before any rule runs.
+#[test]
+fn duplicate_and_baseline_among_candidates_are_refused() -> Outcome {
+    let policy = policy()?;
+    assert_eq!(
+        route(
+            &policy,
+            &task(),
+            &[recipe(ALPHA), recipe(ALPHA)],
+            &baseline()
+        ),
+        Err(Invalid::DuplicateIdentity {
+            recipe: ALPHA.to_owned()
+        })
+    );
+    assert_eq!(
+        route(&policy, &task(), &[recipe(ALPHA), baseline()], &baseline()),
+        Err(Invalid::BaselineAmongCandidates {
+            recipe: BASELINE_ID.to_owned()
+        })
+    );
+    Ok(())
+}
+
+/// T09-RT-15 · at route time the supplied baseline must be the policy's: another id is
+/// refused naming the declared and the supplied identities.
+#[test]
+fn route_time_baseline_must_match_the_policy() -> Outcome {
+    let mut other = baseline();
+    other.id = DELTA;
+    assert_eq!(
+        route(&policy()?, &task(), &[recipe(ALPHA)], &other),
+        Err(Invalid::BaselineMismatch {
+            declared: BASELINE_ID.to_owned(),
+            supplied: DELTA.to_owned()
+        })
+    );
+    Ok(())
+}
+
+/// T09-RT-16 · identity and capability text is bounded like the roster's: an empty id, a
+/// control character, a 129-byte revision, a duplicate capability and an out-of-range quality
+/// are each refused by their own name and recipe.
+#[test]
+fn identity_capability_and_quality_bounds_are_refused_by_name() -> Outcome {
+    let policy = policy()?;
+    let long = "r".repeat(129);
+    let mut empty = recipe(ALPHA);
+    empty.id = "";
+    let mut control = recipe(ALPHA);
+    control.revision = "1\n";
+    let mut oversize = recipe(ALPHA);
+    oversize.revision = long.as_str();
+    for faulty in [empty, control, oversize] {
+        assert_eq!(
+            route(&policy, &task(), &[faulty], &baseline()),
+            Err(Invalid::Identity {
+                recipe: faulty.id.to_owned()
+            })
+        );
+    }
+    let mut duplicate = recipe(BETA);
+    duplicate.capabilities = &["usage", "usage"];
+    assert_eq!(
+        route(&policy, &task(), &[duplicate], &baseline()),
+        Err(Invalid::Capabilities {
+            recipe: Some(BETA.to_owned())
+        })
+    );
+    let mut over = recipe(GAMMA);
+    over.quality_basis_points = Some(MAX_QUALITY_BASIS_POINTS + 1);
+    assert_eq!(
+        route(&policy, &task(), &[over], &baseline()),
+        Err(Invalid::QualityRange {
+            recipe: Some(GAMMA.to_owned())
+        })
+    );
+    let mut floor = task();
+    floor.quality_floor_basis_points = Some(10_001);
+    assert_eq!(
+        route(&policy, &floor, &[recipe(ALPHA)], &baseline()),
+        Err(Invalid::QualityRange { recipe: None })
+    );
+    let mut caps = task();
+    caps.required_capabilities = &["", "identity"];
+    assert_eq!(
+        route(&policy, &caps, &[recipe(ALPHA)], &baseline()),
+        Err(Invalid::Capabilities { recipe: None })
+    );
+    Ok(())
+}
+
+// -------------------------------------------------------------- hard filters
+
+/// T09-RT-17 · R02 required capabilities: a recipe lacking two required capabilities is
+/// excluded naming the first missing one in the task's order, having passed nothing.
+#[test]
+fn missing_capability_excludes_naming_the_first_missing() -> Outcome {
+    let mut task = task();
+    task.required_capabilities = &["final_output", "identity", "usage"];
+    let mut bare = recipe(ALPHA);
+    bare.capabilities = FINAL_ONLY;
+    let decision = decide_task(&task, &[bare])?;
+    assert_eq!(
+        excluded_by(&decision, ALPHA),
+        Some((
+            vec![],
+            Rule::R02RequiredCapabilities,
+            Exclusion::MissingCapability {
+                capability: "identity"
+            }
+        ))
+    );
+    assert_eq!(
+        fallback(&decision).map(|f| f.2),
+        Some(&Fallback::NoEligibleCandidate)
+    );
+    Ok(())
+}
+
+/// T09-RT-18 · R03 context limit at the boundary: a limit equal to the task's context passes;
+/// one token less excludes with both numbers.
+#[test]
+fn context_limit_boundary_is_inclusive() -> Outcome {
+    let mut exact = recipe(ALPHA);
+    exact.context_limit_tokens = 8_192;
+    assert_eq!(chosen(&decide(&[exact])?), Some((ALPHA, "7")));
+    let mut short = recipe(BETA);
+    short.context_limit_tokens = 8_191;
+    let decision = decide(&[short])?;
+    assert_eq!(
+        excluded_by(&decision, BETA),
+        Some((
+            vec![Rule::R02RequiredCapabilities],
+            Rule::R03ContextLimit,
+            Exclusion::ContextExceeded {
+                limit_tokens: 8_191,
+                required_tokens: 8_192
+            }
+        ))
+    );
+    Ok(())
+}
+
+/// T09-RT-19 · R04 privacy class: a local-only task excludes `Remote` and `Hybrid` recipes,
+/// naming the locality; a remote-allowed task admits both.
+#[test]
+fn privacy_class_excludes_non_local_recipes_for_local_only_tasks() -> Outcome {
+    for locality in [Locality::Remote, Locality::Hybrid] {
+        let mut recipe = recipe(ALPHA);
+        recipe.locality = locality;
+        let decision = decide(&[recipe])?;
+        assert_eq!(
+            excluded_by(&decision, ALPHA),
+            Some((
+                vec![Rule::R02RequiredCapabilities, Rule::R03ContextLimit],
+                Rule::R04PrivacyClass,
+                Exclusion::PrivacyViolated { locality }
+            ))
+        );
+        let mut open = task();
+        open.privacy = PrivacyClass::RemoteAllowed;
+        assert_eq!(chosen(&decide_task(&open, &[recipe])?), Some((ALPHA, "7")));
+    }
+    Ok(())
+}
+
+/// T09-RT-20 · R05 availability: a fresh `Unavailable` observation excludes, naming its age.
+#[test]
+fn fresh_unavailable_observation_excludes() -> Outcome {
+    let mut down = recipe(ALPHA);
+    down.availability = observed(Availability::Unavailable, 2_500);
+    let decision = decide(&[down])?;
+    assert_eq!(
+        excluded_by(&decision, ALPHA),
+        Some((
+            vec![
+                Rule::R02RequiredCapabilities,
+                Rule::R03ContextLimit,
+                Rule::R04PrivacyClass
+            ],
+            Rule::R05Availability,
+            Exclusion::Unavailable { age_ms: 2_500 }
+        ))
+    );
+    Ok(())
+}
+
+/// T09-RT-21 · R06 cost ceiling at the boundary: cost equal to the ceiling passes; one unit
+/// above excludes with both numbers; without a ceiling the rule does not apply.
+#[test]
+fn cost_ceiling_boundary_is_inclusive() -> Outcome {
+    let mut task = task();
+    task.cost_ceiling_microunits = Some(100);
+    assert_eq!(
+        chosen(&decide_task(&task, &[recipe(ALPHA)])?),
+        Some((ALPHA, "7"))
+    );
+    let mut over = recipe(BETA);
+    over.cost_microunits = Some(101);
+    let decision = decide_task(&task, &[over])?;
+    assert_eq!(
+        excluded_by(&decision, BETA),
+        Some((
+            FILTER_RULES[..4].to_vec(),
+            Rule::R06CostCeiling,
+            Exclusion::CostAboveCeiling {
+                cost_microunits: 101,
+                ceiling_microunits: 100
+            }
+        ))
+    );
+    assert_eq!(chosen(&decide(&[over])?), Some((BETA, "7")));
+    Ok(())
+}
+
+/// T09-RT-22 · R07 deadline at the boundary: latency equal to the deadline passes; one
+/// millisecond above excludes with both numbers.
+#[test]
+fn deadline_boundary_is_inclusive() -> Outcome {
+    let mut task = task();
+    task.deadline_ms = Some(500);
+    assert_eq!(
+        chosen(&decide_task(&task, &[recipe(ALPHA)])?),
+        Some((ALPHA, "7"))
+    );
+    let mut slow = recipe(BETA);
+    slow.latency_ms = Some(501);
+    let decision = decide_task(&task, &[slow])?;
+    assert_eq!(
+        excluded_by(&decision, BETA),
+        Some((
+            FILTER_RULES[..5].to_vec(),
+            Rule::R07Deadline,
+            Exclusion::LatencyAboveDeadline {
+                latency_ms: 501,
+                deadline_ms: 500
+            }
+        ))
+    );
+    Ok(())
+}
+
+/// T09-RT-23 · R08 quality floor at the boundary: quality equal to the floor passes; one basis
+/// point below excludes with both numbers.
+#[test]
+fn quality_floor_boundary_is_inclusive() -> Outcome {
+    let mut task = task();
+    task.quality_floor_basis_points = Some(9_000);
+    assert_eq!(
+        chosen(&decide_task(&task, &[recipe(ALPHA)])?),
+        Some((ALPHA, "7"))
+    );
+    let mut weak = recipe(BETA);
+    weak.quality_basis_points = Some(8_999);
+    let decision = decide_task(&task, &[weak])?;
+    assert_eq!(
+        excluded_by(&decision, BETA),
+        Some((
+            FILTER_RULES[..6].to_vec(),
+            Rule::R08QualityFloor,
+            Exclusion::QualityBelowFloor {
+                quality_basis_points: 8_999,
+                floor_basis_points: 9_000
+            }
+        ))
+    );
+    Ok(())
+}
+
+/// T09-RT-24 · filters in combination: a recipe failing capability, privacy and availability
+/// at once is excluded by the earliest declared rule only, having passed nothing.
+#[test]
+fn combined_failures_are_attributed_to_the_earliest_declared_filter() -> Outcome {
+    let mut recipe = recipe(ALPHA);
+    recipe.capabilities = &["usage"];
+    recipe.locality = Locality::Remote;
+    recipe.availability = observed(Availability::Unavailable, 10);
+    let decision = decide(&[recipe])?;
+    assert_eq!(
+        excluded_by(&decision, ALPHA),
+        Some((
+            vec![],
+            Rule::R02RequiredCapabilities,
+            Exclusion::MissingCapability {
+                capability: "final_output"
+            }
+        ))
+    );
+    assert_eq!(
+        decision.explanation().exclusions(),
+        vec![(ALPHA, Rule::R02RequiredCapabilities)]
+    );
+    Ok(())
+}
+
+/// T09-RT-25 · the filter order is the declaration's, not a fixed one: with `privacy_class`
+/// declared first, the same doubly-failing recipe is excluded by R04 instead of R02.
+#[test]
+fn filter_order_is_taken_from_the_declaration() -> Outcome {
+    let policy = declared(|d| d.filters.swap(0, 2))?;
+    assert_eq!(policy.filters()[0], Filter::PrivacyClass);
+    let mut recipe = recipe(ALPHA);
+    recipe.capabilities = &["usage"];
+    recipe.locality = Locality::Remote;
+    let decision = route(&policy, &task(), &[recipe], &baseline())?;
+    assert_eq!(
+        excluded_by(&decision, ALPHA),
+        Some((
+            vec![],
+            Rule::R04PrivacyClass,
+            Exclusion::PrivacyViolated {
+                locality: Locality::Remote
+            }
+        ))
+    );
+    Ok(())
+}
+
+/// T09-RT-26 · filters are never traded against ranking: a remote recipe with zero cost and
+/// perfect quality is excluded while a dearer, weaker local recipe is chosen.
+#[test]
+fn a_remote_superstar_cannot_outrank_privacy() -> Outcome {
+    let mut star = recipe(ALPHA);
+    star.locality = Locality::Remote;
+    star.cost_microunits = Some(0);
+    star.quality_basis_points = Some(10_000);
+    star.latency_ms = Some(1);
+    let decision = decide(&[star, recipe(BETA)])?;
+    assert_eq!(chosen(&decision), Some((BETA, "7")));
+    assert_eq!(
+        decision.explanation().exclusions(),
+        vec![(ALPHA, Rule::R04PrivacyClass)]
+    );
+    Ok(())
+}
+
+// ------------------------------------------------------------ evidence gaps
+
+/// T09-RT-27 · an unobserved recipe is an evidence gap at R05: the decision is the baseline,
+/// naming the recipe, the rule and the gap; nothing was excluded.
+#[test]
+fn unobserved_recipe_routes_to_the_baseline() -> Outcome {
+    let mut silent = recipe(ALPHA);
+    silent.availability = Observation::Unobserved;
+    let decision = decide(&[silent])?;
+    assert_eq!(
+        fallback(&decision),
+        Some((
+            BASELINE_ID,
+            BASELINE_REVISION,
+            &Fallback::InsufficientEvidence {
+                gaps: vec![EvidenceGap {
+                    recipe: ALPHA,
+                    rule: Rule::R05Availability,
+                    evidence: Gap::Unobserved
+                }]
+            }
+        ))
+    );
+    assert_eq!(decision.explanation().exclusions(), vec![]);
+    assert_eq!(
+        decision.explanation().decided_by(),
+        Some(Rule::R09InsufficientEvidence)
+    );
+    Ok(())
+}
+
+/// T09-RT-28 · a fresh `Unknown` availability is a gap, not an exclusion, and carries its age.
+#[test]
+fn unknown_availability_is_a_gap_with_its_age() -> Outcome {
+    let mut unsure = recipe(ALPHA);
+    unsure.availability = observed(Availability::Unknown, 40);
+    let decision = decide(&[unsure])?;
+    assert_eq!(
+        gap_of(&decision, ALPHA),
+        Some((
+            vec![
+                Rule::R02RequiredCapabilities,
+                Rule::R03ContextLimit,
+                Rule::R04PrivacyClass
+            ],
+            Rule::R05Availability,
+            Gap::AvailabilityUnknown { age_ms: 40 }
+        ))
+    );
+    assert!(matches!(decision, Route::Baseline { .. }));
+    Ok(())
+}
+
+/// T09-RT-29 · staleness at the boundary: an age equal to the bound is stale (a gap naming age
+/// and bound); one millisecond younger is fresh and the recipe is chosen.
+#[test]
+fn staleness_bound_is_reached_at_equality() -> Outcome {
+    let mut stale = recipe(ALPHA);
+    stale.availability = observed(Availability::Available, BOUND_MS);
+    let decision = decide(&[stale])?;
+    assert_eq!(
+        gap_of(&decision, ALPHA).map(|g| (g.1, g.2)),
+        Some((
+            Rule::R05Availability,
+            Gap::StaleAvailability {
+                age_ms: 30_000,
+                bound_ms: 30_000
+            }
+        ))
+    );
+    let mut fresh_enough = recipe(BETA);
+    fresh_enough.availability = observed(Availability::Available, BOUND_MS - 1);
+    assert_eq!(chosen(&decide(&[fresh_enough])?), Some((BETA, "7")));
+    Ok(())
+}
+
+/// T09-RT-30 · the staleness bound is the declared one: under a 5000 ms bound an age of 5000
+/// is stale and 4999 is fresh, with the declared bound reported in the gap.
+#[test]
+fn staleness_bound_is_the_declared_value() -> Outcome {
+    let policy = declared(|d| d.staleness_bound_ms = 5_000)?;
+    let mut stale = recipe(ALPHA);
+    stale.availability = observed(Availability::Available, 5_000);
+    let decision = route(&policy, &task(), &[stale], &baseline())?;
+    assert_eq!(
+        gap_of(&decision, ALPHA).map(|g| g.2),
+        Some(Gap::StaleAvailability {
+            age_ms: 5_000,
+            bound_ms: 5_000
+        })
+    );
+    let mut fresh_enough = recipe(BETA);
+    fresh_enough.availability = observed(Availability::Available, 4_999);
+    let decision = route(&policy, &task(), &[fresh_enough], &baseline())?;
+    assert_eq!(chosen(&decision), Some((BETA, "7")));
+    Ok(())
+}
+
+/// T09-RT-31 · a missing cost figure under a cost ceiling is a gap at R06 naming the figure.
+#[test]
+fn missing_cost_under_a_ceiling_is_a_gap() -> Outcome {
+    let mut task = task();
+    task.cost_ceiling_microunits = Some(1_000);
+    let mut unpriced = recipe(ALPHA);
+    unpriced.cost_microunits = None;
+    let decision = decide_task(&task, &[unpriced])?;
+    assert_eq!(
+        gap_of(&decision, ALPHA),
+        Some((
+            FILTER_RULES[..4].to_vec(),
+            Rule::R06CostCeiling,
+            Gap::MissingFigure {
+                figure: Figure::Cost
+            }
+        ))
+    );
+    Ok(())
+}
+
+/// T09-RT-32 · a missing latency under a deadline is a gap at R07; a missing quality under a
+/// floor is a gap at R08; each names its figure and its rule.
+#[test]
+fn missing_latency_or_quality_under_a_bound_is_a_gap_at_that_rule() -> Outcome {
+    let mut deadline = task();
+    deadline.deadline_ms = Some(900);
+    let mut untimed = recipe(ALPHA);
+    untimed.latency_ms = None;
+    let decision = decide_task(&deadline, &[untimed])?;
+    assert_eq!(
+        gap_of(&decision, ALPHA).map(|g| (g.1, g.2)),
+        Some((
+            Rule::R07Deadline,
+            Gap::MissingFigure {
+                figure: Figure::Latency
+            }
+        ))
+    );
+    let mut floor = task();
+    floor.quality_floor_basis_points = Some(1);
+    let mut unscored = recipe(BETA);
+    unscored.quality_basis_points = None;
+    let decision = decide_task(&floor, &[unscored])?;
+    assert_eq!(
+        gap_of(&decision, BETA).map(|g| (g.1, g.2)),
+        Some((
+            Rule::R08QualityFloor,
+            Gap::MissingFigure {
+                figure: Figure::Quality
+            }
+        ))
+    );
+    Ok(())
+}
+
+/// T09-RT-33 · without any task bound a missing ranking figure is still a gap, at R11, naming
+/// the first missing figure in the declared key order after every filter passed.
+#[test]
+fn missing_ranking_figure_is_a_gap_at_ranking() -> Outcome {
+    let mut recipe = recipe(ALPHA);
+    recipe.quality_basis_points = None;
+    recipe.latency_ms = None;
+    let decision = decide(&[recipe])?;
+    assert_eq!(
+        gap_of(&decision, ALPHA),
+        Some((
+            FILTER_RULES.to_vec(),
+            Rule::R11Ranking,
+            Gap::MissingFigure {
+                figure: Figure::Quality
+            }
+        ))
+    );
+    Ok(())
+}
+
+/// T09-RT-34 · the baseline survives an unevidenced challenger: one gapped recipe routes the
+/// decision to the baseline even though another recipe is fully eligible, and the explanation
+/// shows both the gap and the eligible recipe before R09 decides.
+#[test]
+fn one_gap_routes_to_the_baseline_despite_an_eligible_challenger() -> Outcome {
+    let mut silent = recipe(BETA);
+    silent.availability = Observation::Unobserved;
+    let decision = decide(&[recipe(ALPHA), silent])?;
+    assert_eq!(
+        fallback(&decision).map(|f| f.2),
+        Some(&Fallback::InsufficientEvidence {
+            gaps: vec![EvidenceGap {
+                recipe: BETA,
+                rule: Rule::R05Availability,
+                evidence: Gap::Unobserved
+            }]
+        })
+    );
+    assert_eq!(
+        decision.explanation().steps,
+        vec![
+            guarded(),
+            Step::Eligible {
+                recipe: ALPHA,
+                passed: FILTER_RULES.to_vec()
+            },
+            Step::Gap {
+                recipe: BETA,
+                passed: FILTER_RULES[..3].to_vec(),
+                rule: Rule::R05Availability,
+                evidence: Gap::Unobserved
+            },
+            Step::Decided {
+                rule: Rule::R09InsufficientEvidence
+            },
+        ]
+    );
+    Ok(())
+}
+
+/// T09-RT-35 · a definite exclusion earlier in the order pre-empts a later gap: an unobserved
+/// recipe that also lacks a capability is excluded by R02 and carries no gap, so the eligible
+/// neighbour is chosen.
+#[test]
+fn an_earlier_exclusion_pre_empts_a_later_gap() -> Outcome {
+    let mut both = recipe(BETA);
+    both.capabilities = &["usage"];
+    both.availability = Observation::Unobserved;
+    let decision = decide(&[recipe(ALPHA), both])?;
+    assert_eq!(chosen(&decision), Some((ALPHA, "7")));
+    assert_eq!(gap_of(&decision, BETA), None);
+    assert_eq!(
+        decision.explanation().exclusions(),
+        vec![(BETA, Rule::R02RequiredCapabilities)]
+    );
+    Ok(())
+}
+
+/// T09-RT-36 · several gaps are reported together, in identity order, whatever the input order.
+#[test]
+fn multiple_gaps_are_listed_in_identity_order() -> Outcome {
+    let mut first = recipe(ALPHA);
+    first.availability = observed(Availability::Unknown, 7);
+    let mut second = recipe(GAMMA);
+    second.cost_microunits = None;
+    let expected = Fallback::InsufficientEvidence {
+        gaps: vec![
+            EvidenceGap {
+                recipe: ALPHA,
+                rule: Rule::R05Availability,
+                evidence: Gap::AvailabilityUnknown { age_ms: 7 },
+            },
+            EvidenceGap {
+                recipe: GAMMA,
+                rule: Rule::R11Ranking,
+                evidence: Gap::MissingFigure {
+                    figure: Figure::Cost,
+                },
+            },
+        ],
+    };
+    assert_eq!(
+        fallback(&decide(&[second, first])?).map(|f| f.2),
+        Some(&expected)
+    );
+    assert_eq!(
+        fallback(&decide(&[first, second])?).map(|f| f.2),
+        Some(&expected)
+    );
+    Ok(())
+}
+
+// ---------------------------------------------------------- empty eligible set
+
+/// T09-RT-37 · every candidate excluded routes to the baseline by R10, and the explanation
+/// carries each excluded recipe with the rule that excluded it.
+#[test]
+fn all_excluded_routes_to_the_baseline_with_every_exclusion_named() -> Outcome {
+    let mut remote = recipe(ALPHA);
+    remote.locality = Locality::Remote;
+    let mut small = recipe(BETA);
+    small.context_limit_tokens = 1;
+    let decision = decide(&[small, remote])?;
+    assert_eq!(
+        fallback(&decision),
+        Some((
+            BASELINE_ID,
+            BASELINE_REVISION,
+            &Fallback::NoEligibleCandidate
+        ))
+    );
+    assert_eq!(
+        decision.explanation().exclusions(),
+        vec![
+            (ALPHA, Rule::R04PrivacyClass),
+            (BETA, Rule::R03ContextLimit)
+        ]
+    );
+    assert_eq!(
+        decision.explanation().decided_by(),
+        Some(Rule::R10NoEligibleCandidate)
+    );
+    Ok(())
+}
+
+/// T09-RT-38 · an empty candidate list routes to the baseline by R10 after the guard alone.
+#[test]
+fn empty_candidate_list_routes_to_the_baseline() -> Outcome {
+    let decision = decide(&[])?;
+    assert_eq!(
+        decision,
+        Route::Baseline {
+            recipe: BASELINE_ID,
+            revision: BASELINE_REVISION,
+            reason: Fallback::NoEligibleCandidate,
+            explanation: Explanation {
+                steps: vec![
+                    guarded(),
+                    Step::Decided {
+                        rule: Rule::R10NoEligibleCandidate
+                    }
+                ]
+            }
+        }
+    );
+    Ok(())
+}
+
+// ------------------------------------------------------------------- ranking
+
+/// T09-RT-39 · cost decides at the smallest margin: 100 beats 101, whichever comes first.
+#[test]
+fn cost_decides_at_one_microunit() -> Outcome {
+    let mut dearer = recipe(BETA);
+    dearer.cost_microunits = Some(101);
+    let mut cheaper = recipe(ALPHA);
+    cheaper.cost_microunits = Some(100);
+    assert_eq!(chosen(&decide(&[dearer, cheaper])?), Some((ALPHA, "7")));
+    cheaper.id = GAMMA;
+    dearer.id = ALPHA;
+    assert_eq!(chosen(&decide(&[dearer, cheaper])?), Some((GAMMA, "7")));
+    Ok(())
+}
+
+/// T09-RT-40 · with equal cost, quality decides at one basis point: 9001 beats 9000.
+#[test]
+fn quality_decides_at_one_basis_point_when_cost_ties() -> Outcome {
+    let mut better = recipe(BETA);
+    better.quality_basis_points = Some(9_001);
+    assert_eq!(
+        chosen(&decide(&[recipe(ALPHA), better])?),
+        Some((BETA, "7"))
+    );
+    Ok(())
+}
+
+/// T09-RT-41 · with equal cost and quality, latency decides at one millisecond: 500 beats 501.
+#[test]
+fn latency_decides_at_one_millisecond_when_cost_and_quality_tie() -> Outcome {
+    let mut slower = recipe(ALPHA);
+    slower.latency_ms = Some(501);
+    assert_eq!(chosen(&decide(&[slower, recipe(BETA)])?), Some((BETA, "7")));
+    Ok(())
+}
+
+/// T09-RT-42 · the declared key order decides which figure dominates: the same two recipes are
+/// ranked differently under `cost, quality, latency` and under `quality, cost, latency`.
+#[test]
+fn declared_key_order_decides_dominance() -> Outcome {
+    let mut cheap = recipe(ALPHA);
+    cheap.cost_microunits = Some(10);
+    cheap.quality_basis_points = Some(7_000);
+    let mut strong = recipe(BETA);
+    strong.cost_microunits = Some(11);
+    strong.quality_basis_points = Some(7_001);
+    assert_eq!(chosen(&decide(&[cheap, strong])?), Some((ALPHA, "7")));
+    let quality_first = declared(|d| d.ranking.swap(0, 1))?;
+    assert_eq!(
+        quality_first.ranking(),
+        &[Key::Quality, Key::Cost, Key::Latency]
+    );
+    let decision = route(&quality_first, &task(), &[cheap, strong], &baseline())?;
+    assert_eq!(chosen(&decision), Some((BETA, "7")));
+    let latency_first = declared(|d| d.ranking.rotate_right(1))?;
+    assert_eq!(
+        latency_first.ranking(),
+        &[Key::Latency, Key::Cost, Key::Quality]
+    );
+    cheap.latency_ms = Some(500);
+    strong.latency_ms = Some(499);
+    let decision = route(&latency_first, &task(), &[cheap, strong], &baseline())?;
+    assert_eq!(chosen(&decision), Some((BETA, "7")));
+    Ok(())
+}
+
+/// T09-RT-43 · a tie on every key routes to the baseline by R12 naming the tied recipes in
+/// identity order, and the ranking step lists them.
+#[test]
+fn a_full_tie_routes_to_the_baseline_naming_the_tied_recipes() -> Outcome {
+    let decision = decide(&[recipe(BETA), recipe(ALPHA)])?;
+    assert_eq!(
+        fallback(&decision),
+        Some((
+            BASELINE_ID,
+            BASELINE_REVISION,
+            &Fallback::Tie {
+                between: vec![ALPHA, BETA]
+            }
+        ))
+    );
+    assert_eq!(decision.explanation().decided_by(), Some(Rule::R12Tie));
+    assert!(decision.explanation().steps.contains(&Step::Ranked {
+        rule: Rule::R11Ranking,
+        order: vec![ranked(&recipe(ALPHA)), ranked(&recipe(BETA))]
+    }));
+    Ok(())
+}
+
+/// T09-RT-44 · only the top group is a tie: two recipes equal at the top and a third strictly
+/// worse name exactly the two; a third equal only on cost is not in the tie.
+#[test]
+fn only_the_top_group_forms_the_tie() -> Outcome {
+    let mut worse = recipe(GAMMA);
+    worse.latency_ms = Some(600);
+    let decision = decide(&[worse, recipe(BETA), recipe(ALPHA)])?;
+    assert_eq!(
+        fallback(&decision).map(|f| f.2),
+        Some(&Fallback::Tie {
+            between: vec![ALPHA, BETA]
+        })
+    );
+    let mut weaker = recipe(DELTA);
+    weaker.quality_basis_points = Some(8_999);
+    let decision = decide(&[weaker, recipe(ALPHA), recipe(BETA)])?;
+    assert_eq!(
+        fallback(&decision).map(|f| f.2),
+        Some(&Fallback::Tie {
+            between: vec![ALPHA, BETA]
+        })
+    );
+    Ok(())
+}
+
+/// T09-RT-45 · permutation invariance: every ordering of four candidates (one excluded, one
+/// worse, two nearly tied) yields the identical `Route`, explanation included.
+#[test]
+fn every_permutation_yields_the_identical_route() -> Outcome {
+    let mut remote = recipe(GAMMA);
+    remote.locality = Locality::Hybrid;
+    let mut worse = recipe(DELTA);
+    worse.cost_microunits = Some(200);
+    let mut near = recipe(BETA);
+    near.latency_ms = Some(499);
+    let set = [recipe(ALPHA), near, remote, worse];
+    let reference = decide(&set)?;
+    assert_eq!(chosen(&reference), Some((BETA, "7")));
+    let mut permutations = 0;
+    for a in 0..4 {
+        for b in (0..4).filter(|&b| b != a) {
+            for c in (0..4).filter(|&c| c != a && c != b) {
+                let d = 6 - a - b - c;
+                let order = [set[a], set[b], set[c], set[d]];
+                assert_eq!(decide(&order)?, reference, "permutation {a}{b}{c}{d}");
+                permutations += 1;
+            }
+        }
+    }
+    assert_eq!(permutations, 24);
+    Ok(())
+}
+
+/// T09-RT-46 · a chosen route carries the chosen recipe's revision and a baseline route the
+/// baseline's; `dispatches` names the recipe each would dispatch and none for a refusal.
+#[test]
+fn routes_carry_the_dispatched_revision() -> Outcome {
+    let mut revised = recipe(ALPHA);
+    revised.revision = "42";
+    let chosen_route = decide(&[revised])?;
+    assert_eq!(chosen(&chosen_route), Some((ALPHA, "42")));
+    assert_eq!(chosen_route.dispatches(), Some(ALPHA));
+    let baseline_route = decide(&[])?;
+    assert_eq!(
+        fallback(&baseline_route).map(|f| (f.0, f.1)),
+        Some((BASELINE_ID, "1"))
+    );
+    assert_eq!(baseline_route.dispatches(), Some(BASELINE_ID));
+    let mut task = task();
+    task.required_capabilities = &["deltas"];
+    let refused = decide_task(&task, &[revised])?;
+    assert_eq!(refused.dispatches(), None);
+    Ok(())
+}
+
+// --------------------------------------------------------- explanation stability
+
+/// T09-RT-47 · the whole explanation of a chosen route, fixture one: three candidates, one
+/// excluded by context, two eligible, the cheaper chosen by R11.
+#[test]
+fn whole_explanation_of_a_chosen_route() -> Outcome {
+    let mut small = recipe(GAMMA);
+    small.context_limit_tokens = 4_096;
+    let mut dear = recipe(BETA);
+    dear.cost_microunits = Some(150);
+    let decision = decide(&[dear, small, recipe(ALPHA)])?;
+    assert_eq!(
+        decision,
+        Route::Chosen {
+            recipe: ALPHA,
+            revision: "7",
+            explanation: Explanation {
+                steps: vec![
+                    guarded(),
+                    Step::Eligible {
+                        recipe: ALPHA,
+                        passed: FILTER_RULES.to_vec()
+                    },
+                    Step::Eligible {
+                        recipe: BETA,
+                        passed: FILTER_RULES.to_vec()
+                    },
+                    Step::Excluded {
+                        recipe: GAMMA,
+                        passed: vec![Rule::R02RequiredCapabilities],
+                        rule: Rule::R03ContextLimit,
+                        why: Exclusion::ContextExceeded {
+                            limit_tokens: 4_096,
+                            required_tokens: 8_192
+                        }
+                    },
+                    Step::Ranked {
+                        rule: Rule::R11Ranking,
+                        order: vec![
+                            Ranked {
+                                recipe: ALPHA,
+                                cost_microunits: 100,
+                                quality_basis_points: 9_000,
+                                latency_ms: 500
+                            },
+                            Ranked {
+                                recipe: BETA,
+                                cost_microunits: 150,
+                                quality_basis_points: 9_000,
+                                latency_ms: 500
+                            },
+                        ]
+                    },
+                    Step::Decided {
+                        rule: Rule::R11Ranking
+                    },
+                ]
+            }
+        }
+    );
+    Ok(())
+}
+
+/// T09-RT-48 · the whole explanation of a baseline route, fixture two, differing from fixture
+/// one in every field: a remote-allowed task with a ceiling, a deadline and a floor the baseline
+/// meets, one recipe excluded by the deadline, one gapped on quality, one eligible, R09 deciding.
+#[test]
+fn whole_explanation_of_a_baseline_route() -> Outcome {
+    let task = Task {
+        required_capabilities: &["identity"],
+        context_tokens: 16_384,
+        privacy: PrivacyClass::RemoteAllowed,
+        cost_ceiling_microunits: Some(5_000),
+        deadline_ms: Some(1_000),
+        quality_floor_basis_points: Some(4_500),
+    };
+    let mut slow = recipe(DELTA);
+    slow.revision = "3";
+    slow.locality = Locality::Remote;
+    slow.latency_ms = Some(1_001);
+    let mut unscored = recipe(BETA);
+    unscored.revision = "5";
+    unscored.locality = Locality::Hybrid;
+    unscored.quality_basis_points = None;
+    let mut fine = recipe(GAMMA);
+    fine.revision = "9";
+    fine.cost_microunits = Some(4_999);
+    fine.latency_ms = Some(999);
+    let decision = decide_task(&task, &[fine, slow, unscored])?;
+    assert_eq!(
+        decision,
+        Route::Baseline {
+            recipe: BASELINE_ID,
+            revision: BASELINE_REVISION,
+            reason: Fallback::InsufficientEvidence {
+                gaps: vec![EvidenceGap {
+                    recipe: BETA,
+                    rule: Rule::R08QualityFloor,
+                    evidence: Gap::MissingFigure {
+                        figure: Figure::Quality
+                    }
+                }]
+            },
+            explanation: Explanation {
+                steps: vec![
+                    guarded(),
+                    Step::Gap {
+                        recipe: BETA,
+                        passed: FILTER_RULES[..6].to_vec(),
+                        rule: Rule::R08QualityFloor,
+                        evidence: Gap::MissingFigure {
+                            figure: Figure::Quality
+                        }
+                    },
+                    Step::Eligible {
+                        recipe: GAMMA,
+                        passed: FILTER_RULES.to_vec()
+                    },
+                    Step::Excluded {
+                        recipe: DELTA,
+                        passed: FILTER_RULES[..5].to_vec(),
+                        rule: Rule::R07Deadline,
+                        why: Exclusion::LatencyAboveDeadline {
+                            latency_ms: 1_001,
+                            deadline_ms: 1_000
+                        }
+                    },
+                    Step::Decided {
+                        rule: Rule::R09InsufficientEvidence
+                    },
+                ]
+            }
+        }
+    );
+    Ok(())
+}
+
+/// T09-RT-49 · rule identities are stable and unique: R01 through R12 in evaluation order.
+#[test]
+fn rule_identities_are_stable_and_unique() {
+    let rules = [
+        Rule::R01BaselineGuard,
+        Rule::R02RequiredCapabilities,
+        Rule::R03ContextLimit,
+        Rule::R04PrivacyClass,
+        Rule::R05Availability,
+        Rule::R06CostCeiling,
+        Rule::R07Deadline,
+        Rule::R08QualityFloor,
+        Rule::R09InsufficientEvidence,
+        Rule::R10NoEligibleCandidate,
+        Rule::R11Ranking,
+        Rule::R12Tie,
+    ];
+    let ids: Vec<&str> = rules.iter().map(|rule| rule.id()).collect();
+    assert_eq!(
+        ids,
+        [
+            "R01", "R02", "R03", "R04", "R05", "R06", "R07", "R08", "R09", "R10", "R11", "R12"
+        ]
+    );
+    let names: Vec<&str> = Filter::ALL.iter().map(|f| f.name()).collect();
+    assert_eq!(
+        names,
+        [
+            "required_capabilities",
+            "context_limit",
+            "privacy_class",
+            "availability",
+            "cost_ceiling",
+            "deadline",
+            "quality_floor"
+        ]
+    );
+    assert_eq!(Key::ALL.map(Key::name), ["cost", "quality", "latency"]);
+    assert_eq!(
+        Key::ALL.map(Key::figure),
+        [Figure::Cost, Figure::Quality, Figure::Latency]
+    );
+}
+
+/// T09-RT-50 · the serialized decision is a stable document: the whole JSON of a chosen route
+/// over one excluded and one eligible recipe equals the literal a consumer would read.
+#[test]
+fn serialized_decision_is_a_stable_document() -> Outcome {
+    let mut down = recipe(BETA);
+    down.availability = observed(Availability::Unavailable, 12);
+    let decision = decide(&[down, recipe(ALPHA)])?;
+    let filters = json!([
+        "R02RequiredCapabilities",
+        "R03ContextLimit",
+        "R04PrivacyClass",
+        "R05Availability",
+        "R06CostCeiling",
+        "R07Deadline",
+        "R08QualityFloor"
+    ]);
+    let expected: Value = json!({
+        "route": "chosen",
+        "recipe": ALPHA,
+        "revision": "7",
+        "explanation": {"steps": [
+            {"step": "guarded", "recipe": BASELINE_ID, "passed": filters},
+            {"step": "eligible", "recipe": ALPHA, "passed": filters},
+            {"step": "excluded", "recipe": BETA,
+             "passed": ["R02RequiredCapabilities", "R03ContextLimit", "R04PrivacyClass"],
+             "rule": "R05Availability", "why": {"why": "unavailable", "age_ms": 12}},
+            {"step": "ranked", "rule": "R11Ranking", "order": [
+                {"recipe": ALPHA, "cost_microunits": 100, "quality_basis_points": 9000, "latency_ms": 500}
+            ]},
+            {"step": "decided", "rule": "R11Ranking"}
+        ]}
+    });
+    assert_eq!(serde_json::to_value(&decision)?, expected);
+    Ok(())
+}
+
+// ------------------------------------------------------------- baseline guard
+
+/// T09-RT-51 · the baseline lacking a capability the task requires is refused by R01 carrying
+/// the R02 exclusion; the refusal dispatches nothing.
+#[test]
+fn baseline_missing_a_required_capability_is_refused() -> Outcome {
+    let mut task = task();
+    task.required_capabilities = &["final_output", "tool_proposals"];
+    let decision = decide_task(&task, &[recipe(ALPHA)])?;
+    assert_eq!(
+        refusal(&decision),
+        Some((
+            Refusal::BaselineExcluded {
+                rule: Rule::R02RequiredCapabilities,
+                why: Exclusion::MissingCapability {
+                    capability: "tool_proposals"
+                }
+            },
+            &Fallback::NoEligibleCandidate
+        ))
+    );
+    assert_eq!(decision.dispatches(), None);
+    assert_eq!(
+        decision.explanation().decided_by(),
+        Some(Rule::R01BaselineGuard)
+    );
+    Ok(())
+}
+
+/// T09-RT-52 · a baseline whose availability is stale cannot honour a tie: the refusal carries
+/// the R05 gap and the tie it could not resolve.
+#[test]
+fn baseline_with_stale_availability_cannot_honour_a_tie() -> Outcome {
+    let mut stale = baseline();
+    stale.availability = observed(Availability::Available, 31_000);
+    let decision = route(&policy()?, &task(), &[recipe(BETA), recipe(ALPHA)], &stale)?;
+    assert_eq!(
+        refusal(&decision),
+        Some((
+            Refusal::BaselineEvidence {
+                rule: Rule::R05Availability,
+                evidence: Gap::StaleAvailability {
+                    age_ms: 31_000,
+                    bound_ms: BOUND_MS
+                }
+            },
+            &Fallback::Tie {
+                between: vec![ALPHA, BETA]
+            }
+        ))
+    );
+    assert_eq!(decision.dispatches(), None);
+    Ok(())
+}
+
+/// T09-RT-53 · a baseline above the task's cost ceiling is refused by R01 carrying the R06
+/// exclusion with both numbers.
+#[test]
+fn baseline_above_the_cost_ceiling_is_refused() -> Outcome {
+    let mut task = task();
+    task.cost_ceiling_microunits = Some(3);
+    let mut dear = baseline();
+    dear.cost_microunits = Some(4);
+    let decision = route(&policy()?, &task, &[recipe(ALPHA)], &dear)?;
+    assert_eq!(
+        refusal(&decision),
+        Some((
+            Refusal::BaselineExcluded {
+                rule: Rule::R06CostCeiling,
+                why: Exclusion::CostAboveCeiling {
+                    cost_microunits: 4,
+                    ceiling_microunits: 3
+                }
+            },
+            &Fallback::NoEligibleCandidate
+        ))
+    );
+    Ok(())
+}
+
+/// T09-RT-54 · the guard is screened first but decides last: a baseline that cannot hold the
+/// task's context leads the explanation as `Excluded`, and a strictly best candidate is still
+/// chosen because no fallback was required.
+#[test]
+fn a_failed_guard_does_not_deny_a_strict_choice() -> Outcome {
+    let mut task = task();
+    task.context_tokens = 40_000;
+    let mut roomy = recipe(ALPHA);
+    roomy.context_limit_tokens = 65_536;
+    let decision = decide_task(&task, &[roomy])?;
+    assert_eq!(
+        decision,
+        Route::Chosen {
+            recipe: ALPHA,
+            revision: "7",
+            explanation: Explanation {
+                steps: vec![
+                    Step::Excluded {
+                        recipe: BASELINE_ID,
+                        passed: vec![Rule::R02RequiredCapabilities],
+                        rule: Rule::R03ContextLimit,
+                        why: Exclusion::ContextExceeded {
+                            limit_tokens: 32_768,
+                            required_tokens: 40_000
+                        }
+                    },
+                    Step::Eligible {
+                        recipe: ALPHA,
+                        passed: FILTER_RULES.to_vec()
+                    },
+                    Step::Ranked {
+                        rule: Rule::R11Ranking,
+                        order: vec![ranked(&roomy)]
+                    },
+                    Step::Decided {
+                        rule: Rule::R11Ranking
+                    },
+                ]
+            }
+        }
+    );
+    Ok(())
+}
+
+/// T09-RT-57 · the same baseline defect refuses the moment a fallback is required: with the
+/// roomy candidate gapped, R09 requires the baseline and R01 refuses, carrying the gap fallback.
+#[test]
+fn a_failed_guard_refuses_when_a_fallback_is_required() -> Outcome {
+    let mut task = task();
+    task.context_tokens = 40_000;
+    let mut roomy = recipe(ALPHA);
+    roomy.context_limit_tokens = 65_536;
+    roomy.availability = Observation::Unobserved;
+    let decision = decide_task(&task, &[roomy])?;
+    let gaps = vec![EvidenceGap {
+        recipe: ALPHA,
+        rule: Rule::R05Availability,
+        evidence: Gap::Unobserved,
+    }];
+    assert_eq!(
+        decision,
+        Route::Refused {
+            fallback: Fallback::InsufficientEvidence { gaps: gaps.clone() },
+            reason: Refusal::BaselineExcluded {
+                rule: Rule::R03ContextLimit,
+                why: Exclusion::ContextExceeded {
+                    limit_tokens: 32_768,
+                    required_tokens: 40_000
+                }
+            },
+            explanation: Explanation {
+                steps: vec![
+                    Step::Excluded {
+                        recipe: BASELINE_ID,
+                        passed: vec![Rule::R02RequiredCapabilities],
+                        rule: Rule::R03ContextLimit,
+                        why: Exclusion::ContextExceeded {
+                            limit_tokens: 32_768,
+                            required_tokens: 40_000
+                        }
+                    },
+                    Step::Gap {
+                        recipe: ALPHA,
+                        passed: FILTER_RULES[..3].to_vec(),
+                        rule: Rule::R05Availability,
+                        evidence: Gap::Unobserved
+                    },
+                    Step::Decided {
+                        rule: Rule::R09InsufficientEvidence
+                    },
+                    Step::Decided {
+                        rule: Rule::R01BaselineGuard
+                    },
+                ]
+            }
+        }
+    );
+    assert_eq!(decision.dispatches(), None);
+    Ok(())
+}
+
+/// T09-RT-58 · a refusal never dispatches and a fallback never names an ineligible baseline:
+/// over every task bound the baseline fails, the empty candidate list yields `Refused`, never
+/// `Baseline`, and each refusal names the bound's own rule.
+#[test]
+fn an_ineligible_baseline_is_never_dispatched_by_a_fallback() -> Outcome {
+    let mut floor = task();
+    floor.quality_floor_basis_points = Some(5_001);
+    let mut deadline = task();
+    deadline.deadline_ms = Some(999);
+    let mut ceiling = task();
+    ceiling.cost_ceiling_microunits = Some(0);
+    let mut dear = baseline();
+    dear.cost_microunits = Some(1);
+    for (task, baseline, rule) in [
+        (floor, baseline(), Rule::R08QualityFloor),
+        (deadline, baseline(), Rule::R07Deadline),
+        (ceiling, dear, Rule::R06CostCeiling),
+    ] {
+        let decision = route(&policy()?, &task, &[], &baseline)?;
+        assert_eq!(decision.dispatches(), None, "{rule:?}");
+        assert_eq!(
+            refusal(&decision).map(|r| r.1),
+            Some(&Fallback::NoEligibleCandidate)
+        );
+        assert!(
+            matches!(refusal(&decision), Some((Refusal::BaselineExcluded { rule: by, .. }, _)) if by == rule),
+            "{rule:?}"
+        );
+    }
+    Ok(())
+}
+
+// -------------------------------------------------------- purity and known answers
+
+/// T09-RT-55 · routing makes zero model calls, zero I/O and reads zero clocks: the policy body
+/// after its anchor block names no adapter, filesystem, process, network, clock or store item.
+#[test]
+fn policy_source_names_no_effectful_item() {
+    let source = include_str!("../src/route.rs");
+    let body = source.split("HEE3-ANCHORS-END").nth(1).unwrap_or_default();
+    let code: String = body
+        .lines()
+        .map(|line| line.split("//").next().unwrap_or_default())
+        .collect::<Vec<_>>()
+        .join("\n");
+    for token in [
+        "std::fs",
+        "std::io",
+        "std::net",
+        "std::env",
+        "std::process",
+        "std::thread",
+        "Instant",
+        "SystemTime",
+        "/proc",
+        "Command",
+        "worker::",
+        "native",
+        "inference",
+        "Store",
+        "rusqlite",
+        "unsafe",
+        "unwrap()",
+        "expect(",
+        "panic!",
+        "unreachable!",
+        "todo!",
+    ] {
+        assert!(!code.contains(token), "policy body names {token}");
+    }
+    assert!(code.contains("pub fn route<'a>("));
+}
+
+/// T09-RT-56 · known answers from an independent implementation: the retained table
+/// `fixtures/route/known-answers.json`, computed by the Python oracle over
+/// `fixtures/route/fixture.json`, equals this router's decisions over the same fixture, whole.
+#[test]
+fn known_answer_table_matches_the_independent_oracle() -> Outcome {
+    let fixture: Value = serde_json::from_str(include_str!("fixtures/route/fixture.json"))?;
+    let expected: Value = serde_json::from_str(include_str!("fixtures/route/known-answers.json"))?;
+    let policy = policy()?;
+    let recipes = fixture["recipes"].as_array().ok_or("recipes")?;
+    let capability_lists: Vec<Vec<&str>> = recipes
+        .iter()
+        .map(|r| {
+            r["capabilities"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .collect()
+        })
+        .collect();
+    let candidates: Vec<Recipe<'_>> = recipes
+        .iter()
+        .zip(&capability_lists)
+        .map(|(r, caps)| fixture_recipe(r, caps))
+        .collect::<Result<_, Box<dyn Error>>>()?;
+    let tasks = fixture["tasks"].as_array().ok_or("tasks")?;
+    let mut answers = Vec::new();
+    for entry in tasks {
+        let required: Vec<&str> = entry["required_capabilities"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .collect();
+        let task = Task {
+            required_capabilities: &required,
+            context_tokens: entry["context_tokens"].as_u64().ok_or("context")?,
+            privacy: if entry["privacy"] == "local_only" {
+                PrivacyClass::LocalOnly
+            } else {
+                PrivacyClass::RemoteAllowed
+            },
+            cost_ceiling_microunits: entry["cost_ceiling_microunits"].as_u64(),
+            deadline_ms: entry["deadline_ms"].as_u64(),
+            quality_floor_basis_points: entry["quality_floor_basis_points"]
+                .as_u64()
+                .map(u16::try_from)
+                .transpose()?,
+        };
+        let decision = route(&policy, &task, &candidates, &baseline())?;
+        answers.push(json!({"task": entry["id"], "answer": project(&decision)}));
+    }
+    assert_eq!(tasks.len(), 12, "the fixture declares twelve tasks");
+    assert_eq!(Value::Array(answers), expected["answers"]);
+    Ok(())
+}
+
+/// T09-RT-59 · the task's quality floor is in range at exactly `MAX_QUALITY_BASIS_POINTS`: the
+/// boundary value screens by R08 and is not refused as structurally invalid, while one basis
+/// point above it is refused. Both sides of the range comparison are named, not only the far
+/// side — a value pinned only where the answer is the same on either side is pinned by nothing.
+#[test]
+fn a_task_quality_floor_at_the_maximum_is_in_range() -> Outcome {
+    let mut at_bound = task();
+    at_bound.quality_floor_basis_points = Some(MAX_QUALITY_BASIS_POINTS);
+    let mut top = recipe(ALPHA);
+    top.quality_basis_points = Some(MAX_QUALITY_BASIS_POINTS);
+    let decision = decide_task(&at_bound, &[top])?;
+    assert_eq!(chosen(&decision), Some((ALPHA, "7")));
+    assert_eq!(decision.explanation().decided_by(), Some(Rule::R11Ranking));
+    let mut just_over = task();
+    just_over.quality_floor_basis_points = Some(MAX_QUALITY_BASIS_POINTS + 1);
+    assert_eq!(
+        route(&policy()?, &just_over, &[recipe(ALPHA)], &baseline()),
+        Err(Invalid::QualityRange { recipe: None })
+    );
+    Ok(())
+}
+
+/// One rendered diagnostic: the variant it came from, what `Display` produced, what is expected.
+type Rendering = (&'static str, String, &'static str);
+
+/// The variant names an enum declares, taken from the module source rather than from a list
+/// written here: an include list cannot see an omission, so the denominator comes from the
+/// artefact that decides. `src/route.rs` is read at compile time; no test reads a file at run time.
+fn declared_variants(name: &str) -> Result<Vec<String>, Box<dyn Error>> {
+    let source = include_str!("../src/route.rs");
+    let header = format!("pub enum {name} {{\n");
+    let start = source.find(&header).ok_or("enum declaration")? + header.len();
+    let body = &source[start..];
+    let end = body.find("\n}\n").ok_or("enum terminator")?;
+    Ok(body[..end]
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with("//"))
+        .filter_map(|line| line.split([' ', ',', '{', '(']).next())
+        .map(str::to_owned)
+        .collect())
+}
+
+fn invalid_renderings_a() -> Vec<Rendering> {
+    vec![
+        (
+            "TooManyCandidates",
+            Invalid::TooManyCandidates {
+                count: 257,
+                limit: 256,
+            }
+            .to_string(),
+            "257 candidates exceed the bound of 256",
+        ),
+        (
+            "TooManyCandidates",
+            Invalid::TooManyCandidates { count: 9, limit: 4 }.to_string(),
+            "9 candidates exceed the bound of 4",
+        ),
+        (
+            "Identity",
+            Invalid::Identity {
+                recipe: "alpha".to_owned(),
+            }
+            .to_string(),
+            "invalid recipe identity \"alpha\"",
+        ),
+        (
+            "Identity",
+            Invalid::Identity {
+                recipe: "beta-2".to_owned(),
+            }
+            .to_string(),
+            "invalid recipe identity \"beta-2\"",
+        ),
+        (
+            "DuplicateIdentity",
+            Invalid::DuplicateIdentity {
+                recipe: "gamma".to_owned(),
+            }
+            .to_string(),
+            "duplicate recipe identity \"gamma\"",
+        ),
+        (
+            "DuplicateIdentity",
+            Invalid::DuplicateIdentity {
+                recipe: "delta-4".to_owned(),
+            }
+            .to_string(),
+            "duplicate recipe identity \"delta-4\"",
+        ),
+        (
+            "BaselineAmongCandidates",
+            Invalid::BaselineAmongCandidates {
+                recipe: "epsilon".to_owned(),
+            }
+            .to_string(),
+            "baseline \"epsilon\" is also a candidate",
+        ),
+        (
+            "BaselineAmongCandidates",
+            Invalid::BaselineAmongCandidates {
+                recipe: "zeta-6".to_owned(),
+            }
+            .to_string(),
+            "baseline \"zeta-6\" is also a candidate",
+        ),
+    ]
+}
+
+fn invalid_renderings_b() -> Vec<Rendering> {
+    vec![
+        (
+            "BaselineMismatch",
+            Invalid::BaselineMismatch {
+                declared: "eta".to_owned(),
+                supplied: "theta".to_owned(),
+            }
+            .to_string(),
+            "policy declares baseline \"eta\", caller supplied \"theta\"",
+        ),
+        (
+            "BaselineMismatch",
+            Invalid::BaselineMismatch {
+                declared: "iota-9".to_owned(),
+                supplied: "kappa-10".to_owned(),
+            }
+            .to_string(),
+            "policy declares baseline \"iota-9\", caller supplied \"kappa-10\"",
+        ),
+        (
+            "Capabilities",
+            Invalid::Capabilities {
+                recipe: Some("lambda".to_owned()),
+            }
+            .to_string(),
+            "invalid capabilities on recipe \"lambda\"",
+        ),
+        (
+            "Capabilities",
+            Invalid::Capabilities {
+                recipe: Some("mu-12".to_owned()),
+            }
+            .to_string(),
+            "invalid capabilities on recipe \"mu-12\"",
+        ),
+        (
+            "Capabilities",
+            Invalid::Capabilities { recipe: None }.to_string(),
+            "invalid required capabilities on the task",
+        ),
+        (
+            "QualityRange",
+            Invalid::QualityRange {
+                recipe: Some("nu".to_owned()),
+            }
+            .to_string(),
+            "quality figure out of range on \"nu\"",
+        ),
+        (
+            "QualityRange",
+            Invalid::QualityRange {
+                recipe: Some("xi-14".to_owned()),
+            }
+            .to_string(),
+            "quality figure out of range on \"xi-14\"",
+        ),
+        (
+            "QualityRange",
+            Invalid::QualityRange { recipe: None }.to_string(),
+            "quality floor out of range on the task",
+        ),
+    ]
+}
+
+/// T09-RT-60 · the whole rendered diagnostic of every `Invalid` variant, over two fixtures per
+/// field-carrying variant that differ in every field. The variant list is taken from the module
+/// source, so a variant added without a rendering fails here rather than passing unseen.
+#[test]
+fn every_invalid_refusal_renders_its_own_whole_diagnostic() -> Outcome {
+    let mut table = invalid_renderings_a();
+    table.extend(invalid_renderings_b());
+    for (variant, rendered, expected) in &table {
+        assert_eq!(rendered, expected, "{variant} rendered wrongly");
+    }
+    let declared = declared_variants("Invalid")?;
+    assert_eq!(declared.len(), 7, "Invalid declares seven variants");
+    for variant in &declared {
+        assert!(
+            table.iter().any(|(name, ..)| name == variant),
+            "no rendering case for Invalid::{variant}"
+        );
+    }
+    for (variant, ..) in &table {
+        assert!(
+            declared.iter().any(|name| name == variant),
+            "rendering case names an undeclared variant Invalid::{variant}"
+        );
+    }
+    let distinct: BTreeSet<&str> = table.iter().map(|(_, r, _)| r.as_str()).collect();
+    assert_eq!(distinct.len(), table.len(), "two fixtures rendered alike");
+    Ok(())
+}
+
+fn config_renderings_a() -> Vec<Rendering> {
+    vec![
+        (
+            "Syntax",
+            ConfigError::Syntax.to_string(),
+            "route configuration is not valid TOML",
+        ),
+        (
+            "UnknownKey",
+            ConfigError::UnknownKey {
+                key: "filters.extra".to_owned(),
+            }
+            .to_string(),
+            "unknown key \"filters.extra\"",
+        ),
+        (
+            "UnknownKey",
+            ConfigError::UnknownKey {
+                key: "tie.mode".to_owned(),
+            }
+            .to_string(),
+            "unknown key \"tie.mode\"",
+        ),
+        (
+            "MissingKey",
+            ConfigError::MissingKey {
+                key: "ranking".to_owned(),
+            }
+            .to_string(),
+            "missing key \"ranking\"",
+        ),
+        (
+            "MissingKey",
+            ConfigError::MissingKey {
+                key: "staleness_bound_ms".to_owned(),
+            }
+            .to_string(),
+            "missing key \"staleness_bound_ms\"",
+        ),
+        (
+            "WrongType",
+            ConfigError::WrongType {
+                key: "schema_version".to_owned(),
+            }
+            .to_string(),
+            "wrong type at key \"schema_version\"",
+        ),
+        (
+            "WrongType",
+            ConfigError::WrongType {
+                key: "baseline.recipe".to_owned(),
+            }
+            .to_string(),
+            "wrong type at key \"baseline.recipe\"",
+        ),
+        (
+            "SchemaVersion",
+            ConfigError::SchemaVersion { found: 2 }.to_string(),
+            "unsupported schema_version 2",
+        ),
+        (
+            "SchemaVersion",
+            ConfigError::SchemaVersion { found: -7 }.to_string(),
+            "unsupported schema_version -7",
+        ),
+    ]
+}
+
+fn config_renderings_b() -> Vec<Rendering> {
+    vec![
+        (
+            "UnknownRule",
+            ConfigError::UnknownRule {
+                name: "colour".to_owned(),
+            }
+            .to_string(),
+            "unknown filter rule \"colour\"",
+        ),
+        (
+            "UnknownRule",
+            ConfigError::UnknownRule {
+                name: "weather".to_owned(),
+            }
+            .to_string(),
+            "unknown filter rule \"weather\"",
+        ),
+        (
+            "DuplicateRule",
+            ConfigError::DuplicateRule {
+                name: "privacy_class".to_owned(),
+            }
+            .to_string(),
+            "duplicate filter rule \"privacy_class\"",
+        ),
+        (
+            "DuplicateRule",
+            ConfigError::DuplicateRule {
+                name: "context_limit".to_owned(),
+            }
+            .to_string(),
+            "duplicate filter rule \"context_limit\"",
+        ),
+        (
+            "MissingRule",
+            ConfigError::MissingRule {
+                name: "availability".to_owned(),
+            }
+            .to_string(),
+            "missing filter rule \"availability\"",
+        ),
+        (
+            "MissingRule",
+            ConfigError::MissingRule {
+                name: "cost_ceiling".to_owned(),
+            }
+            .to_string(),
+            "missing filter rule \"cost_ceiling\"",
+        ),
+        (
+            "UnknownRankingKey",
+            ConfigError::UnknownRankingKey {
+                name: "charisma".to_owned(),
+            }
+            .to_string(),
+            "unknown ranking key \"charisma\"",
+        ),
+        (
+            "UnknownRankingKey",
+            ConfigError::UnknownRankingKey {
+                name: "hue".to_owned(),
+            }
+            .to_string(),
+            "unknown ranking key \"hue\"",
+        ),
+    ]
+}
+
+fn config_renderings_c() -> Vec<Rendering> {
+    vec![
+        (
+            "DuplicateRankingKey",
+            ConfigError::DuplicateRankingKey {
+                name: "cost".to_owned(),
+            }
+            .to_string(),
+            "duplicate ranking key \"cost\"",
+        ),
+        (
+            "DuplicateRankingKey",
+            ConfigError::DuplicateRankingKey {
+                name: "latency".to_owned(),
+            }
+            .to_string(),
+            "duplicate ranking key \"latency\"",
+        ),
+        (
+            "MissingRankingKey",
+            ConfigError::MissingRankingKey {
+                name: "quality".to_owned(),
+            }
+            .to_string(),
+            "missing ranking key \"quality\"",
+        ),
+        (
+            "MissingRankingKey",
+            ConfigError::MissingRankingKey {
+                name: "identity".to_owned(),
+            }
+            .to_string(),
+            "missing ranking key \"identity\"",
+        ),
+        (
+            "UnknownTieRule",
+            ConfigError::UnknownTieRule {
+                name: "coin_flip".to_owned(),
+            }
+            .to_string(),
+            "unknown tie rule \"coin_flip\"",
+        ),
+        (
+            "UnknownTieRule",
+            ConfigError::UnknownTieRule {
+                name: "first_seen".to_owned(),
+            }
+            .to_string(),
+            "unknown tie rule \"first_seen\"",
+        ),
+        (
+            "StalenessBound",
+            ConfigError::StalenessBound { value: 0 }.to_string(),
+            "staleness_bound_ms 0 is outside 1..=60000",
+        ),
+        (
+            "StalenessBound",
+            ConfigError::StalenessBound { value: 60_001 }.to_string(),
+            "staleness_bound_ms 60001 is outside 1..=60000",
+        ),
+        (
+            "MissingBaseline",
+            ConfigError::MissingBaseline.to_string(),
+            "no baseline recipe is declared",
+        ),
+    ]
+}
+
+fn config_renderings_d() -> Vec<Rendering> {
+    vec![
+        (
+            "BaselineIdentity",
+            ConfigError::BaselineIdentity {
+                recipe: "omicron".to_owned(),
+            }
+            .to_string(),
+            "invalid baseline identity \"omicron\"",
+        ),
+        (
+            "BaselineIdentity",
+            ConfigError::BaselineIdentity {
+                recipe: "pi-16".to_owned(),
+            }
+            .to_string(),
+            "invalid baseline identity \"pi-16\"",
+        ),
+        (
+            "BaselineMismatch",
+            ConfigError::BaselineMismatch {
+                declared: "rho".to_owned(),
+                supplied: "sigma".to_owned(),
+            }
+            .to_string(),
+            "declared baseline \"rho\" is not the supplied baseline \"sigma\"",
+        ),
+        (
+            "BaselineMismatch",
+            ConfigError::BaselineMismatch {
+                declared: "tau-19".to_owned(),
+                supplied: "upsilon-20".to_owned(),
+            }
+            .to_string(),
+            "declared baseline \"tau-19\" is not the supplied baseline \"upsilon-20\"",
+        ),
+        (
+            "BaselineNotLocal",
+            ConfigError::BaselineNotLocal {
+                recipe: "phi".to_owned(),
+                locality: Locality::Remote,
+            }
+            .to_string(),
+            "baseline \"phi\" is Remote, not local, and cannot serve a local-only task",
+        ),
+        (
+            "BaselineNotLocal",
+            ConfigError::BaselineNotLocal {
+                recipe: "chi-22".to_owned(),
+                locality: Locality::Hybrid,
+            }
+            .to_string(),
+            "baseline \"chi-22\" is Hybrid, not local, and cannot serve a local-only task",
+        ),
+        (
+            "BaselineMissingFigure",
+            ConfigError::BaselineMissingFigure {
+                recipe: "psi".to_owned(),
+                figure: Figure::Cost,
+            }
+            .to_string(),
+            "baseline \"psi\" carries no Cost figure and cannot be screened",
+        ),
+        (
+            "BaselineMissingFigure",
+            ConfigError::BaselineMissingFigure {
+                recipe: "omega-24".to_owned(),
+                figure: Figure::Latency,
+            }
+            .to_string(),
+            "baseline \"omega-24\" carries no Latency figure and cannot be screened",
+        ),
+    ]
+}
+
+/// T09-RT-61 · the whole rendered diagnostic of every `ConfigError` variant, over two fixtures
+/// per field-carrying variant that differ in every field. The loader refuses by name, and the
+/// name a reader sees is pinned here; the variant list comes from the module source.
+#[test]
+fn every_config_refusal_renders_its_own_whole_diagnostic() -> Outcome {
+    let mut table = config_renderings_a();
+    table.extend(config_renderings_b());
+    table.extend(config_renderings_c());
+    table.extend(config_renderings_d());
+    for (variant, rendered, expected) in &table {
+        assert_eq!(rendered, expected, "{variant} rendered wrongly");
+    }
+    let declared = declared_variants("ConfigError")?;
+    assert_eq!(declared.len(), 18, "ConfigError declares eighteen variants");
+    for variant in &declared {
+        assert!(
+            table.iter().any(|(name, ..)| name == variant),
+            "no rendering case for ConfigError::{variant}"
+        );
+    }
+    for (variant, ..) in &table {
+        assert!(
+            declared.iter().any(|name| name == variant),
+            "rendering case names an undeclared variant ConfigError::{variant}"
+        );
+    }
+    let distinct: BTreeSet<&str> = table.iter().map(|(_, r, _)| r.as_str()).collect();
+    assert_eq!(distinct.len(), table.len(), "two fixtures rendered alike");
+    Ok(())
+}
+
+fn fixture_recipe<'a>(row: &'a Value, caps: &'a [&'a str]) -> Result<Recipe<'a>, Box<dyn Error>> {
+    let availability = match row["availability"]["kind"].as_str() {
+        Some("unobserved") => Observation::Unobserved,
+        _ => Observation::Observed {
+            availability: match row["availability"]["availability"].as_str() {
+                Some("available") => Availability::Available,
+                Some("unavailable") => Availability::Unavailable,
+                _ => Availability::Unknown,
+            },
+            age_ms: row["availability"]["age_ms"].as_u64().ok_or("age")?,
+        },
+    };
+    Ok(Recipe {
+        id: row["id"].as_str().ok_or("id")?,
+        revision: row["revision"].as_str().ok_or("revision")?,
+        capabilities: caps,
+        context_limit_tokens: row["context_limit_tokens"].as_u64().ok_or("limit")?,
+        locality: match row["locality"].as_str() {
+            Some("local") => Locality::Local,
+            Some("remote") => Locality::Remote,
+            _ => Locality::Hybrid,
+        },
+        availability,
+        cost_microunits: row["cost_microunits"].as_u64(),
+        quality_basis_points: row["quality_basis_points"]
+            .as_u64()
+            .map(u16::try_from)
+            .transpose()?,
+        latency_ms: row["latency_ms"].as_u64(),
+    })
+}
+
+/// The projection both sides compare: arm, dispatched recipe, reason, ranking order, exclusions and gaps.
+fn project(decision: &Route<'_>) -> Value {
+    let explanation = decision.explanation();
+    let order: Vec<&str> = explanation
+        .steps
+        .iter()
+        .find_map(|step| match step {
+            Step::Ranked { order, .. } => Some(order.iter().map(|r| r.recipe).collect()),
+            _ => None,
+        })
+        .unwrap_or_default();
+    let exclusions: Vec<Value> = explanation
+        .exclusions()
+        .iter()
+        .map(|(recipe, rule)| json!([recipe, rule.id()]))
+        .collect();
+    let gaps: Vec<Value> = explanation
+        .steps
+        .iter()
+        .filter_map(|step| match step {
+            Step::Gap {
+                recipe,
+                rule,
+                evidence,
+                ..
+            } => Some(json!([recipe, rule.id(), gap_name(*evidence)])),
+            _ => None,
+        })
+        .collect();
+    let (arm, reason) = match decision {
+        Route::Chosen { .. } => ("chosen", Value::Null),
+        Route::Baseline { reason, .. } => ("baseline", fallback_name(reason)),
+        Route::Refused {
+            reason, fallback, ..
+        } => (
+            "refused",
+            match (reason, fallback) {
+                (Refusal::BaselineExcluded { rule, .. }, required) => {
+                    json!(["baseline_excluded", rule.id(), fallback_name(required)])
+                }
+                (Refusal::BaselineEvidence { rule, .. }, required) => {
+                    json!(["baseline_evidence", rule.id(), fallback_name(required)])
+                }
+            },
+        ),
+    };
+    json!({
+        "route": arm,
+        "recipe": decision.dispatches(),
+        "reason": reason,
+        "decided_by": explanation.decided_by().map(Rule::id),
+        "order": order,
+        "exclusions": exclusions,
+        "gaps": gaps,
+    })
+}
+
+fn fallback_name(fallback: &Fallback<'_>) -> Value {
+    match fallback {
+        Fallback::Tie { between } => json!(["tie", between]),
+        Fallback::InsufficientEvidence { .. } => json!(["insufficient_evidence"]),
+        Fallback::NoEligibleCandidate => json!(["no_eligible_candidate"]),
+    }
+}
+
+fn gap_name(gap: Gap) -> &'static str {
+    match gap {
+        Gap::Unobserved => "unobserved",
+        Gap::AvailabilityUnknown { .. } => "availability_unknown",
+        Gap::StaleAvailability { .. } => "stale_availability",
+        Gap::MissingFigure {
+            figure: Figure::Cost,
+        } => "missing_cost",
+        Gap::MissingFigure {
+            figure: Figure::Quality,
+        } => "missing_quality",
+        Gap::MissingFigure {
+            figure: Figure::Latency,
+        } => "missing_latency",
+    }
+}

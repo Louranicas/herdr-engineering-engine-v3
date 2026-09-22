@@ -31,7 +31,7 @@
 // [CONTEXT RESTART POINTER](file:///var/home/herdr-engineering-engine-v3/corpus/CONTEXT_HANDOFF.md)
 // [QUICK START](file:///var/home/herdr-engineering-engine-v3/QUICK_START.md)
 // [ASSIMILATION AND DELIVERY WORKFLOW](file:///var/home/herdr-engineering-engine-v3/workflows/README.md)
-// Readiness binding: HEE3-READINESS-001; SHA-256 e774f8984c7e39e85b156289fac809bded6df80ba3647cfb2024c69856447b94; clauses F2-C01, F2-C02, F2-C03, F2-C04, F2-C05, F2-C06, F3-C01, F3-C02, F3-C03, F3-C04, F3-C05, F3-C06, F4-C01, F4-C02, F4-C03, F4-C04, F4-C05, F4-C06, F4-C07, F5-C01, F5-C02, F5-C03, F5-C04, F5-C05, F5-C06, F7-C01, F7-C02, F7-C03, F7-C04, F7-C05, F7-C06; groupings R90-06, R90-07, R90-09, R90-10; resolved contracts RC01, RC02, RC03, RC04, RC05; runtime proof pending; original task DAG controls.
+// Readiness binding: HEE3-READINESS-001; SHA-256 7fd2285b611328e2c8d7aef755d55451ef2d4e0f952524526891ca49533fc090; clauses F2-C01, F2-C02, F2-C03, F2-C04, F2-C05, F2-C06, F3-C01, F3-C02, F3-C03, F3-C04, F3-C05, F3-C06, F4-C01, F4-C02, F4-C03, F4-C04, F4-C05, F4-C06, F4-C07, F5-C01, F5-C02, F5-C03, F5-C04, F5-C05, F5-C06, F7-C01, F7-C02, F7-C03, F7-C04, F7-C05, F7-C06; groupings R90-06, R90-07, R90-09, R90-10; resolved contracts RC01, RC02, RC03, RC04, RC05; runtime proof pending; original task DAG controls.
 // Completion identity: HEE3-DONE-context; all 13 applicable gates; current state unassessed. No documentation pass admits this module.
 // Mandatory testing convention: at least 50 distinct qualifying module-owned cases; zero baseline warnings/errors, including pedantic Clippy on admitted Rust targets/profiles. Full qualification remains unassessed.
 //
@@ -162,7 +162,7 @@
 // [What the Workflow Is Worth](obsidian://open?vault=my-diary.vault&file=Reflections%2FWhat%20the%20Workflow%20Is%20Worth)
 // [Why I Stopped Trusting Green](obsidian://open?vault=my-diary.vault&file=Reflections%2FWhy%20I%20Stopped%20Trusting%20Green)
 // [Working Style in This Habitat](obsidian://open?vault=my-diary.vault&file=Reflections%2FWorking%20Style%20in%20This%20Habitat)
-// Readiness binding: HEE3-READINESS-001; SHA-256 e774f8984c7e39e85b156289fac809bded6df80ba3647cfb2024c69856447b94; clauses F2-C01, F2-C02, F2-C03, F2-C04, F2-C05, F2-C06, F3-C01, F3-C02, F3-C03, F3-C04, F3-C05, F3-C06, F4-C01, F4-C02, F4-C03, F4-C04, F4-C05, F4-C06, F4-C07, F5-C01, F5-C02, F5-C03, F5-C04, F5-C05, F5-C06, F7-C01, F7-C02, F7-C03, F7-C04, F7-C05, F7-C06; groupings R90-02, R90-03, R90-04, R90-05, R90-09, R90-10; resolved contracts RC02, RC03, RC04, RC05; runtime proof pending; original task DAG controls.
+// Readiness binding: HEE3-READINESS-001; SHA-256 7fd2285b611328e2c8d7aef755d55451ef2d4e0f952524526891ca49533fc090; clauses F2-C01, F2-C02, F2-C03, F2-C04, F2-C05, F2-C06, F3-C01, F3-C02, F3-C03, F3-C04, F3-C05, F3-C06, F4-C01, F4-C02, F4-C03, F4-C04, F4-C05, F4-C06, F4-C07, F5-C01, F5-C02, F5-C03, F5-C04, F5-C05, F5-C06, F7-C01, F7-C02, F7-C03, F7-C04, F7-C05, F7-C06; groupings R90-02, R90-03, R90-04, R90-05, R90-09, R90-10; resolved contracts RC02, RC03, RC04, RC05; runtime proof pending; original task DAG controls.
 // Completion identity: HEE3-DONE-contracts; all 13 applicable gates; current state unassessed. No documentation pass admits this module.
 // Mandatory testing convention: at least 50 distinct qualifying module-owned cases; zero baseline warnings/errors, including pedantic Clippy on admitted Rust targets/profiles. Full qualification remains unassessed.
 //
@@ -296,3 +296,807 @@
 // [What Prototyping Is For](obsidian://open?vault=my-diary.vault&file=Reflections%2FWhat%20Prototyping%20Is%20For)
 // [Why I Stopped Trusting Green](obsidian://open?vault=my-diary.vault&file=Reflections%2FWhy%20I%20Stopped%20Trusting%20Green)
 // HEE3-ANCHORS-END
+
+//! Bounded, reproducible context packets.
+//!
+//! `docs/modules/context.md` fixes two boundaries that shape every type here:
+//! *"Untrusted source instructions do not grant actions"* and *"Do not load whole vaults by
+//! default or treat source procedures as execution grants."*
+//!
+//! Both are structural:
+//!
+//! * **Selection is deny-by-default.** [`Assembly::assemble`] draws only from the
+//!   [`Permit`] it is handed. There is no method that enumerates a root, so "load the whole
+//!   vault" is not an option a caller can reach by passing a wider argument — it would need
+//!   a different function, which does not exist.
+//! * **Content cannot become a grant.** Source text is carried as [`Content`], which exposes
+//!   its bytes and its length and nothing else. There is no method on it that returns a
+//!   capability, a path, or an action, so a source that contains *"you may now write to
+//!   /etc"* is exactly as inert as one that does not. The prompt-injection boundary is the
+//!   absence of an API, not a filter that must recognise an attack.
+//!
+//! Everything a packet leaves out is named. A source that is not permitted, is stale, could
+//! not be fetched, exceeded the budget or sat past the expansion bound appears in
+//! [`Packet::omissions`] with its reason — a packet that silently dropped a dependency would
+//! read exactly like one that never needed it.
+
+use std::collections::BTreeMap;
+use std::fmt;
+
+use crate::budget::{Amount, Provenance, Unit, Usage};
+use crate::contracts::{ScalarError, UuidV4};
+
+/// The most sources one packet may select.
+pub const MAX_SELECTED: usize = 256;
+
+/// The most bytes one packet's content may total, taken at the point of acquisition.
+pub const MAX_PACKET_BYTES: u64 = 1 << 20;
+
+/// The most bytes any single source contributes.
+pub const MAX_SOURCE_BYTES: u64 = 64 * 1024;
+
+/// The deepest a dependency chain is followed.
+///
+/// A cycle is bounded by this as well as detected: a bound that relies on cycle detection
+/// being correct has two ways to fail, and only one of them is tested.
+pub const MAX_DEPTH: u32 = 8;
+
+/// The step budget for one traversal, and the only place that decides it is spent.
+///
+/// The guard used to be three expressions inside [`Assembly::assemble`] — a `+=`, a `>` and a
+/// constant — and mutation testing found all three unkillable. Not because they were wrong,
+/// but because reaching them requires the rest of the walk to be broken, and no *input* can
+/// arrange that: the budget is set at the largest queue a correct walk can build. A branch
+/// whose reachability depends on the surrounding code rather than on an argument is a policy
+/// tangled with its caller, so the policy moved here, where every case is one call away.
+///
+/// The walk still needs it. `seen` stops a source being processed twice, but that is a
+/// property of the data; this is a property of the loop, and the two fail differently —
+/// without it, a mutation of the cursor arithmetic does not fail the traversal, it hangs it,
+/// which reads as a tooling problem rather than a defect.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct StepBudget {
+    /// Steps still available. Counting DOWN rather than up is deliberate: with a `spent`
+    /// counter the guard reads `spent >= limit`, and `spent == limit` computes the same
+    /// function — `spent` starts at zero and only ever rises by one behind that guard, so
+    /// the two can never disagree. Mutation testing found exactly that: `>=` → `==`
+    /// survived, and no test could have killed it, because it was an equivalent mutant.
+    /// Against zero there is one spelling, so the alternative is not representable.
+    remaining: usize,
+    limit: usize,
+}
+
+impl StepBudget {
+    /// The budget for a walk over `roots` roots.
+    ///
+    /// One entry per root, plus one per declared dependency of every selectable source. That
+    /// is the largest queue this walk can legitimately build, so a correct traversal never
+    /// spends the last step and an incorrect one cannot run forever.
+    const fn for_roots(roots: usize) -> Self {
+        let limit = MAX_SELECTED
+            .saturating_mul(MAX_SELECTED.saturating_add(1))
+            .saturating_add(roots);
+        Self {
+            remaining: limit,
+            limit,
+        }
+    }
+
+    /// Spend one step.
+    ///
+    /// # Errors
+    ///
+    /// [`Refusal::TraversalBudget`] once `limit` steps have been spent. The limit is the
+    /// count of steps *allowed*, so spending the `limit`-th succeeds and the next refuses.
+    fn spend(&mut self) -> Result<(), Refusal> {
+        if self.remaining == 0 {
+            return Err(Refusal::TraversalBudget);
+        }
+        self.remaining -= 1;
+        Ok(())
+    }
+
+    /// How many steps have been spent.
+    #[cfg(test)]
+    const fn spent(self) -> usize {
+        self.limit - self.remaining
+    }
+
+    /// How many steps this budget allows in total.
+    #[cfg(test)]
+    const fn limit(self) -> usize {
+        self.limit
+    }
+}
+
+/// Schema version of the persisted packet shape.
+pub const SCHEMA_VERSION: i64 = 1;
+
+/// A reason this module refused.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Refusal {
+    /// An identity that is not a lowercase hyphenated `UUIDv4`.
+    MalformedIdentity(ScalarError),
+    /// A source id appeared twice in one registration.
+    DuplicateSource,
+    /// The named source is not registered.
+    UnknownSource,
+    /// A source declared more than [`MAX_SELECTED`] dependencies.
+    DependencyLimit,
+    /// One source's content exceeds [`MAX_SOURCE_BYTES`].
+    SourceTooLarge,
+    /// The requested budget exceeds [`MAX_PACKET_BYTES`].
+    BudgetTooLarge,
+    /// The budget is not expressed in bytes.
+    IncompatibleUnit,
+    /// A sum left `u64`.
+    Overflow,
+    /// The traversal exceeded its own step budget. Unreachable through any well-formed
+    /// assembly; it exists so that a defect in the walk fails loudly instead of hanging.
+    TraversalBudget,
+}
+
+impl Refusal {
+    /// The stable diagnostic name.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::MalformedIdentity(_) => "malformed context identity",
+            Self::DuplicateSource => "duplicate source identity",
+            Self::UnknownSource => "unknown source",
+            Self::DependencyLimit => "declared dependency bound reached",
+            Self::SourceTooLarge => "source exceeds the per-source byte bound",
+            Self::BudgetTooLarge => "requested budget exceeds the packet byte bound",
+            Self::IncompatibleUnit => "context budget must be expressed in bytes",
+            Self::Overflow => "context sum exceeds the permitted integer range",
+            Self::TraversalBudget => "context traversal exceeded its step budget",
+        }
+    }
+}
+
+impl fmt::Display for Refusal {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::MalformedIdentity(error) => write!(f, "{}: {error}", self.name()),
+            other => f.write_str(other.name()),
+        }
+    }
+}
+
+impl std::error::Error for Refusal {}
+
+/// Opaque source text.
+///
+/// The type deliberately exposes only bytes and length. There is no `as_command`,
+/// `as_path`, `permissions` or `interpret`, and adding one would be the whole of a
+/// prompt-injection vulnerability, visible in a diff as a new method on this type.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Content<'a>(&'a [u8]);
+
+impl<'a> Content<'a> {
+    /// Wrap borrowed source bytes.
+    #[must_use]
+    pub const fn new(bytes: &'a [u8]) -> Self {
+        Self(bytes)
+    }
+
+    /// The bytes, for inclusion in a packet and nothing else.
+    #[must_use]
+    pub const fn bytes(self) -> &'a [u8] {
+        self.0
+    }
+
+    /// The byte length.
+    #[must_use]
+    pub const fn len(self) -> usize {
+        self.0.len()
+    }
+
+    /// Whether the source is empty.
+    #[must_use]
+    pub const fn is_empty(self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+/// How current a source is, relative to the revision the caller asked for.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
+pub struct Revision(u64);
+
+impl Revision {
+    /// A revision number.
+    #[must_use]
+    pub const fn new(value: u64) -> Self {
+        Self(value)
+    }
+
+    /// The underlying value.
+    #[must_use]
+    pub const fn value(self) -> u64 {
+        self.0
+    }
+}
+
+/// Why a source is not in the packet.
+///
+/// Every omission is named. A packet that quietly dropped a dependency would be
+/// indistinguishable from one that never needed it, and a consumer cannot tell the
+/// difference after the fact.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Omission {
+    /// The permit does not admit this source. Deny by default.
+    NotPermitted,
+    /// The source is registered but its revision is older than the caller asked for.
+    Stale {
+        /// What the caller required.
+        required: Revision,
+        /// What the source actually is.
+        found: Revision,
+    },
+    /// The source is declared as a dependency but is not registered.
+    Missing,
+    /// Reading the source failed. A failed fetch is a gap, never an empty success.
+    FetchFailed,
+    /// Including it would have exceeded the caller's byte budget.
+    BudgetExhausted,
+    /// It sits deeper than [`MAX_DEPTH`] in the dependency chain.
+    DepthExceeded,
+    /// The packet already holds [`MAX_SELECTED`] sources.
+    SelectionFull,
+}
+
+impl Omission {
+    /// The stable wire name.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::NotPermitted => "not-permitted",
+            Self::Stale { .. } => "stale",
+            Self::Missing => "missing",
+            Self::FetchFailed => "fetch-failed",
+            Self::BudgetExhausted => "budget-exhausted",
+            Self::DepthExceeded => "depth-exceeded",
+            Self::SelectionFull => "selection-full",
+        }
+    }
+
+    /// Whether this omission is a **gap** — something the caller asked for and did not get,
+    /// as distinct from something it was never entitled to.
+    ///
+    /// `NotPermitted` is not a gap: the packet is complete with respect to what the caller
+    /// may see. Everything else is.
+    #[must_use]
+    pub const fn is_gap(self) -> bool {
+        !matches!(self, Self::NotPermitted)
+    }
+}
+
+impl fmt::Display for Omission {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Stale { required, found } => {
+                write!(
+                    f,
+                    "stale: required {} found {}",
+                    required.value(),
+                    found.value()
+                )
+            }
+            other => f.write_str(other.name()),
+        }
+    }
+}
+
+/// What a caller may draw from. Deny by default: a source absent from the permit is omitted
+/// as [`Omission::NotPermitted`], never fetched.
+#[derive(Clone, Debug, Default)]
+pub struct Permit {
+    allowed: Vec<String>,
+}
+
+impl Permit {
+    /// An empty permit, which admits nothing.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Admit one source identity.
+    ///
+    /// # Errors
+    ///
+    /// [`Refusal::MalformedIdentity`] when `source` is not a lowercase hyphenated `UUIDv4`.
+    pub fn allow(mut self, source: &str) -> Result<Self, Refusal> {
+        let source = UuidV4::parse(source).map_err(Refusal::MalformedIdentity)?;
+        let source = source.as_str().to_owned();
+        if !self.allowed.contains(&source) {
+            self.allowed.push(source);
+        }
+        Ok(self)
+    }
+
+    /// Whether this permit admits `source`.
+    #[must_use]
+    pub fn admits(&self, source: &str) -> bool {
+        self.allowed.iter().any(|allowed| allowed == source)
+    }
+
+    /// How many sources are admitted.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.allowed.len()
+    }
+
+    /// Whether the permit admits nothing.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.allowed.is_empty()
+    }
+}
+
+/// One registered source: its revision, its declared dependencies and its content, or the
+/// fact that reading it failed.
+#[derive(Clone, Debug)]
+struct Source<'a> {
+    identity: String,
+    revision: Revision,
+    dependencies: Vec<String>,
+    content: Option<Content<'a>>,
+}
+
+/// One selected reference in a packet.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Selected<'a> {
+    /// The source identity.
+    pub identity: UuidV4<'a>,
+    /// The revision that was included.
+    pub revision: Revision,
+    /// Its content.
+    pub content: Content<'a>,
+    /// How deep in the dependency chain it sat. The roots the caller named are depth 0.
+    pub depth: u32,
+}
+
+/// An assembled context packet.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Packet<'a> {
+    selected: Vec<Selected<'a>>,
+    omissions: Vec<(String, Omission)>,
+    bytes: u64,
+    work: u64,
+}
+
+impl<'a> Packet<'a> {
+    /// The selected references, in the packet's deterministic order.
+    #[must_use]
+    pub fn selected(&self) -> &[Selected<'a>] {
+        &self.selected
+    }
+
+    /// Every source that is not in the packet, with its reason, sorted by identity so two
+    /// assemblies of the same world produce byte-identical omission lists.
+    #[must_use]
+    pub fn omissions(&self) -> &[(String, Omission)] {
+        &self.omissions
+    }
+
+    /// The omissions that are gaps — what the caller asked for and did not get.
+    #[must_use]
+    pub fn gaps(&self) -> Vec<(&str, Omission)> {
+        self.omissions
+            .iter()
+            .filter(|(_, omission)| omission.is_gap())
+            .map(|(identity, omission)| (identity.as_str(), *omission))
+            .collect()
+    }
+
+    /// The total content bytes included.
+    #[must_use]
+    pub const fn bytes(&self) -> u64 {
+        self.bytes
+    }
+
+    /// Selection and compaction work, in bytes examined.
+    ///
+    /// This is the figure `budget` accounts for. It counts bytes the assembly **looked at**,
+    /// including those it then rejected for budget — work done is cost incurred, and
+    /// charging only for what survived would make selection look free.
+    #[must_use]
+    pub const fn work(&self) -> u64 {
+        self.work
+    }
+
+    /// The packet's cost as a [`budget::Usage`](crate::budget::Usage), ready to report.
+    ///
+    /// The provenance is [`Provenance::CheckerMeasured`] because the figure is measured by
+    /// the engine while assembling, not settled by a worker.
+    #[must_use]
+    pub fn cost(&self) -> Usage {
+        Usage::new(
+            Amount::new(Unit::Tokens, self.work),
+            Provenance::CheckerMeasured,
+        )
+    }
+}
+
+/// What changed between two packets, and which consumers are affected.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Change {
+    /// Sources present in the new packet and not the old.
+    pub added: Vec<String>,
+    /// Sources present in the old packet and not the new.
+    pub removed: Vec<String>,
+    /// Sources in both, whose revision moved.
+    pub revised: Vec<(String, Revision, Revision)>,
+}
+
+impl Change {
+    /// Whether anything at all differs.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.added.is_empty() && self.removed.is_empty() && self.revised.is_empty()
+    }
+
+    /// Every source a consumer would have to re-read, sorted and deduplicated.
+    #[must_use]
+    pub fn affected(&self) -> Vec<&str> {
+        let mut out: Vec<&str> = self
+            .added
+            .iter()
+            .chain(&self.removed)
+            .map(String::as_str)
+            .chain(
+                self.revised
+                    .iter()
+                    .map(|(identity, _, _)| identity.as_str()),
+            )
+            .collect();
+        out.sort_unstable();
+        out.dedup();
+        out
+    }
+}
+
+/// A registry of sources, from which packets are assembled.
+///
+/// There is no method that enumerates a filesystem, a vault or a directory. A source exists
+/// here because a caller registered it, which is what makes *"do not load whole vaults by
+/// default"* a property of the API rather than a habit.
+#[derive(Clone, Debug, Default)]
+pub struct Assembly<'a> {
+    sources: Vec<Source<'a>>,
+}
+
+impl<'a> Assembly<'a> {
+    /// An empty assembly.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// The number of registered sources.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.sources.len()
+    }
+
+    /// Whether nothing is registered.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.sources.is_empty()
+    }
+
+    /// Register a readable source.
+    ///
+    /// # Errors
+    ///
+    /// * [`Refusal::MalformedIdentity`] for a source or dependency that is not a `UUIDv4`;
+    /// * [`Refusal::DuplicateSource`] when the identity is already registered;
+    /// * [`Refusal::DependencyLimit`] beyond [`MAX_SELECTED`] declared dependencies;
+    /// * [`Refusal::SourceTooLarge`] beyond [`MAX_SOURCE_BYTES`], refused at registration so
+    ///   the bound is taken where the bytes are acquired rather than where they are copied.
+    pub fn register(
+        &mut self,
+        identity: &str,
+        revision: Revision,
+        dependencies: &[&str],
+        content: Content<'a>,
+    ) -> Result<(), Refusal> {
+        if u64::try_from(content.len()).map_err(|_| Refusal::Overflow)? > MAX_SOURCE_BYTES {
+            return Err(Refusal::SourceTooLarge);
+        }
+        self.insert(identity, revision, dependencies, Some(content))
+    }
+
+    /// Register a source whose read failed.
+    ///
+    /// It appears in packets as [`Omission::FetchFailed`], never as empty content: an empty
+    /// success and a failed fetch mean different things to every consumer.
+    ///
+    /// # Errors
+    ///
+    /// As [`Assembly::register`], without the size check.
+    pub fn register_unreadable(
+        &mut self,
+        identity: &str,
+        revision: Revision,
+        dependencies: &[&str],
+    ) -> Result<(), Refusal> {
+        self.insert(identity, revision, dependencies, None)
+    }
+
+    fn insert(
+        &mut self,
+        identity: &str,
+        revision: Revision,
+        dependencies: &[&str],
+        content: Option<Content<'a>>,
+    ) -> Result<(), Refusal> {
+        if dependencies.len() > MAX_SELECTED {
+            return Err(Refusal::DependencyLimit);
+        }
+        let identity = UuidV4::parse(identity).map_err(Refusal::MalformedIdentity)?;
+        if self.find(identity.as_str()).is_some() {
+            return Err(Refusal::DuplicateSource);
+        }
+        let mut declared = Vec::with_capacity(dependencies.len());
+        for dependency in dependencies {
+            let dependency = UuidV4::parse(dependency).map_err(Refusal::MalformedIdentity)?;
+            declared.push(dependency.as_str().to_owned());
+        }
+        self.sources.push(Source {
+            identity: identity.as_str().to_owned(),
+            revision,
+            dependencies: declared,
+            content,
+        });
+        Ok(())
+    }
+
+    fn find(&self, identity: &str) -> Option<usize> {
+        self.sources
+            .iter()
+            .position(|source| source.identity == identity)
+    }
+}
+
+impl<'a> Assembly<'a> {
+    /// Assemble a packet from `roots`, following declared dependencies breadth-first.
+    ///
+    /// Ordering is deterministic and does not depend on registration order or on any hash
+    /// iteration: roots are visited in the order the caller named them, and each source's
+    /// dependencies in the order it declared them. Two assemblies of the same world produce
+    /// the same packet, which is the contract's *"reproducible packet ordering"*.
+    ///
+    /// Breadth-first matters: it means a shallow source is never displaced from the budget
+    /// by a deep one, so exhausting the budget truncates the *edge* of the graph rather than
+    /// an arbitrary slice of it.
+    ///
+    /// # Errors
+    ///
+    /// * [`Refusal::IncompatibleUnit`] when `budget` is not in bytes
+    ///   ([`Unit::Tokens`] is this module's byte unit, matching `budget`'s ledger);
+    /// * [`Refusal::BudgetTooLarge`] beyond [`MAX_PACKET_BYTES`], taken before any content
+    ///   is copied;
+    /// * [`Refusal::MalformedIdentity`] for a root that is not a `UUIDv4`;
+    /// * [`Refusal::Overflow`] on a byte sum that leaves `u64`.
+    pub fn assemble(
+        &'a self,
+        roots: &[&str],
+        required: Revision,
+        permit: &Permit,
+        budget: Amount,
+    ) -> Result<Packet<'a>, Refusal> {
+        if budget.unit() != Unit::Tokens {
+            return Err(Refusal::IncompatibleUnit);
+        }
+        if budget.value() > MAX_PACKET_BYTES {
+            return Err(Refusal::BudgetTooLarge);
+        }
+        let mut queue: Vec<(String, u32)> = Vec::new();
+        for root in roots {
+            let root = UuidV4::parse(root).map_err(Refusal::MalformedIdentity)?;
+            queue.push((root.as_str().to_owned(), 0));
+        }
+        let mut seen: Vec<String> = Vec::new();
+        let mut omissions: BTreeMap<String, Omission> = BTreeMap::new();
+        let mut selected: Vec<Selected<'a>> = Vec::new();
+        let mut bytes: u64 = 0;
+        let mut work: u64 = 0;
+        let mut head = 0;
+        // The walk takes its own budget. `seen` stops a source being processed twice, but
+        // that is a property of the data; this is a property of the loop, and the two fail
+        // differently. Without it a mutation of the cursor arithmetic does not fail the
+        // traversal, it hangs it — which reads as a tooling problem rather than a defect
+        // (mutation testing reports TIMEOUT, not a killed mutant). The bound is the largest
+        // queue this walk can legitimately build: one entry per root plus one per declared
+        // dependency of every selectable source.
+        let mut steps = StepBudget::for_roots(roots.len());
+
+        while head < queue.len() {
+            steps.spend()?;
+            let (identity, depth) = queue[head].clone();
+            head += 1;
+            if seen.contains(&identity) {
+                continue;
+            }
+            seen.push(identity.clone());
+
+            if depth > MAX_DEPTH {
+                omissions.insert(identity, Omission::DepthExceeded);
+                continue;
+            }
+            if !permit.admits(&identity) {
+                omissions.insert(identity, Omission::NotPermitted);
+                continue;
+            }
+            let Some(index) = self.find(&identity) else {
+                omissions.insert(identity, Omission::Missing);
+                continue;
+            };
+            let source = &self.sources[index];
+            if source.revision < required {
+                omissions.insert(
+                    identity,
+                    Omission::Stale {
+                        required,
+                        found: source.revision,
+                    },
+                );
+                continue;
+            }
+            let Some(content) = source.content else {
+                omissions.insert(identity, Omission::FetchFailed);
+                continue;
+            };
+            // Work is charged for every byte examined, including bytes then rejected for
+            // budget: selection is not free just because its result was discarded.
+            let size = u64::try_from(content.len()).map_err(|_| Refusal::Overflow)?;
+            work = work.checked_add(size).ok_or(Refusal::Overflow)?;
+            if selected.len() >= MAX_SELECTED {
+                omissions.insert(identity, Omission::SelectionFull);
+                continue;
+            }
+            let projected = bytes.checked_add(size).ok_or(Refusal::Overflow)?;
+            if projected > budget.value() {
+                omissions.insert(identity, Omission::BudgetExhausted);
+                continue;
+            }
+            bytes = projected;
+            selected.push(Selected {
+                identity: UuidV4::parse(source.identity.as_str())
+                    .map_err(Refusal::MalformedIdentity)?,
+                revision: source.revision,
+                content,
+                depth,
+            });
+            for dependency in &source.dependencies {
+                queue.push((dependency.clone(), depth + 1));
+            }
+        }
+
+        Ok(Packet {
+            selected,
+            omissions: omissions.into_iter().collect(),
+            bytes,
+            work,
+        })
+    }
+
+    /// Compare two packets and name what a consumer must re-read.
+    ///
+    /// Both lists are sorted, so the report is reproducible regardless of the order the
+    /// packets were assembled in.
+    #[must_use]
+    pub fn compare(old: &Packet<'_>, new: &Packet<'_>) -> Change {
+        let index = |packet: &Packet<'_>| -> BTreeMap<String, Revision> {
+            packet
+                .selected()
+                .iter()
+                .map(|item| (item.identity.as_str().to_owned(), item.revision))
+                .collect()
+        };
+        let (before, after) = (index(old), index(new));
+        let added = after
+            .keys()
+            .filter(|identity| !before.contains_key(*identity))
+            .cloned()
+            .collect();
+        let removed = before
+            .keys()
+            .filter(|identity| !after.contains_key(*identity))
+            .cloned()
+            .collect();
+        let revised = before
+            .iter()
+            .filter_map(|(identity, old_revision)| {
+                after.get(identity).and_then(|new_revision| {
+                    (old_revision != new_revision)
+                        .then(|| (identity.clone(), *old_revision, *new_revision))
+                })
+            })
+            .collect();
+        Change {
+            added,
+            removed,
+            revised,
+        }
+    }
+}
+
+#[cfg(test)]
+mod step_budget_tests {
+    use super::{MAX_SELECTED, Refusal, StepBudget};
+
+    /// The boundary, stated from the other side: the limit is how many steps are ALLOWED, so
+    /// the `limit`-th spend succeeds and the `limit + 1`-th refuses. `>=` against `>` and
+    /// `==` differ exactly here, and all three survived while this decision was inline in
+    /// the walk, where no input could reach it.
+    #[test]
+    fn the_last_allowed_step_succeeds_and_the_next_refuses() {
+        let mut budget = StepBudget::for_roots(0);
+        let limit = budget.limit();
+        for step in 1..=limit {
+            assert_eq!(
+                budget.spend(),
+                Ok(()),
+                "step {step} of {limit} should be allowed"
+            );
+        }
+        assert_eq!(budget.spent(), limit);
+        assert_eq!(budget.spend(), Err(Refusal::TraversalBudget));
+        // A refused spend costs nothing: a budget that kept counting past its limit would
+        // report a spend total no walk could have produced.
+        assert_eq!(budget.spent(), limit);
+        assert_eq!(budget.spend(), Err(Refusal::TraversalBudget));
+    }
+
+    #[test]
+    fn a_fresh_budget_has_spent_nothing() {
+        let budget = StepBudget::for_roots(3);
+        assert_eq!(budget.spent(), 0);
+    }
+
+    #[test]
+    fn each_spend_advances_by_exactly_one() {
+        // Pinned off the origin: three spends, each asserted, so a budget frozen at 1 or
+        // one that doubled would both fail. A single spend expecting 1 pins neither.
+        let mut budget = StepBudget::for_roots(0);
+        for expected in 1..=3_usize {
+            assert_eq!(budget.spend(), Ok(()));
+            assert_eq!(budget.spent(), expected);
+        }
+    }
+
+    #[test]
+    fn the_limit_is_one_queue_entry_per_root_plus_the_selectable_dependency_product() {
+        // The two numbers, computed here rather than read from the constructor, so a change
+        // to either the shape or the constant is a red test and not a silent widening.
+        for roots in [0_usize, 1, 7, MAX_SELECTED] {
+            assert_eq!(
+                StepBudget::for_roots(roots).limit(),
+                MAX_SELECTED * (MAX_SELECTED + 1) + roots,
+                "budget for {roots} roots"
+            );
+        }
+    }
+
+    #[test]
+    fn more_roots_buy_more_steps() {
+        assert!(StepBudget::for_roots(2).limit() > StepBudget::for_roots(1).limit());
+        assert_eq!(
+            StepBudget::for_roots(2).limit() - StepBudget::for_roots(1).limit(),
+            1
+        );
+    }
+
+    #[test]
+    fn an_absurd_root_count_saturates_rather_than_wrapping() {
+        // `for_roots` is `const` and saturating; a wrapping add here would hand the walk a
+        // tiny budget and turn a bound into a refusal on the first step.
+        let budget = StepBudget::for_roots(usize::MAX);
+        assert_eq!(budget.limit(), usize::MAX);
+        let mut budget = budget;
+        assert_eq!(budget.spend(), Ok(()));
+    }
+}

@@ -1,0 +1,138 @@
+{
+  "schema": "hee3.evaluation.claim-overlap.v1",
+  "rule": "Two claims overlap when one is a prefix of the other on a segment boundary; a shared character prefix that does not end a segment is not an overlap.",
+  "generator": "evaluation/cohorts/make-claim-overlap.py",
+  "read_by": [
+    "src/cohort.rs::Claim::conflicts_with (tests/t22_cohort.rs)",
+    "julia/src/Cohesion.jl::claims_conflict (julia/test/analysis.jl)"
+  ],
+  "scope": "Agreement between two implementations of one rule. This table is not a measurement of the live tree and admits nothing.",
+  "cases": [
+    {
+      "name": "identical",
+      "a": "src/store",
+      "b": "src/store",
+      "overlap": true
+    },
+    {
+      "name": "identical single segment",
+      "a": "src",
+      "b": "src",
+      "overlap": true
+    },
+    {
+      "name": "parent of child",
+      "a": "src/store",
+      "b": "src/store/index",
+      "overlap": true
+    },
+    {
+      "name": "grandparent of descendant",
+      "a": "src",
+      "b": "src/store/index/mod.rs",
+      "overlap": true
+    },
+    {
+      "name": "child of parent, argument order reversed",
+      "a": "src/store/index",
+      "b": "src/store",
+      "overlap": true
+    },
+    {
+      "name": "root segment is an ancestor",
+      "a": "src",
+      "b": "src/store",
+      "overlap": true
+    },
+    {
+      "name": "shared prefix, different segment",
+      "a": "src/store",
+      "b": "src/storefront",
+      "overlap": false
+    },
+    {
+      "name": "shared prefix, reversed",
+      "a": "src/storefront",
+      "b": "src/store",
+      "overlap": false
+    },
+    {
+      "name": "shared prefix deeper in the path",
+      "a": "src/store/index",
+      "b": "src/store/indexer",
+      "overlap": false
+    },
+    {
+      "name": "one character apart at the leaf",
+      "a": "a/bb",
+      "b": "a/b",
+      "overlap": false
+    },
+    {
+      "name": "siblings",
+      "a": "src/store",
+      "b": "src/route",
+      "overlap": false
+    },
+    {
+      "name": "siblings under a shared parent",
+      "a": "src/store/a",
+      "b": "src/store/b",
+      "overlap": false
+    },
+    {
+      "name": "disjoint roots",
+      "a": "docs/a.md",
+      "b": "src/store",
+      "overlap": false
+    },
+    {
+      "name": "same leaf under different parents",
+      "a": "a/x",
+      "b": "b/x",
+      "overlap": false
+    },
+    {
+      "name": "file extension does not make a segment",
+      "a": "src/main",
+      "b": "src/main.rs",
+      "overlap": false
+    },
+    {
+      "name": "trailing separator makes an empty final segment",
+      "a": "a/b",
+      "b": "a/b/",
+      "overlap": true
+    },
+    {
+      "name": "case differs in one segment",
+      "a": "src/Store",
+      "b": "src/store",
+      "overlap": false
+    },
+    {
+      "name": "prefix at the root segment only",
+      "a": "s",
+      "b": "src/store",
+      "overlap": false
+    },
+    {
+      "name": "deep identical paths",
+      "a": "a/b/c/d/e",
+      "b": "a/b/c/d/e",
+      "overlap": true
+    },
+    {
+      "name": "deep paths diverging at the last segment",
+      "a": "a/b/c/d/e",
+      "b": "a/b/c/d/f",
+      "overlap": false
+    },
+    {
+      "name": "ancestor several segments up",
+      "a": "a/b",
+      "b": "a/b/c/d/e",
+      "overlap": true
+    }
+  ]
+}

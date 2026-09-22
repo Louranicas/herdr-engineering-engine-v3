@@ -5,7 +5,7 @@
   "status": "active standard; engine qualification unassessed",
   "reviewed_on": "2026-09-15",
   "authority": "User-directed additive testing convention. The preserved atlas task predicates and this standard apply together; rendered Markdown, vault notes and codebase copies are projections. The user explicitly requires at least 50 meaningful tests per module and zero pedantic warnings/errors.",
-  "base_plan_sha256": "9c8fcbc0a67c6a25dc98fea8dc8af6312b34649768a7b6c618ec21d999f839fd",
+  "base_plan_sha256": "c280a547b058df5b414b18c81a64153633d48b94671fc397ece02ec1cefed160",
   "minimum_cases_per_module": 50,
   "maximum_baseline_warnings": 0,
   "maximum_baseline_errors": 0,

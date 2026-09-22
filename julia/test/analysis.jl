@@ -237,3 +237,176 @@ end
         @test result.request_sha256!=JSON3.read(analyze(RAW, NOW)).request_sha256
     end
 end
+
+# ---------------------------------------------------------------------------------------
+# T22 cohort cohesion. Appended to the T21 file because `tools/julia-quality.jl` hashes
+# `test/analysis.jl` as a recipe subject and a new test file would be outside that set.
+# ---------------------------------------------------------------------------------------
+
+const C01 = read(joinpath(@__DIR__, "../../tests/fixtures/t22/C01.json"))
+const C02 = read(joinpath(@__DIR__, "../../tests/fixtures/t22/C02.json"))
+const C_NOW = UInt64(1_769_999_500_000)
+oracle(name) =
+    JSON3.read(read(joinpath(@__DIR__, "../../tests/fixtures/t22/$name-known-answers.json"), String))
+
+"""Assert one report field-for-field against answers computed outside this language.
+
+`fixtures/make-C02.py` implements the T22 rule in Python and never reads `Cohesion.jl`, so a
+disagreement here names a defect on one side or the other -- establish which before editing
+either (F94). The two fixtures differ in every computed field, and C02 exists because C01
+leaves `overlapping_claims` empty and `errors_delta` at zero, which pin nothing (F129)."""
+function against_oracle(raw, want)
+    r = JSON3.read(cohesion(raw, C_NOW))
+    @test r.request_sha256 == want.request_sha256
+    for key in (:threads, :required, :met, :unmet, :dissent, :indeterminate, :rework, :unknown_cost)
+        @test r.counts[key] == want.counts[key]
+    end
+    for key in (:met, :dissent, :rework, :error)
+        @test r.rates[key].value == want.rates[key]
+        @test r.rates[key].of == want.rates.of
+    end
+    @test r.allocation.accounted_tokens == want.allocation_accounted_tokens
+    @test r.allocation.conserved === true
+    @test r.comparison.cohort.cost_tokens == want.comparison.cohort_cost_tokens
+    @test r.comparison.cohort.errors == want.comparison.cohort_errors
+    @test r.comparison.cohort.disagreement == want.comparison.cohort_disagreement
+    @test r.comparison.cohort.rework == want.comparison.cohort_rework
+    @test r.comparison.cost_delta_tokens == want.comparison.cost_delta_tokens
+    @test r.comparison.errors_delta == want.comparison.errors_delta
+    @test r.comparison.rework_delta == want.comparison.rework_delta
+    @test String.(r.overlapping_claims) == String.(want.overlapping_claims)
+    @test String.(r.excluded) == String.(want.excluded)
+    return r
+end
+
+cu(n) = string(lpad(string(n, base = 16), 8, '0'), "-0000-4000-8000-000000000000")
+cbase() = JSON3.read(String(copy(C01)), Dict{String,Any})
+function crun(mutate)
+    q = cbase()
+    mutate(q)
+    raw = Vector{UInt8}(codeunits(JSON3.write(q) * "\n"))
+    try
+        cohesion(raw, C_NOW)
+        return :NO_REFUSAL
+    catch e
+        e isa AnalysisError ? e.code : Symbol("WRONG_EXCEPTION_", typeof(e))
+    end
+end
+function crun_raw(edit)
+    raw = Vector{UInt8}(edit(JSON3.write(cbase()) * "\n"))
+    try
+        cohesion(raw, C_NOW)
+        return :NO_REFUSAL
+    catch e
+        e isa AnalysisError ? e.code : Symbol("WRONG_EXCEPTION_", typeof(e))
+    end
+end
+
+@testset "T22 cohort cohesion" begin
+    @testset "C01 independent fixed oracle" begin
+        r = against_oracle(C01, oracle("C01"))
+        @test r.protocol == "hee3.cohesion"
+        @test r.join.verdict == "blocked"
+        @test String.(r.join.reasons) == ["dissent", "unmet"]
+        @test cohesion(C01, C_NOW) == cohesion(C01, C_NOW + UInt64(1000))
+    end
+    @testset "C02 independent fixed oracle" begin
+        r = against_oracle(C02, oracle("C02"))
+        @test r.join.verdict == "integrable"
+        @test isempty(r.join.reasons)
+        @test cohesion(C02, C_NOW) == cohesion(C02, C_NOW + UInt64(1000))
+        # The two fixtures must not agree anywhere the rule computes, or one of them is
+        # pinning the other's answer rather than the rule.
+        @test JSON3.read(cohesion(C01, C_NOW)).counts != r.counts
+    end
+    @testset "claim overlap agrees with the shared table" begin
+        # The Rust half is `tests/t22_cohort.rs::claim_overlap_agrees_with_the_shared_table`.
+        # Both read this file; neither owns it. `evaluation/cohorts/make-claim-overlap.py`
+        # generates it from a third statement of the rule and `--check` re-derives it.
+        table = JSON3.read(
+            read(joinpath(@__DIR__, "../../evaluation/cohorts/claim-overlap-v1.json"), String),
+        )
+        @test table.schema == "hee3.evaluation.claim-overlap.v1"
+        @test length(table.cases) >= 20
+        answers = Set{Bool}()
+        for case in table.cases
+            push!(answers, case.overlap)
+            @test HabitatAnalysis.claims_conflict(case.a, case.b) == case.overlap
+            @test HabitatAnalysis.claims_conflict(case.b, case.a) == case.overlap
+        end
+        @test answers == Set([true, false])
+    end
+    # Every refusal SITE in Cohesion.jl, one case each, asserting its own symbol. The site
+    # set was enumerated from the module's own source and each case verified to change its
+    # answer when its site alone is neutered -- a case per symbol NAME would have left eight
+    # sites covered by a neighbour raising the same symbol (F140).
+    @testset "refusals" begin
+        for (name, mutate, expected) in [
+            ("a well-formed request is quiet", q -> nothing, :NO_REFUSAL),
+            ("unknown protocol", q -> q["protocol"] = "hee3.other", :schema),
+            ("unknown recipe", q -> q["recipe"]["id"] = "descriptive", :schema),
+            ("wrong usage unit", q -> q["units"]["usage"] = "microcent", :schema),
+            ("extra top-level key", q -> q["surprise"] = 1, :schema),
+            ("malformed cohort id", q -> q["subject"]["cohort_id"] = "nope", :identity),
+            ("malformed artifact digest", q -> q["subject"]["artifact_sha256"] = "nope", :identity),
+            ("expired request", q -> q["expires_unix_ms"] = "1769999000001", :stale),
+            ("request from before its own cutoff", q -> q["cutoff_unix_ms"] = "1769999600000", :stale),
+            ("unknown outcome name", q -> q["threads"][1]["outcome"] = "approved", :schema),
+            ("thread brief ahead of the cohort", q -> q["threads"][1]["brief_revision"] = "5", :domain),
+            ("duplicate thread identity",
+                q -> (q["threads"][2]["thread_id"] = q["threads"][1]["thread_id"]), :identity),
+            ("allocation does not conserve", q -> q["allocation"]["spent_tokens"] = "9000", :conservation),
+            ("integrable join carrying a reason",
+                q -> (q["join"]["verdict"] = "integrable"; q["join"]["reasons"] = ["dissent"]), :domain),
+            ("blocked join carrying no reason",
+                q -> (q["join"]["verdict"] = "blocked"; q["join"]["reasons"] = []), :domain),
+            ("unknown join verdict",
+                q -> (q["join"]["verdict"] = "unknown"; q["join"]["reasons"] = []), :schema),
+            ("unknown blocked reason", q -> q["join"]["reasons"] = ["whatever", "unmet"], :schema),
+            ("duplicate blocked reason", q -> q["join"]["reasons"] = ["dissent", "dissent"], :duplicate),
+            ("reasons is not a list", q -> q["join"]["reasons"] = "dissent", :schema),
+            ("more reasons than the vocabulary",
+                q -> q["join"]["reasons"] =
+                    ["dissent", "unmet", "missing-child", "stale-brief", "dissent"], :bound),
+            ("shape rows disagree with threads", q -> q["shape"]["rows"] = 9, :schema),
+            ("shape fields disagree with the row", q -> q["shape"]["fields"] = 5, :schema),
+            ("threads is not a list",
+                q -> (q["threads"] = Dict{String,Any}(); q["shape"]["rows"] = 0), :schema),
+            ("empty thread list", q -> (q["threads"] = []; q["shape"]["rows"] = 0), :bound),
+            ("non-boolean required", q -> q["threads"][1]["required"] = "yes", :schema),
+            ("empty claim path", q -> q["threads"][1]["claims"] = [""], :schema),
+            ("claims is not a list", q -> q["threads"][1]["claims"] = "", :schema),
+            ("too many claims on one thread",
+                q -> q["threads"][1]["claims"] = ["p/$i" for i = 1:65], :bound),
+            ("report exceeds the admitted bound", q -> begin
+                q["threads"] = [
+                    Dict{String,Any}(
+                        "thread_id" => cu(0x100 + i), "outcome" => "met",
+                        "brief_revision" => "4", "required" => true,
+                        "cost_tokens" => "1", "claims" => ["src/store"],
+                    ) for i = 1:64
+                ]
+                q["shape"]["rows"] = 64
+                q["allocation"]["spent_tokens"] = "64"
+            end, :bound),
+        ]
+            @testset "$name" begin
+                @test crun(mutate) == expected
+            end
+        end
+        # Two sites that a Julia Dict cannot reach: it holds neither invalid UTF-8 nor an
+        # unpaired escape, so these are planted in the encoded bytes.
+        @testset "invalid UTF-8 in the payload" begin
+            @test crun_raw(function (text)
+                bytes = Vector{UInt8}(codeunits(text))
+                bytes[findfirst(==(UInt8('t')), bytes)] = 0xff
+                bytes
+            end) == :encoding
+        end
+        @testset "unpaired surrogate escape" begin
+            @test crun_raw(
+                text -> replace(text, "hee3.cohesion" => "hee3.cohesio\\ud800"; count = 1),
+            ) == :encoding
+        end
+    end
+end

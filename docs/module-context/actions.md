@@ -99,6 +99,7 @@ Each route below remains available; inclusion here does not mark it read. First 
 | [schemas/actions/generate_control_schema.py](file:///var/home/herdr-engineering-engine-v3/schemas/actions/generate_control_schema.py) | [actions](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Context%2FModules%2FCTX-actions) | Closed control schema, generator or structural fixture checks; byte and authority gaps remain runtime-owned. |
 | [schemas/actions/control-v1.schema.json](file:///var/home/herdr-engineering-engine-v3/schemas/actions/control-v1.schema.json) | [actions](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Context%2FModules%2FCTX-actions) | Closed control schema, generator or structural fixture checks; byte and authority gaps remain runtime-owned. |
 | [tests/control_schema.py](file:///var/home/herdr-engineering-engine-v3/tests/control_schema.py) | [actions](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Context%2FModules%2FCTX-actions) | Closed control schema, generator or structural fixture checks; byte and authority gaps remain runtime-owned. |
+| [tests/t28_actions.rs](file:///var/home/herdr-engineering-engine-v3/tests/t28_actions.rs) | [actions](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Context%2FModules%2FCTX-actions) | Declared Rust integration target for the versioned action catalogue, compared against the plan spine. |
 
 [Conditional companion skills and exact entrypoints](file:///var/home/herdr-engineering-engine-v3/corpus/agent-skills/hee-module-scout/references/companion-skills.md)
 

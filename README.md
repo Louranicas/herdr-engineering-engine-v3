@@ -32,7 +32,7 @@ Engine coding is not authorized until human operator Luke types start coding as 
 [CONTEXT RESTART POINTER](file:///var/home/herdr-engineering-engine-v3/corpus/CONTEXT_HANDOFF.md)
 [QUICK START](file:///var/home/herdr-engineering-engine-v3/QUICK_START.md)
 [ASSIMILATION AND DELIVERY WORKFLOW](file:///var/home/herdr-engineering-engine-v3/workflows/README.md)
-Readiness binding: HEE3-READINESS-001; SHA-256 e774f8984c7e39e85b156289fac809bded6df80ba3647cfb2024c69856447b94; clauses F1-C01, F1-C02, F1-C03, F1-C04, F1-C05, F2-C01, F2-C02, F2-C03, F2-C04, F2-C05, F2-C06, F3-C01, F3-C02, F3-C03, F3-C04, F3-C05, F3-C06, F4-C01, F4-C02, F4-C03, F4-C04, F4-C05, F4-C06, F4-C07, F5-C01, F5-C02, F5-C03, F5-C04, F5-C05, F5-C06, F6-C01, F6-C02, F6-C03, F6-C04, F6-C05, F6-C06, F6-C07, F6-C08, F7-C01, F7-C02, F7-C03, F7-C04, F7-C05, F7-C06; groupings R90-01, R90-02, R90-03, R90-04, R90-06, R90-08, R90-09, R90-10; resolved contracts RC01, RC02, RC03, RC04, RC05, RC06; runtime proof pending; original task DAG controls.
+Readiness binding: HEE3-READINESS-001; SHA-256 7fd2285b611328e2c8d7aef755d55451ef2d4e0f952524526891ca49533fc090; clauses F1-C01, F1-C02, F1-C03, F1-C04, F1-C05, F2-C01, F2-C02, F2-C03, F2-C04, F2-C05, F2-C06, F3-C01, F3-C02, F3-C03, F3-C04, F3-C05, F3-C06, F4-C01, F4-C02, F4-C03, F4-C04, F4-C05, F4-C06, F4-C07, F5-C01, F5-C02, F5-C03, F5-C04, F5-C05, F5-C06, F6-C01, F6-C02, F6-C03, F6-C04, F6-C05, F6-C06, F6-C07, F6-C08, F7-C01, F7-C02, F7-C03, F7-C04, F7-C05, F7-C06; groupings R90-01, R90-02, R90-03, R90-04, R90-06, R90-08, R90-09, R90-10; resolved contracts RC01, RC02, RC03, RC04, RC05, RC06; runtime proof pending; original task DAG controls.
 Completion identity: HEE3-DONE-app; all 13 applicable gates; current state unassessed. No documentation pass admits this module.
 Mandatory testing convention: at least 50 distinct qualifying module-owned cases; zero baseline warnings/errors, including pedantic Clippy on admitted Rust targets/profiles. Full qualification remains unassessed.
 
@@ -723,6 +723,14 @@ Exact current bytes are inventoried without inserting managed comments. These ar
 | [tests/t13_service.rs](file:///var/home/herdr-engineering-engine-v3/tests/t13_service.rs) | service | T13 |
 | [tests/t21_analysis.rs](file:///var/home/herdr-engineering-engine-v3/tests/t21_analysis.rs) | numerical | T21 |
 | [tests/t21_process.rs](file:///var/home/herdr-engineering-engine-v3/tests/t21_process.rs) | numerical | T21 |
+| [tests/t09_route.rs](file:///var/home/herdr-engineering-engine-v3/tests/t09_route.rs) | route | T09 |
+| [tests/t11_notify.rs](file:///var/home/herdr-engineering-engine-v3/tests/t11_notify.rs) | notify | T11 |
+| [tests/t11_context.rs](file:///var/home/herdr-engineering-engine-v3/tests/t11_context.rs) | context | T11 |
+| [tests/t22_cohort.rs](file:///var/home/herdr-engineering-engine-v3/tests/t22_cohort.rs) | cohort | T22 |
+| [tests/t28_actions.rs](file:///var/home/herdr-engineering-engine-v3/tests/t28_actions.rs) | actions | T28 |
+| [tests/t16_herdr.rs](file:///var/home/herdr-engineering-engine-v3/tests/t16_herdr.rs) | herdr | T16 |
+| [tests/fixtures/route/fixture.json](file:///var/home/herdr-engineering-engine-v3/tests/fixtures/route/fixture.json) | route | T09 |
+| [tests/fixtures/route/known-answers.json](file:///var/home/herdr-engineering-engine-v3/tests/fixtures/route/known-answers.json) | route | T09 |
 
 ## Lifecycle observations
 
@@ -732,20 +740,20 @@ Exact current bytes are inventoried without inserting managed comments. These ar
 | task | engine_source | stale | unqualified | unqualified |
 | store | engine_source | unqualified | unqualified | unqualified |
 | roster | engine_source | unqualified | unqualified | unqualified |
-| route | comment_stub | unqualified | unqualified | unqualified |
-| budget | comment_stub | unqualified | unqualified | unqualified |
+| route | engine_source | unqualified | unqualified | unqualified |
+| budget | engine_source | unqualified | unqualified | unqualified |
 | worker | engine_source | unqualified | unqualified | unqualified |
 | check | engine_source | unqualified | unqualified | unqualified |
 | recovery | engine_source | unqualified | unqualified | unqualified |
-| cohort | comment_stub | unqualified | unqualified | unqualified |
-| context | comment_stub | unqualified | unqualified | unqualified |
-| notify | comment_stub | unqualified | unqualified | unqualified |
+| cohort | engine_source | unqualified | unqualified | unqualified |
+| context | engine_source | unqualified | unqualified | unqualified |
+| notify | engine_source | unqualified | unqualified | unqualified |
 | service | engine_source | unqualified | unqualified | unqualified |
-| herdr | comment_stub | unqualified | unqualified | unqualified |
+| herdr | engine_source | unqualified | unqualified | unqualified |
 | numerical | engine_source | unqualified | unqualified | unqualified |
 | julia | engine_source | unqualified | unqualified | unqualified |
 | app | engine_source | unqualified | unqualified | unqualified |
-| actions | comment_stub | unqualified | unqualified | unqualified |
+| actions | engine_source | unqualified | unqualified | unqualified |
 | bash | comment_stub | unqualified | unqualified | unqualified |
 | pi_extension | comment_stub | unqualified | unqualified | unqualified |
 | skills | comment_stub | unqualified | unqualified | unqualified |

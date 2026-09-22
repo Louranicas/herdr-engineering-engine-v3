@@ -110,6 +110,14 @@ NATIVE_CLIENT_FIXTURE = "tests/fixtures/native/client.py"
 # sources; the Store-owned src/store/recovery.rs stays pinned by T07_INPUTS.
 RECOVERY_TARGET_COUNTS = {"recovery": 58}
 RECOVERY_INPUTS = ("src/recovery.rs", "tests/recovery.rs")
+# Reviewed T07 startup application target: 78 controls, no library-unit namespace.
+# tests/t07_startup.rs drives the startup pass, so its pins are the two sources
+# only this target owns: the app-owned I/O shell and the Store-owned reconciliation
+# reads/writes. The pure policy src/recovery.rs stays pinned by RECOVERY_INPUTS and
+# the inventory reader src/store/recovery.rs by T07_INPUTS; both are read by this
+# battery too, and a file is pinned once by the battery that owns it.
+T07_STARTUP_TARGET_COUNTS = {"t07_startup": 78}
+T07_STARTUP_INPUTS = ("src/app/startup.rs", "src/store/reconciliation.rs", "tests/t07_startup.rs")
 # Reviewed T08 contract battery: 23 controls, no library-unit namespace. The
 # inputs are what tests/t08_contract.rs reads (the offline contract client it
 # copies and executes, the overbound prompt recipe, the two retained actual
@@ -134,6 +142,34 @@ CONTRACT_CLIENT_FIXTURE = "tests/fixtures/native/contract-client.py"
 # Presence of the contract battery is judged by the sources only it owns: the
 # adapter sources it shares with t08_native keep counting for that battery.
 T08_CONTRACT_OWN_SOURCES = tuple(name for name in T08_CONTRACT_INPUTS if name not in T08_INPUTS and name not in T03_IMPLEMENTATION_PATHS)
+
+# Reviewed T09 routing battery: 61 controls, no library-unit namespace. The inputs are
+# what tests/t09_route.rs includes with include_str! -- the router source, the route
+# configuration and the two fixture files -- so the pins follow the battery's own reads
+# rather than a list somebody maintains beside them. The battery is pure and sub-second,
+# so it runs inside the main partition and needs no command of its own.
+# Reviewed application batteries, one per module landed in the 2026-09-22 application
+# wave. Each pins its own count and the sources it owns; a battery whose size changes must
+# change its line here, which is what makes this a census rather than a tally. None reads a
+# fixture with include_str!, so the inputs are the module sources themselves -- except
+# t22_cohort, which reads the shared claim-overlap table at run time through
+# CARGO_MANIFEST_DIR and therefore pins it too.
+BUDGET_TARGET_COUNTS = {"accounting": 77}
+BUDGET_INPUTS = ("src/budget.rs",)
+NOTIFY_TARGET_COUNTS = {"t11_notify": 69}
+NOTIFY_INPUTS = ("src/notify.rs",)
+CONTEXT_TARGET_COUNTS = {"t11_context": 59}
+CONTEXT_INPUTS = ("src/context.rs",)
+COHORT_TARGET_COUNTS = {"t22_cohort": 57}
+COHORT_INPUTS = ("src/cohort.rs", "evaluation/cohorts/claim-overlap-v1.json")
+ACTIONS_TARGET_COUNTS = {"t28_actions": 64}
+ACTIONS_INPUTS = ("src/actions.rs", "src/worker/tools.rs")
+HERDR_TARGET_COUNTS = {"t16_herdr": 52}
+HERDR_INPUTS = ("src/herdr.rs",)
+
+T09_TARGET_COUNTS = {"t09_route": 61}
+T09_INPUTS = ("config/routes.toml", "src/route.rs", "tests/fixtures/route/fixture.json",
+              "tests/fixtures/route/known-answers.json")
 
 T13_TARGET_COUNTS = {"t13_service": 50, "t13_probe": 18, "t13_local_probe": 16}
 T21_TARGET_COUNTS = {"t21_analysis": 74, "t21_process": 16}
@@ -184,6 +220,41 @@ def has_t08(root):
 
 def has_recovery(root):
     return named_target_present(root, "recovery", RECOVERY_INPUTS)
+
+
+def has_budget_battery(root):
+    return named_target_present(root, "accounting", BUDGET_INPUTS)
+
+
+def has_notify_battery(root):
+    return named_target_present(root, "t11_notify", NOTIFY_INPUTS)
+
+
+def has_context_battery(root):
+    return named_target_present(root, "t11_context", CONTEXT_INPUTS)
+
+
+def has_cohort_battery(root):
+    return named_target_present(root, "t22_cohort", COHORT_INPUTS)
+
+
+def has_actions_battery(root):
+    return named_target_present(root, "t28_actions", ACTIONS_INPUTS)
+
+
+def has_herdr_battery(root):
+    return named_target_present(root, "t16_herdr", HERDR_INPUTS)
+
+
+def has_t09(root):
+    return named_target_present(root, "t09_route", T09_INPUTS)
+
+
+def has_t07_startup(root):
+    # Judged by this target's exact name, never by the shared "t07_" prefix that
+    # has_t07 reads: two t07_ batteries make a prefix ambiguous, and a presence
+    # predicate that cannot name which one it saw is not a predicate.
+    return named_target_present(root, "t07_startup", T07_STARTUP_INPUTS)
 
 
 def has_t08_contract(root):
@@ -446,7 +517,8 @@ def refuse_unsupported_cargo_inputs(root):
 def quality_subject_paths(root, deadline, rust_only):
     required = ["Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "tools/check-quality",
                 "tools/development_process.py", "tools/rust-offline.py", "tools/sqlite-static.py", "tools/check-store-mutations", "tests/t25_process.py",
-                "tests/t25_quality.py"]
+                "tests/t25_quality.py", "tools/check-workflow-sites", "tools/check-skill-sites", "tools/check-pi-sites",
+                "tools/check-mutation-survivors"]
     required += [name for directory in ("src", "tests") for name in tree_files(root, directory, deadline, ".rs")]
     required += tree_files(root, RUST_OFFLINE_BUNDLE, deadline)
     if (root / "tests/t02_pi.rs").is_file():
@@ -469,12 +541,37 @@ def quality_subject_paths(root, deadline, rust_only):
         required += T08_INPUTS
     if has_recovery(root):
         required += RECOVERY_INPUTS
+    if has_t07_startup(root):
+        required += T07_STARTUP_INPUTS
+    if has_t09(root):
+        required += T09_INPUTS
+    if has_budget_battery(root):
+        required += BUDGET_INPUTS
+    if has_notify_battery(root):
+        required += NOTIFY_INPUTS
+    if has_context_battery(root):
+        required += CONTEXT_INPUTS
+    if has_cohort_battery(root):
+        required += COHORT_INPUTS
+    if has_actions_battery(root):
+        required += ACTIONS_INPUTS
+    if has_herdr_battery(root):
+        required += HERDR_INPUTS
     if has_t08_contract(root):
         required += T08_CONTRACT_INPUTS
     if has_t13(root):
         required += T13_INPUTS
     if has_t21(root):
         required += T21_INPUTS
+        required += tree_files(root, "tests/fixtures/t22", deadline)
+    # `tests/t22_cohort.rs` reads the shared claim-overlap table through CARGO_MANIFEST_DIR,
+    # and the three interface suites below read their own schemas, validators and examples.
+    for directory in ("evaluation/cohorts", "workflows", "skills", "integrations/bash",
+                      "integrations/pi"):
+        required += tree_files(root, directory, deadline)
+    required += ["tests/procedure_schema.py", "tests/skill_schema.py", "tests/bash_wrapper.py",
+                 "tests/pi_extension.py", "tests/mutation_survivors.py",
+                 "tools/check-mutation-survivors", "evidence/mutation-equivalences.json"]
     if not rust_only or has_t21(root):
         required += tree_files(root, "julia", deadline)
         required += ["tools/julia-quality.jl"]
@@ -545,6 +642,14 @@ def rust_test_expectations(root):
     if has_t06(root):
         required.update({name: "tests/" + name + ".rs" for name in T06_TARGET_COUNTS})
         extensions = ((has_t07(root), T07_TARGET_COUNTS, T07_INPUTS),
+                      (has_t07_startup(root), T07_STARTUP_TARGET_COUNTS, T07_STARTUP_INPUTS),
+                      (has_t09(root), T09_TARGET_COUNTS, T09_INPUTS),
+                      (has_budget_battery(root), BUDGET_TARGET_COUNTS, BUDGET_INPUTS),
+                      (has_notify_battery(root), NOTIFY_TARGET_COUNTS, NOTIFY_INPUTS),
+                      (has_context_battery(root), CONTEXT_TARGET_COUNTS, CONTEXT_INPUTS),
+                      (has_cohort_battery(root), COHORT_TARGET_COUNTS, COHORT_INPUTS),
+                      (has_actions_battery(root), ACTIONS_TARGET_COUNTS, ACTIONS_INPUTS),
+                      (has_herdr_battery(root), HERDR_TARGET_COUNTS, HERDR_INPUTS),
                       (has_t08(root), T08_TARGET_COUNTS, T08_INPUTS),
                       (has_recovery(root), RECOVERY_TARGET_COUNTS, RECOVERY_INPUTS),
                       (has_t08_contract(root), T08_CONTRACT_TARGET_COUNTS, T08_CONTRACT_INPUTS),
@@ -586,6 +691,32 @@ def rust_test_expectations(root):
             counts.extend(T08_TARGET_COUNTS.values())
         if has_recovery(root):
             counts.extend(RECOVERY_TARGET_COUNTS.values())
+        if has_t07_startup(root):
+            counts.extend(T07_STARTUP_TARGET_COUNTS.values())
+        if has_t09(root):
+            counts.extend(T09_TARGET_COUNTS.values())
+        if has_budget_battery(root):
+            counts.extend(BUDGET_TARGET_COUNTS.values())
+        if has_notify_battery(root):
+            counts.extend(NOTIFY_TARGET_COUNTS.values())
+        if has_context_battery(root):
+            counts.extend(CONTEXT_TARGET_COUNTS.values())
+            # StepBudget is private to the module, so its cases live in the library rather
+            # than in tests/t11_context.rs. The bound it enforces is unreachable through any
+            # argument to `assemble`, which is why the decision was extracted; the six cases
+            # are the only thing that pins it.
+            #
+            # Two places, because they are two different claims: the namespace census says
+            # which unit names must appear, and counts[0] is the LIBRARY TARGET's own
+            # summary line. `has_t13` does the same pair just below for its one case.
+            counts[0] += 6
+            unit_counts["context::step_budget_tests::"] = 6
+        if has_cohort_battery(root):
+            counts.extend(COHORT_TARGET_COUNTS.values())
+        if has_actions_battery(root):
+            counts.extend(ACTIONS_TARGET_COUNTS.values())
+        if has_herdr_battery(root):
+            counts.extend(HERDR_TARGET_COUNTS.values())
         if has_t08_contract(root):
             counts.extend(T08_CONTRACT_TARGET_COUNTS.values())
         if has_t13(root):
@@ -621,7 +752,7 @@ def require_rust_test_summaries(stdout, expectations, label):
 
 def rust_test_partitions(root):
     """Keep the selected finite targets within unchanged command/task deadlines."""
-    if not any(present(root) for present in (has_t21, has_t07, has_t08, has_recovery, has_t08_contract)):
+    if not any(present(root) for present in (has_t21, has_t07, has_t08, has_recovery, has_t08_contract, has_t07_startup)):
         return [("tests", ["--all-targets"])]
     # Validate the complete fixed census before selecting any subset. Cargo's
     # auto-discovery or conditional targets must not disappear through selection.
@@ -873,7 +1004,25 @@ def main():
             return texts
 
         run("process-controls", [sys.executable, "-W", "error", "tests/t25_process.py"], required_text="17 tests")
-        run("quality-integration-controls", [sys.executable, "-W", "error", "tests/t25_quality.py"], required_text="Ran 93 tests" if has_t08_contract(ROOT) or has_recovery(ROOT) else ("Ran 83 tests" if has_t08(ROOT) else ("Ran 73 tests" if has_t07(ROOT) else ("Ran 66 tests" if has_t21(ROOT) or has_t13(ROOT) else ("Ran 47 tests" if has_t06(ROOT) else "Ran 43 tests")))), required_stream="stderr")
+        run("quality-integration-controls", [sys.executable, "-W", "error", "tests/t25_quality.py"], required_text="Ran 98 tests" if has_t09(ROOT) else "Ran 93 tests" if has_t08_contract(ROOT) or has_recovery(ROOT) else ("Ran 83 tests" if has_t08(ROOT) else ("Ran 73 tests" if has_t07(ROOT) else ("Ran 66 tests" if has_t21(ROOT) or has_t13(ROOT) else ("Ran 47 tests" if has_t06(ROOT) else "Ran 43 tests")))), required_stream="stderr")
+        run("workflow-procedure-controls", [sys.executable, "-W", "error", "tests/procedure_schema.py"],
+            required_text="run=46 failures=0 errors=0")
+        run("workflow-site-sweep", [sys.executable, "tools/check-workflow-sites"],
+            required_text="sites=16 killed=16 survived=0")
+        run("skill-package-controls", [sys.executable, "-W", "error", "tests/skill_schema.py"],
+            required_text="run=44 failures=0 errors=0")
+        run("skill-site-sweep", [sys.executable, "tools/check-skill-sites"],
+            required_text="sites=15 killed=15 survived=0")
+        run("bash-wrapper-controls", [sys.executable, "-W", "error", "tests/bash_wrapper.py"],
+            required_text="run=53 failures=0 errors=0")
+        run("pi-extension-controls", [sys.executable, "-W", "error", "tests/pi_extension.py"],
+            required_text="run=34 failures=0 errors=0")
+        run("pi-site-sweep", [sys.executable, "tools/check-pi-sites"],
+            required_text="sites=14 killed=14 survived=0")
+        run("mutation-survivor-audit", [sys.executable, "-W", "error", "tests/mutation_survivors.py"],
+            required_text="run=11 failures=0 errors=0")
+        run("claim-overlap-table", [sys.executable, "evaluation/cohorts/make-claim-overlap.py", "--check"],
+            required_text="matches_generator=yes")
         run("rustc-identity", [str(compiler), "-vV"], required_text="rustc 1.98.0 ")
         cargo = str(binaries["cargo"])
         metadata = run("offline-dependency-resolution", [cargo, "metadata", "--locked", "--offline", "--format-version=1"])

@@ -1,0 +1,93 @@
+#!/usr/bin/env python3
+"""Reconcile a cargo-mutants run's survivors against the declared equivalences.
+
+Two sides, deliberately: the survivors come from the RUN (`mutants.out/missed.txt`, written by
+cargo-mutants) and the declarations come from `evidence/mutation-equivalences.json`. A
+completeness check whose two numbers come from the same file is equal by construction and
+cannot see a gap, so neither number is derived from the other here.
+
+Every survivor must be declared, and every declaration must carry an argument about the
+reachable domain AND a falsifier. A declaration missing either is refused: a well-written
+justification is what disguises a shortcut, and a falsifier is the sentence that is hard to
+write when the argument is not true.
+
+A declaration that matches no survivor is reported too. It is not a refusal on its own -- a
+scoped run need not produce every mutant -- but an unmatched declaration on a FULL run means
+the code changed under it.
+
+Run: python3 tools/check-mutation-survivors <mutants.out dir> [--full]
+"""
+
+import json
+import re
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+DECLARATIONS = ROOT / "evidence/mutation-equivalences.json"
+
+
+def main():
+    arguments = [a for a in sys.argv[1:] if not a.startswith("--")]
+    full = "--full" in sys.argv[1:]
+    if len(arguments) != 1:
+        raise SystemExit("usage: check-mutation-survivors <mutants.out dir> [--full]")
+    out = Path(arguments[0])
+    missed = out / "missed.txt"
+    if not missed.is_file():
+        raise SystemExit(f"no missed.txt under {out}; the run did not complete")
+
+    survivors = [line.strip() for line in missed.read_text().splitlines() if line.strip()]
+    declared = json.loads(DECLARATIONS.read_text())["equivalences"]
+
+    # Every `fn name(` across the test tree and the library, so a declaration cannot cite a
+    # case that does not exist. Written after doing exactly that by hand: the first draft of
+    # the claims_are_disjoint declaration named `overlapping_claims_are_refused_at_assignment`,
+    # which was never a test. A citation nobody resolves is worth less than none, because it
+    # reads as evidence.
+    known = set()
+    for source in list((ROOT / "tests").rglob("*.rs")) + list((ROOT / "src").rglob("*.rs")):
+        known.update(re.findall(r"^\s*fn ([a-z0-9_]+)\(", source.read_text(errors="replace"),
+                                flags=re.MULTILINE))
+
+    faults = []
+    for entry in declared:
+        for field in ("id", "file", "argument", "falsifier", "mutants", "pinned_by"):
+            if not entry.get(field):
+                faults.append(f"declaration {entry.get('id', '?')!r} has no {field}")
+        if len(str(entry.get("argument", ""))) < 80:
+            faults.append(f"declaration {entry.get('id')!r}: the argument is too short to be one")
+        if not (ROOT / str(entry.get("file", ""))).is_file():
+            faults.append(f"declaration {entry.get('id')!r}: names a file that is not in the tree")
+        for case in entry.get("pinned_by", []):
+            if case not in known:
+                faults.append(f"declaration {entry.get('id')!r}: pinned_by names {case!r}, "
+                              "which is not a function in this tree")
+
+    # A survivor line is `path:line:col: <description>`; declarations name the description,
+    # because line and column move with every edit above them.
+    admitted = {text: entry["id"] for entry in declared for text in entry["mutants"]}
+    undeclared, matched = [], set()
+    for survivor in survivors:
+        description = survivor.split(": ", 1)[1] if ": " in survivor else survivor
+        if description in admitted:
+            matched.add(description)
+        else:
+            undeclared.append(survivor)
+
+    unmatched = sorted(set(admitted) - matched)
+    print(f"survivors={len(survivors)} declared={len(admitted)} matched={len(matched)} "
+          f"undeclared={len(undeclared)} unmatched_declarations={len(unmatched)}")
+    for survivor in undeclared:
+        print(f"  UNDECLARED {survivor}")
+    for text in unmatched:
+        print(f"  unmatched declaration: {text} ({admitted[text]})")
+    for fault in faults:
+        print(f"  FAULT {fault}")
+
+    bad = bool(undeclared) or bool(faults) or (full and bool(unmatched))
+    print("verdict=" + ("FAIL" if bad else "PASS"))
+    return 1 if bad else 0
+
+
+sys.exit(main())

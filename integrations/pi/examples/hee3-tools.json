@@ -1,0 +1,26 @@
+{
+  "schema": "hee3.integrations.pi_extension.v1",
+  "extension_id": "hee3-tools",
+  "extension_generation": 3,
+  "bridge_version": 1,
+  "tools": [
+    {
+      "tool_id": "list-tasks",
+      "action": "task.list",
+      "action_version": 1,
+      "summary": "List tasks this caller may see."
+    },
+    {
+      "tool_id": "get-task",
+      "action": "task.get",
+      "action_version": 1,
+      "summary": "Read one task's current state."
+    },
+    {
+      "tool_id": "engine-health",
+      "action": "health",
+      "action_version": 1,
+      "summary": "Report engine health."
+    }
+  ]
+}

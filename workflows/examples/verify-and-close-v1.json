@@ -1,0 +1,83 @@
+{
+  "schema": "hee3.workflows.procedure.v1",
+  "procedure_id": "verify-and-close",
+  "procedure_version": 1,
+  "purpose": "Submit a task, wait for its threads, then verify before proposing closure.",
+  "budget": {
+    "max_fanout": 4,
+    "max_seconds": 3600,
+    "max_tokens": 250000
+  },
+  "steps": [
+    {
+      "step_id": "preview",
+      "action": "task.preview",
+      "action_version": 1,
+      "depends_on": [],
+      "required": true,
+      "retry": {
+        "max_attempts": 2,
+        "retry_on": ["unavailable", "deadline_exceeded"]
+      },
+      "notes": "Preview first: a submit whose shape was never previewed is an effect nobody predicted."
+    },
+    {
+      "step_id": "submit",
+      "action": "task.submit",
+      "action_version": 1,
+      "depends_on": ["preview"],
+      "required": true,
+      "retry": {
+        "max_attempts": 1,
+        "retry_on": []
+      },
+      "notes": "One attempt. A resubmit whose first effect was unobserved is exactly what effect_unknown exists to stop."
+    },
+    {
+      "step_id": "threads",
+      "action": "thread.list",
+      "action_version": 1,
+      "depends_on": ["submit"],
+      "required": true,
+      "retry": {
+        "max_attempts": 4,
+        "retry_on": ["unavailable", "deadline_exceeded", "internal"]
+      }
+    },
+    {
+      "step_id": "verify",
+      "action": "task.get",
+      "action_version": 1,
+      "depends_on": ["threads"],
+      "required": true,
+      "retry": {
+        "max_attempts": 3,
+        "retry_on": ["unavailable", "internal"]
+      }
+    },
+    {
+      "step_id": "record",
+      "action": "analysis.request",
+      "action_version": 1,
+      "depends_on": ["verify"],
+      "required": false,
+      "retry": {
+        "max_attempts": 2,
+        "retry_on": ["unavailable"]
+      },
+      "notes": "Optional: the join closes without it, and its absence is stated rather than inferred."
+    }
+  ],
+  "acceptance": [
+    {
+      "criterion_id": "task-reached-a-terminal-state",
+      "statement": "task.get reports a terminal state, and the state is not effect_unknown.",
+      "evidence": "The verify step's recorded response."
+    },
+    {
+      "criterion_id": "every-required-thread-settled",
+      "statement": "Every thread thread.list names is settled, with its outcome recorded.",
+      "evidence": "The threads step's recorded response."
+    }
+  ]
+}

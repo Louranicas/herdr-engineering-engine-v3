@@ -16,7 +16,7 @@ Declared build dependencies: none. Declared consumers: none. Runtime request/ret
 
 Own bounded Julia analysis, compatible locked test environment and independent numerical oracles. Required Broken/skips cannot qualify; collect stderr and structured logs, and validate language-specific mutation strategy.
 
-[Adopted readiness requirements and evidence roadmap](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Delivery%2FReadiness%2FIndex) · [Codebase readiness plan](file:///var/home/herdr-engineering-engine-v3/docs/readiness-plan.md) · [Six resolved design contracts](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Delivery%2FContracts%2FIndex) · [Concrete contract decisions](file:///var/home/herdr-engineering-engine-v3/docs/contract-decisions.md). Binding: `HEE3-READINESS-001` / `e774f8984c7e39e85b156289fac809bded6df80ba3647cfb2024c69856447b94`. Adoption is complete; the required engine proof is pending.
+[Adopted readiness requirements and evidence roadmap](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Delivery%2FReadiness%2FIndex) · [Codebase readiness plan](file:///var/home/herdr-engineering-engine-v3/docs/readiness-plan.md) · [Six resolved design contracts](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Delivery%2FContracts%2FIndex) · [Concrete contract decisions](file:///var/home/herdr-engineering-engine-v3/docs/contract-decisions.md). Binding: `HEE3-READINESS-001` / `7fd2285b611328e2c8d7aef755d55451ef2d4e0f952524526891ca49533fc090`. Adoption is complete; the required engine proof is pending.
 
 | Applicable facet / criterion IDs | Primary contract owners |
 | --- | --- |
@@ -67,7 +67,7 @@ Every operation inherits the catalogue requirements for caller capability, ident
 
 Observed source kind: `engine_source`. Accepted current interface: **unavailable**. No completion admission collector is implemented. A source body would be an implementation candidate, not automatically an accepted module. After verified admission exists, exact accepted source/schema and tests govern current interface facts; intended changes remain in the atlas.
 
-Convention SHA-256: `c8a96767e52cf8b309ef5fc5ab968a1e875b0d97ab7d62aaec6f96f1d8436557`. This binding proves which documentation convention is projected, not runtime correctness.
+Convention SHA-256: `70f8a696de7ea69018d752380855f76b2f3732510cc8d8caabac310d1a19a84e`. This binding proves which documentation convention is projected, not runtime correctness.
 
 ## Fully-complete contract
 
@@ -75,7 +75,7 @@ Convention SHA-256: `c8a96767e52cf8b309ef5fc5ab968a1e875b0d97ab7d62aaec6f96f1d84
 
 [Concrete module outcome, failure controls and admission checklist](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Standards%2FCompletion%2FDONE-julia) · [Corpus architecture and update schematics](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Schematics%2FCorpus%2FIndex) · [Open clickable drawings](file:///var/home/herdr-engineering-engine-v3/docs/corpus-schematics.html) · [Fully-complete standard](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Standards%2FModule%20Completion) · [Justfile and runbooks](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Operations%2FJustfiles%20and%20Runbooks) · [Context handoff](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Context%20Handoff) · [Executive summary](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Executive%20Summary) · [Daybreak security profile](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Security%2FDaybreak%20Profile) · [Graphify full corpus](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Graphify%2FIndex) · [Adopted readiness requirements and evidence roadmap](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Delivery%2FReadiness%2FIndex) · [Codebase readiness plan](file:///var/home/herdr-engineering-engine-v3/docs/readiness-plan.md) · [Six resolved design contracts](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Delivery%2FContracts%2FIndex) · [Concrete contract decisions](file:///var/home/herdr-engineering-engine-v3/docs/contract-decisions.md)
 
-Completion standard SHA-256: `a36374a796816c1ea4c85c3292d376942fe9da226d714012b87da2588f598594`. All 13 gates apply; only an inapplicable subcheck may be explicitly justified.
+Completion standard SHA-256: `cd84afe35f99245f89e6d097ade8b59314fb378eef77385a3c6b271596705c75`. All 13 gates apply; only an inapplicable subcheck may be explicitly justified.
 
 **Required finished behavior:** Julia analysis produces reproducible routing/cohesion reports with complete denominators, justified tolerances and held-out baseline comparisons.
 
@@ -119,7 +119,7 @@ These are scoped design and review obligations. Their engine detectors remain un
 
 Bind assimilation, mutation sensitivity, lint coverage and raw evidence to the exact candidate. Property iterations, assertions, retries, lint findings and mutant runs do not multiply case credits. The current observation schema does not establish this qualification.
 
-Standard: `HEE3-TEST-STD-001`; SHA-256: `14a29dad1d089bc529ff9a132e5f80d5195e81aba2c2c0a07229e1c7c8960b09`. Full-standard qualification: **unassessed; collector/validator not implemented**.
+Standard: `HEE3-TEST-STD-001`; SHA-256: `f6174830e03fbe54fa3312e4a157fd4b00255aab412067ac3829c50eb73d60e3`. Full-standard qualification: **unassessed; collector/validator not implemented**.
 
 Module priorities: Rust-Julia request/return framing; locked package/bounds-checked execution; numerical invalid/edge inputs; timeout/cancel and deterministic fixtures.
 
@@ -272,7 +272,7 @@ Dependencies: T04. Atlas task state: `done`.
 
 [Owning task and current atlas state](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Delivery%2FTasks%2FTASK-T22)
 
-Dependencies: T07, T10, T11, T21. Atlas task state: `idle`.
+Dependencies: T07, T10, T11, T21. Atlas task state: `wip`.
 
 **Acceptance:** Roles share a versioned objective, distinct artifact ownership and bounded messages. Cross-agent resource conflicts and stale-generation callbacks are rejected. Compare one-worker and specialist-cohort outcomes including cost, errors, disagreement and rework; idle cohorts stop. Persist logical thread identity, versioned mailbox obligations and parent join requirements; protect shared interface/lockfile ownership and recover orchestrator loss without duplicate dispatch. Enforce one conserved parent/child allocation tree. Waiting parents release resources children require. Semantic cross-module calls remain mediated by the composition root and current action authority. Thread briefs preserve the task-critical relationships needed by the receiving specialist; a list of included files alone cannot prove adequate context. Narrow the question explicitly when required coverage exceeds its bound.
 

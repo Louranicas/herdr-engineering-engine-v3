@@ -614,8 +614,15 @@
             "validation_cmd": "Proposed, not implemented: habitat-engine-check case T10 --fixture-root <disposable-fixtures>",
             "validator_available": false,
             "acceptance": "Concurrent reservations cannot exceed configured bounds; retries/checking/compaction are included; unknown usage is visible; hard-ceiling tasks reject incompatible accounting; fallback cannot cross privacy or tool constraints.",
-            "state": "idle",
-            "evidence": [],
+            "state": "wip",
+            "evidence": [
+              {
+                "path": "evidence/implementation-T10-20260922/progress.json",
+                "sha256": "f2c91f4cad414c67f44a1f9d2fbb15eb2c16c9fabfececc155a19d121b5a278f",
+                "task_id": "T10",
+                "scope": "implementation_candidate"
+              }
+            ],
             "research_refs": [
               "C13",
               "A11"
@@ -636,8 +643,15 @@
             "validation_cmd": "Proposed, not implemented: habitat-engine-check case T11 --fixture-root <disposable-fixtures>",
             "validator_available": false,
             "acceptance": "Context is bounded to task needs; actionable wakes are deduplicated/batched; controlled idle and repeated unchanged events cause zero model requests; summaries and compaction usage are accounted for. Context records distinguish required source-file coverage from task-critical call/dependency/ownership relationship coverage. Expose each gap and account for discovery, supplemental reads and repeated context as well as final packet size.",
-            "state": "idle",
-            "evidence": [],
+            "state": "wip",
+            "evidence": [
+              {
+                "path": "evidence/implementation-T11-20260922/progress.json",
+                "sha256": "37fee8762915d1aa1e381e40a847127213b4563944d957b398bd853a5da81700",
+                "task_id": "T11",
+                "scope": "implementation_candidate"
+              }
+            ],
             "research_refs": [
               "D18",
               "H12",
@@ -688,8 +702,15 @@
             "validation_cmd": "Proposed, not implemented: habitat-engine-check case T22 --fixture-root <disposable-fixtures>",
             "validator_available": false,
             "acceptance": "Roles share a versioned objective, distinct artifact ownership and bounded messages. Cross-agent resource conflicts and stale-generation callbacks are rejected. Compare one-worker and specialist-cohort outcomes including cost, errors, disagreement and rework; idle cohorts stop. Persist logical thread identity, versioned mailbox obligations and parent join requirements; protect shared interface/lockfile ownership and recover orchestrator loss without duplicate dispatch. Enforce one conserved parent/child allocation tree. Waiting parents release resources children require. Semantic cross-module calls remain mediated by the composition root and current action authority. Thread briefs preserve the task-critical relationships needed by the receiving specialist; a list of included files alone cannot prove adequate context. Narrow the question explicitly when required coverage exceeds its bound.",
-            "state": "idle",
-            "evidence": [],
+            "state": "wip",
+            "evidence": [
+              {
+                "path": "evidence/implementation-T22-20260922/progress.json",
+                "sha256": "52581890273ef104b38ab29093d51872e1378d9b3989e3f1e5ce3c6b2da0e443",
+                "task_id": "T22",
+                "scope": "implementation_candidate"
+              }
+            ],
             "research_refs": [
               "S02",
               "S09",
@@ -718,8 +739,15 @@
             "validation_cmd": "Proposed, not implemented: habitat-engine-check case T28 --fixture-root <disposable-fixtures>",
             "validator_available": false,
             "acceptance": "One action definition drives CLI/Unix schemas and one selected LLM-tool adapter. Bounded discovery/inspection/preview, scoped invocation, identity/idempotency and evidence readback work end to end. Denial remains denial across transports; untrusted workers receive no operator socket; generated projections cannot drift. task.get and analysis.get support their own principal-scoped admission-key readback; service.inspect can query the lifecycle operation key without confusing current health with historic effect. events.subscribe without a cursor provides a bounded coherent bootstrap snapshot plus high-water cursor. Distinguish request correlation from durable idempotency. Base Pi RPC does not supply the engine tool callback path; qualify the actual inherited channel or maintained bridge. Template-produced requests preserve literal typed values at the action boundary; model-emitted risk or approval fields never confer effect authority.",
-            "state": "idle",
-            "evidence": [],
+            "state": "wip",
+            "evidence": [
+              {
+                "path": "evidence/implementation-T28-20260922/progress.json",
+                "sha256": "b37953dfabfceef80d1eea7aebe0e250158c88b30aeb0a5d6e06c76cff226a1e",
+                "task_id": "T28",
+                "scope": "implementation_candidate"
+              }
+            ],
             "research_refs": [
               "A11",
               "A12",
@@ -828,8 +856,15 @@
             "validation_cmd": "Proposed, not implemented: habitat-engine-check case T16 --fixture-root <disposable-fixtures>",
             "validator_available": false,
             "acceptance": "Task cards show owner, model, state, spend and outcome; pane closure does not erase task state; reconnect resynchronises; event gap/poll fallback and user cancel are exercised on the actual public Herdr API. Display the current loop iteration, failing criterion, remaining budget, completion evidence and notification state. The captured Herdr protocol has live events without durable replay cursors. Qualify resubscription and coherent snapshot reconciliation; do not claim gap-free Herdr history.",
-            "state": "idle",
-            "evidence": [],
+            "state": "wip",
+            "evidence": [
+              {
+                "path": "evidence/implementation-T16-20260922/progress.json",
+                "sha256": "07d9a882b30922ebdb5526220ec0bf620f3731b6a8dd3c0fdd2ca14b39fb2ac7",
+                "task_id": "T16",
+                "scope": "implementation_candidate"
+              }
+            ],
             "research_refs": [
               "D19",
               "H10",
@@ -856,8 +891,15 @@
             "validation_cmd": "Proposed, not implemented: habitat-engine-check case T29 --fixture-root <disposable-fixtures>",
             "validator_available": false,
             "acceptance": "Thin updatable packages share action/procedure identity and preserve authority, arguments, producer exit status, cancellation and evidence. Pi errors/parallel calls/reload and effective tool-set readback are qualified; skills disclose bounded context. Two typed compositions close their real return paths. Version switching preserves active attempts and rollback; no separate scheduler or silent self-update. Keep the admitted package/protocol tuple pinned through every active attempt. Revoked/reloaded tool handlers cannot retain effect authority. No custom Pi-host glue is selected until its concrete packaging need is established. Each integration renders its owned template once, then passes literal typed data rather than copying/re-templating procedure bodies. Focused fixtures include braces, quotes, newlines, dollar signs and leading dashes, with exact final argv/JSON and producer-status checks. Preserve source and relationship coverage with whole-workflow context accounting. Source-change reports cannot advance accepted compatibility/source baselines.",
-            "state": "idle",
-            "evidence": [],
+            "state": "wip",
+            "evidence": [
+              {
+                "path": "evidence/implementation-T29-20260922/progress.json",
+                "sha256": "d23d0145a056cf3dd3a3f86f534734826a3e52e4c47157162ee1e3af2dd13461",
+                "task_id": "T29",
+                "scope": "implementation_candidate"
+              }
+            ],
             "research_refs": [
               "B02",
               "B03",
