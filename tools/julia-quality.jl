@@ -55,13 +55,35 @@ function main()
         "uuid" => "27bc5c0a-e2f1-4a83-a4c2-9c324f347a1e",
         "version" => "0.1.0",
     )
-    get(manifest, "deps", Dict()) == Dict("HabitatAnalysis" => [expected_self]) || error(
-        "This foundation admits only its own local package manifest entry, without external runtime dependencies",
-    )
     metadata = TOML.parsefile(joinpath(project, "Project.toml"))
-    metadata["compat"]["julia"] == "=1.12.7" ||
-        error("Exact Julia compatibility is required")
-    isempty(get(metadata, "deps", Dict())) || error("Unexpected runtime dependencies")
+    t21 =
+        haskey(get(metadata, "deps", Dict()), "JSON3") ||
+        isfile(joinpath(project, "bin", "analysis.jl"))
+    if t21
+        bytes2hex(sha256(read(manifest_path))) ==
+        "097d5028df4e1667a970a8297d41eedb908e0319a0b4154c7ec12548140a9f79" ||
+            error("T21 requires the exact reviewed locked dependency manifest")
+        metadata["deps"] == Dict(
+            "JSON3" => "0f8b85d8-7281-11e9-16c2-39a750bddbf1",
+            "SHA" => "ea8e919c-243c-51af-8825-aaa63cd721ce",
+        ) || error("Unexpected T21 runtime dependencies")
+        metadata["compat"] == Dict("JSON3" => "=1.14.3", "julia" => "=1.12.7") ||
+            error("Unexpected T21 compatibility")
+        Set(keys(metadata)) ==
+        Set(["name", "uuid", "version", "deps", "compat", "extras", "targets"]) ||
+            error("Unexpected T21 project fields")
+        metadata["name"] == "HabitatAnalysis" &&
+        metadata["uuid"] == "27bc5c0a-e2f1-4a83-a4c2-9c324f347a1e" &&
+        metadata["version"] == "0.1.0" || error("Unexpected T21 package identity")
+    else
+        get(manifest, "deps", Dict()) == Dict("HabitatAnalysis" => [expected_self]) ||
+            error(
+                "This foundation admits only its own local package manifest entry, without external runtime dependencies",
+            )
+        metadata["compat"]["julia"] == "=1.12.7" ||
+            error("Exact Julia compatibility is required")
+        isempty(get(metadata, "deps", Dict())) || error("Unexpected runtime dependencies")
+    end
     expected_extras = Dict(
         "Test" => "8dfed614-e22c-5e08-85e1-65c5234f0b40",
         "Logging" => "56ddb016-857b-54e1-b83d-db4d58db5568",
@@ -69,8 +91,13 @@ function main()
         "SHA" => "ea8e919c-243c-51af-8825-aaa63cd721ce",
         "LinearAlgebra" => "37e2e46d-f89d-539d-b4ee-838fcccc9c8e",
     )
+    expected_target = ["Test", "Logging", "TOML", "SHA", "LinearAlgebra"]
+    if t21
+        delete!(expected_extras, "SHA")
+        expected_target = ["Test", "Logging", "TOML", "LinearAlgebra"]
+    end
     metadata["extras"] == expected_extras || error("Unexpected test dependency")
-    metadata["targets"]["test"] == ["Test", "Logging", "TOML", "SHA", "LinearAlgebra"] ||
+    metadata["targets"] == Dict("test" => expected_target) ||
         error("Unexpected test target")
     Pkg.is_manifest_current(project) === true ||
         error("Manifest is stale; resolve only in separately authorized setup")
@@ -89,6 +116,19 @@ function main()
             name in modes if name != "baseline"
         ],
     )
+    if t21
+        append!(
+            subjects,
+            [
+                joinpath(project, path) for path in (
+                    "src/Evaluate.jl",
+                    "src/Cohesion.jl",
+                    "bin/analysis.jl",
+                    "test/analysis.jl",
+                )
+            ],
+        )
+    end
     before = Dict(path => bytes2hex(sha256(read(path))) for path in subjects)
     println("HEE3_JULIA_RECIPE_SUBJECTS_BEGIN")
     TOML.print(
@@ -107,17 +147,27 @@ function main()
     try
         # The default Pkg IO is stderr. Selecting stdout keeps child stdout and
         # stderr on separate captured parent streams (Pkg API, pinned 1.12.7).
-        Pkg.test(;
-            io = stdout,
-            allow_reresolve = false,
-            julia_args = [
-                "--startup-file=no",
-                "--check-bounds=yes",
-                "--depwarn=error",
-                "--threads=1",
-            ],
-            test_args = [mode],
-        )
+        if t21
+            # Pkg.test constructs and resolves a fresh sandbox even with
+            # allow_reresolve=false (pinned Pkg 1.12.7). Run the unchanged
+            # Test controls in the exact locked project; no acceptance-time resolve.
+            println(
+                "HEE3_JULIA_TEST_BASIS: exact locked T21 project, direct unchanged Test controls",
+            )
+            Base.include(Main, joinpath(project, "test", "runtests.jl"))
+        else
+            Pkg.test(;
+                io = stdout,
+                allow_reresolve = false,
+                julia_args = [
+                    "--startup-file=no",
+                    "--check-bounds=yes",
+                    "--depwarn=error",
+                    "--threads=1",
+                ],
+                test_args = [mode],
+            )
+        end
     finally
         for path in subjects
             bytes2hex(sha256(read(path))) == before[path] ||

@@ -16,7 +16,7 @@ Declared build dependencies: contracts. Declared consumers: app. Runtime request
 
 Own registry/lifecycle bridges to existing systemd/Podman authorities. Verify answering interfaces, expected inventory, residual processes and cleanup; a listener or process is insufficient health proof.
 
-[Adopted readiness requirements and evidence roadmap](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Delivery%2FReadiness%2FIndex) · [Codebase readiness plan](file:///var/home/herdr-engineering-engine-v3/docs/readiness-plan.md) · [Six resolved design contracts](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Delivery%2FContracts%2FIndex) · [Concrete contract decisions](file:///var/home/herdr-engineering-engine-v3/docs/contract-decisions.md). Binding: `HEE3-READINESS-001` / `ea991737ce282467556e4997f28e97c4b7f0799d823aae98905fcf34f71766f7`. Adoption is complete; the required engine proof is pending.
+[Adopted readiness requirements and evidence roadmap](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Delivery%2FReadiness%2FIndex) · [Codebase readiness plan](file:///var/home/herdr-engineering-engine-v3/docs/readiness-plan.md) · [Six resolved design contracts](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Delivery%2FContracts%2FIndex) · [Concrete contract decisions](file:///var/home/herdr-engineering-engine-v3/docs/contract-decisions.md). Binding: `HEE3-READINESS-001` / `e774f8984c7e39e85b156289fac809bded6df80ba3647cfb2024c69856447b94`. Adoption is complete; the required engine proof is pending.
 
 | Applicable facet / criterion IDs | Primary contract owners |
 | --- | --- |
@@ -65,9 +65,9 @@ Every operation inherits the catalogue requirements for caller capability, ident
 
 ### Accepted current interface and implementation
 
-Observed source kind: `comment_stub`. Accepted current interface: **unavailable**. No completion admission collector is implemented. A source body would be an implementation candidate, not automatically an accepted module. After verified admission exists, exact accepted source/schema and tests govern current interface facts; intended changes remain in the atlas.
+Observed source kind: `engine_source`. Accepted current interface: **unavailable**. No completion admission collector is implemented. A source body would be an implementation candidate, not automatically an accepted module. After verified admission exists, exact accepted source/schema and tests govern current interface facts; intended changes remain in the atlas.
 
-Convention SHA-256: `089e6c05bbe6f53db1c473153d26638028b2e3c8f99d99967d8f0e7baa97bb8d`. This binding proves which documentation convention is projected, not runtime correctness.
+Convention SHA-256: `c8a96767e52cf8b309ef5fc5ab968a1e875b0d97ab7d62aaec6f96f1d8436557`. This binding proves which documentation convention is projected, not runtime correctness.
 
 ## Fully-complete contract
 
@@ -75,7 +75,7 @@ Convention SHA-256: `089e6c05bbe6f53db1c473153d26638028b2e3c8f99d99967d8f0e7baa9
 
 [Concrete module outcome, failure controls and admission checklist](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Standards%2FCompletion%2FDONE-service) · [Corpus architecture and update schematics](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Schematics%2FCorpus%2FIndex) · [Open clickable drawings](file:///var/home/herdr-engineering-engine-v3/docs/corpus-schematics.html) · [Fully-complete standard](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Standards%2FModule%20Completion) · [Justfile and runbooks](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Operations%2FJustfiles%20and%20Runbooks) · [Context handoff](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Context%20Handoff) · [Executive summary](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Executive%20Summary) · [Daybreak security profile](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Security%2FDaybreak%20Profile) · [Graphify full corpus](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Graphify%2FIndex) · [Adopted readiness requirements and evidence roadmap](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Delivery%2FReadiness%2FIndex) · [Codebase readiness plan](file:///var/home/herdr-engineering-engine-v3/docs/readiness-plan.md) · [Six resolved design contracts](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Delivery%2FContracts%2FIndex) · [Concrete contract decisions](file:///var/home/herdr-engineering-engine-v3/docs/contract-decisions.md)
 
-Completion standard SHA-256: `860dc3c4021b780b94ddcb8b9af22c4fd09fe3590e7785de0bcf5a3b5025c3ea`. All 13 gates apply; only an inapplicable subcheck may be explicitly justified.
+Completion standard SHA-256: `a36374a796816c1ea4c85c3292d376942fe9da226d714012b87da2588f598594`. All 13 gates apply; only an inapplicable subcheck may be explicitly justified.
 
 **Required finished behavior:** Registered binaries, daemons, libraries and numerical services expose useful health and delegated owner-controlled lifecycle with effect readback.
 
@@ -117,7 +117,7 @@ These are scoped design and review obligations. Their engine detectors remain un
 
 Bind assimilation, mutation sensitivity, lint coverage and raw evidence to the exact candidate. Property iterations, assertions, retries, lint findings and mutant runs do not multiply case credits. The current observation schema does not establish this qualification.
 
-Standard: `HEE3-TEST-STD-001`; SHA-256: `1004749abf352815dc13b8317c4277ea124d06612137e9010666977bfd059986`. Full-standard qualification: **unassessed; collector/validator not implemented**.
+Standard: `HEE3-TEST-STD-001`; SHA-256: `14a29dad1d089bc529ff9a132e5f80d5195e81aba2c2c0a07229e1c7c8960b09`. Full-standard qualification: **unassessed; collector/validator not implemented**.
 
 Module priorities: admission and lifecycle ownership; binary/daemon/library/operator boundaries; health/readback and failure isolation; restart/stop and resource cleanup.
 
@@ -168,6 +168,13 @@ Module priorities: admission and lifecycle ownership; binary/daemon/library/oper
 | evidence/release/ | app | original planned path | Release evidence aggregates exact-subject qualification receipts; aggregation cannot create or replace module proof. |
 | numerical-workers/ | numerical | original planned path | Conditional numerical worker packaging is owned by the existing numerical boundary; no new mandatory runtime module is introduced. |
 | evaluation/runtime-compatibility.md | numerical | original planned path | Optional Julia/tch/LibTorch or external-service comparison records the concrete model, device, format, cost and cancellation contract. |
+| src/service/local_probe.rs | service | authored candidate / T13 | Inspect-only useful service observations and admitted-revision-bound preparation/local execution through existing owners; no lifecycle grant. |
+| src/service/observations.rs | service | authored candidate / T13 | Inspect-only useful service observations and admitted-revision-bound preparation/local execution through existing owners; no lifecycle grant. |
+| src/service/probe.rs | service | authored candidate / T13 | Inspect-only useful service observations and admitted-revision-bound preparation/local execution through existing owners; no lifecycle grant. |
+| src/service/profile.rs | service | authored candidate / T13 | Inspect-only useful service observations and admitted-revision-bound preparation/local execution through existing owners; no lifecycle grant. |
+| tests/t13_local_probe.rs | service | authored candidate / T13 | Source-bound useful observation, authority, stale-revision and actual local probe controls; task evidence, not module qualification. |
+| tests/t13_probe.rs | service | authored candidate / T13 | Source-bound useful observation, authority, stale-revision and actual local probe controls; task evidence, not module qualification. |
+| tests/t13_service.rs | service | authored candidate / T13 | Source-bound useful observation, authority, stale-revision and actual local probe controls; task evidence, not module qualification. |
 
 ## Delivery, verification and hardening contracts
 
@@ -175,7 +182,7 @@ Module priorities: admission and lifecycle ownership; binary/daemon/library/oper
 
 [Owning task and current atlas state](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Delivery%2FTasks%2FTASK-T13)
 
-Dependencies: T04, T05. Atlas task state: `idle`.
+Dependencies: T04, T05. Atlas task state: `done`.
 
 **Acceptance:** Daemon, one-shot, library, remote endpoint and neural-operator records use appropriate observations. Unknown/stale readiness cannot become healthy; discovery claims no lifecycle ownership. Apply T05 admitted-revision and explicit import/export rules to service records. Test service update/disable, restart and stale/invalid import; observed inventory cannot overwrite effective authority or grant lifecycle control.
 

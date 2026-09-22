@@ -399,6 +399,113 @@ Exact current bytes are inventoried without inserting managed comments. These ar
 | [tools/rust-offline-inputs/toml_parser-1.1.3+spec-1.1.0.crate](file:///var/home/herdr-engineering-engine-v3/tools/rust-offline-inputs/toml_parser-1.1.3%2Bspec-1.1.0.crate) | check | T05 |
 | [tools/rust-offline-inputs/toml_writer-1.1.2+spec-1.1.0.crate](file:///var/home/herdr-engineering-engine-v3/tools/rust-offline-inputs/toml_writer-1.1.2%2Bspec-1.1.0.crate) | check | T05 |
 | [tools/rust-offline-inputs/winnow-1.0.4.crate](file:///var/home/herdr-engineering-engine-v3/tools/rust-offline-inputs/winnow-1.0.4.crate) | check | T05 |
+| [development/t06/README.md](file:///var/home/herdr-engineering-engine-v3/development/t06/README.md) | app | T06 |
+| [development/t06/fixed-runtime-frontend/Cargo.lock](file:///var/home/herdr-engineering-engine-v3/development/t06/fixed-runtime-frontend/Cargo.lock) | app | T06 |
+| [development/t06/fixed-runtime-frontend/Cargo.toml](file:///var/home/herdr-engineering-engine-v3/development/t06/fixed-runtime-frontend/Cargo.toml) | app | T06 |
+| [development/t06/fixed-runtime-frontend/compare-result.py](file:///var/home/herdr-engineering-engine-v3/development/t06/fixed-runtime-frontend/compare-result.py) | app | T06 |
+| [development/t06/fixed-runtime-frontend/prepare-inputs.py](file:///var/home/herdr-engineering-engine-v3/development/t06/fixed-runtime-frontend/prepare-inputs.py) | app | T06 |
+| [development/t06/fixed-runtime-frontend/src/frontend.rs](file:///var/home/herdr-engineering-engine-v3/development/t06/fixed-runtime-frontend/src/frontend.rs) | app | T06 |
+| [development/t06/fixed-runtime-frontend/src/inputs.rs](file:///var/home/herdr-engineering-engine-v3/development/t06/fixed-runtime-frontend/src/inputs.rs) | app | T06 |
+| [development/t06/fixed-runtime-frontend/src/lib.rs](file:///var/home/herdr-engineering-engine-v3/development/t06/fixed-runtime-frontend/src/lib.rs) | app | T06 |
+| [development/t06/fixed-runtime-frontend/src/main.rs](file:///var/home/herdr-engineering-engine-v3/development/t06/fixed-runtime-frontend/src/main.rs) | app | T06 |
+| [development/t06/fixed-runtime-frontend/src/manifest.rs](file:///var/home/herdr-engineering-engine-v3/development/t06/fixed-runtime-frontend/src/manifest.rs) | app | T06 |
+| [development/t06/fixed-runtime-frontend/src/probes.rs](file:///var/home/herdr-engineering-engine-v3/development/t06/fixed-runtime-frontend/src/probes.rs) | app | T06 |
+| [development/t06/fixed-runtime-frontend/tests/frontend_controls.rs](file:///var/home/herdr-engineering-engine-v3/development/t06/fixed-runtime-frontend/tests/frontend_controls.rs) | app | T06 |
+| [development/t06/fixed-runtime-frontend/tests/test_freezer.py](file:///var/home/herdr-engineering-engine-v3/development/t06/fixed-runtime-frontend/tests/test_freezer.py) | app | T06 |
+| [development/t06/fixed-runtime-frontend/write-build-record.py](file:///var/home/herdr-engineering-engine-v3/development/t06/fixed-runtime-frontend/write-build-record.py) | app | T06 |
+| [development/t06/task-runtime/Cargo.lock](file:///var/home/herdr-engineering-engine-v3/development/t06/task-runtime/Cargo.lock) | app | T06 |
+| [development/t06/task-runtime/Cargo.toml](file:///var/home/herdr-engineering-engine-v3/development/t06/task-runtime/Cargo.toml) | app | T06 |
+| [development/t06/task-runtime/src/clock.rs](file:///var/home/herdr-engineering-engine-v3/development/t06/task-runtime/src/clock.rs) | app | T06 |
+| [development/t06/task-runtime/src/lib.rs](file:///var/home/herdr-engineering-engine-v3/development/t06/task-runtime/src/lib.rs) | app | T06 |
+| [development/t06/task-runtime/src/native_executor_observation.rs](file:///var/home/herdr-engineering-engine-v3/development/t06/task-runtime/src/native_executor_observation.rs) | app | T06 |
+| [development/t06/task-runtime/src/prepare.rs](file:///var/home/herdr-engineering-engine-v3/development/t06/task-runtime/src/prepare.rs) | app | T06 |
+| [development/t06/task-runtime/src/runtime-preparation.json](file:///var/home/herdr-engineering-engine-v3/development/t06/task-runtime/src/runtime-preparation.json) | app | T06 |
+| [development/t06/task-runtime/src/runtime.rs](file:///var/home/herdr-engineering-engine-v3/development/t06/task-runtime/src/runtime.rs) | app | T06 |
+| [development/t06/task-runtime/src/runtime_controls.rs](file:///var/home/herdr-engineering-engine-v3/development/t06/task-runtime/src/runtime_controls.rs) | app | T06 |
+| [development/t06/task-runtime/src/runtime_fixture.rs](file:///var/home/herdr-engineering-engine-v3/development/t06/task-runtime/src/runtime_fixture.rs) | app | T06 |
+| [development/t06/task-runtime/src/runtime_readback.rs](file:///var/home/herdr-engineering-engine-v3/development/t06/task-runtime/src/runtime_readback.rs) | app | T06 |
+| [development/t06/task-runtime/src/support.rs](file:///var/home/herdr-engineering-engine-v3/development/t06/task-runtime/src/support.rs) | app | T06 |
+| [development/t06/task-runtime/src/u64_receipt/binding.rs](file:///var/home/herdr-engineering-engine-v3/development/t06/task-runtime/src/u64_receipt/binding.rs) | app | T06 |
+| [development/t06/task-runtime/src/u64_receipt/observed.rs](file:///var/home/herdr-engineering-engine-v3/development/t06/task-runtime/src/u64_receipt/observed.rs) | app | T06 |
+| [development/t06/task-runtime/src/u64_receipt/preparation.rs](file:///var/home/herdr-engineering-engine-v3/development/t06/task-runtime/src/u64_receipt/preparation.rs) | app | T06 |
+| [development/t06/task-runtime/src/u64_receipt.rs](file:///var/home/herdr-engineering-engine-v3/development/t06/task-runtime/src/u64_receipt.rs) | app | T06 |
+| [development/t06/task-runtime/tests/fixtures/existing-objects.json](file:///var/home/herdr-engineering-engine-v3/development/t06/task-runtime/tests/fixtures/existing-objects.json) | app | T06 |
+| [development/t06/task-runtime/tests/fixtures/review-bundle.json](file:///var/home/herdr-engineering-engine-v3/development/t06/task-runtime/tests/fixtures/review-bundle.json) | app | T06 |
+| [development/t06/task-runtime/tests/fixtures/review-request.json](file:///var/home/herdr-engineering-engine-v3/development/t06/task-runtime/tests/fixtures/review-request.json) | app | T06 |
+| [development/t06/task-runtime/tests/native_store.rs](file:///var/home/herdr-engineering-engine-v3/development/t06/task-runtime/tests/native_store.rs) | app | T06 |
+| [development/t06/task-runtime/tests/prepare_controls.rs](file:///var/home/herdr-engineering-engine-v3/development/t06/task-runtime/tests/prepare_controls.rs) | app | T06 |
+| [development/t06/task-runtime/tests/receipt_inventory_controls.rs](file:///var/home/herdr-engineering-engine-v3/development/t06/task-runtime/tests/receipt_inventory_controls.rs) | app | T06 |
+| [development/t06/task-runtime/tests/support_controls.rs](file:///var/home/herdr-engineering-engine-v3/development/t06/task-runtime/tests/support_controls.rs) | app | T06 |
+| [evaluation/harnesses/bootstrap/checker.rs](file:///var/home/herdr-engineering-engine-v3/evaluation/harnesses/bootstrap/checker.rs) | check | T06 |
+| [evaluation/harnesses/bootstrap/producer.rs](file:///var/home/herdr-engineering-engine-v3/evaluation/harnesses/bootstrap/producer.rs) | check | T06 |
+| [evaluation/harnesses/u64-public-wrapper.rs](file:///var/home/herdr-engineering-engine-v3/evaluation/harnesses/u64-public-wrapper.rs) | check | T06 |
+| [src/app/capture.rs](file:///var/home/herdr-engineering-engine-v3/src/app/capture.rs) | app | T06 |
+| [src/app/durable_control.rs](file:///var/home/herdr-engineering-engine-v3/src/app/durable_control.rs) | app | T06 |
+| [src/app/evidence.rs](file:///var/home/herdr-engineering-engine-v3/src/app/evidence.rs) | app | T06 |
+| [src/app/mod.rs](file:///var/home/herdr-engineering-engine-v3/src/app/mod.rs) | app | T06 |
+| [src/app/receipt_import.rs](file:///var/home/herdr-engineering-engine-v3/src/app/receipt_import.rs) | app | T06 |
+| [src/app/repair.rs](file:///var/home/herdr-engineering-engine-v3/src/app/repair.rs) | app | T06 |
+| [src/app/subjects.rs](file:///var/home/herdr-engineering-engine-v3/src/app/subjects.rs) | app | T06 |
+| [src/app/workload.rs](file:///var/home/herdr-engineering-engine-v3/src/app/workload.rs) | app | T06 |
+| [src/bin/namespace_shim.rs](file:///var/home/herdr-engineering-engine-v3/src/bin/namespace_shim.rs) | worker | T06 |
+| [src/check/collector.rs](file:///var/home/herdr-engineering-engine-v3/src/check/collector.rs) | check | T06 |
+| [src/check/consistency.rs](file:///var/home/herdr-engineering-engine-v3/src/check/consistency.rs) | check | T06 |
+| [src/check/decision.rs](file:///var/home/herdr-engineering-engine-v3/src/check/decision.rs) | check | T06 |
+| [src/check/graph.rs](file:///var/home/herdr-engineering-engine-v3/src/check/graph.rs) | check | T06 |
+| [src/check/u64_oracle.rs](file:///var/home/herdr-engineering-engine-v3/src/check/u64_oracle.rs) | check | T06 |
+| [src/contracts/receipt/codec.rs](file:///var/home/herdr-engineering-engine-v3/src/contracts/receipt/codec.rs) | contracts | T06 |
+| [src/contracts/receipt/invariants.rs](file:///var/home/herdr-engineering-engine-v3/src/contracts/receipt/invariants.rs) | contracts | T06 |
+| [src/contracts/receipt/primitives.rs](file:///var/home/herdr-engineering-engine-v3/src/contracts/receipt/primitives.rs) | contracts | T06 |
+| [src/contracts/receipt/records.rs](file:///var/home/herdr-engineering-engine-v3/src/contracts/receipt/records.rs) | contracts | T06 |
+| [src/contracts/receipt.rs](file:///var/home/herdr-engineering-engine-v3/src/contracts/receipt.rs) | contracts | T06 |
+| [src/contracts.rs](file:///var/home/herdr-engineering-engine-v3/src/contracts.rs) | contracts | T06 |
+| [src/main.rs](file:///var/home/herdr-engineering-engine-v3/src/main.rs) | app | T06 |
+| [src/store/staging.rs](file:///var/home/herdr-engineering-engine-v3/src/store/staging.rs) | store | T06 |
+| [src/store/terminal.rs](file:///var/home/herdr-engineering-engine-v3/src/store/terminal.rs) | store | T06 |
+| [src/store/verification.rs](file:///var/home/herdr-engineering-engine-v3/src/store/verification.rs) | store | T06 |
+| [src/task/driver.rs](file:///var/home/herdr-engineering-engine-v3/src/task/driver.rs) | task | T06 |
+| [src/worker/aggregate.rs](file:///var/home/herdr-engineering-engine-v3/src/worker/aggregate.rs) | worker | T06 |
+| [src/worker/aggregate_io.rs](file:///var/home/herdr-engineering-engine-v3/src/worker/aggregate_io.rs) | worker | T06 |
+| [src/worker/namespace.rs](file:///var/home/herdr-engineering-engine-v3/src/worker/namespace.rs) | worker | T06 |
+| [src/worker/namespace_shim.rs](file:///var/home/herdr-engineering-engine-v3/src/worker/namespace_shim.rs) | worker | T06 |
+| [src/worker/process.rs](file:///var/home/herdr-engineering-engine-v3/src/worker/process.rs) | worker | T06 |
+| [src/worker/resources.rs](file:///var/home/herdr-engineering-engine-v3/src/worker/resources.rs) | worker | T06 |
+| [src/worker/workspace.rs](file:///var/home/herdr-engineering-engine-v3/src/worker/workspace.rs) | worker | T06 |
+| [tests/fixtures/receipt-import/nonpass.json](file:///var/home/herdr-engineering-engine-v3/tests/fixtures/receipt-import/nonpass.json) | app | T06 |
+| [tests/fixtures/receipt-import/preparation.json](file:///var/home/herdr-engineering-engine-v3/tests/fixtures/receipt-import/preparation.json) | app | T06 |
+| [tests/t06_availability.rs](file:///var/home/herdr-engineering-engine-v3/tests/t06_availability.rs) | check | T06 |
+| [tests/t06_bounded_preflight.rs](file:///var/home/herdr-engineering-engine-v3/tests/t06_bounded_preflight.rs) | app | T06 |
+| [tests/t06_collector.rs](file:///var/home/herdr-engineering-engine-v3/tests/t06_collector.rs) | check | T06 |
+| [tests/t06_consistency.rs](file:///var/home/herdr-engineering-engine-v3/tests/t06_consistency.rs) | check | T06 |
+| [tests/t06_decision.rs](file:///var/home/herdr-engineering-engine-v3/tests/t06_decision.rs) | check | T06 |
+| [tests/t06_driver.rs](file:///var/home/herdr-engineering-engine-v3/tests/t06_driver.rs) | task | T06 |
+| [tests/t06_durable_control.rs](file:///var/home/herdr-engineering-engine-v3/tests/t06_durable_control.rs) | app | T06 |
+| [tests/t06_evidence.rs](file:///var/home/herdr-engineering-engine-v3/tests/t06_evidence.rs) | app | T06 |
+| [tests/t06_graph.rs](file:///var/home/herdr-engineering-engine-v3/tests/t06_graph.rs) | check | T06 |
+| [tests/t06_process_timing.rs](file:///var/home/herdr-engineering-engine-v3/tests/t06_process_timing.rs) | worker | T06 |
+| [tests/t06_receipt_import.rs](file:///var/home/herdr-engineering-engine-v3/tests/t06_receipt_import.rs) | app | T06 |
+| [tests/t06_receipts.rs](file:///var/home/herdr-engineering-engine-v3/tests/t06_receipts.rs) | contracts | T06 |
+| [tests/t06_staging.rs](file:///var/home/herdr-engineering-engine-v3/tests/t06_staging.rs) | store | T06 |
+| [tests/t06_store.rs](file:///var/home/herdr-engineering-engine-v3/tests/t06_store.rs) | store | T06 |
+| [tests/t06_store_staging.rs](file:///var/home/herdr-engineering-engine-v3/tests/t06_store_staging.rs) | store | T06 |
+| [tests/t06_subjects.rs](file:///var/home/herdr-engineering-engine-v3/tests/t06_subjects.rs) | app | T06 |
+| [tests/t06_terminal.rs](file:///var/home/herdr-engineering-engine-v3/tests/t06_terminal.rs) | store | T06 |
+| [tests/t06_workspace.rs](file:///var/home/herdr-engineering-engine-v3/tests/t06_workspace.rs) | worker | T06 |
+| [tests/t06_workspace_export.rs](file:///var/home/herdr-engineering-engine-v3/tests/t06_workspace_export.rs) | worker | T06 |
+| [julia/bin/analysis.jl](file:///var/home/herdr-engineering-engine-v3/julia/bin/analysis.jl) | julia | T21 |
+| [julia/test/analysis.jl](file:///var/home/herdr-engineering-engine-v3/julia/test/analysis.jl) | julia | T21 |
+| [src/numerical/process.rs](file:///var/home/herdr-engineering-engine-v3/src/numerical/process.rs) | numerical | T21 |
+| [src/service/local_probe.rs](file:///var/home/herdr-engineering-engine-v3/src/service/local_probe.rs) | service | T13 |
+| [src/service/observations.rs](file:///var/home/herdr-engineering-engine-v3/src/service/observations.rs) | service | T13 |
+| [src/service/probe.rs](file:///var/home/herdr-engineering-engine-v3/src/service/probe.rs) | service | T13 |
+| [src/service/profile.rs](file:///var/home/herdr-engineering-engine-v3/src/service/profile.rs) | service | T13 |
+| [tests/fixtures/t21/J01.json](file:///var/home/herdr-engineering-engine-v3/tests/fixtures/t21/J01.json) | numerical | T21 |
+| [tests/fixtures/t21/descendant-control.py](file:///var/home/herdr-engineering-engine-v3/tests/fixtures/t21/descendant-control.py) | numerical | T21 |
+| [tests/t13_local_probe.rs](file:///var/home/herdr-engineering-engine-v3/tests/t13_local_probe.rs) | service | T13 |
+| [tests/t13_probe.rs](file:///var/home/herdr-engineering-engine-v3/tests/t13_probe.rs) | service | T13 |
+| [tests/t13_service.rs](file:///var/home/herdr-engineering-engine-v3/tests/t13_service.rs) | service | T13 |
+| [tests/t21_analysis.rs](file:///var/home/herdr-engineering-engine-v3/tests/t21_analysis.rs) | numerical | T21 |
+| [tests/t21_process.rs](file:///var/home/herdr-engineering-engine-v3/tests/t21_process.rs) | numerical | T21 |
 
 ## Lifecycle observations
 
@@ -411,16 +518,16 @@ Exact current bytes are inventoried without inserting managed comments. These ar
 | route | comment_stub | unqualified | unqualified | unqualified |
 | budget | comment_stub | unqualified | unqualified | unqualified |
 | worker | engine_source | unqualified | unqualified | unqualified |
-| check | comment_stub | unqualified | unqualified | unqualified |
-| recovery | comment_stub | unqualified | unqualified | unqualified |
+| check | engine_source | unqualified | unqualified | unqualified |
+| recovery | engine_source | unqualified | unqualified | unqualified |
 | cohort | comment_stub | unqualified | unqualified | unqualified |
 | context | comment_stub | unqualified | unqualified | unqualified |
 | notify | comment_stub | unqualified | unqualified | unqualified |
-| service | comment_stub | unqualified | unqualified | unqualified |
+| service | engine_source | unqualified | unqualified | unqualified |
 | herdr | comment_stub | unqualified | unqualified | unqualified |
-| numerical | comment_stub | unqualified | unqualified | unqualified |
+| numerical | engine_source | unqualified | unqualified | unqualified |
 | julia | engine_source | unqualified | unqualified | unqualified |
-| app | comment_stub | unqualified | unqualified | unqualified |
+| app | engine_source | unqualified | unqualified | unqualified |
 | actions | comment_stub | unqualified | unqualified | unqualified |
 | bash | comment_stub | unqualified | unqualified | unqualified |
 | pi_extension | comment_stub | unqualified | unqualified | unqualified |

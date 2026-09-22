@@ -5,6 +5,10 @@ from importlib.machinery import SourceFileLoader
 from importlib.util import module_from_spec, spec_from_loader
 from pathlib import Path
 import gzip
+import ast
+import inspect
+import copy
+import re
 import hashlib
 import io
 import shutil
@@ -27,6 +31,48 @@ loader.exec_module(quality)
 
 
 class QualityIntegrationControls(unittest.TestCase):
+    def test_all_julia_fault_modes_use_uncached_source_loading(self):
+        source = ast.parse((ROOT / "tools/check-quality").read_text())
+        calls = [node for node in ast.walk(source) if isinstance(node, ast.Call)
+                 and isinstance(node.func, ast.Name) and node.func.id == "run"
+                 and node.args and ast.unparse(node.args[0]) == "'julia-' + mode"]
+        self.assertEqual(len(calls), 1)
+        arguments = calls[0].args[1]
+        self.assertIsInstance(arguments, ast.List)
+        flags = [node.value for node in arguments.elts if isinstance(node, ast.Constant)]
+        self.assertEqual(flags.count("--compiled-modules=no"), 1)
+        controls = [node.value for node in ast.walk(source) if isinstance(node, ast.Assign)
+                    and any(isinstance(target, ast.Name) and target.id == "controls"
+                            for target in node.targets)]
+        self.assertEqual(len(controls), 1)
+        self.assertEqual([node.value for node in controls[0].keys],
+                         ["baseline", "assertion", "warning", "skip", "broken",
+                          "bounds", "deprecation", "empty"])
+
+    def test_reviewed_engineering_clock_preserves_other_custody_bounds(self):
+        # Independent declared policy for the expanded full regression, not an
+        # engine task allocation. The 1200 s window could not fit the measured
+        # 1042-control four-profile matrix (two runs killed at 1205 s).
+        self.assertEqual(quality.TASK_LIMIT, 1800)
+        self.assertEqual(quality.TASK_LIMIT - quality.CLEANUP_RESERVE, 1500)
+        self.assertEqual(quality.CLEANUP_RESERVE, 300)
+        self.assertEqual(quality.STREAM_LIMIT, 8 * 1024 * 1024)
+        source = ast.parse((ROOT / "tools/check-quality").read_text())
+        main = next(node for node in source.body
+                    if isinstance(node, ast.FunctionDef) and node.name == "main")
+        deadlines = {node.targets[0].id: ast.unparse(node.value)
+                     for node in main.body if isinstance(node, ast.Assign)
+                     and isinstance(node.targets[0], ast.Name)}
+        self.assertEqual(deadlines["work_deadline"], "origin + TASK_LIMIT - CLEANUP_RESERVE")
+        self.assertEqual(deadlines["task_deadline"], "origin + TASK_LIMIT")
+        calls = [node for node in ast.walk(main) if isinstance(node, ast.Call)
+                 and isinstance(node.func, ast.Name) and node.func.id == "run_bounded"]
+        self.assertEqual(len(calls), 1)
+        keywords = {node.arg: ast.unparse(node.value) for node in calls[0].keywords}
+        self.assertNotIn("command_timeout", keywords)
+        self.assertEqual(inspect.signature(quality.run_bounded).parameters["command_timeout"].default, 180)
+        self.assertEqual(keywords["stream_limit"], "STREAM_LIMIT")
+
     def test_expired_work_deadline_refuses_phase(self):
         with self.assertRaisesRegex(TimeoutError, "subject copy"):
             quality.require_work_time(time.monotonic() - 1, "subject copy")
@@ -465,6 +511,19 @@ Precompiling packages...
         changed["resolve"]["nodes"].append(copy.deepcopy(changed["resolve"]["nodes"][7]))
         with self.assertRaisesRegex(ValueError, "Duplicate resolved"):
             quality.validate_t05_features(changed)
+
+        # T06's actual metadata adds only rustix/event for bounded polling.
+        with self.assertRaisesRegex(ValueError, "resolved features differ: rustix"):
+            quality.validate_t05_features(metadata, t06=True)
+        current = copy.deepcopy(metadata)
+        node = next(n for n in current["resolve"]["nodes"] if n["id"] == "rustix")
+        node["features"].append("event")
+        quality.validate_t05_features(current, t06=True)
+        with self.assertRaisesRegex(ValueError, "resolved features differ: rustix"):
+            quality.validate_t05_features(current)
+        node["features"].append("net")
+        with self.assertRaisesRegex(ValueError, "resolved features differ: rustix"):
+            quality.validate_t05_features(current, t06=True)
 
     def test_roster_mutations_refuse_pending_declarations_and_preserve_store_profile(self):
         loader = SourceFileLoader("hee3_store_mutation_controls", str(ROOT / "tools/check-store-mutations"))
@@ -909,6 +968,871 @@ Precompiling packages...
                 offline.copy_member(OversizedRead(), refused, 3, deadline=1.0)
             self.assertEqual(refused.getvalue(), b"")
 
+
+
+class T06QualityInventoryControls(unittest.TestCase):
+    @staticmethod
+    def summary(count):
+        return f"test result: ok. {count} passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s\n"
+
+    @staticmethod
+    def strip_targets(text, names):
+        """Remove the named [[test]] registrations; the example inventory travels with t08_contract."""
+        for name in names:
+            text, count = re.subn(r'\[\[test\]\]\s*name = "' + re.escape(name) + r'"\s*path = "[^"]+"\s*', '', text)
+            assert count == 1, name
+        if "t08_contract" in names:
+            text, count = re.subn(r'\[\[example\]\]\s*name = "[^"]+"\s*path = "[^"]+"\s*', '', text)
+            assert count == len(quality.T08_CONTRACT_EXAMPLES)
+        return text
+
+    @staticmethod
+    def serve(expected, overrides):
+        """A run() double: each partition's stdout, the rest of the census on the main command."""
+        rows = {"t21_process": 16, "t07_inventory": 51, "t08_native": 21, "recovery": 58, "t08_contract": 23}
+        main = T06QualityInventoryControls.synthetic_output(expected)
+        for count in rows.values():
+            if count in expected["test_counts"]:
+                main = main.replace(T06QualityInventoryControls.summary(count), "", 1)
+        t06 = "".join(T06QualityInventoryControls.summary(n) for n in quality.T06_TARGET_COUNTS.values())
+        for count in quality.T06_TARGET_COUNTS.values():
+            main = main.replace(T06QualityInventoryControls.summary(count), "", 1)
+        def run(_label, argv):
+            if "--lib" in argv:
+                return {"stdout": overrides.get("main", main)}
+            if argv[-2] == "--test" and argv[-1] in rows:
+                return {"stdout": overrides.get(argv[-1], T06QualityInventoryControls.summary(rows[argv[-1]]))}
+            return {"stdout": overrides.get("t06", t06)}
+        return run
+
+    @staticmethod
+    def synthetic_output(expected):
+        text = "".join(T06QualityInventoryControls.summary(n) for n in expected["test_counts"])
+        text += "T02_TRANSPORT_FINITE_CONTROLS: 5 passed; TH-DEV only\n"
+        for prefix, n in expected["unit_test_counts"].items():
+            text += "".join(f"test {prefix}case_{i} ... ok\n" for i in range(n))
+        return text
+
+    def test_t06_fixed_census_and_subject_fixture_coverage(self):
+        expected = quality.rust_test_expectations(ROOT)
+        reviewed = [
+            160, 0, 0, 24, 27, 60, 34, 12, 29, 22, 3, 25, 45, 40,
+            29, 1, 26, 32, 3, 9, 64, 20, 39, 8, 39, 35, 9]
+        if quality.has_t13(ROOT):
+            reviewed[0] = 161
+            reviewed.extend([50, 18, 16])
+        if quality.has_t21(ROOT):
+            reviewed.extend([74, 16])
+        if quality.has_t07(ROOT):
+            reviewed.append(51)
+        if quality.has_t08(ROOT):
+            reviewed.append(21)
+        if quality.has_recovery(ROOT):
+            reviewed.append(58)
+        if quality.has_t08_contract(ROOT):
+            reviewed.append(23)
+        self.assertEqual(sorted(expected["test_counts"]), sorted(reviewed))
+        self.assertEqual(sum(expected["test_counts"]), 795 + (85 if quality.has_t13(ROOT) else 0) + (90 if quality.has_t21(ROOT) else 0) + (51 if quality.has_t07(ROOT) else 0) + (21 if quality.has_t08(ROOT) else 0) + (58 if quality.has_recovery(ROOT) else 0) + (23 if quality.has_t08_contract(ROOT) else 0))
+        self.assertEqual(sum(expected["unit_test_counts"].values()), 161 if quality.has_t13(ROOT) else 160)
+        paths = quality.quality_subject_paths(ROOT, time.monotonic() + 5, True)
+        for path in ["tests/fixtures/receipts/inventory-examples.json",
+                     "tests/fixtures/receipt-import/preparation.json",
+                     "tests/fixtures/receipt-import/nonpass.json",
+                     "evaluation/tasks/WL-U64-PARSE-001/v1/reference/src/lib.rs",
+                     "evaluation/tasks/WL-U64-PARSE-001/v1/oracle/cases.json",
+                     "evaluation/harnesses/u64-public-wrapper.rs"]:
+            self.assertIn(path, paths)
+
+    def test_repeated_count_groups_require_exact_multiplicity_and_no_extra_summary(self):
+        expected = {"test_counts": [0, 0, 3, 3, 9], "has_t02": False}
+        valid = "".join(self.summary(n) for n in [3, 0, 9, 3, 0])
+        quality.require_rust_test_summaries(valid, expected, "permuted benign")
+        faults = [valid.replace(self.summary(3), "", 1), valid + self.summary(3),
+                  valid + self.summary(77), valid.replace(self.summary(0), "", 1),
+                  valid.replace("0 ignored", "1 ignored", 1),
+                  valid.replace("0 filtered out", "1 filtered out", 1),
+                  valid + "test result: FAILED. malformed\n"]
+        for text in faults:
+            with self.subTest(text=text), self.assertRaisesRegex(ValueError, "required Rust"):
+                quality.require_rust_test_summaries(text, expected, "multiplicity fault")
+
+    def test_t06_new_library_namespaces_cannot_be_omitted_or_misattributed(self):
+        expected = quality.rust_test_expectations(ROOT)
+        text = "".join(self.summary(n) for n in expected["test_counts"])
+        text += "T02_TRANSPORT_FINITE_CONTROLS: 5 passed; TH-DEV only\n"
+        # Synthetic parser controls, not execution or independent real case credit.
+        for prefix, n in expected["unit_test_counts"].items():
+            text += "".join(f"test {prefix}case_{i} ... ok\n" for i in range(n))
+        quality.require_rust_test_summaries(text, expected, "synthetic census benign")
+        for bad in [text.replace("test app::capture::tests::case_0 ... ok\n", ""),
+                    text.replace("app::repair::tests::case_0", "wrong::case_0"),
+                    text + "test store::staging_tests::case_0 ... ok\n"]:
+            with self.assertRaisesRegex(ValueError, "required Rust"):
+                quality.require_rust_test_summaries(bad, expected, "namespace fault")
+
+    def test_t06_manifest_target_and_fixture_faults_refuse(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw) / "subject"
+            # TMPDIR can be ROOT in the real CLI. Copy only the fixed fixture
+            # inventory, never recurse into a temporary child of our own source.
+            declared = quality.tomllib.loads((ROOT / "Cargo.toml").read_text())
+            inputs = {"Cargo.toml", "src/store.rs", *quality.T03_IMPLEMENTATION_PATHS,
+                      *quality.T04_IMPLEMENTATION_PATHS, *quality.T05_IMPLEMENTATION_PATHS,
+                      *quality.T06_INPUTS, *(quality.T07_INPUTS if quality.has_t07(ROOT) else ()), *(quality.T13_INPUTS if quality.has_t13(ROOT) else ()),
+                      *(quality.T21_INPUTS if quality.has_t21(ROOT) else ()), *(quality.T08_INPUTS if quality.has_t08(ROOT) else ()),
+                      *(quality.RECOVERY_INPUTS if quality.has_recovery(ROOT) else ()), *(quality.T08_CONTRACT_INPUTS if quality.has_t08_contract(ROOT) else ()),
+                      *(target["path"] for target in declared["test"])}
+            for name in sorted(inputs):
+                destination = root / name
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(ROOT / name, destination)
+            manifest = root / "Cargo.toml"
+            original = manifest.read_text()
+            for fault in [original.replace('name = "t06_receipts"', 'name = "renamed_receipts"'),
+                          original.replace('path = "tests/t06_receipts.rs"', 'path = "tests/t06_store.rs"'),
+                          original.replace('name = "t06_receipts"', 'name = "t06_receipts"\nharness = false'),
+                          original + '\n[[test]]\nname="extra"\npath="tests/t01_task.rs"\n']:
+                manifest.write_text(fault)
+                with self.assertRaisesRegex(ValueError, "T06"):
+                    quality.rust_test_expectations(root)
+            manifest.write_text(original)
+            path = root / "tests/fixtures/receipt-import/nonpass.json"
+            before = path.read_bytes()
+            path.unlink()
+            with self.assertRaisesRegex(ValueError, "required T06 fixture"):
+                quality.rust_test_expectations(root)
+            path.write_bytes(before)
+            self.assertEqual(sum(quality.rust_test_expectations(root)["test_counts"]), sum(quality.rust_test_expectations(ROOT)["test_counts"]))
+
+
+    def combined_fixture(self, root):
+        declared = quality.tomllib.loads((ROOT / "Cargo.toml").read_text())
+        inputs = {"Cargo.toml", "src/store.rs", *quality.T03_IMPLEMENTATION_PATHS,
+                  *quality.T04_IMPLEMENTATION_PATHS, *quality.T05_IMPLEMENTATION_PATHS,
+                  *quality.T06_INPUTS, *(quality.T07_INPUTS if quality.has_t07(ROOT) else ()), *quality.T13_INPUTS, *quality.T21_INPUTS,
+                  *(quality.T08_INPUTS if quality.has_t08(ROOT) else ()),
+                  *(quality.RECOVERY_INPUTS if quality.has_recovery(ROOT) else ()), *(quality.T08_CONTRACT_INPUTS if quality.has_t08_contract(ROOT) else ()),
+                  *(target["path"] for target in declared["test"])}
+        for name in sorted(inputs):
+            destination = root / name
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(ROOT / name, destination)
+        return root / "Cargo.toml"
+
+    def synthetic_combined_output(self, expected):
+        text = "".join(self.summary(n) for n in expected["test_counts"])
+        text += "T02_TRANSPORT_FINITE_CONTROLS: 5 passed; TH-DEV only\n"
+        for prefix, n in expected["unit_test_counts"].items():
+            text += "".join(f"test {prefix}case_{i} ... ok\n" for i in range(n))
+        return text
+
+    def test_combined_fixed_970_census_preserves_both_sixteen_groups(self):
+        expected = quality.rust_test_expectations(ROOT)
+        self.assertEqual(sum(expected["test_counts"]), 970 + (51 if quality.has_t07(ROOT) else 0) + (21 if quality.has_t08(ROOT) else 0) + (58 if quality.has_recovery(ROOT) else 0) + (23 if quality.has_t08_contract(ROOT) else 0))
+        self.assertEqual(len(expected["test_counts"]), 32 + sum(1 for present in (quality.has_t07, quality.has_t08, quality.has_recovery, quality.has_t08_contract) if present(ROOT)))
+        self.assertEqual(expected["test_counts"].count(16), 2)
+        self.assertEqual(sum(expected["unit_test_counts"].values()), 161)
+        quality.require_rust_test_summaries(self.synthetic_combined_output(expected), expected, "synthetic complete")
+
+    def test_historical_t06_subject_keeps_795_and_160(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            manifest = self.combined_fixture(root)
+            text = manifest.read_text()
+            text = re.sub(r'\[\[test\]\]\s*name = "t(?:07|08|13|21)_[^"]+"\s*path = "[^"]+"\s*', '', text)
+            text = self.strip_targets(text, ["recovery"])
+            text = re.sub(r'\[\[example\]\]\s*name = "[^"]+"\s*path = "[^"]+"\s*', '', text)
+            manifest.write_text(text)
+            for name in {*quality.T07_INPUTS, *quality.T08_INPUTS, *quality.T13_INPUTS, *quality.T21_INPUTS,
+                         *quality.RECOVERY_INPUTS, *quality.T08_CONTRACT_OWN_SOURCES,
+                         *("tests/"+n+".rs" for n in (*quality.T13_TARGET_COUNTS, *quality.T21_TARGET_COUNTS))}:
+                path = root / name
+                if path.exists() and name not in quality.T03_IMPLEMENTATION_PATHS: path.unlink()
+            expected = quality.rust_test_expectations(root)
+            self.assertEqual(sum(expected["test_counts"]), 795)
+            self.assertEqual(sum(expected["unit_test_counts"].values()), 160)
+            self.assertEqual(quality.rust_test_partitions(root), [("tests", ["--all-targets"])])
+
+    def test_combined_missing_duplicate_and_substituted_targets_refuse(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw); manifest = self.combined_fixture(root); original = manifest.read_text()
+            for fault in [original.replace('name = "t13_service"','name = "foreign_service"'),
+                          original.replace('name = "t21_process"','name = "t21_analysis"'),
+                          original.replace('path = "tests/t21_process.rs"','path = "tests/t21_analysis.rs"'),
+                          original.replace('name = "t13_probe"','name = "t13_probe"\nharness = false')]:
+                manifest.write_text(fault)
+                with self.assertRaisesRegex(ValueError, "T06"): quality.rust_test_expectations(root)
+
+    def test_substantive_extension_source_cannot_hide_removed_targets(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw); manifest = self.combined_fixture(root)
+            manifest.write_text(re.sub(r'\[\[test\]\]\s*name = "t(?:13|21)_[^"]+"\s*path = "[^"]+"\s*', '', manifest.read_text()))
+            self.assertTrue(quality.has_t13(root)); self.assertTrue(quality.has_t21(root))
+            with self.assertRaisesRegex(ValueError,"T06"): quality.rust_test_expectations(root)
+
+    def test_t21_rust_only_requires_julia_j01_and_descendant_fixture(self):
+        paths=quality.quality_subject_paths(ROOT,time.monotonic()+5,True)
+        for name in quality.T21_INPUTS: self.assertIn(name,paths)
+        with tempfile.TemporaryDirectory() as raw:
+            root=Path(raw);self.combined_fixture(root)
+            for name in ["tests/fixtures/t21/J01.json","julia/src/Evaluate.jl","tests/fixtures/t21/descendant-control.py"]:
+                path=root/name;before=path.read_bytes();path.unlink()
+                with self.assertRaisesRegex(ValueError,"required extension input"):quality.rust_test_expectations(root)
+                path.write_bytes(before)
+
+    def test_missing_one_sixteen_summary_refuses(self):
+        expected=quality.rust_test_expectations(ROOT);text=self.synthetic_combined_output(expected)
+        with self.assertRaisesRegex(ValueError,"required Rust"):
+            quality.require_rust_test_summaries(text.replace(self.summary(16),'',1),expected,"missing repeated16")
+
+    def test_missing_service_unit_namespace_refuses(self):
+        expected=quality.rust_test_expectations(ROOT);text=self.synthetic_combined_output(expected)
+        with self.assertRaisesRegex(ValueError,"required Rust"):
+            quality.require_rust_test_summaries(text.replace('service::probe::tests::case_0','foreign::case_0'),expected,"service unit")
+
+    def test_t21_float_roundtrip_exact_feature_tuple(self):
+        rows=dict(quality.T05_FEATURES);rows['rustix']=("1.1.4",["alloc","default","event","fs","process","rand","std"])
+        rows['serde_json']=("1.0.151",["default","float_roundtrip","std"])
+        metadata={"packages":[{"id":n,"name":n,"version":v}for n,(v,_)in rows.items()],"resolve":{"nodes":[{"id":n,"features":f}for n,(_,f)in rows.items()]}}
+        quality.validate_t05_features(metadata,t06=True,t21=True)
+        for features in [["default","std"],["default","float_roundtrip","std","arbitrary_precision"]]:
+            changed=copy.deepcopy(metadata);next(x for x in changed['resolve']['nodes']if x['id']=='serde_json')['features']=features
+            with self.assertRaisesRegex(ValueError,"serde_json"):quality.validate_t05_features(changed,t06=True,t21=True)
+
+    def test_selected_julia_cache_missing_added_changed_refuses(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root=Path(raw)
+            for relative in quality.T21_PACKAGE_PATHS:
+                path=root/relative/'src.jl';path.parent.mkdir(parents=True);path.write_text('synthetic package fixture')
+            expected=quality.t21_package_inventory(root,time.monotonic()+5)
+            quality.verify_t21_package_inventory(root,expected,time.monotonic()+5)
+            first=root/quality.T21_PACKAGE_PATHS[0]/'src.jl';first.write_text('changed')
+            with self.assertRaisesRegex(ValueError,"cache changed"):quality.verify_t21_package_inventory(root,expected,time.monotonic()+5)
+            first.write_text('synthetic package fixture');extra=first.with_name('extra.jl');extra.write_text('extra')
+            with self.assertRaisesRegex(ValueError,"cache changed"):quality.verify_t21_package_inventory(root,expected,time.monotonic()+5)
+            extra.unlink();first.unlink()
+            with self.assertRaisesRegex(ValueError,"Missing selected"):quality.t21_package_inventory(root,time.monotonic()+5)
+
+    def test_t21_numerical_environment_has_separate_owned_report(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root=Path(raw); captured=root/'julia-j01.stdout';captured.write_bytes(b'original stdout')
+            original={"KEEP":"same","T21_JULIA_REPORT":str(captured)}
+            selected=quality.t21_analysis_environment(original,root)
+            self.assertEqual(selected["KEEP"],"same")
+            self.assertEqual(original["T21_JULIA_REPORT"],str(captured))
+            self.assertNotEqual(selected["T21_JULIA_REPORT"],str(captured))
+            self.assertEqual(selected["T21_JULIA_REPORT"],str(root/'julia-t21-analysis-report.json'))
+            self.assertEqual(captured.read_bytes(),b'original stdout')
+            destination=Path(selected["T21_JULIA_REPORT"]);destination.write_bytes(b'already owned')
+            with self.assertRaisesRegex(ValueError,"already exists"):
+                quality.t21_analysis_environment(original,root)
+            destination.unlink();destination.symlink_to(root/'missing')
+            with self.assertRaisesRegex(ValueError,"already exists"):
+                quality.t21_analysis_environment(original,root)
+
+    def test_t21_numerical_report_requires_exact_j01_and_request(self):
+        with tempfile.TemporaryDirectory() as raw:
+            path=Path(raw)/'report.json';request='a'*64
+            expected=quality.json.dumps({"request_sha256":"sha256:"+request,"synthetic":"benign"}).encode()
+            with self.assertRaisesRegex(ValueError,"Missing regular"):
+                quality.require_t21_analysis_report(path,expected,request)
+            path.write_bytes(expected)
+            result=quality.require_t21_analysis_report(path,expected,request)
+            self.assertEqual(result["sha256"],hashlib.sha256(expected).hexdigest())
+            self.assertEqual(result["bytes"],len(expected))
+            with self.assertRaisesRegex(ValueError,"request binding"):
+                quality.require_t21_analysis_report(path,expected,'b'*64)
+            for changed in [b'',expected+b' ',b'x'*65537]:
+                path.write_bytes(changed)
+                with self.assertRaisesRegex(ValueError,"differs.*bound"):
+                    quality.require_t21_analysis_report(path,expected,request)
+            path.unlink();path.symlink_to(Path(raw)/'missing')
+            with self.assertRaisesRegex(ValueError,"Missing regular"):
+                quality.require_t21_analysis_report(path,expected,request)
+
+    def test_julia_numerical_summary_requires_all_three_exact_groups(self):
+        benign = ("Test Summary: | Pass Total Time\nT21 descriptive evaluator | 82 82 1.0s\n"
+                  "Test Summary: | Pass Total Time\nT21 numerical boundary controls | 10 10 0.1s\n"
+                  "Test Summary: | Pass Total Time\nT21 deferred string decoding | 7 7 0.0s\n")
+        quality.require_t21_julia_summaries(benign, "")
+        for fault in ["", benign.replace("82 82", "0 0"), benign.replace("82 82", "81 82"),
+                      benign.replace("Pass Total", "Pass Broken Total", 1),
+                      benign.replace("T21 deferred string decoding | 7 7 0.0s\n", ""),
+                      benign + "Test Summary: | Pass Total\nT21 extra | 1 1\n",
+                      benign.replace("T21 deferred string decoding", "T21 numerical boundary controls"),
+                      benign.replace("10 10 0.1s", "10 10 ignored")]:
+            with self.assertRaisesRegex(ValueError, "T21 Julia evaluator"):
+                quality.require_t21_julia_summaries(fault, "")
+        with self.assertRaisesRegex(ValueError, "diagnostics"):
+            quality.require_t21_julia_summaries(benign, "Warning: synthetic")
+
+    def test_each_profile_retains_distinct_process_evidence_roots(self):
+        environment={"T13_PROCESS_EVIDENCE":"unused13", "T21_PROCESS_EVIDENCE":"unused21", "KEEP":"same"}
+        first=quality.retained_command_environment(environment,Path('/retained'),'default-debug-tests')
+        second=quality.retained_command_environment(environment,Path('/retained'),'no-default-release-tests')
+        for variable in ['T13_PROCESS_EVIDENCE','T21_PROCESS_EVIDENCE']:
+            self.assertNotEqual(first[variable],second[variable])
+            self.assertTrue(first[variable].startswith('/retained/'))
+            self.assertEqual(first[variable].split('/')[-1],'default-debug-tests')
+        self.assertEqual(environment['T13_PROCESS_EVIDENCE'],'unused13')
+        self.assertEqual(first['KEEP'],'same')
+        with self.assertRaisesRegex(ValueError,'command label'):
+            quality.retained_command_environment(environment,Path('/retained'),'../escape')
+
+    def test_t21_partition_selects_each_declared_target_once(self):
+        partitions = quality.rust_test_partitions(ROOT)
+        self.assertEqual([row[0] for row in partitions], ["tests-main", "tests-t06", "tests-t21-process"] + (["tests-t07-inventory"] if quality.has_t07(ROOT) else []) + (["tests-t08-native"] if quality.has_t08(ROOT) else []) + (["tests-recovery"] if quality.has_recovery(ROOT) else []) + (["tests-t08-contract"] if quality.has_t08_contract(ROOT) else []))
+        self.assertEqual(partitions[0][1][:2], ["--lib", "--bins"])
+        self.assertEqual(partitions[2][1], ["--test", "t21_process"])
+        main = partitions[0][1][2:]
+        self.assertEqual(main[::2], ["--test"] * 11)
+        expected = {"t01_contracts", "t01_task", "t02_pi", "t02_transport", "t03_contract",
+                    "t05_roster", "t05_codec", "t13_service", "t13_probe", "t13_local_probe", "t21_analysis"}
+        self.assertEqual(set(main[1::2]), expected)
+        self.assertEqual(len(main[1::2]), len(set(main[1::2])))
+        t06 = partitions[1][1]
+        self.assertEqual(t06[::2], ["--test"] * 18)
+        self.assertEqual(set(t06[1::2]), {"t06_receipts", "t06_store", "t06_graph",
+                    "t06_driver", "t06_consistency", "t06_workspace", "t06_terminal",
+                    "t06_evidence", "t06_collector", "t06_availability", "t06_decision",
+                    "t06_staging", "t06_subjects", "t06_process_timing", "t06_workspace_export",
+                    "t06_bounded_preflight", "t06_durable_control", "t06_receipt_import"})
+        self.assertEqual(len(t06[1::2]), len(set(t06[1::2])))
+
+    def test_t21_partition_refuses_unaccounted_or_conditional_targets(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            manifest = self.combined_fixture(root)
+            original = manifest.read_text()
+            faults = [original.replace('autotests = false', 'autotests = true'),
+                      original.replace('autobins = false', 'autobins = true'),
+                      original.replace('autotests = false', ''),
+                      original.replace('[workspace]', '[workspace]\nmembers = ["other"]'),
+                      original.replace('[lib]', '[lib]\nharness = false'),
+                      original + '\n[[example]]\nname="extra"\npath="src/main.rs"\n',
+                      original + '\n[[bench]]\nname="extra"\npath="src/main.rs"\n',
+                      original.replace('name = "t21_process"', 'required-features = ["hidden"]\nname = "t21_process"'),
+                      original.replace('name = "t21_process"', 'test = false\nname = "t21_process"'),
+                      original.replace('name = "t21_process"', 'name = "unlisted_process"')]
+            for changed in faults:
+                self.assertNotEqual(original, changed)
+                manifest.write_text(changed)
+                with self.subTest(change=changed[-120:]), self.assertRaises(ValueError):
+                    quality.rust_test_partitions(root)
+            manifest.write_text(original)
+            for directory in ("examples", "benches"):
+                extra = root / directory
+                extra.mkdir()
+                with self.assertRaisesRegex(ValueError, "Unsupported Cargo input"):
+                    quality.rust_test_partitions(root)
+                extra.rmdir()
+            self.assertEqual(quality.rust_test_partitions(root), quality.rust_test_partitions(ROOT))
+
+    def test_t21_partition_runs_both_with_unique_labels_and_full_oracle(self):
+        expected = quality.rust_test_expectations(ROOT)
+        combined = self.synthetic_combined_output(expected)
+        process = self.summary(16)
+        main = combined.replace(process, "", 1)
+        inventory = self.summary(51) if quality.has_t07(ROOT) else ""
+        main = main.replace(inventory, "", 1) if inventory else main
+        calls = []
+        serve = self.serve(expected, {})
+        def run(label, argv):
+            calls.append((label, argv))
+            return serve(label, argv)
+        common = ["--workspace", "--locked", "--offline", "--release", "--no-default-features"]
+        quality.run_rust_test_partitions(ROOT, run, "/pinned/cargo", common, "no-default-release", expected)
+        self.assertEqual([row[0] for row in calls],
+                         ["no-default-release-tests-main", "no-default-release-tests-t06", "no-default-release-tests-t21-process"] + (["no-default-release-tests-t07-inventory"] if quality.has_t07(ROOT) else []) + (["no-default-release-tests-t08-native"] if quality.has_t08(ROOT) else []) + (["no-default-release-tests-recovery"] if quality.has_recovery(ROOT) else []) + (["no-default-release-tests-t08-contract"] if quality.has_t08_contract(ROOT) else []))
+        for _, argv in calls:
+            self.assertEqual(argv[:7], ["/pinned/cargo", "test", *common])
+            self.assertNotIn("--all-targets", argv)
+        for variable in ("T13_PROCESS_EVIDENCE", "T21_PROCESS_EVIDENCE"):
+            environment = {variable: "unused"}
+            roots = [quality.retained_command_environment(environment, Path('/retained'), label)[variable]
+                     for label, _ in calls]
+            self.assertEqual(len(set(roots)), 3 + sum(1 for present in (quality.has_t07, quality.has_t08, quality.has_recovery, quality.has_t08_contract) if present(ROOT)))
+
+    def test_t21_partition_missing_duplicate_or_filtered_result_refuses(self):
+        expected = quality.rust_test_expectations(ROOT)
+        process = self.summary(16)
+        main = self.synthetic_combined_output(expected).replace(process, "", 1)
+        for result in ("", process + process, process.replace("16 passed", "15 passed")):
+            with self.subTest(result=result), self.assertRaisesRegex(ValueError, "Rust test count"):
+                quality.run_rust_test_partitions(ROOT, self.serve(expected, {"t21_process": result}), "cargo", [], "fixture", expected)
+
+    def test_t07_fixed_51_inventory_census_and_owned_inputs(self):
+        expected = quality.rust_test_expectations(ROOT)
+        self.assertEqual(sum(expected["test_counts"]), 1123)
+        self.assertEqual(len(expected["test_counts"]), 36)
+        self.assertEqual(expected["test_counts"].count(51), 1)
+        self.assertEqual(expected["test_counts"].count(43), 0)
+        self.assertEqual(sum(expected["unit_test_counts"].values()), 161)
+        paths = quality.quality_subject_paths(ROOT, time.monotonic() + 5, True)
+        for name in ["src/store/recovery.rs", "tests/t07_inventory.rs"]:
+            self.assertIn(name, paths)
+        self.assertFalse(any(name.startswith("development/t06/") for name in paths))
+
+    def test_t07_absent_historical_combined_970_is_preserved(self):
+        # The T13/T21-only subject has neither the inventory nor the native target.
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw); manifest = self.combined_fixture(root)
+            manifest.write_text(self.strip_targets(manifest.read_text(), ["t07_inventory", "t08_native", "recovery", "t08_contract"]))
+            for name in ["src/store/recovery.rs", "tests/t07_inventory.rs", *quality.T08_INPUTS, *quality.RECOVERY_INPUTS, *quality.T08_CONTRACT_OWN_SOURCES]:
+                (root / name).unlink()
+            self.assertFalse(quality.has_t07(root))
+            self.assertFalse(quality.has_t08(root))
+            self.assertFalse(quality.has_recovery(root))
+            self.assertFalse(quality.has_t08_contract(root))
+            expected = quality.rust_test_expectations(root)
+            self.assertEqual(sum(expected["test_counts"]), 970)
+            self.assertEqual(len(expected["test_counts"]), 32)
+            self.assertEqual(sum(expected["unit_test_counts"].values()), 161)
+            quality.require_rust_test_summaries(self.synthetic_combined_output(expected), expected, "historical970")
+            self.assertEqual([n for n,_ in quality.rust_test_partitions(root)], ["tests-main", "tests-t06", "tests-t21-process"])
+
+    def test_t07_missing_or_substituted_owned_inputs_refuse(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw); self.combined_fixture(root)
+            for name in ["src/store/recovery.rs", "tests/t07_inventory.rs"]:
+                path = root/name; before = path.read_bytes(); path.unlink()
+                with self.assertRaisesRegex(ValueError, "required extension input"):
+                    quality.rust_test_expectations(root)
+                path.symlink_to(ROOT/name)
+                with self.assertRaisesRegex(ValueError, "required extension input"):
+                    quality.rust_test_expectations(root)
+                path.unlink(); path.write_bytes(before)
+            self.assertEqual(sum(quality.rust_test_expectations(root)["test_counts"]), 1123)
+
+    def test_t07_omitted_changed_or_conditional_target_refuses(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw); manifest = self.combined_fixture(root); original = manifest.read_text()
+            faults = [re.sub(r'\[\[test\]\]\s*name = "t07_inventory"\s*path = "tests/t07_inventory.rs"\s*', '', original),
+                      original.replace('name = "t07_inventory"','name = "other_inventory"'),
+                      original.replace('path = "tests/t07_inventory.rs"','path = "tests/t06_store.rs"'),
+                      original.replace('name = "t07_inventory"','name = "t07_inventory"\nharness = false'),
+                      original.replace('name = "t07_inventory"','name = "t07_inventory"\nrequired-features = ["hidden"]'),
+                      original.replace('name = "t07_inventory"','name = "t07_inventory"\ntest = false'),
+                      original + '\n[[test]]\nname="t07_inventory"\npath="tests/t07_inventory.rs"\n']
+            for fault in faults:
+                self.assertNotEqual(original, fault); manifest.write_text(fault)
+                self.assertTrue(quality.has_t07(root))
+                with self.subTest(fault=fault[-100:]), self.assertRaises(ValueError):
+                    quality.rust_test_partitions(root)
+            manifest.write_text(original)
+            self.assertEqual(quality.rust_test_partitions(root), quality.rust_test_partitions(ROOT))
+
+    def test_t07_missing_changed_duplicate_or_filtered_census_refuses(self):
+        expected = quality.rust_test_expectations(ROOT)
+        valid = self.synthetic_combined_output(expected)
+        row = self.summary(51)
+        for fault in [valid.replace(row, "", 1), valid.replace(row,self.summary(50),1),
+                      valid+row, valid.replace(row,row.replace("0 filtered out","1 filtered out"),1),
+                      valid.replace(row,row.replace("0 ignored","1 ignored"),1)]:
+            with self.subTest(fault=fault[-100:]), self.assertRaisesRegex(ValueError, "required Rust"):
+                quality.require_rust_test_summaries(fault, expected, "T07 census fault")
+        quality.require_rust_test_summaries(valid, expected, "T07 census benign")
+
+    def test_t07_partition_selects_inventory_once_without_frontend_tests(self):
+        rows = quality.rust_test_partitions(ROOT)
+        self.assertEqual([name for name,_ in rows], ["tests-main", "tests-t06", "tests-t21-process", "tests-t07-inventory", "tests-t08-native", "tests-recovery", "tests-t08-contract"])
+        self.assertEqual(rows[3][1], ["--test", "t07_inventory"])
+        targets = [args[i+1] for _,args in rows for i,value in enumerate(args) if value == "--test"]
+        self.assertEqual(targets.count("t07_inventory"), 1)
+        self.assertEqual(len(targets), 34)
+        self.assertEqual(len(set(targets)), 34)
+        for name in ["recovery_cancel", "recovery_inspect", "recovery_crash", "recovery_pi_queue", "frontend_controls"]:
+            self.assertNotIn(name, targets)
+
+    def test_t07_partition_omitted_or_repeated_return_refuses(self):
+        expected = quality.rust_test_expectations(ROOT)
+        inventory = self.summary(51)
+        for observed in ["", inventory+inventory, inventory.replace("51 passed","50 passed")]:
+            with self.subTest(observed=observed), self.assertRaisesRegex(ValueError, "required Rust test count (?:50|51)"):
+                quality.run_rust_test_partitions(ROOT, self.serve(expected, {"t07_inventory": observed}), "cargo", [], "T07-return-fault", expected)
+        quality.run_rust_test_partitions(ROOT, self.serve(expected, {}), "cargo", [], "T07-return-benign", expected)
+
+    def test_t08_native_fixed_21_census_and_owned_inputs(self):
+        expected = quality.rust_test_expectations(ROOT)
+        self.assertEqual(sum(expected["test_counts"]), 1123)
+        self.assertEqual(len(expected["test_counts"]), 36)
+        self.assertEqual(expected["test_counts"].count(21), 1)
+        self.assertEqual(expected["test_counts"].count(51), 1)
+        self.assertEqual(sum(expected["unit_test_counts"].values()), 161)
+        self.assertNotIn("worker::native::", "".join(expected["unit_test_counts"]))
+        self.assertEqual(quality.T08_TARGET_COUNTS, {"t08_native": 21})
+        self.assertEqual(quality.T08_INPUTS, ("src/worker/native.rs", "tests/t08_native.rs", "tests/fixtures/native/client.py"))
+        paths = quality.quality_subject_paths(ROOT, time.monotonic() + 5, True)
+        for name in quality.T08_INPUTS:
+            self.assertIn(name, paths)
+        self.assertFalse(any(name.startswith("development/t06/") for name in paths))
+        self.assertFalse(any(name.startswith("tests/fixtures/native/control-v1/") for name in paths))
+
+    def test_t08_native_battery_cannot_leave_while_the_adapter_stays(self):
+        # The adapter source keeps the native battery required; the contract battery reads
+        # the same adapter, so a subject with the contract battery and no native battery
+        # is not one this recipe accepts. Removing the registration and the battery's own
+        # files is refused by name; removing the adapter too breaks the contract inputs.
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw); manifest = self.combined_fixture(root)
+            manifest.write_text(self.strip_targets(manifest.read_text(), ["t08_native"]))
+            for name in ("tests/t08_native.rs", "tests/fixtures/native/client.py"):
+                (root / name).unlink()
+            self.assertTrue(quality.has_t08(root))
+            self.assertTrue(quality.has_t08_contract(root))
+            with self.assertRaisesRegex(ValueError, "required extension input: tests/t08_native.rs"):
+                quality.rust_test_expectations(root)
+            (root / "tests/t08_native.rs").write_text("// stub\n")
+            (root / "tests/fixtures/native/client.py").write_text("#!/usr/bin/python3\n")
+            with self.assertRaisesRegex(ValueError, r"missing=\['t08_native'\] extra=\[\] duplicate=\[\]"):
+                quality.rust_test_expectations(root)
+            (root / "src/worker/native.rs").unlink()
+            (root / "tests/t08_native.rs").unlink()
+            (root / "tests/fixtures/native/client.py").unlink()
+            self.assertFalse(quality.has_t08(root))
+            with self.assertRaisesRegex(ValueError, "required extension input: src/worker/native.rs"):
+                quality.rust_test_expectations(root)
+
+    def test_t08_missing_or_substituted_owned_inputs_refuse(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw); self.combined_fixture(root)
+            for name in quality.T08_INPUTS:
+                path = root / name; before = path.read_bytes(); path.unlink()
+                self.assertTrue(quality.has_t08(root))
+                with self.assertRaisesRegex(ValueError, "required extension input: " + re.escape(name)):
+                    quality.rust_test_expectations(root)
+                path.symlink_to(ROOT / name)
+                with self.assertRaisesRegex(ValueError, "required extension input: " + re.escape(name)):
+                    quality.rust_test_expectations(root)
+                path.unlink(); path.write_bytes(before)
+            self.assertEqual(sum(quality.rust_test_expectations(root)["test_counts"]), 1123)
+
+    def test_t08_omitted_changed_or_conditional_target_refuses_by_name(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw); manifest = self.combined_fixture(root); original = manifest.read_text()
+            named = [(re.sub(r'\[\[test\]\]\s*name = "t08_native"\s*path = "tests/t08_native.rs"\s*', '', original),
+                      r"missing=\['t08_native'\] extra=\[\] duplicate=\[\]"),
+                     (original.replace('name = "t08_native"', 'name = "other_native"'),
+                      r"missing=\['t08_native'\] extra=\['other_native'\] duplicate=\[\]"),
+                     (original + '\n[[test]]\nname="t08_native"\npath="tests/t08_native.rs"\n',
+                      r"missing=\[\] extra=\[\] duplicate=\['t08_native'\]")]
+            for fault, diagnostic in named:
+                self.assertNotEqual(original, fault); manifest.write_text(fault)
+                self.assertTrue(quality.has_t08(root))
+                with self.subTest(diagnostic=diagnostic), self.assertRaisesRegex(ValueError, diagnostic):
+                    quality.rust_test_expectations(root)
+            faults = [original.replace('path = "tests/t08_native.rs"', 'path = "tests/t06_store.rs"'),
+                      original.replace('name = "t08_native"', 'name = "t08_native"\nharness = false'),
+                      original.replace('name = "t08_native"', 'name = "t08_native"\nrequired-features = ["hidden"]'),
+                      original.replace('name = "t08_native"', 'name = "t08_native"\ntest = false')]
+            for fault, _ in named:
+                faults.append(fault)
+            for fault in faults:
+                self.assertNotEqual(original, fault); manifest.write_text(fault)
+                with self.subTest(fault=fault[-100:]), self.assertRaises(ValueError):
+                    quality.rust_test_partitions(root)
+            manifest.write_text(original)
+            self.assertEqual(quality.rust_test_partitions(root), quality.rust_test_partitions(ROOT))
+
+    def test_t08_missing_changed_duplicate_or_filtered_census_refuses(self):
+        expected = quality.rust_test_expectations(ROOT)
+        valid = self.synthetic_combined_output(expected)
+        row = self.summary(21)
+        self.assertEqual(valid.count(row), 1)
+        # A 20-row already exists (t06_staging); rewriting 21 to 20 is refused as
+        # the first wrong multiplicity in census order, which is that group.
+        for fault in [valid.replace(row, "", 1), valid.replace(row, self.summary(20), 1), valid + row,
+                      valid.replace(row, row.replace("0 filtered out", "1 filtered out"), 1),
+                      valid.replace(row, row.replace("0 ignored", "1 ignored"), 1),
+                      valid.replace(row, row.replace("0 failed", "1 failed"), 1)]:
+            with self.subTest(fault=fault[-100:]), self.assertRaisesRegex(ValueError, "required Rust test count (?:20|21)"):
+                quality.require_rust_test_summaries(fault, expected, "T08 census fault")
+        quality.require_rust_test_summaries(valid, expected, "T08 census benign")
+
+    def test_t08_partition_selects_native_once_after_inventory(self):
+        rows = quality.rust_test_partitions(ROOT)
+        self.assertEqual([name for name, _ in rows], ["tests-main", "tests-t06", "tests-t21-process", "tests-t07-inventory", "tests-t08-native", "tests-recovery", "tests-t08-contract"])
+        self.assertEqual(rows[4][1], ["--test", "t08_native"])
+        self.assertNotIn("t08_native", rows[0][1])
+        self.assertNotIn("t08_native", rows[1][1])
+        targets = [args[i + 1] for _, args in rows for i, value in enumerate(args) if value == "--test"]
+        self.assertEqual(targets.count("t08_native"), 1)
+        self.assertEqual(len(targets), 34)
+        self.assertEqual(len(set(targets)), 34)
+        # The partition world is the manifest's declared test inventory, every target once.
+        declared = quality.tomllib.loads((ROOT / "Cargo.toml").read_text())
+        self.assertEqual(sorted(targets), sorted(target["name"] for target in declared["test"]))
+
+    def test_t08_partition_omitted_or_repeated_return_refuses(self):
+        expected = quality.rust_test_expectations(ROOT)
+        native = self.summary(21)
+        for observed in ["", native + native, native.replace("21 passed", "20 passed")]:
+            with self.subTest(observed=observed), self.assertRaisesRegex(ValueError, "required Rust test count (?:20|21)"):
+                quality.run_rust_test_partitions(ROOT, self.serve(expected, {"t08_native": observed}), "cargo", [], "T08-return-fault", expected)
+        quality.run_rust_test_partitions(ROOT, self.serve(expected, {}), "cargo", [], "T08-return-benign", expected)
+
+    def test_native_client_interpreter_pin_reads_fixture_shebang(self):
+        pin = quality.native_client_interpreter(ROOT)
+        first = (ROOT / quality.NATIVE_CLIENT_FIXTURE).read_bytes().split(b"\n", 1)[0]
+        self.assertEqual(first, b"#!" + pin["path"].encode())
+        self.assertTrue(Path(pin["path"]).is_absolute())
+        self.assertEqual(pin["sha256"], hashlib.sha256(Path(pin["path"]).read_bytes()).hexdigest())
+        self.assertEqual(pin["resolved"], str(Path(pin["path"]).resolve(strict=True)))
+        self.assertEqual(sorted(pin), ["path", "resolved", "sha256"])
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw).resolve()
+            fixture = root / quality.NATIVE_CLIENT_FIXTURE
+            fixture.parent.mkdir(parents=True)
+            interpreter = root / "interpreter"
+            interpreter.write_bytes(b"#!/bin/sh\n")
+            line = b"#!" + str(interpreter).encode()
+            fixture.write_bytes(line + b"\nprint()\n")
+            self.assertEqual(quality.native_client_interpreter(root),
+                             {"path": str(interpreter), "resolved": str(interpreter),
+                              "sha256": hashlib.sha256(b"#!/bin/sh\n").hexdigest()})
+            for content, diagnostic in ((b"print()\n", "Unsupported"), (b"#!relative/python\n", "Unsupported"),
+                                        (b"#!/usr/bin/env python3\n", "Unsupported"), (line, "Unsupported"),
+                                        (b"#!" + str(root / "missing").encode() + b"\n", "Missing"),
+                                        (b"#!/" + b"x" * 4096 + b"\n", "Unsupported")):
+                fixture.write_bytes(content)
+                with self.subTest(content=content[:40]), self.assertRaisesRegex(ValueError, diagnostic + " native client interpreter"):
+                    quality.native_client_interpreter(root)
+            alias = root / "alias"
+            alias.symlink_to(interpreter)
+            fixture.write_bytes(b"#!" + str(alias).encode() + b"\n")
+            self.assertEqual(quality.native_client_interpreter(root)["resolved"], str(interpreter))
+            (root / "directory").mkdir()
+            fixture.write_bytes(b"#!" + str(root / "directory").encode() + b"\n")
+            with self.assertRaisesRegex(ValueError, "Missing native client interpreter"):
+                quality.native_client_interpreter(root)
+
+    def test_t08_interpreter_and_python_pins_are_recorded_and_rechecked(self):
+        source = ast.parse((ROOT / "tools/check-quality").read_text())
+        main = next(node for node in source.body if isinstance(node, ast.FunctionDef) and node.name == "main")
+        text = ast.unparse(main)
+        self.assertIn("report['executables']['native-client-interpreter'] = native_client_interpreter(ROOT)", text)
+        self.assertIn("if has_t08(ROOT):\n            report['executables']['native-client-interpreter']", text)
+        self.assertIn("'resolved': str(Path(sys.executable).resolve(strict=True))", text)
+        self.assertIn("Pinned interpreter changed during quality checks", text)
+        self.assertEqual(text.count("for name in ('python', 'native-client-interpreter', 'native-daemon-stand-in', 'contract-client-interpreter', 'contract-daemon-stand-in'):"), 1)
+        # The recheck reads the pin's own path and digest, after the Rust commands.
+        recheck = text.index("Pinned interpreter changed")
+        self.assertGreater(recheck, text.index("run_rust_test_partitions(ROOT, run, cargo, common, label, test_expectations)"))
+        self.assertIn("required_text='Ran 93 tests' if has_t08_contract(ROOT) or has_recovery(ROOT) else", text)
+
+    def test_t06_partition_holds_every_t06_target_once_and_nothing_else(self):
+        rows = quality.rust_test_partitions(ROOT)
+        self.assertEqual(len(rows), 7)
+        self.assertEqual(rows[1][0], "tests-t06")
+        t06 = rows[1][1]
+        self.assertEqual(t06[::2], ["--test"] * (len(t06) // 2))
+        declared = quality.tomllib.loads((ROOT / "Cargo.toml").read_text())
+        expected = sorted(target["name"] for target in declared["test"] if target["name"].startswith("t06_"))
+        self.assertEqual(len(expected), 18)
+        self.assertEqual(sorted(t06[1::2]), expected)
+        self.assertFalse(any(name.startswith("t06_") for name in rows[0][1][1::2]))
+        for _, arguments in rows[2:]:
+            self.assertFalse(any(name.startswith("t06_") for name in arguments[1::2]))
+        # The split oracle: T06 summaries served by the T06 command, nothing served twice.
+        expected_counts = quality.rust_test_expectations(ROOT)
+        t06_rows = "".join(self.summary(n) for n in quality.T06_TARGET_COUNTS.values())
+        quality.run_rust_test_partitions(ROOT, self.serve(expected_counts, {}), "cargo", [], "T06-split-benign", expected_counts)
+        for fault in ("", t06_rows + self.summary(64), t06_rows.replace(self.summary(64), "", 1)):
+            with self.subTest(fault=fault[-80:]), self.assertRaisesRegex(ValueError, "required Rust"):
+                quality.run_rust_test_partitions(ROOT, self.serve(expected_counts, {"t06": fault}), "cargo", [], "T06-split-fault", expected_counts)
+
+    def test_recovery_and_contract_fixed_1123_census_and_owned_inputs(self):
+        expected = quality.rust_test_expectations(ROOT)
+        self.assertEqual(sum(expected["test_counts"]), 1123)
+        self.assertEqual(len(expected["test_counts"]), 36)
+        self.assertEqual(expected["test_counts"].count(58), 1)
+        self.assertEqual(expected["test_counts"].count(23), 1)
+        self.assertEqual(sum(expected["unit_test_counts"].values()), 161)
+        self.assertNotIn("recovery::", "".join(expected["unit_test_counts"]))
+        self.assertEqual(quality.RECOVERY_TARGET_COUNTS, {"recovery": 58})
+        self.assertEqual(quality.T08_CONTRACT_TARGET_COUNTS, {"t08_contract": 23})
+        paths = quality.quality_subject_paths(ROOT, time.monotonic() + 5, True)
+        for name in (*quality.RECOVERY_INPUTS, *quality.T08_CONTRACT_INPUTS):
+            self.assertIn(name, paths)
+        for row in quality.T08_CONTRACT_EXAMPLES:
+            self.assertIn(row["path"], quality.T08_CONTRACT_INPUTS)
+        self.assertFalse(any(name.startswith("tests/fixtures/native/control-v1/") for name in paths))
+        self.assertNotIn("tests/fixtures/native/README.stub.md", paths)
+        self.assertFalse(any(name.startswith("development/t06/") for name in paths))
+        # The inputs are what the sources read: every include of the battery is pinned.
+        included = re.findall(r'include_(?:str|bytes)!\("([^"]+)"\)', (ROOT / "tests/t08_contract.rs").read_text())
+        self.assertTrue(included)
+        for relative in included:
+            self.assertIn("tests/" + relative, quality.T08_CONTRACT_INPUTS)
+        self.assertEqual(sorted(set(re.findall(r"habitat_engine::(\w+)", (ROOT / "tests/recovery.rs").read_text()))), ["recovery"])
+
+    def test_recovery_absent_keeps_1065_and_35_groups(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw); manifest = self.combined_fixture(root)
+            manifest.write_text(self.strip_targets(manifest.read_text(), ["recovery"]))
+            for name in quality.RECOVERY_INPUTS:
+                (root / name).unlink()
+            self.assertFalse(quality.has_recovery(root))
+            self.assertTrue(quality.has_t08_contract(root))
+            expected = quality.rust_test_expectations(root)
+            self.assertEqual(sum(expected["test_counts"]), 1065)
+            self.assertEqual(len(expected["test_counts"]), 35)
+            self.assertEqual(expected["test_counts"].count(58), 0)
+            quality.require_rust_test_summaries(self.synthetic_combined_output(expected), expected, "recovery-absent")
+            self.assertEqual([n for n, _ in quality.rust_test_partitions(root)], ["tests-main", "tests-t06", "tests-t21-process", "tests-t07-inventory", "tests-t08-native", "tests-t08-contract"])
+            self.assertNotIn("src/recovery.rs", quality.quality_subject_paths(root, time.monotonic() + 5, True))
+
+    def test_contract_absent_keeps_1100_and_35_groups_and_no_examples(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw); manifest = self.combined_fixture(root)
+            manifest.write_text(self.strip_targets(manifest.read_text(), ["t08_contract"]))
+            for name in quality.T08_CONTRACT_OWN_SOURCES:
+                (root / name).unlink()
+            self.assertFalse(quality.has_t08_contract(root))
+            self.assertTrue(quality.has_t08(root))
+            self.assertEqual(quality.expected_examples(root), [])
+            expected = quality.rust_test_expectations(root)
+            self.assertEqual(sum(expected["test_counts"]), 1100)
+            self.assertEqual(len(expected["test_counts"]), 35)
+            self.assertEqual(expected["test_counts"].count(23), 0)
+            quality.require_rust_test_summaries(self.synthetic_combined_output(expected), expected, "contract-absent")
+            self.assertEqual([n for n, _ in quality.rust_test_partitions(root)], ["tests-main", "tests-t06", "tests-t21-process", "tests-t07-inventory", "tests-t08-native", "tests-recovery"])
+            self.assertNotIn("tests/fixtures/native/contract-client.py", quality.quality_subject_paths(root, time.monotonic() + 5, True))
+
+    def test_recovery_or_contract_missing_or_substituted_inputs_refuse(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw); self.combined_fixture(root)
+            for name in (*quality.RECOVERY_INPUTS, *quality.T08_CONTRACT_INPUTS):
+                path = root / name; before = path.read_bytes(); path.unlink()
+                self.assertTrue(quality.has_recovery(root) and quality.has_t08_contract(root))
+                with self.subTest(name=name), self.assertRaisesRegex(ValueError, "required (?:extension input|T03 source|example source): " + re.escape(name)):
+                    quality.rust_test_expectations(root)
+                path.symlink_to(ROOT / name)
+                with self.subTest(name=name, kind="symlink"), self.assertRaisesRegex(ValueError, "required (?:extension input|T03 source|example source): " + re.escape(name)):
+                    quality.rust_test_expectations(root)
+                path.unlink(); path.write_bytes(before)
+            self.assertEqual(sum(quality.rust_test_expectations(root)["test_counts"]), 1123)
+
+    def test_recovery_or_contract_omitted_changed_or_conditional_target_refuses_by_name(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw); manifest = self.combined_fixture(root); original = manifest.read_text()
+            named = [(self.strip_targets(original, ["recovery"]), r"missing=\['recovery'\] extra=\[\] duplicate=\[\]"),
+                     (original.replace('name = "t08_contract"', 'name = "t08_battery"'), r"missing=\['t08_contract'\] extra=\['t08_battery'\] duplicate=\[\]"),
+                     (original + '\n[[test]]\nname="recovery"\npath="tests/recovery.rs"\n', r"missing=\[\] extra=\[\] duplicate=\['recovery'\]")]
+            for fault, diagnostic in named:
+                self.assertNotEqual(original, fault); manifest.write_text(fault)
+                self.assertTrue(quality.has_recovery(root) and quality.has_t08_contract(root))
+                with self.subTest(diagnostic=diagnostic), self.assertRaisesRegex(ValueError, diagnostic):
+                    quality.rust_test_expectations(root)
+            # Removing only the contract registration leaves its sources, so the census still names it.
+            contract_gone = re.sub(r'\[\[test\]\]\s*name = "t08_contract"\s*path = "tests/t08_contract.rs"\s*', '', original)
+            manifest.write_text(contract_gone)
+            with self.assertRaisesRegex(ValueError, r"missing=\['t08_contract'\]"):
+                quality.rust_test_expectations(root)
+            faults = [original.replace('path = "tests/recovery.rs"', 'path = "tests/t06_store.rs"'),
+                      original.replace('name = "t08_contract"', 'name = "t08_contract"\nharness = false'),
+                      original.replace('name = "recovery"', 'name = "recovery"\nrequired-features = ["hidden"]'),
+                      original.replace('name = "t08_contract"', 'name = "t08_contract"\ntest = false')]
+            for fault in faults + [fault for fault, _ in named]:
+                self.assertNotEqual(original, fault); manifest.write_text(fault)
+                with self.subTest(fault=fault[-100:]), self.assertRaises(ValueError):
+                    quality.rust_test_partitions(root)
+            manifest.write_text(original)
+            self.assertEqual(quality.rust_test_partitions(root), quality.rust_test_partitions(ROOT))
+
+    def test_example_inventory_must_match_the_contract_battery_exactly(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw); manifest = self.combined_fixture(root); original = manifest.read_text()
+            self.assertEqual(quality.expected_examples(root), list(quality.T08_CONTRACT_EXAMPLES))
+            faults = {"extra": original + '\n[[example]]\nname="extra"\npath="src/main.rs"\n',
+                      "renamed": original.replace('name = "t08-contract-cohort"', 'name = "t08-contract-cohorts"'),
+                      "repathed": original.replace('path = "tests/fixtures/native/driver.rs"', 'path = "tests/fixtures/native/contract-cohort.rs"'),
+                      "removed": re.sub(r'\[\[example\]\]\s*name = "t08-native-profile-driver"\s*path = "[^"]+"\s*', '', original),
+                      "reordered": re.sub(r'\[\[example\]\]\s*name = "t08-native-profile-driver"\s*path = "[^"]+"\s*', '', original) + '\n[[example]]\nname = "t08-native-profile-driver"\npath = "tests/fixtures/native/driver.rs"\n'}
+            for label, fault in faults.items():
+                self.assertNotEqual(original, fault); manifest.write_text(fault)
+                with self.subTest(label=label), self.assertRaisesRegex(ValueError, "required example target inventory: manifest="):
+                    quality.rust_test_expectations(root)
+                with self.subTest(label=label, stage="partition"), self.assertRaisesRegex(ValueError, "required example target inventory"):
+                    quality.rust_test_partitions(root)
+            manifest.write_text(original)
+            source = root / "tests/fixtures/native/contract-cohort.rs"
+            before = source.read_bytes(); source.unlink()
+            with self.assertRaisesRegex(ValueError, "required extension input: tests/fixtures/native/contract-cohort.rs"):
+                quality.rust_test_expectations(root)
+            source.write_bytes(before)
+            # Examples without the battery that owns them are unaccounted.
+            manifest.write_text(self.strip_targets(original, ["t08_contract"]) + "".join(
+                f'\n[[example]]\nname = "{row["name"]}"\npath = "{row["path"]}"\n' for row in quality.T08_CONTRACT_EXAMPLES))
+            for name in quality.T08_CONTRACT_OWN_SOURCES:
+                (root / name).unlink()
+            self.assertFalse(quality.has_t08_contract(root))
+            with self.assertRaisesRegex(ValueError, r"required example target inventory: manifest=\[\('t08-native-profile-driver'"):
+                quality.rust_test_expectations(root)
+
+    def test_recovery_and_contract_census_faults_refuse(self):
+        expected = quality.rust_test_expectations(ROOT)
+        valid = self.synthetic_combined_output(expected)
+        for count in (58, 23):
+            row = self.summary(count)
+            self.assertEqual(valid.count(row), 1)
+            for fault in [valid.replace(row, "", 1), valid.replace(row, self.summary(count - 1), 1), valid + row,
+                          valid.replace(row, row.replace("0 filtered out", "1 filtered out"), 1),
+                          valid.replace(row, row.replace("0 ignored", "1 ignored"), 1)]:
+                with self.subTest(count=count, fault=fault[-100:]), self.assertRaisesRegex(ValueError, "required Rust test count"):
+                    quality.require_rust_test_summaries(fault, expected, "census fault")
+        quality.require_rust_test_summaries(valid, expected, "census benign")
+
+    def test_partition_selects_recovery_and_contract_once_after_native(self):
+        rows = quality.rust_test_partitions(ROOT)
+        self.assertEqual([name for name, _ in rows][-2:], ["tests-recovery", "tests-t08-contract"])
+        self.assertEqual(rows[5][1], ["--test", "recovery"])
+        self.assertEqual(rows[6][1], ["--test", "t08_contract"])
+        targets = [args[i + 1] for _, args in rows for i, value in enumerate(args) if value == "--test"]
+        self.assertEqual((targets.count("recovery"), targets.count("t08_contract")), (1, 1))
+        declared = quality.tomllib.loads((ROOT / "Cargo.toml").read_text())
+        self.assertEqual(sorted(targets), sorted(target["name"] for target in declared["test"]))
+        self.assertNotIn("recovery", rows[0][1]); self.assertNotIn("t08_contract", rows[0][1])
+
+    def test_partition_recovery_or_contract_omitted_or_repeated_return_refuses(self):
+        expected = quality.rust_test_expectations(ROOT)
+        for name, count in (("recovery", 58), ("t08_contract", 23)):
+            row = self.summary(count)
+            for observed in ["", row + row, row.replace(f"{count} passed", f"{count - 1} passed")]:
+                with self.subTest(name=name, observed=observed), self.assertRaisesRegex(ValueError, "required Rust test count"):
+                    quality.run_rust_test_partitions(ROOT, self.serve(expected, {name: observed}), "cargo", [], "return-fault", expected)
+        quality.run_rust_test_partitions(ROOT, self.serve(expected, {}), "cargo", [], "return-benign", expected)
+
+    def test_contract_client_interpreter_and_daemon_stand_in_pins(self):
+        pin = quality.native_client_interpreter(ROOT, quality.CONTRACT_CLIENT_FIXTURE)
+        first = (ROOT / quality.CONTRACT_CLIENT_FIXTURE).read_bytes().split(b"\n", 1)[0]
+        self.assertEqual(first, b"#!" + pin["path"].encode())
+        self.assertEqual(pin["sha256"], hashlib.sha256(Path(pin["path"]).read_bytes()).hexdigest())
+        for source in ("tests/t08_contract.rs", "tests/t08_native.rs"):
+            stand_in = quality.daemon_stand_in(ROOT, source, required=True)
+            declared = re.findall(r"const EXECUTABLE: &'static str = \"(/[^\"]+)\";", (ROOT / source).read_text())
+            self.assertEqual(declared, [stand_in["path"]])
+            self.assertEqual(stand_in["sha256"], hashlib.sha256(Path(stand_in["path"]).read_bytes()).hexdigest())
+            self.assertEqual(stand_in["bytes"], Path(stand_in["path"]).stat().st_size)
+            self.assertEqual(stand_in["declared_in"], source)
+            self.assertEqual(stand_in["resolved"], str(Path(stand_in["path"]).resolve(strict=True)))
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            source = root / "battery.rs"
+            source.write_text("// no declaration\n")
+            self.assertIsNone(quality.daemon_stand_in(root, "battery.rs", required=False))
+            with self.assertRaisesRegex(ValueError, "Missing or ambiguous daemon stand-in declaration: battery.rs"):
+                quality.daemon_stand_in(root, "battery.rs", required=True)
+            source.write_text('const EXECUTABLE: &\'static str = "/usr/bin/sleep";\nconst EXECUTABLE: &\'static str = "/usr/bin/true";\n')
+            with self.assertRaisesRegex(ValueError, "ambiguous daemon stand-in declaration"):
+                quality.daemon_stand_in(root, "battery.rs", required=False)
+            source.write_text('const EXECUTABLE: &\'static str = "' + str(root / "absent") + '";\n')
+            with self.assertRaisesRegex(ValueError, "Missing daemon stand-in executable"):
+                quality.daemon_stand_in(root, "battery.rs", required=True)
+        text = ast.unparse(next(node for node in ast.parse((ROOT / "tools/check-quality").read_text()).body if isinstance(node, ast.FunctionDef) and node.name == "main"))
+        self.assertIn("report['executables']['contract-client-interpreter'] = native_client_interpreter(ROOT, CONTRACT_CLIENT_FIXTURE)", text)
+        self.assertIn("report['executables']['contract-daemon-stand-in'] = daemon_stand_in(ROOT, 'tests/t08_contract.rs', required=True)", text)
+        self.assertIn("stand_in = daemon_stand_in(ROOT, 'tests/t08_native.rs', required=False)", text)
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -16,7 +16,7 @@ Declared build dependencies: contracts. Declared consumers: app. Runtime request
 
 Own admitted adapter execution, literal argument boundaries and lifecycle. Build/test hooks remain candidate-controlled; isolate effects, cancel descendants and retain authoritative producer outcomes.
 
-[Adopted readiness requirements and evidence roadmap](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Delivery%2FReadiness%2FIndex) · [Codebase readiness plan](file:///var/home/herdr-engineering-engine-v3/docs/readiness-plan.md) · [Six resolved design contracts](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Delivery%2FContracts%2FIndex) · [Concrete contract decisions](file:///var/home/herdr-engineering-engine-v3/docs/contract-decisions.md). Binding: `HEE3-READINESS-001` / `ea991737ce282467556e4997f28e97c4b7f0799d823aae98905fcf34f71766f7`. Adoption is complete; the required engine proof is pending.
+[Adopted readiness requirements and evidence roadmap](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Delivery%2FReadiness%2FIndex) · [Codebase readiness plan](file:///var/home/herdr-engineering-engine-v3/docs/readiness-plan.md) · [Six resolved design contracts](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Delivery%2FContracts%2FIndex) · [Concrete contract decisions](file:///var/home/herdr-engineering-engine-v3/docs/contract-decisions.md). Binding: `HEE3-READINESS-001` / `e774f8984c7e39e85b156289fac809bded6df80ba3647cfb2024c69856447b94`. Adoption is complete; the required engine proof is pending.
 
 | Applicable facet / criterion IDs | Primary contract owners |
 | --- | --- |
@@ -66,7 +66,7 @@ Every operation inherits the catalogue requirements for caller capability, ident
 
 Observed source kind: `engine_source`. Accepted current interface: **unavailable**. No completion admission collector is implemented. A source body would be an implementation candidate, not automatically an accepted module. After verified admission exists, exact accepted source/schema and tests govern current interface facts; intended changes remain in the atlas.
 
-Convention SHA-256: `089e6c05bbe6f53db1c473153d26638028b2e3c8f99d99967d8f0e7baa97bb8d`. This binding proves which documentation convention is projected, not runtime correctness.
+Convention SHA-256: `c8a96767e52cf8b309ef5fc5ab968a1e875b0d97ab7d62aaec6f96f1d8436557`. This binding proves which documentation convention is projected, not runtime correctness.
 
 ## Fully-complete contract
 
@@ -74,7 +74,7 @@ Convention SHA-256: `089e6c05bbe6f53db1c473153d26638028b2e3c8f99d99967d8f0e7baa9
 
 [Concrete module outcome, failure controls and admission checklist](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Standards%2FCompletion%2FDONE-worker) · [Corpus architecture and update schematics](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Schematics%2FCorpus%2FIndex) · [Open clickable drawings](file:///var/home/herdr-engineering-engine-v3/docs/corpus-schematics.html) · [Fully-complete standard](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Standards%2FModule%20Completion) · [Justfile and runbooks](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Operations%2FJustfiles%20and%20Runbooks) · [Context handoff](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Context%20Handoff) · [Executive summary](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Executive%20Summary) · [Daybreak security profile](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Security%2FDaybreak%20Profile) · [Graphify full corpus](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Graphify%2FIndex) · [Adopted readiness requirements and evidence roadmap](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Delivery%2FReadiness%2FIndex) · [Codebase readiness plan](file:///var/home/herdr-engineering-engine-v3/docs/readiness-plan.md) · [Six resolved design contracts](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Delivery%2FContracts%2FIndex) · [Concrete contract decisions](file:///var/home/herdr-engineering-engine-v3/docs/contract-decisions.md)
 
-Completion standard SHA-256: `860dc3c4021b780b94ddcb8b9af22c4fd09fe3590e7785de0bcf5a3b5025c3ea`. All 13 gates apply; only an inapplicable subcheck may be explicitly justified.
+Completion standard SHA-256: `a36374a796816c1ea4c85c3292d376942fe9da226d714012b87da2588f598594`. All 13 gates apply; only an inapplicable subcheck may be explicitly justified.
 
 **Required finished behavior:** Replaceable admitted adapters execute bounded model work with actual model/process identity, stream custody, cancellation and retained result evidence.
 
@@ -119,7 +119,7 @@ These are scoped design and review obligations. Their engine detectors remain un
 
 Bind assimilation, mutation sensitivity, lint coverage and raw evidence to the exact candidate. Property iterations, assertions, retries, lint findings and mutant runs do not multiply case credits. The current observation schema does not establish this qualification.
 
-Standard: `HEE3-TEST-STD-001`; SHA-256: `1004749abf352815dc13b8317c4277ea124d06612137e9010666977bfd059986`. Full-standard qualification: **unassessed; collector/validator not implemented**.
+Standard: `HEE3-TEST-STD-001`; SHA-256: `14a29dad1d089bc529ff9a132e5f80d5195e81aba2c2c0a07229e1c7c8960b09`. Full-standard qualification: **unassessed; collector/validator not implemented**.
 
 Module priorities: provider/adapter request-return contracts; partial streams and malformed output; cancel/deadline/cleanup; no worker self-acceptance.
 
@@ -347,6 +347,76 @@ Module priorities: provider/adapter request-return contracts; partial streams an
 | tools/rust-offline-inputs/zmij-1.0.23.crate | check | authored candidate / T02 | Closed Cargo.lock-bound offline archive input; exact package checksums and extraction controls are development observations. |
 | tests/t03_contract.rs | worker | authored candidate / T03 | Independent fake-dispatch development controls for common worker lifecycle and output-only result semantics; TH-DEV only, no module admission. |
 | docs/worker-contract.md | worker | authored candidate / T03 | Scoped common worker/output-only behavior, identity and usage provenance, cancellation limits and development verification guidance; T06 launcher and T08 backend remain separate. |
+| development/t06/README.md | app | authored candidate / T06 | Existing fixed T06 development runtime/frontend composition owned by app; single root engine dependencies, no new architectural module or T28 public action; scoped tooling retains explicit private external inputs. |
+| development/t06/fixed-runtime-frontend/Cargo.lock | app | authored candidate / T06 | Existing fixed T06 development runtime/frontend composition owned by app; single root engine dependencies, no new architectural module or T28 public action; scoped tooling retains explicit private external inputs. |
+| development/t06/fixed-runtime-frontend/Cargo.toml | app | authored candidate / T06 | Existing fixed T06 development runtime/frontend composition owned by app; single root engine dependencies, no new architectural module or T28 public action; scoped tooling retains explicit private external inputs. |
+| development/t06/fixed-runtime-frontend/compare-result.py | app | authored candidate / T06 | Existing fixed T06 development runtime/frontend composition owned by app; single root engine dependencies, no new architectural module or T28 public action; scoped tooling retains explicit private external inputs. |
+| development/t06/fixed-runtime-frontend/prepare-inputs.py | app | authored candidate / T06 | Existing fixed T06 development runtime/frontend composition owned by app; single root engine dependencies, no new architectural module or T28 public action; scoped tooling retains explicit private external inputs. |
+| development/t06/fixed-runtime-frontend/src/frontend.rs | app | authored candidate / T06 | Existing fixed T06 development runtime/frontend composition owned by app; single root engine dependencies, no new architectural module or T28 public action; scoped tooling retains explicit private external inputs. |
+| development/t06/fixed-runtime-frontend/src/inputs.rs | app | authored candidate / T06 | Existing fixed T06 development runtime/frontend composition owned by app; single root engine dependencies, no new architectural module or T28 public action; scoped tooling retains explicit private external inputs. |
+| development/t06/fixed-runtime-frontend/src/lib.rs | app | authored candidate / T06 | Existing fixed T06 development runtime/frontend composition owned by app; single root engine dependencies, no new architectural module or T28 public action; scoped tooling retains explicit private external inputs. |
+| development/t06/fixed-runtime-frontend/src/main.rs | app | authored candidate / T06 | Existing fixed T06 development runtime/frontend composition owned by app; single root engine dependencies, no new architectural module or T28 public action; scoped tooling retains explicit private external inputs. |
+| development/t06/fixed-runtime-frontend/src/manifest.rs | app | authored candidate / T06 | Existing fixed T06 development runtime/frontend composition owned by app; single root engine dependencies, no new architectural module or T28 public action; scoped tooling retains explicit private external inputs. |
+| development/t06/fixed-runtime-frontend/src/probes.rs | app | authored candidate / T06 | Existing fixed T06 development runtime/frontend composition owned by app; single root engine dependencies, no new architectural module or T28 public action; scoped tooling retains explicit private external inputs. |
+| development/t06/fixed-runtime-frontend/tests/frontend_controls.rs | app | authored candidate / T06 | Existing fixed T06 development runtime/frontend composition owned by app; single root engine dependencies, no new architectural module or T28 public action; scoped tooling retains explicit private external inputs. |
+| development/t06/fixed-runtime-frontend/tests/test_freezer.py | app | authored candidate / T06 | Existing fixed T06 development runtime/frontend composition owned by app; single root engine dependencies, no new architectural module or T28 public action; scoped tooling retains explicit private external inputs. |
+| development/t06/fixed-runtime-frontend/write-build-record.py | app | authored candidate / T06 | Existing fixed T06 development runtime/frontend composition owned by app; single root engine dependencies, no new architectural module or T28 public action; scoped tooling retains explicit private external inputs. |
+| development/t06/task-runtime/Cargo.lock | app | authored candidate / T06 | Existing fixed T06 development runtime/frontend composition owned by app; single root engine dependencies, no new architectural module or T28 public action; scoped tooling retains explicit private external inputs. |
+| development/t06/task-runtime/Cargo.toml | app | authored candidate / T06 | Existing fixed T06 development runtime/frontend composition owned by app; single root engine dependencies, no new architectural module or T28 public action; scoped tooling retains explicit private external inputs. |
+| development/t06/task-runtime/src/clock.rs | app | authored candidate / T06 | Existing fixed T06 development runtime/frontend composition owned by app; single root engine dependencies, no new architectural module or T28 public action; scoped tooling retains explicit private external inputs. |
+| development/t06/task-runtime/src/lib.rs | app | authored candidate / T06 | Existing fixed T06 development runtime/frontend composition owned by app; single root engine dependencies, no new architectural module or T28 public action; scoped tooling retains explicit private external inputs. |
+| development/t06/task-runtime/src/native_executor_observation.rs | app | authored candidate / T06 | Existing fixed T06 development runtime/frontend composition owned by app; single root engine dependencies, no new architectural module or T28 public action; scoped tooling retains explicit private external inputs. |
+| development/t06/task-runtime/src/prepare.rs | app | authored candidate / T06 | Existing fixed T06 development runtime/frontend composition owned by app; single root engine dependencies, no new architectural module or T28 public action; scoped tooling retains explicit private external inputs. |
+| development/t06/task-runtime/src/runtime-preparation.json | app | authored candidate / T06 | Existing fixed T06 development runtime/frontend composition owned by app; single root engine dependencies, no new architectural module or T28 public action; scoped tooling retains explicit private external inputs. |
+| development/t06/task-runtime/src/runtime.rs | app | authored candidate / T06 | Existing fixed T06 development runtime/frontend composition owned by app; single root engine dependencies, no new architectural module or T28 public action; scoped tooling retains explicit private external inputs. |
+| development/t06/task-runtime/src/runtime_controls.rs | app | authored candidate / T06 | Existing fixed T06 development runtime/frontend composition owned by app; single root engine dependencies, no new architectural module or T28 public action; scoped tooling retains explicit private external inputs. |
+| development/t06/task-runtime/src/runtime_fixture.rs | app | authored candidate / T06 | Existing fixed T06 development runtime/frontend composition owned by app; single root engine dependencies, no new architectural module or T28 public action; scoped tooling retains explicit private external inputs. |
+| development/t06/task-runtime/src/runtime_readback.rs | app | authored candidate / T06 | Existing fixed T06 development runtime/frontend composition owned by app; single root engine dependencies, no new architectural module or T28 public action; scoped tooling retains explicit private external inputs. |
+| development/t06/task-runtime/src/support.rs | app | authored candidate / T06 | Existing fixed T06 development runtime/frontend composition owned by app; single root engine dependencies, no new architectural module or T28 public action; scoped tooling retains explicit private external inputs. |
+| development/t06/task-runtime/src/u64_receipt/binding.rs | app | authored candidate / T06 | Existing fixed T06 development runtime/frontend composition owned by app; single root engine dependencies, no new architectural module or T28 public action; scoped tooling retains explicit private external inputs. |
+| development/t06/task-runtime/src/u64_receipt/observed.rs | app | authored candidate / T06 | Existing fixed T06 development runtime/frontend composition owned by app; single root engine dependencies, no new architectural module or T28 public action; scoped tooling retains explicit private external inputs. |
+| development/t06/task-runtime/src/u64_receipt/preparation.rs | app | authored candidate / T06 | Existing fixed T06 development runtime/frontend composition owned by app; single root engine dependencies, no new architectural module or T28 public action; scoped tooling retains explicit private external inputs. |
+| development/t06/task-runtime/src/u64_receipt.rs | app | authored candidate / T06 | Existing fixed T06 development runtime/frontend composition owned by app; single root engine dependencies, no new architectural module or T28 public action; scoped tooling retains explicit private external inputs. |
+| development/t06/task-runtime/tests/fixtures/existing-objects.json | app | authored candidate / T06 | Existing fixed T06 development runtime/frontend composition owned by app; single root engine dependencies, no new architectural module or T28 public action; scoped tooling retains explicit private external inputs. |
+| development/t06/task-runtime/tests/fixtures/review-bundle.json | app | authored candidate / T06 | Existing fixed T06 development runtime/frontend composition owned by app; single root engine dependencies, no new architectural module or T28 public action; scoped tooling retains explicit private external inputs. |
+| development/t06/task-runtime/tests/fixtures/review-request.json | app | authored candidate / T06 | Existing fixed T06 development runtime/frontend composition owned by app; single root engine dependencies, no new architectural module or T28 public action; scoped tooling retains explicit private external inputs. |
+| development/t06/task-runtime/tests/native_store.rs | app | authored candidate / T06 | Existing fixed T06 development runtime/frontend composition owned by app; single root engine dependencies, no new architectural module or T28 public action; scoped tooling retains explicit private external inputs. |
+| development/t06/task-runtime/tests/prepare_controls.rs | app | authored candidate / T06 | Existing fixed T06 development runtime/frontend composition owned by app; single root engine dependencies, no new architectural module or T28 public action; scoped tooling retains explicit private external inputs. |
+| development/t06/task-runtime/tests/receipt_inventory_controls.rs | app | authored candidate / T06 | Existing fixed T06 development runtime/frontend composition owned by app; single root engine dependencies, no new architectural module or T28 public action; scoped tooling retains explicit private external inputs. |
+| development/t06/task-runtime/tests/support_controls.rs | app | authored candidate / T06 | Existing fixed T06 development runtime/frontend composition owned by app; single root engine dependencies, no new architectural module or T28 public action; scoped tooling retains explicit private external inputs. |
+| evaluation/harnesses/bootstrap/checker.rs | check | authored candidate / T06 | T06 current single-engine development composition and source-bound controls; no module, task or deployment admission. |
+| evaluation/harnesses/bootstrap/producer.rs | check | authored candidate / T06 | T06 current single-engine development composition and source-bound controls; no module, task or deployment admission. |
+| evaluation/harnesses/u64-public-wrapper.rs | check | authored candidate / T06 | T06 current single-engine development composition and source-bound controls; no module, task or deployment admission. |
+| src/app/capture.rs | app | authored candidate / T06 | T06 current single-engine development composition and source-bound controls; no module, task or deployment admission. |
+| src/app/durable_control.rs | app | authored candidate / T06 | T06 current single-engine development composition and source-bound controls; no module, task or deployment admission. |
+| src/app/evidence.rs | app | authored candidate / T06 | T06 current single-engine development composition and source-bound controls; no module, task or deployment admission. |
+| src/app/mod.rs | app | authored candidate / T06 | T06 current single-engine development composition and source-bound controls; no module, task or deployment admission. |
+| src/app/receipt_import.rs | app | authored candidate / T06 | T06 current single-engine development composition and source-bound controls; no module, task or deployment admission. |
+| src/app/repair.rs | app | authored candidate / T06 | T06 current single-engine development composition and source-bound controls; no module, task or deployment admission. |
+| src/app/subjects.rs | app | authored candidate / T06 | T06 current single-engine development composition and source-bound controls; no module, task or deployment admission. |
+| src/app/workload.rs | app | authored candidate / T06 | T06 current single-engine development composition and source-bound controls; no module, task or deployment admission. |
+| src/bin/namespace_shim.rs | worker | authored candidate / T06 | T06 current single-engine development composition and source-bound controls; no module, task or deployment admission. |
+| src/main.rs | app | authored candidate / T06 | T06 current single-engine development composition and source-bound controls; no module, task or deployment admission. |
+| src/worker/aggregate.rs | worker | authored candidate / T06 | T06 current single-engine development composition and source-bound controls; no module, task or deployment admission. |
+| src/worker/aggregate_io.rs | worker | authored candidate / T06 | T06 current single-engine development composition and source-bound controls; no module, task or deployment admission. |
+| src/worker/namespace.rs | worker | authored candidate / T06 | T06 current single-engine development composition and source-bound controls; no module, task or deployment admission. |
+| src/worker/namespace_shim.rs | worker | authored candidate / T06 | T06 current single-engine development composition and source-bound controls; no module, task or deployment admission. |
+| src/worker/process.rs | worker | authored candidate / T06 | T06 current single-engine development composition and source-bound controls; no module, task or deployment admission. |
+| src/worker/resources.rs | worker | authored candidate / T06 | T06 current single-engine development composition and source-bound controls; no module, task or deployment admission. |
+| src/worker/workspace.rs | worker | authored candidate / T06 | T06 current single-engine development composition and source-bound controls; no module, task or deployment admission. |
+| tests/t06_bounded_preflight.rs | app | authored candidate / T06 | T06 current single-engine development composition and source-bound controls; no module, task or deployment admission. |
+| tests/t06_durable_control.rs | app | authored candidate / T06 | T06 current single-engine development composition and source-bound controls; no module, task or deployment admission. |
+| tests/t06_evidence.rs | app | authored candidate / T06 | T06 current single-engine development composition and source-bound controls; no module, task or deployment admission. |
+| tests/t06_process_timing.rs | worker | authored candidate / T06 | T06 current single-engine development composition and source-bound controls; no module, task or deployment admission. |
+| tests/t06_receipt_import.rs | app | authored candidate / T06 | T06 current single-engine development composition and source-bound controls; no module, task or deployment admission. |
+| tests/t06_subjects.rs | app | authored candidate / T06 | T06 current single-engine development composition and source-bound controls; no module, task or deployment admission. |
+| tests/t06_workspace.rs | worker | authored candidate / T06 | T06 current single-engine development composition and source-bound controls; no module, task or deployment admission. |
+| tests/t06_workspace_export.rs | worker | authored candidate / T06 | T06 current single-engine development composition and source-bound controls; no module, task or deployment admission. |
+| src/numerical/process.rs | numerical | authored candidate / T21 | Bounded EOF numerical subprocess exchange using existing process custody; truthful failure, cancellation and unknown CPU; no task authority. |
+| tests/fixtures/t21/J01.json | numerical | authored candidate / T21 | Source-bound numerical oracle/process/fault controls and finite requests; nested descendant control retains its bounded process owner and original failure observations. |
+| tests/fixtures/t21/descendant-control.py | numerical | authored candidate / T21 | Source-bound numerical oracle/process/fault controls and finite requests; nested descendant control retains its bounded process owner and original failure observations. |
+| tests/t21_analysis.rs | numerical | authored candidate / T21 | Source-bound numerical oracle/process/fault controls and finite requests; nested descendant control retains its bounded process owner and original failure observations. |
+| tests/t21_process.rs | numerical | authored candidate / T21 | Source-bound numerical oracle/process/fault controls and finite requests; nested descendant control retains its bounded process owner and original failure observations. |
 
 ## Delivery, verification and hardening contracts
 
@@ -394,7 +464,7 @@ Dependencies: T03, T04. Atlas task state: `done`.
 
 [Owning task and current atlas state](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Delivery%2FTasks%2FTASK-T06)
 
-Dependencies: T03, T04, T05. Atlas task state: `idle`.
+Dependencies: T03, T04, T05. Atlas task state: `done`.
 
 **Acceptance:** A contained task uses the selected recipe and owned workspace, produces an artifact, runs an actual acceptance check and records result/cost. Worker end or exit zero alone cannot accept it. A failing candidate is repaired and reverified; exhausted and verifier-error cases stop truthfully. Acceptance and completion outbox event commit together with a criterion-to-evidence manifest bound to the actual candidate. Even this first loop requires a safe minimal budget gate and reserved verification allocation; unknown accounting cannot satisfy a hard ceiling. Rich cross-adapter reconciliation follows in T10. Terminal cancellation requires observed cleanup/effect reconciliation.
 
@@ -404,7 +474,7 @@ Dependencies: T03, T04, T05. Atlas task state: `idle`.
 
 [Owning task and current atlas state](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Delivery%2FTasks%2FTASK-T07)
 
-Dependencies: T06. Atlas task state: `idle`.
+Dependencies: T06. Atlas task state: `wip`.
 
 **Acceptance:** Crashes before/after dispatch acknowledgement, stale generations, PID reuse, queued Pi messages and partial cleanup produce correct recoverable states without duplicate writes. Ambiguous external outcomes remain explicit. Cover restart at verification/evidence/acceptance boundaries; lease expiry alone cannot authorize reuse of a still-writable old workspace. Acceptance explicitly rejects any earlier committed cancellation intent, even before terminal cleanup. If acceptance committed first, later cancellation cannot rewrite history. Startup may reattach observation to a positively reconciled live attempt without redispatch. Restored ledger epochs cannot silently reuse prior event cursors.
 
@@ -414,7 +484,7 @@ Dependencies: T06. Atlas task state: `idle`.
 
 [Owning task and current atlas state](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Delivery%2FTasks%2FTASK-T08)
 
-Dependencies: T03, T06. Atlas task state: `idle`.
+Dependencies: T03, T06. Atlas task state: `done`.
 
 **Acceptance:** A selected native harness or plain inference backend passes the common contract; actual supported model/effort is recorded. No success inferred from terminal prose. Version-specific limitations are listed.
 
@@ -560,6 +630,18 @@ A successful compile or lint of comment-only stubs is not module verification. T
 
 A live Pi/native adapter, complete stream grammar, one retry owner, scope cancellation, accounting and provider compatibility still need qualification.
 
+### Native adapter — version-specific limitations (recorded 2026-09-21, T08 contract-integration release 1f2b847c…, actual reviews 8d274802…/ef2ea679…)
+
+- **API version literal `0.0.0`.** The packaged daemon reports `{"version":"0.0.0"}`; the adapter pins that literal (`native.rs` `identity()`, `version.version != "0.0.0"`) and any other value is `Error::Identity` before generation (`tests/t08_native.rs::packaging_version_change_requires_new_profile`). A packaging that reports its real version needs a new profile. Evidence: `/var/home/Louranicas/.
+- **No Cancel, Deltas, ToolProposals or effort.** Capabilities are `FinalOutput`, `Identity`, `Usage` only (`native.rs` `execute()`, `Capabilities::new`); a request requiring any other feature is refused at launch preflight before the subject check and before any client process (`T08C-15`…`T08C-17`), and `selection.effort: Some(_)` is `Error::Profile` (`T08C-18`). A cancel after dispatch stops the
+- **Raw, non-streamed request only.** The generate body is fixed to `stream:false, raw:true, truncate:false, shift:false, keep_alive:60` (`native.rs` `execute_inner()`); no chat, template, tool or streaming path exists, and the streaming grammar is unexercised. Evidence: `/var/home/Louranicas/.cache/hee3-implementation/T08/native-continuation/overbound-control/release.json` key `request`; `T08C-03
+- **Context 512 / output 64 profile.** The loaded readback must report `context_length == 512` (`native.rs` `identity()`), the request sends `num_ctx:512, num_predict:64`, and a completed response reporting `prompt_eval_count > 512` or `eval_count > 64` is `Error::Usage` even when `done` (`tests/t08_native.rs::input_and_output_cap_violations_refuse_even_done`). Evidence: `/var/home/Louranicas/.cac
+- **Loopback only.** `ENDPOINT` is the literal `http://127.0.0.1:11434/api/` and the client runs with `--noproxy * --proto =http --max-redirs 0 --connect-timeout 2`; no TLS, remote host or redirect is reachable, and a catalogue row carrying `remote_host` is refused as `Error::Json` by `deny_unknown_fields` (`tests/t08_native.rs::remote_catalogue_metadata_refuses_before_generation`). Evidence: `/va
+- **Alias custody is same-UID without no-clobber.** The commissioning helpers copy `llama3.2:3b` to a fresh alias, check the alias is absent before the copy and delete only what they created; that is an absence check, not an atomic reservation, and the daemon runs as the same UID, so it is not hostile-race custody. Evidence: `/var/home/Louranicas/.cache/hee3-implementation/T08/native-overbound-exe
+- **Loaded-resource expiry is unobserved.** `keep_alive:60` is re-armed by every generate, including a refused one; after the alias tag is deleted the runner stays resident (`size_vram` reported) and no unload is issued or authorised. Evidence: `/var/home/Louranicas/.cache/hee3-implementation/T08/native-overbound-execution-root-20260921/actual-review/REPORT.md` R-2 and §4; `/var/home/Louranicas/.c
+- **HTTP 400 overbound refusal text is pinned to upstream v0.12.11 sources.** The refusal the packaged daemon returns for an input over `num_ctx` with `truncate:false` is HTTP 400 with body `{"error":"the input length exceeds the context length"}`; under `--fail-with-body` curl exits 22 with `curl: (22) The requested URL returned error: 400` on stderr, and the adapter reports `Error::Process` with
+- **Deadline envelope shape.** A work deadline that expires during an exchange stops the client (`Interruption::Timeout`) and reaches the contract as `Error::Process` with cancellation intent `Deadline`/dispatch `Unsupported` (`T08C-11`); the `Error::Deadline` variant surfaces pre-effect (`T08C-10`) or between exchanges, the latter only by timing. The exact token count of the 135168-byte overbound
+
 ## Full return-anchor register
 
 - [module cluster · CLU-K2](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Clusters%2FCLU-K2)
@@ -580,6 +662,7 @@ A live Pi/native adapter, complete stream grammar, one retry owner, scope cancel
 - [task · TASK-T18](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Delivery%2FTasks%2FTASK-T18)
 - [task · TASK-T19](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Delivery%2FTasks%2FTASK-T19)
 - [task · TASK-T20](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Delivery%2FTasks%2FTASK-T20)
+- [implementation support task · TASK-T21](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Delivery%2FTasks%2FTASK-T21)
 - [task · TASK-T22](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Delivery%2FTasks%2FTASK-T22)
 - [task · TASK-T25](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Delivery%2FTasks%2FTASK-T25)
 - [task · TASK-T26](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Delivery%2FTasks%2FTASK-T26)

@@ -1,0 +1,40 @@
+[package]
+name = "hee3-fixed-task-runtime"
+version = "0.1.0"
+edition = "2024"
+publish = false
+autotests = false
+
+[workspace]
+
+[dependencies]
+habitat_engine = { package = "herdr-engineering-engine-v3", path = "../../.." }
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.151"
+sha2 = "=0.11.0"
+rustix = { version = "=1.1.4", features = ["fs", "process"] }
+toml = { version = "=1.1.5", default-features = false, features = ["std", "serde", "parse", "display"] }
+
+[[test]]
+name = "native_store"
+path = "tests/native_store.rs"
+
+[profile.dev]
+opt-level = 0
+debug-assertions = true
+overflow-checks = true
+panic = "unwind"
+
+[profile.test]
+debug = 0
+opt-level = 0
+debug-assertions = true
+overflow-checks = true
+
+[profile.release]
+opt-level = 2
+overflow-checks = true
+panic = "unwind"
+lto = "thin"
+codegen-units = 1
+debug = "line-tables-only"

@@ -1,0 +1,74 @@
+[package]
+name = "hee3-fixed-runtime-frontend"
+version = "0.1.0"
+edition = "2024"
+publish = false
+autotests = false
+[workspace]
+[dependencies]
+habitat_engine = { package = "herdr-engineering-engine-v3", path = "../../.." }
+hee3-fixed-task-runtime = { path = "../task-runtime" }
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.151"
+sha2 = "=0.11.0"
+rustix = { version = "=1.1.4", features = ["fs", "process"] }
+toml = { version = "=1.1.5", default-features = false, features = ["std","serde","parse","display"] }
+[profile.dev]
+opt-level = 0
+debug-assertions = true
+overflow-checks = true
+panic = "unwind"
+
+[profile.test]
+opt-level = 0
+debug-assertions = true
+overflow-checks = true
+
+[profile.release]
+opt-level = 2
+overflow-checks = true
+panic = "unwind"
+lto = "thin"
+codegen-units = 1
+debug = "line-tables-only"
+
+[[test]]
+name = "recovery_inspect"
+path = "tests/recovery_inspect.rs"
+
+[dev-dependencies]
+rusqlite = { version = "=0.40.2", default-features = false, features = ["backup", "modern_sqlite", "hooks"] }
+
+[[test]]
+name = "recovery_cancel"
+path = "tests/recovery_cancel.rs"
+
+[[bin]]
+name = "hee3-recovery-crash-fixture"
+path = "tests/fixtures/recovery_crash.rs"
+test = false
+bench = false
+
+[[test]]
+name = "recovery_crash"
+path = "tests/recovery_crash.rs"
+
+[[bin]]
+name = "hee3-recovery-pi-queue-fixture"
+path = "tests/fixtures/recovery_pi_queue.rs"
+test = false
+bench = false
+
+[[test]]
+name = "recovery_pi_queue"
+path = "tests/recovery_pi_queue.rs"
+
+[[bin]]
+name = "hee3-recovery-pid-reuse-fixture"
+path = "tests/fixtures/recovery_pid_reuse.rs"
+test = false
+bench = false
+
+[[test]]
+name = "recovery_pid_reuse"
+path = "tests/recovery_pid_reuse.rs"

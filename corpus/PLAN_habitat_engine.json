@@ -450,8 +450,15 @@
             "validation_cmd": "Proposed, not implemented: habitat-engine-check case T06 --fixture-root <disposable-fixtures>",
             "validator_available": false,
             "acceptance": "A contained task uses the selected recipe and owned workspace, produces an artifact, runs an actual acceptance check and records result/cost. Worker end or exit zero alone cannot accept it. A failing candidate is repaired and reverified; exhausted and verifier-error cases stop truthfully. Acceptance and completion outbox event commit together with a criterion-to-evidence manifest bound to the actual candidate. Even this first loop requires a safe minimal budget gate and reserved verification allocation; unknown accounting cannot satisfy a hard ceiling. Rich cross-adapter reconciliation follows in T10. Terminal cancellation requires observed cleanup/effect reconciliation.",
-            "state": "idle",
-            "evidence": [],
+            "state": "done",
+            "evidence": [
+              {
+                "path": "evidence/implementation-T06-20260921/closure-final/T06-closure.json",
+                "sha256": "ebf5c49c1b3e82d8bb9a960d8739b323ceeb6b0716b2e6fe3a3817081c876a07",
+                "task_id": "T06",
+                "scope": "task_contract_review"
+              }
+            ],
             "research_refs": [
               "D15",
               "A11",
@@ -474,8 +481,27 @@
             "validation_cmd": "Proposed, not implemented: habitat-engine-check case T07 --fixture-root <disposable-fixtures>",
             "validator_available": false,
             "acceptance": "Crashes before/after dispatch acknowledgement, stale generations, PID reuse, queued Pi messages and partial cleanup produce correct recoverable states without duplicate writes. Ambiguous external outcomes remain explicit. Cover restart at verification/evidence/acceptance boundaries; lease expiry alone cannot authorize reuse of a still-writable old workspace. Acceptance explicitly rejects any earlier committed cancellation intent, even before terminal cleanup. If acceptance committed first, later cancellation cannot rewrite history. Startup may reattach observation to a positively reconciled live attempt without redispatch. Restored ledger epochs cannot silently reuse prior event cursors.",
-            "state": "idle",
-            "evidence": [],
+            "state": "wip",
+            "evidence": [
+              {
+                "path": "evidence/implementation-T07-20260921/progress.json",
+                "sha256": "fe3c93a8aa1bd4f74c670adc3fae92b534acf41a7c2224904d32caf9855f9445",
+                "task_id": "T07",
+                "scope": "implementation_candidate"
+              },
+              {
+                "path": "evidence/implementation-T07-20260921/progress-pid-reuse.json",
+                "sha256": "26bb44665194c191d5ce7ff8b379805047a6c4784c9381ac4a78fd20adb4d641",
+                "task_id": "T07",
+                "scope": "implementation_candidate"
+              },
+              {
+                "path": "evidence/implementation-T07-20260921/progress-3.json",
+                "sha256": "4e26b521365e5e69de0e63f6f3667ba96b9a25c7b6cf0fb7e3b5ff81387c07f0",
+                "task_id": "T07",
+                "scope": "implementation_candidate"
+              }
+            ],
             "research_refs": [
               "H11",
               "A11",
@@ -497,8 +523,15 @@
             "validation_cmd": "Proposed, not implemented: habitat-engine-check case T21 --fixture-root <disposable-fixtures>",
             "validator_available": false,
             "acceptance": "An immutable attempt dataset produces a reproducible Julia report with dataset/schema identity. Missing data, nonfinite values, stale results, timeout and cancellation are explicit. Julia failure preserves the approved route and cannot mutate task ownership. Exercise the bidirectional contract corpus with independent expectations, numeric tolerances and explicit Julia bounds checks.",
-            "state": "idle",
-            "evidence": [],
+            "state": "done",
+            "evidence": [
+              {
+                "path": "evidence/implementation-T21-20260921/closure-final/T21-closure.json",
+                "sha256": "173d7d77b728a54ad4b3377b962deff6bdd7248a59c2cec32a16bc7d3bd097fd",
+                "task_id": "T21",
+                "scope": "task_contract_review"
+              }
+            ],
             "research_refs": [
               "S05",
               "S13"
@@ -528,8 +561,15 @@
             "validation_cmd": "Proposed, not implemented: habitat-engine-check case T08 --fixture-root <disposable-fixtures>",
             "validator_available": false,
             "acceptance": "A selected native harness or plain inference backend passes the common contract; actual supported model/effort is recorded. No success inferred from terminal prose. Version-specific limitations are listed.",
-            "state": "idle",
-            "evidence": [],
+            "state": "done",
+            "evidence": [
+              {
+                "path": "evidence/implementation-T08-20260921/closure-final/T08-closure.json",
+                "sha256": "8047176b2c07203dfa89909fc23c04f5a02f24a02f99fbd7c31726a435dd53c0",
+                "task_id": "T08",
+                "scope": "task_contract_review"
+              }
+            ],
             "research_refs": [
               "D19",
               "H13"
@@ -712,8 +752,15 @@
             "validation_cmd": "Proposed, not implemented: habitat-engine-check case T13 --fixture-root <disposable-fixtures>",
             "validator_available": false,
             "acceptance": "Daemon, one-shot, library, remote endpoint and neural-operator records use appropriate observations. Unknown/stale readiness cannot become healthy; discovery claims no lifecycle ownership. Apply T05 admitted-revision and explicit import/export rules to service records. Test service update/disable, restart and stale/invalid import; observed inventory cannot overwrite effective authority or grant lifecycle control.",
-            "state": "idle",
-            "evidence": [],
+            "state": "done",
+            "evidence": [
+              {
+                "path": "evidence/implementation-T13-20260921/closure-final/T13-closure.json",
+                "sha256": "9e94b785f5dbaeedf9c12ab08777d9e7774ca21531b55b413f00fa1346688df7",
+                "task_id": "T13",
+                "scope": "task_contract_review"
+              }
+            ],
             "research_refs": [
               "D07",
               "D08",

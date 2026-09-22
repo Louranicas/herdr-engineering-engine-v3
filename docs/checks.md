@@ -32,7 +32,7 @@ Engine coding is not authorized until human operator Luke types start coding as 
 [CONTEXT RESTART POINTER](file:///var/home/herdr-engineering-engine-v3/corpus/CONTEXT_HANDOFF.md)
 [QUICK START](file:///var/home/herdr-engineering-engine-v3/QUICK_START.md)
 [ASSIMILATION AND DELIVERY WORKFLOW](file:///var/home/herdr-engineering-engine-v3/workflows/README.md)
-Readiness binding: HEE3-READINESS-001; SHA-256 ea991737ce282467556e4997f28e97c4b7f0799d823aae98905fcf34f71766f7; clauses F2-C01, F2-C02, F2-C03, F2-C04, F2-C05, F2-C06, F3-C01, F3-C02, F3-C03, F3-C04, F3-C05, F3-C06, F4-C01, F4-C02, F4-C03, F4-C04, F4-C05, F4-C06, F4-C07, F5-C01, F5-C02, F5-C03, F5-C04, F5-C05, F5-C06, F7-C01, F7-C02, F7-C03, F7-C04, F7-C05, F7-C06; groupings R90-03, R90-06, R90-07, R90-09, R90-10; resolved contracts RC02, RC03, RC04, RC05, RC06; runtime proof pending; original task DAG controls.
+Readiness binding: HEE3-READINESS-001; SHA-256 e774f8984c7e39e85b156289fac809bded6df80ba3647cfb2024c69856447b94; clauses F2-C01, F2-C02, F2-C03, F2-C04, F2-C05, F2-C06, F3-C01, F3-C02, F3-C03, F3-C04, F3-C05, F3-C06, F4-C01, F4-C02, F4-C03, F4-C04, F4-C05, F4-C06, F4-C07, F5-C01, F5-C02, F5-C03, F5-C04, F5-C05, F5-C06, F7-C01, F7-C02, F7-C03, F7-C04, F7-C05, F7-C06; groupings R90-03, R90-06, R90-07, R90-09, R90-10; resolved contracts RC02, RC03, RC04, RC05, RC06; runtime proof pending; original task DAG controls.
 Completion identity: HEE3-DONE-actions; all 13 applicable gates; current state unassessed. No documentation pass admits this module.
 Mandatory testing convention: at least 50 distinct qualifying module-owned cases; zero baseline warnings/errors, including pedantic Clippy on admitted Rust targets/profiles. Full qualification remains unassessed.
 
@@ -172,7 +172,7 @@ Applicable learning IDs: LRN01, LRN02, LRN03, LRN04, LRN08, LRN14; guidance only
 [What Prototyping Is For](obsidian://open?vault=my-diary.vault&file=Reflections%2FWhat%20Prototyping%20Is%20For)
 [What the Workflow Is Worth](obsidian://open?vault=my-diary.vault&file=Reflections%2FWhat%20the%20Workflow%20Is%20Worth)
 [Why I Stopped Trusting Green](obsidian://open?vault=my-diary.vault&file=Reflections%2FWhy%20I%20Stopped%20Trusting%20Green)
-Readiness binding: HEE3-READINESS-001; SHA-256 ea991737ce282467556e4997f28e97c4b7f0799d823aae98905fcf34f71766f7; clauses F1-C01, F1-C02, F1-C03, F1-C04, F1-C05, F2-C01, F2-C02, F2-C03, F2-C04, F2-C05, F2-C06, F3-C01, F3-C02, F3-C03, F3-C04, F3-C05, F3-C06, F4-C01, F4-C02, F4-C03, F4-C04, F4-C05, F4-C06, F4-C07, F5-C01, F5-C02, F5-C03, F5-C04, F5-C05, F5-C06, F6-C01, F6-C02, F6-C03, F6-C04, F6-C05, F6-C06, F6-C07, F6-C08, F7-C01, F7-C02, F7-C03, F7-C04, F7-C05, F7-C06; groupings R90-01, R90-02, R90-03, R90-04, R90-06, R90-08, R90-09, R90-10; resolved contracts RC01, RC02, RC03, RC04, RC05, RC06; runtime proof pending; original task DAG controls.
+Readiness binding: HEE3-READINESS-001; SHA-256 e774f8984c7e39e85b156289fac809bded6df80ba3647cfb2024c69856447b94; clauses F1-C01, F1-C02, F1-C03, F1-C04, F1-C05, F2-C01, F2-C02, F2-C03, F2-C04, F2-C05, F2-C06, F3-C01, F3-C02, F3-C03, F3-C04, F3-C05, F3-C06, F4-C01, F4-C02, F4-C03, F4-C04, F4-C05, F4-C06, F4-C07, F5-C01, F5-C02, F5-C03, F5-C04, F5-C05, F5-C06, F6-C01, F6-C02, F6-C03, F6-C04, F6-C05, F6-C06, F6-C07, F6-C08, F7-C01, F7-C02, F7-C03, F7-C04, F7-C05, F7-C06; groupings R90-01, R90-02, R90-03, R90-04, R90-06, R90-08, R90-09, R90-10; resolved contracts RC01, RC02, RC03, RC04, RC05, RC06; runtime proof pending; original task DAG controls.
 Completion identity: HEE3-DONE-app; all 13 applicable gates; current state unassessed. No documentation pass admits this module.
 Mandatory testing convention: at least 50 distinct qualifying module-owned cases; zero baseline warnings/errors, including pedantic Clippy on admitted Rust targets/profiles. Full qualification remains unassessed.
 
@@ -328,7 +328,7 @@ Applicable learning IDs: LRN01, LRN02, LRN03, LRN04, LRN05, LRN06, LRN07, LRN08,
 [Why I Stopped Trusting Green](obsidian://open?vault=my-diary.vault&file=Reflections%2FWhy%20I%20Stopped%20Trusting%20Green)
 [Working Style in This Habitat](obsidian://open?vault=my-diary.vault&file=Reflections%2FWorking%20Style%20in%20This%20Habitat)
 [Working in Sandboxes on Kinoite](obsidian://open?vault=my-diary.vault&file=Reflections%2FWorking%20in%20Sandboxes%20on%20Kinoite)
-Readiness binding: HEE3-READINESS-001; SHA-256 ea991737ce282467556e4997f28e97c4b7f0799d823aae98905fcf34f71766f7; clauses F2-C01, F2-C02, F2-C03, F2-C04, F2-C05, F2-C06, F3-C01, F3-C02, F3-C03, F3-C04, F3-C05, F3-C06, F4-C01, F4-C02, F4-C03, F4-C04, F4-C05, F4-C06, F4-C07, F5-C01, F5-C02, F5-C03, F5-C04, F5-C05, F5-C06, F7-C01, F7-C02, F7-C03, F7-C04, F7-C05, F7-C06; groupings R90-03, R90-07, R90-09, R90-10; resolved contracts RC02, RC03, RC04, RC05; runtime proof pending; original task DAG controls.
+Readiness binding: HEE3-READINESS-001; SHA-256 e774f8984c7e39e85b156289fac809bded6df80ba3647cfb2024c69856447b94; clauses F2-C01, F2-C02, F2-C03, F2-C04, F2-C05, F2-C06, F3-C01, F3-C02, F3-C03, F3-C04, F3-C05, F3-C06, F4-C01, F4-C02, F4-C03, F4-C04, F4-C05, F4-C06, F4-C07, F5-C01, F5-C02, F5-C03, F5-C04, F5-C05, F5-C06, F7-C01, F7-C02, F7-C03, F7-C04, F7-C05, F7-C06; groupings R90-03, R90-07, R90-09, R90-10; resolved contracts RC02, RC03, RC04, RC05; runtime proof pending; original task DAG controls.
 Completion identity: HEE3-DONE-bash; all 13 applicable gates; current state unassessed. No documentation pass admits this module.
 Mandatory testing convention: at least 50 distinct qualifying module-owned cases; zero baseline warnings/errors, including pedantic Clippy on admitted Rust targets/profiles. Full qualification remains unassessed.
 
@@ -442,7 +442,7 @@ Applicable learning IDs: LRN03, LRN04, LRN07, LRN08; guidance only, engine detec
 [What My Ancestors Knew That I Did Not](obsidian://open?vault=my-diary.vault&file=Reflections%2FWhat%20My%20Ancestors%20Knew%20That%20I%20Did%20Not)
 [What Prototyping Is For](obsidian://open?vault=my-diary.vault&file=Reflections%2FWhat%20Prototyping%20Is%20For)
 [Why I Stopped Trusting Green](obsidian://open?vault=my-diary.vault&file=Reflections%2FWhy%20I%20Stopped%20Trusting%20Green)
-Readiness binding: HEE3-READINESS-001; SHA-256 ea991737ce282467556e4997f28e97c4b7f0799d823aae98905fcf34f71766f7; clauses F1-C01, F1-C02, F1-C03, F1-C04, F1-C05, F2-C01, F2-C02, F2-C03, F2-C04, F2-C05, F2-C06, F3-C01, F3-C02, F3-C03, F3-C04, F3-C05, F3-C06, F4-C01, F4-C02, F4-C03, F4-C04, F4-C05, F4-C06, F4-C07, F5-C01, F5-C02, F5-C03, F5-C04, F5-C05, F5-C06, F7-C01, F7-C02, F7-C03, F7-C04, F7-C05, F7-C06; groupings R90-01, R90-05, R90-07, R90-09, R90-10; resolved contracts RC01, RC02, RC03, RC04, RC05, RC06; runtime proof pending; original task DAG controls.
+Readiness binding: HEE3-READINESS-001; SHA-256 e774f8984c7e39e85b156289fac809bded6df80ba3647cfb2024c69856447b94; clauses F1-C01, F1-C02, F1-C03, F1-C04, F1-C05, F2-C01, F2-C02, F2-C03, F2-C04, F2-C05, F2-C06, F3-C01, F3-C02, F3-C03, F3-C04, F3-C05, F3-C06, F4-C01, F4-C02, F4-C03, F4-C04, F4-C05, F4-C06, F4-C07, F5-C01, F5-C02, F5-C03, F5-C04, F5-C05, F5-C06, F7-C01, F7-C02, F7-C03, F7-C04, F7-C05, F7-C06; groupings R90-01, R90-05, R90-07, R90-09, R90-10; resolved contracts RC01, RC02, RC03, RC04, RC05, RC06; runtime proof pending; original task DAG controls.
 Completion identity: HEE3-DONE-budget; all 13 applicable gates; current state unassessed. No documentation pass admits this module.
 Mandatory testing convention: at least 50 distinct qualifying module-owned cases; zero baseline warnings/errors, including pedantic Clippy on admitted Rust targets/profiles. Full qualification remains unassessed.
 
@@ -572,7 +572,7 @@ Applicable learning IDs: LRN08, LRN09, LRN12; guidance only, engine detectors un
 [Thematic Analysis of the Vaults](obsidian://open?vault=my-diary.vault&file=Reflections%2FThematic%20Analysis%20of%20the%20Vaults)
 [What My Ancestors Knew That I Did Not](obsidian://open?vault=my-diary.vault&file=Reflections%2FWhat%20My%20Ancestors%20Knew%20That%20I%20Did%20Not)
 [What the Workflow Is Worth](obsidian://open?vault=my-diary.vault&file=Reflections%2FWhat%20the%20Workflow%20Is%20Worth)
-Readiness binding: HEE3-READINESS-001; SHA-256 ea991737ce282467556e4997f28e97c4b7f0799d823aae98905fcf34f71766f7; clauses F2-C01, F2-C02, F2-C03, F2-C04, F2-C05, F2-C06, F3-C01, F3-C02, F3-C03, F3-C04, F3-C05, F3-C06, F4-C01, F4-C02, F4-C03, F4-C04, F4-C05, F4-C06, F4-C07, F5-C01, F5-C02, F5-C03, F5-C04, F5-C05, F5-C06, F6-C01, F6-C02, F6-C03, F6-C04, F6-C05, F6-C06, F6-C07, F6-C08, F7-C01, F7-C02, F7-C03, F7-C04, F7-C05, F7-C06; groupings R90-04, R90-05, R90-06, R90-08, R90-09, R90-10; resolved contracts RC01, RC02, RC03, RC04, RC05, RC06; runtime proof pending; original task DAG controls.
+Readiness binding: HEE3-READINESS-001; SHA-256 e774f8984c7e39e85b156289fac809bded6df80ba3647cfb2024c69856447b94; clauses F2-C01, F2-C02, F2-C03, F2-C04, F2-C05, F2-C06, F3-C01, F3-C02, F3-C03, F3-C04, F3-C05, F3-C06, F4-C01, F4-C02, F4-C03, F4-C04, F4-C05, F4-C06, F4-C07, F5-C01, F5-C02, F5-C03, F5-C04, F5-C05, F5-C06, F6-C01, F6-C02, F6-C03, F6-C04, F6-C05, F6-C06, F6-C07, F6-C08, F7-C01, F7-C02, F7-C03, F7-C04, F7-C05, F7-C06; groupings R90-04, R90-05, R90-06, R90-08, R90-09, R90-10; resolved contracts RC01, RC02, RC03, RC04, RC05, RC06; runtime proof pending; original task DAG controls.
 Completion identity: HEE3-DONE-check; all 13 applicable gates; current state unassessed. No documentation pass admits this module.
 Mandatory testing convention: at least 50 distinct qualifying module-owned cases; zero baseline warnings/errors, including pedantic Clippy on admitted Rust targets/profiles. Full qualification remains unassessed.
 
@@ -599,12 +599,14 @@ Future validators are proposed/unavailable; no empty or skipped check establishe
 [task TASK-T07](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Delivery%2FTasks%2FTASK-T07)
 [task TASK-T10](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Delivery%2FTasks%2FTASK-T10)
 [task TASK-T12](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Delivery%2FTasks%2FTASK-T12)
+[implementation support task TASK-T13](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Delivery%2FTasks%2FTASK-T13)
 [task TASK-T14](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Delivery%2FTasks%2FTASK-T14)
 [task TASK-T15](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Delivery%2FTasks%2FTASK-T15)
 [task TASK-T17](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Delivery%2FTasks%2FTASK-T17)
 [task TASK-T18](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Delivery%2FTasks%2FTASK-T18)
 [task TASK-T19](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Delivery%2FTasks%2FTASK-T19)
 [task TASK-T20](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Delivery%2FTasks%2FTASK-T20)
+[implementation support task TASK-T21](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Delivery%2FTasks%2FTASK-T21)
 [task TASK-T25](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Delivery%2FTasks%2FTASK-T25)
 [task TASK-T26](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Delivery%2FTasks%2FTASK-T26)
 [task TASK-T27](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Delivery%2FTasks%2FTASK-T27)
@@ -720,7 +722,7 @@ Applicable learning IDs: LRN01, LRN02, LRN05, LRN06, LRN08, LRN12, LRN14; guidan
 [What the Workflow Is Worth](obsidian://open?vault=my-diary.vault&file=Reflections%2FWhat%20the%20Workflow%20Is%20Worth)
 [Why I Stopped Trusting Green](obsidian://open?vault=my-diary.vault&file=Reflections%2FWhy%20I%20Stopped%20Trusting%20Green)
 [Working in Sandboxes on Kinoite](obsidian://open?vault=my-diary.vault&file=Reflections%2FWorking%20in%20Sandboxes%20on%20Kinoite)
-Readiness binding: HEE3-READINESS-001; SHA-256 ea991737ce282467556e4997f28e97c4b7f0799d823aae98905fcf34f71766f7; clauses F2-C01, F2-C02, F2-C03, F2-C04, F2-C05, F2-C06, F3-C01, F3-C02, F3-C03, F3-C04, F3-C05, F3-C06, F4-C01, F4-C02, F4-C03, F4-C04, F4-C05, F4-C06, F4-C07, F5-C01, F5-C02, F5-C03, F5-C04, F5-C05, F5-C06, F7-C01, F7-C02, F7-C03, F7-C04, F7-C05, F7-C06; groupings R90-07, R90-09, R90-10; resolved contracts RC01, RC02, RC03, RC04, RC05; runtime proof pending; original task DAG controls.
+Readiness binding: HEE3-READINESS-001; SHA-256 e774f8984c7e39e85b156289fac809bded6df80ba3647cfb2024c69856447b94; clauses F2-C01, F2-C02, F2-C03, F2-C04, F2-C05, F2-C06, F3-C01, F3-C02, F3-C03, F3-C04, F3-C05, F3-C06, F4-C01, F4-C02, F4-C03, F4-C04, F4-C05, F4-C06, F4-C07, F5-C01, F5-C02, F5-C03, F5-C04, F5-C05, F5-C06, F7-C01, F7-C02, F7-C03, F7-C04, F7-C05, F7-C06; groupings R90-07, R90-09, R90-10; resolved contracts RC01, RC02, RC03, RC04, RC05; runtime proof pending; original task DAG controls.
 Completion identity: HEE3-DONE-cohort; all 13 applicable gates; current state unassessed. No documentation pass admits this module.
 Mandatory testing convention: at least 50 distinct qualifying module-owned cases; zero baseline warnings/errors, including pedantic Clippy on admitted Rust targets/profiles. Full qualification remains unassessed.
 
@@ -857,7 +859,7 @@ Applicable learning IDs: LRN07, LRN08, LRN11, LRN12, LRN14; guidance only, engin
 [What My Ancestors Knew That I Did Not](obsidian://open?vault=my-diary.vault&file=Reflections%2FWhat%20My%20Ancestors%20Knew%20That%20I%20Did%20Not)
 [What the Workflow Is Worth](obsidian://open?vault=my-diary.vault&file=Reflections%2FWhat%20the%20Workflow%20Is%20Worth)
 [Working Style in This Habitat](obsidian://open?vault=my-diary.vault&file=Reflections%2FWorking%20Style%20in%20This%20Habitat)
-Readiness binding: HEE3-READINESS-001; SHA-256 ea991737ce282467556e4997f28e97c4b7f0799d823aae98905fcf34f71766f7; clauses F2-C01, F2-C02, F2-C03, F2-C04, F2-C05, F2-C06, F3-C01, F3-C02, F3-C03, F3-C04, F3-C05, F3-C06, F4-C01, F4-C02, F4-C03, F4-C04, F4-C05, F4-C06, F4-C07, F5-C01, F5-C02, F5-C03, F5-C04, F5-C05, F5-C06, F7-C01, F7-C02, F7-C03, F7-C04, F7-C05, F7-C06; groupings R90-06, R90-07, R90-09, R90-10; resolved contracts RC01, RC02, RC03, RC04, RC05; runtime proof pending; original task DAG controls.
+Readiness binding: HEE3-READINESS-001; SHA-256 e774f8984c7e39e85b156289fac809bded6df80ba3647cfb2024c69856447b94; clauses F2-C01, F2-C02, F2-C03, F2-C04, F2-C05, F2-C06, F3-C01, F3-C02, F3-C03, F3-C04, F3-C05, F3-C06, F4-C01, F4-C02, F4-C03, F4-C04, F4-C05, F4-C06, F4-C07, F5-C01, F5-C02, F5-C03, F5-C04, F5-C05, F5-C06, F7-C01, F7-C02, F7-C03, F7-C04, F7-C05, F7-C06; groupings R90-06, R90-07, R90-09, R90-10; resolved contracts RC01, RC02, RC03, RC04, RC05; runtime proof pending; original task DAG controls.
 Completion identity: HEE3-DONE-context; all 13 applicable gates; current state unassessed. No documentation pass admits this module.
 Mandatory testing convention: at least 50 distinct qualifying module-owned cases; zero baseline warnings/errors, including pedantic Clippy on admitted Rust targets/profiles. Full qualification remains unassessed.
 
@@ -988,7 +990,7 @@ Applicable learning IDs: LRN03, LRN08, LRN09, LRN11, LRN12, LRN14; guidance only
 [What the Workflow Is Worth](obsidian://open?vault=my-diary.vault&file=Reflections%2FWhat%20the%20Workflow%20Is%20Worth)
 [Why I Stopped Trusting Green](obsidian://open?vault=my-diary.vault&file=Reflections%2FWhy%20I%20Stopped%20Trusting%20Green)
 [Working Style in This Habitat](obsidian://open?vault=my-diary.vault&file=Reflections%2FWorking%20Style%20in%20This%20Habitat)
-Readiness binding: HEE3-READINESS-001; SHA-256 ea991737ce282467556e4997f28e97c4b7f0799d823aae98905fcf34f71766f7; clauses F2-C01, F2-C02, F2-C03, F2-C04, F2-C05, F2-C06, F3-C01, F3-C02, F3-C03, F3-C04, F3-C05, F3-C06, F4-C01, F4-C02, F4-C03, F4-C04, F4-C05, F4-C06, F4-C07, F5-C01, F5-C02, F5-C03, F5-C04, F5-C05, F5-C06, F7-C01, F7-C02, F7-C03, F7-C04, F7-C05, F7-C06; groupings R90-02, R90-03, R90-04, R90-05, R90-09, R90-10; resolved contracts RC02, RC03, RC04, RC05; runtime proof pending; original task DAG controls.
+Readiness binding: HEE3-READINESS-001; SHA-256 e774f8984c7e39e85b156289fac809bded6df80ba3647cfb2024c69856447b94; clauses F2-C01, F2-C02, F2-C03, F2-C04, F2-C05, F2-C06, F3-C01, F3-C02, F3-C03, F3-C04, F3-C05, F3-C06, F4-C01, F4-C02, F4-C03, F4-C04, F4-C05, F4-C06, F4-C07, F5-C01, F5-C02, F5-C03, F5-C04, F5-C05, F5-C06, F7-C01, F7-C02, F7-C03, F7-C04, F7-C05, F7-C06; groupings R90-02, R90-03, R90-04, R90-05, R90-09, R90-10; resolved contracts RC02, RC03, RC04, RC05; runtime proof pending; original task DAG controls.
 Completion identity: HEE3-DONE-contracts; all 13 applicable gates; current state unassessed. No documentation pass admits this module.
 Mandatory testing convention: at least 50 distinct qualifying module-owned cases; zero baseline warnings/errors, including pedantic Clippy on admitted Rust targets/profiles. Full qualification remains unassessed.
 
@@ -1121,7 +1123,7 @@ Applicable learning IDs: LRN01, LRN03, LRN04, LRN08; guidance only, engine detec
 [What My Ancestors Knew That I Did Not](obsidian://open?vault=my-diary.vault&file=Reflections%2FWhat%20My%20Ancestors%20Knew%20That%20I%20Did%20Not)
 [What Prototyping Is For](obsidian://open?vault=my-diary.vault&file=Reflections%2FWhat%20Prototyping%20Is%20For)
 [Why I Stopped Trusting Green](obsidian://open?vault=my-diary.vault&file=Reflections%2FWhy%20I%20Stopped%20Trusting%20Green)
-Readiness binding: HEE3-READINESS-001; SHA-256 ea991737ce282467556e4997f28e97c4b7f0799d823aae98905fcf34f71766f7; clauses F2-C01, F2-C02, F2-C03, F2-C04, F2-C05, F2-C06, F3-C01, F3-C02, F3-C03, F3-C04, F3-C05, F3-C06, F4-C01, F4-C02, F4-C03, F4-C04, F4-C05, F4-C06, F4-C07, F5-C01, F5-C02, F5-C03, F5-C04, F5-C05, F5-C06, F7-C01, F7-C02, F7-C03, F7-C04, F7-C05, F7-C06; groupings R90-03, R90-07, R90-09, R90-10; resolved contracts RC02, RC03, RC04, RC05; runtime proof pending; original task DAG controls.
+Readiness binding: HEE3-READINESS-001; SHA-256 e774f8984c7e39e85b156289fac809bded6df80ba3647cfb2024c69856447b94; clauses F2-C01, F2-C02, F2-C03, F2-C04, F2-C05, F2-C06, F3-C01, F3-C02, F3-C03, F3-C04, F3-C05, F3-C06, F4-C01, F4-C02, F4-C03, F4-C04, F4-C05, F4-C06, F4-C07, F5-C01, F5-C02, F5-C03, F5-C04, F5-C05, F5-C06, F7-C01, F7-C02, F7-C03, F7-C04, F7-C05, F7-C06; groupings R90-03, R90-07, R90-09, R90-10; resolved contracts RC02, RC03, RC04, RC05; runtime proof pending; original task DAG controls.
 Completion identity: HEE3-DONE-herdr; all 13 applicable gates; current state unassessed. No documentation pass admits this module.
 Mandatory testing convention: at least 50 distinct qualifying module-owned cases; zero baseline warnings/errors, including pedantic Clippy on admitted Rust targets/profiles. Full qualification remains unassessed.
 
@@ -1234,7 +1236,7 @@ Applicable learning IDs: LRN01, LRN08, LRN13; guidance only, engine detectors un
 [The Spellbook and the Ember](obsidian://open?vault=my-diary.vault&file=Reflections%2FThe%20Spellbook%20and%20the%20Ember)
 [What My Ancestors Knew That I Did Not](obsidian://open?vault=my-diary.vault&file=Reflections%2FWhat%20My%20Ancestors%20Knew%20That%20I%20Did%20Not)
 [Working in Sandboxes on Kinoite](obsidian://open?vault=my-diary.vault&file=Reflections%2FWorking%20in%20Sandboxes%20on%20Kinoite)
-Readiness binding: HEE3-READINESS-001; SHA-256 ea991737ce282467556e4997f28e97c4b7f0799d823aae98905fcf34f71766f7; clauses F1-C01, F1-C02, F1-C03, F1-C04, F1-C05, F2-C01, F2-C02, F2-C03, F2-C04, F2-C05, F2-C06, F3-C01, F3-C02, F3-C03, F3-C04, F3-C05, F3-C06, F4-C01, F4-C02, F4-C03, F4-C04, F4-C05, F4-C06, F4-C07, F5-C01, F5-C02, F5-C03, F5-C04, F5-C05, F5-C06, F7-C01, F7-C02, F7-C03, F7-C04, F7-C05, F7-C06; groupings R90-01, R90-02, R90-03, R90-04, R90-07, R90-09, R90-10; resolved contracts RC01, RC02, RC03, RC04, RC05; runtime proof pending; original task DAG controls.
+Readiness binding: HEE3-READINESS-001; SHA-256 e774f8984c7e39e85b156289fac809bded6df80ba3647cfb2024c69856447b94; clauses F1-C01, F1-C02, F1-C03, F1-C04, F1-C05, F2-C01, F2-C02, F2-C03, F2-C04, F2-C05, F2-C06, F3-C01, F3-C02, F3-C03, F3-C04, F3-C05, F3-C06, F4-C01, F4-C02, F4-C03, F4-C04, F4-C05, F4-C06, F4-C07, F5-C01, F5-C02, F5-C03, F5-C04, F5-C05, F5-C06, F7-C01, F7-C02, F7-C03, F7-C04, F7-C05, F7-C06; groupings R90-01, R90-02, R90-03, R90-04, R90-07, R90-09, R90-10; resolved contracts RC01, RC02, RC03, RC04, RC05; runtime proof pending; original task DAG controls.
 Completion identity: HEE3-DONE-julia; all 13 applicable gates; current state unassessed. No documentation pass admits this module.
 Mandatory testing convention: at least 50 distinct qualifying module-owned cases; zero baseline warnings/errors, including pedantic Clippy on admitted Rust targets/profiles. Full qualification remains unassessed.
 
@@ -1385,7 +1387,7 @@ Applicable learning IDs: LRN03, LRN05, LRN06, LRN08, LRN09, LRN10, LRN12; guidan
 [What the Workflow Is Worth](obsidian://open?vault=my-diary.vault&file=Reflections%2FWhat%20the%20Workflow%20Is%20Worth)
 [Why I Stopped Trusting Green](obsidian://open?vault=my-diary.vault&file=Reflections%2FWhy%20I%20Stopped%20Trusting%20Green)
 [Working in Sandboxes on Kinoite](obsidian://open?vault=my-diary.vault&file=Reflections%2FWorking%20in%20Sandboxes%20on%20Kinoite)
-Readiness binding: HEE3-READINESS-001; SHA-256 ea991737ce282467556e4997f28e97c4b7f0799d823aae98905fcf34f71766f7; clauses F2-C01, F2-C02, F2-C03, F2-C04, F2-C05, F2-C06, F3-C01, F3-C02, F3-C03, F3-C04, F3-C05, F3-C06, F4-C01, F4-C02, F4-C03, F4-C04, F4-C05, F4-C06, F4-C07, F5-C01, F5-C02, F5-C03, F5-C04, F5-C05, F5-C06, F6-C01, F6-C02, F6-C03, F6-C04, F6-C05, F6-C06, F6-C07, F6-C08, F7-C01, F7-C02, F7-C03, F7-C04, F7-C05, F7-C06; groupings R90-05, R90-07, R90-08, R90-09, R90-10; resolved contracts RC02, RC03, RC04, RC05, RC06; runtime proof pending; original task DAG controls.
+Readiness binding: HEE3-READINESS-001; SHA-256 e774f8984c7e39e85b156289fac809bded6df80ba3647cfb2024c69856447b94; clauses F2-C01, F2-C02, F2-C03, F2-C04, F2-C05, F2-C06, F3-C01, F3-C02, F3-C03, F3-C04, F3-C05, F3-C06, F4-C01, F4-C02, F4-C03, F4-C04, F4-C05, F4-C06, F4-C07, F5-C01, F5-C02, F5-C03, F5-C04, F5-C05, F5-C06, F6-C01, F6-C02, F6-C03, F6-C04, F6-C05, F6-C06, F6-C07, F6-C08, F7-C01, F7-C02, F7-C03, F7-C04, F7-C05, F7-C06; groupings R90-05, R90-07, R90-08, R90-09, R90-10; resolved contracts RC02, RC03, RC04, RC05, RC06; runtime proof pending; original task DAG controls.
 Completion identity: HEE3-DONE-notify; all 13 applicable gates; current state unassessed. No documentation pass admits this module.
 Mandatory testing convention: at least 50 distinct qualifying module-owned cases; zero baseline warnings/errors, including pedantic Clippy on admitted Rust targets/profiles. Full qualification remains unassessed.
 
@@ -1512,7 +1514,7 @@ Applicable learning IDs: LRN01, LRN03, LRN08, LRN13; guidance only, engine detec
 [What My Ancestors Knew That I Did Not](obsidian://open?vault=my-diary.vault&file=Reflections%2FWhat%20My%20Ancestors%20Knew%20That%20I%20Did%20Not)
 [Why I Stopped Trusting Green](obsidian://open?vault=my-diary.vault&file=Reflections%2FWhy%20I%20Stopped%20Trusting%20Green)
 [Working in Sandboxes on Kinoite](obsidian://open?vault=my-diary.vault&file=Reflections%2FWorking%20in%20Sandboxes%20on%20Kinoite)
-Readiness binding: HEE3-READINESS-001; SHA-256 ea991737ce282467556e4997f28e97c4b7f0799d823aae98905fcf34f71766f7; clauses F1-C01, F1-C02, F1-C03, F1-C04, F1-C05, F2-C01, F2-C02, F2-C03, F2-C04, F2-C05, F2-C06, F3-C01, F3-C02, F3-C03, F3-C04, F3-C05, F3-C06, F4-C01, F4-C02, F4-C03, F4-C04, F4-C05, F4-C06, F4-C07, F5-C01, F5-C02, F5-C03, F5-C04, F5-C05, F5-C06, F7-C01, F7-C02, F7-C03, F7-C04, F7-C05, F7-C06; groupings R90-01, R90-03, R90-07, R90-09, R90-10; resolved contracts RC01, RC02, RC03, RC04, RC05; runtime proof pending; original task DAG controls.
+Readiness binding: HEE3-READINESS-001; SHA-256 e774f8984c7e39e85b156289fac809bded6df80ba3647cfb2024c69856447b94; clauses F1-C01, F1-C02, F1-C03, F1-C04, F1-C05, F2-C01, F2-C02, F2-C03, F2-C04, F2-C05, F2-C06, F3-C01, F3-C02, F3-C03, F3-C04, F3-C05, F3-C06, F4-C01, F4-C02, F4-C03, F4-C04, F4-C05, F4-C06, F4-C07, F5-C01, F5-C02, F5-C03, F5-C04, F5-C05, F5-C06, F7-C01, F7-C02, F7-C03, F7-C04, F7-C05, F7-C06; groupings R90-01, R90-03, R90-07, R90-09, R90-10; resolved contracts RC01, RC02, RC03, RC04, RC05; runtime proof pending; original task DAG controls.
 Completion identity: HEE3-DONE-numerical; all 13 applicable gates; current state unassessed. No documentation pass admits this module.
 Mandatory testing convention: at least 50 distinct qualifying module-owned cases; zero baseline warnings/errors, including pedantic Clippy on admitted Rust targets/profiles. Full qualification remains unassessed.
 
@@ -1669,7 +1671,7 @@ Applicable learning IDs: LRN03, LRN05, LRN06, LRN08, LRN09, LRN10, LRN12; guidan
 [What the Workflow Is Worth](obsidian://open?vault=my-diary.vault&file=Reflections%2FWhat%20the%20Workflow%20Is%20Worth)
 [Why I Stopped Trusting Green](obsidian://open?vault=my-diary.vault&file=Reflections%2FWhy%20I%20Stopped%20Trusting%20Green)
 [Working in Sandboxes on Kinoite](obsidian://open?vault=my-diary.vault&file=Reflections%2FWorking%20in%20Sandboxes%20on%20Kinoite)
-Readiness binding: HEE3-READINESS-001; SHA-256 ea991737ce282467556e4997f28e97c4b7f0799d823aae98905fcf34f71766f7; clauses F2-C01, F2-C02, F2-C03, F2-C04, F2-C05, F2-C06, F3-C01, F3-C02, F3-C03, F3-C04, F3-C05, F3-C06, F4-C01, F4-C02, F4-C03, F4-C04, F4-C05, F4-C06, F4-C07, F5-C01, F5-C02, F5-C03, F5-C04, F5-C05, F5-C06, F7-C01, F7-C02, F7-C03, F7-C04, F7-C05, F7-C06; groupings R90-03, R90-07, R90-09, R90-10; resolved contracts RC02, RC03, RC04, RC05; runtime proof pending; original task DAG controls.
+Readiness binding: HEE3-READINESS-001; SHA-256 e774f8984c7e39e85b156289fac809bded6df80ba3647cfb2024c69856447b94; clauses F2-C01, F2-C02, F2-C03, F2-C04, F2-C05, F2-C06, F3-C01, F3-C02, F3-C03, F3-C04, F3-C05, F3-C06, F4-C01, F4-C02, F4-C03, F4-C04, F4-C05, F4-C06, F4-C07, F5-C01, F5-C02, F5-C03, F5-C04, F5-C05, F5-C06, F7-C01, F7-C02, F7-C03, F7-C04, F7-C05, F7-C06; groupings R90-03, R90-07, R90-09, R90-10; resolved contracts RC02, RC03, RC04, RC05; runtime proof pending; original task DAG controls.
 Completion identity: HEE3-DONE-pi_extension; all 13 applicable gates; current state unassessed. No documentation pass admits this module.
 Mandatory testing convention: at least 50 distinct qualifying module-owned cases; zero baseline warnings/errors, including pedantic Clippy on admitted Rust targets/profiles. Full qualification remains unassessed.
 
@@ -1795,7 +1797,7 @@ Applicable learning IDs: LRN03, LRN04, LRN07, LRN08, LRN10, LRN11; guidance only
 [What the Workflow Is Worth](obsidian://open?vault=my-diary.vault&file=Reflections%2FWhat%20the%20Workflow%20Is%20Worth)
 [Why I Stopped Trusting Green](obsidian://open?vault=my-diary.vault&file=Reflections%2FWhy%20I%20Stopped%20Trusting%20Green)
 [Working Style in This Habitat](obsidian://open?vault=my-diary.vault&file=Reflections%2FWorking%20Style%20in%20This%20Habitat)
-Readiness binding: HEE3-READINESS-001; SHA-256 ea991737ce282467556e4997f28e97c4b7f0799d823aae98905fcf34f71766f7; clauses F2-C01, F2-C02, F2-C03, F2-C04, F2-C05, F2-C06, F3-C01, F3-C02, F3-C03, F3-C04, F3-C05, F3-C06, F4-C01, F4-C02, F4-C03, F4-C04, F4-C05, F4-C06, F4-C07, F5-C01, F5-C02, F5-C03, F5-C04, F5-C05, F5-C06, F6-C01, F6-C02, F6-C03, F6-C04, F6-C05, F6-C06, F6-C07, F6-C08, F7-C01, F7-C02, F7-C03, F7-C04, F7-C05, F7-C06; groupings R90-05, R90-08, R90-09, R90-10; resolved contracts RC01, RC02, RC03, RC04, RC05, RC06; runtime proof pending; original task DAG controls.
+Readiness binding: HEE3-READINESS-001; SHA-256 e774f8984c7e39e85b156289fac809bded6df80ba3647cfb2024c69856447b94; clauses F2-C01, F2-C02, F2-C03, F2-C04, F2-C05, F2-C06, F3-C01, F3-C02, F3-C03, F3-C04, F3-C05, F3-C06, F4-C01, F4-C02, F4-C03, F4-C04, F4-C05, F4-C06, F4-C07, F5-C01, F5-C02, F5-C03, F5-C04, F5-C05, F5-C06, F6-C01, F6-C02, F6-C03, F6-C04, F6-C05, F6-C06, F6-C07, F6-C08, F7-C01, F7-C02, F7-C03, F7-C04, F7-C05, F7-C06; groupings R90-05, R90-08, R90-09, R90-10; resolved contracts RC01, RC02, RC03, RC04, RC05, RC06; runtime proof pending; original task DAG controls.
 Completion identity: HEE3-DONE-recovery; all 13 applicable gates; current state unassessed. No documentation pass admits this module.
 Mandatory testing convention: at least 50 distinct qualifying module-owned cases; zero baseline warnings/errors, including pedantic Clippy on admitted Rust targets/profiles. Full qualification remains unassessed.
 
@@ -1924,7 +1926,7 @@ Applicable learning IDs: LRN05, LRN06, LRN07, LRN08, LRN11, LRN13; guidance only
 [Why I Stopped Trusting Green](obsidian://open?vault=my-diary.vault&file=Reflections%2FWhy%20I%20Stopped%20Trusting%20Green)
 [Working Style in This Habitat](obsidian://open?vault=my-diary.vault&file=Reflections%2FWorking%20Style%20in%20This%20Habitat)
 [Working in Sandboxes on Kinoite](obsidian://open?vault=my-diary.vault&file=Reflections%2FWorking%20in%20Sandboxes%20on%20Kinoite)
-Readiness binding: HEE3-READINESS-001; SHA-256 ea991737ce282467556e4997f28e97c4b7f0799d823aae98905fcf34f71766f7; clauses F2-C01, F2-C02, F2-C03, F2-C04, F2-C05, F2-C06, F3-C01, F3-C02, F3-C03, F3-C04, F3-C05, F3-C06, F4-C01, F4-C02, F4-C03, F4-C04, F4-C05, F4-C06, F4-C07, F5-C01, F5-C02, F5-C03, F5-C04, F5-C05, F5-C06, F7-C01, F7-C02, F7-C03, F7-C04, F7-C05, F7-C06; groupings R90-05, R90-07, R90-09, R90-10; resolved contracts RC02, RC03, RC04, RC05; runtime proof pending; original task DAG controls.
+Readiness binding: HEE3-READINESS-001; SHA-256 e774f8984c7e39e85b156289fac809bded6df80ba3647cfb2024c69856447b94; clauses F2-C01, F2-C02, F2-C03, F2-C04, F2-C05, F2-C06, F3-C01, F3-C02, F3-C03, F3-C04, F3-C05, F3-C06, F4-C01, F4-C02, F4-C03, F4-C04, F4-C05, F4-C06, F4-C07, F5-C01, F5-C02, F5-C03, F5-C04, F5-C05, F5-C06, F7-C01, F7-C02, F7-C03, F7-C04, F7-C05, F7-C06; groupings R90-05, R90-07, R90-09, R90-10; resolved contracts RC02, RC03, RC04, RC05; runtime proof pending; original task DAG controls.
 Completion identity: HEE3-DONE-roster; all 13 applicable gates; current state unassessed. No documentation pass admits this module.
 Mandatory testing convention: at least 50 distinct qualifying module-owned cases; zero baseline warnings/errors, including pedantic Clippy on admitted Rust targets/profiles. Full qualification remains unassessed.
 
@@ -2055,7 +2057,7 @@ Applicable learning IDs: LRN05, LRN08, LRN09; guidance only, engine detectors un
 [The Spellbook and the Ember](obsidian://open?vault=my-diary.vault&file=Reflections%2FThe%20Spellbook%20and%20the%20Ember)
 [What My Ancestors Knew That I Did Not](obsidian://open?vault=my-diary.vault&file=Reflections%2FWhat%20My%20Ancestors%20Knew%20That%20I%20Did%20Not)
 [What the Workflow Is Worth](obsidian://open?vault=my-diary.vault&file=Reflections%2FWhat%20the%20Workflow%20Is%20Worth)
-Readiness binding: HEE3-READINESS-001; SHA-256 ea991737ce282467556e4997f28e97c4b7f0799d823aae98905fcf34f71766f7; clauses F1-C01, F1-C02, F1-C03, F1-C04, F1-C05, F2-C01, F2-C02, F2-C03, F2-C04, F2-C05, F2-C06, F3-C01, F3-C02, F3-C03, F3-C04, F3-C05, F3-C06, F4-C01, F4-C02, F4-C03, F4-C04, F4-C05, F4-C06, F4-C07, F5-C01, F5-C02, F5-C03, F5-C04, F5-C05, F5-C06, F7-C01, F7-C02, F7-C03, F7-C04, F7-C05, F7-C06; groupings R90-01, R90-07, R90-09, R90-10; resolved contracts RC01, RC02, RC03, RC04, RC05; runtime proof pending; original task DAG controls.
+Readiness binding: HEE3-READINESS-001; SHA-256 e774f8984c7e39e85b156289fac809bded6df80ba3647cfb2024c69856447b94; clauses F1-C01, F1-C02, F1-C03, F1-C04, F1-C05, F2-C01, F2-C02, F2-C03, F2-C04, F2-C05, F2-C06, F3-C01, F3-C02, F3-C03, F3-C04, F3-C05, F3-C06, F4-C01, F4-C02, F4-C03, F4-C04, F4-C05, F4-C06, F4-C07, F5-C01, F5-C02, F5-C03, F5-C04, F5-C05, F5-C06, F7-C01, F7-C02, F7-C03, F7-C04, F7-C05, F7-C06; groupings R90-01, R90-07, R90-09, R90-10; resolved contracts RC01, RC02, RC03, RC04, RC05; runtime proof pending; original task DAG controls.
 Completion identity: HEE3-DONE-route; all 13 applicable gates; current state unassessed. No documentation pass admits this module.
 Mandatory testing convention: at least 50 distinct qualifying module-owned cases; zero baseline warnings/errors, including pedantic Clippy on admitted Rust targets/profiles. Full qualification remains unassessed.
 
@@ -2188,7 +2190,7 @@ Applicable learning IDs: LRN05, LRN08, LRN09, LRN10, LRN12; guidance only, engin
 [What My Ancestors Knew That I Did Not](obsidian://open?vault=my-diary.vault&file=Reflections%2FWhat%20My%20Ancestors%20Knew%20That%20I%20Did%20Not)
 [What Prototyping Is For](obsidian://open?vault=my-diary.vault&file=Reflections%2FWhat%20Prototyping%20Is%20For)
 [What the Workflow Is Worth](obsidian://open?vault=my-diary.vault&file=Reflections%2FWhat%20the%20Workflow%20Is%20Worth)
-Readiness binding: HEE3-READINESS-001; SHA-256 ea991737ce282467556e4997f28e97c4b7f0799d823aae98905fcf34f71766f7; clauses F2-C01, F2-C02, F2-C03, F2-C04, F2-C05, F2-C06, F3-C01, F3-C02, F3-C03, F3-C04, F3-C05, F3-C06, F4-C01, F4-C02, F4-C03, F4-C04, F4-C05, F4-C06, F4-C07, F5-C01, F5-C02, F5-C03, F5-C04, F5-C05, F5-C06, F6-C01, F6-C02, F6-C03, F6-C04, F6-C05, F6-C06, F6-C07, F6-C08, F7-C01, F7-C02, F7-C03, F7-C04, F7-C05, F7-C06; groupings R90-02, R90-06, R90-07, R90-08, R90-09, R90-10; resolved contracts RC02, RC03, RC04, RC05, RC06; runtime proof pending; original task DAG controls.
+Readiness binding: HEE3-READINESS-001; SHA-256 e774f8984c7e39e85b156289fac809bded6df80ba3647cfb2024c69856447b94; clauses F2-C01, F2-C02, F2-C03, F2-C04, F2-C05, F2-C06, F3-C01, F3-C02, F3-C03, F3-C04, F3-C05, F3-C06, F4-C01, F4-C02, F4-C03, F4-C04, F4-C05, F4-C06, F4-C07, F5-C01, F5-C02, F5-C03, F5-C04, F5-C05, F5-C06, F6-C01, F6-C02, F6-C03, F6-C04, F6-C05, F6-C06, F6-C07, F6-C08, F7-C01, F7-C02, F7-C03, F7-C04, F7-C05, F7-C06; groupings R90-02, R90-06, R90-07, R90-08, R90-09, R90-10; resolved contracts RC02, RC03, RC04, RC05, RC06; runtime proof pending; original task DAG controls.
 Completion identity: HEE3-DONE-service; all 13 applicable gates; current state unassessed. No documentation pass admits this module.
 Mandatory testing convention: at least 50 distinct qualifying module-owned cases; zero baseline warnings/errors, including pedantic Clippy on admitted Rust targets/profiles. Full qualification remains unassessed.
 
@@ -2329,7 +2331,7 @@ Applicable learning IDs: LRN06, LRN07, LRN08, LRN10, LRN13; guidance only, engin
 [What Prototyping Is For](obsidian://open?vault=my-diary.vault&file=Reflections%2FWhat%20Prototyping%20Is%20For)
 [Why I Stopped Trusting Green](obsidian://open?vault=my-diary.vault&file=Reflections%2FWhy%20I%20Stopped%20Trusting%20Green)
 [Working in Sandboxes on Kinoite](obsidian://open?vault=my-diary.vault&file=Reflections%2FWorking%20in%20Sandboxes%20on%20Kinoite)
-Readiness binding: HEE3-READINESS-001; SHA-256 ea991737ce282467556e4997f28e97c4b7f0799d823aae98905fcf34f71766f7; clauses F2-C01, F2-C02, F2-C03, F2-C04, F2-C05, F2-C06, F3-C01, F3-C02, F3-C03, F3-C04, F3-C05, F3-C06, F4-C01, F4-C02, F4-C03, F4-C04, F4-C05, F4-C06, F4-C07, F5-C01, F5-C02, F5-C03, F5-C04, F5-C05, F5-C06, F7-C01, F7-C02, F7-C03, F7-C04, F7-C05, F7-C06; groupings R90-03, R90-07, R90-09, R90-10; resolved contracts RC02, RC03, RC04, RC05; runtime proof pending; original task DAG controls.
+Readiness binding: HEE3-READINESS-001; SHA-256 e774f8984c7e39e85b156289fac809bded6df80ba3647cfb2024c69856447b94; clauses F2-C01, F2-C02, F2-C03, F2-C04, F2-C05, F2-C06, F3-C01, F3-C02, F3-C03, F3-C04, F3-C05, F3-C06, F4-C01, F4-C02, F4-C03, F4-C04, F4-C05, F4-C06, F4-C07, F5-C01, F5-C02, F5-C03, F5-C04, F5-C05, F5-C06, F7-C01, F7-C02, F7-C03, F7-C04, F7-C05, F7-C06; groupings R90-03, R90-07, R90-09, R90-10; resolved contracts RC02, RC03, RC04, RC05; runtime proof pending; original task DAG controls.
 Completion identity: HEE3-DONE-skills; all 13 applicable gates; current state unassessed. No documentation pass admits this module.
 Mandatory testing convention: at least 50 distinct qualifying module-owned cases; zero baseline warnings/errors, including pedantic Clippy on admitted Rust targets/profiles. Full qualification remains unassessed.
 
@@ -2455,7 +2457,7 @@ Applicable learning IDs: LRN04, LRN08, LRN09, LRN10, LRN11, LRN14; guidance only
 [What Prototyping Is For](obsidian://open?vault=my-diary.vault&file=Reflections%2FWhat%20Prototyping%20Is%20For)
 [What the Workflow Is Worth](obsidian://open?vault=my-diary.vault&file=Reflections%2FWhat%20the%20Workflow%20Is%20Worth)
 [Working Style in This Habitat](obsidian://open?vault=my-diary.vault&file=Reflections%2FWorking%20Style%20in%20This%20Habitat)
-Readiness binding: HEE3-READINESS-001; SHA-256 ea991737ce282467556e4997f28e97c4b7f0799d823aae98905fcf34f71766f7; clauses F2-C01, F2-C02, F2-C03, F2-C04, F2-C05, F2-C06, F3-C01, F3-C02, F3-C03, F3-C04, F3-C05, F3-C06, F4-C01, F4-C02, F4-C03, F4-C04, F4-C05, F4-C06, F4-C07, F5-C01, F5-C02, F5-C03, F5-C04, F5-C05, F5-C06, F6-C01, F6-C02, F6-C03, F6-C04, F6-C05, F6-C06, F6-C07, F6-C08, F7-C01, F7-C02, F7-C03, F7-C04, F7-C05, F7-C06; groupings R90-02, R90-05, R90-06, R90-08, R90-09, R90-10; resolved contracts RC02, RC03, RC04, RC05, RC06; runtime proof pending; original task DAG controls.
+Readiness binding: HEE3-READINESS-001; SHA-256 e774f8984c7e39e85b156289fac809bded6df80ba3647cfb2024c69856447b94; clauses F2-C01, F2-C02, F2-C03, F2-C04, F2-C05, F2-C06, F3-C01, F3-C02, F3-C03, F3-C04, F3-C05, F3-C06, F4-C01, F4-C02, F4-C03, F4-C04, F4-C05, F4-C06, F4-C07, F5-C01, F5-C02, F5-C03, F5-C04, F5-C05, F5-C06, F6-C01, F6-C02, F6-C03, F6-C04, F6-C05, F6-C06, F6-C07, F6-C08, F7-C01, F7-C02, F7-C03, F7-C04, F7-C05, F7-C06; groupings R90-02, R90-05, R90-06, R90-08, R90-09, R90-10; resolved contracts RC02, RC03, RC04, RC05, RC06; runtime proof pending; original task DAG controls.
 Completion identity: HEE3-DONE-store; all 13 applicable gates; current state unassessed. No documentation pass admits this module.
 Mandatory testing convention: at least 50 distinct qualifying module-owned cases; zero baseline warnings/errors, including pedantic Clippy on admitted Rust targets/profiles. Full qualification remains unassessed.
 
@@ -2476,6 +2478,7 @@ Future validators are proposed/unavailable; no empty or skipped check establishe
 [implementation support task TASK-T05](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Delivery%2FTasks%2FTASK-T05)
 [task TASK-T06](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Delivery%2FTasks%2FTASK-T06)
 [task TASK-T07](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Delivery%2FTasks%2FTASK-T07)
+[implementation support task TASK-T13](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Delivery%2FTasks%2FTASK-T13)
 [task TASK-T14](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Delivery%2FTasks%2FTASK-T14)
 [task TASK-T15](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Delivery%2FTasks%2FTASK-T15)
 [task TASK-T17](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Delivery%2FTasks%2FTASK-T17)
@@ -2587,7 +2590,7 @@ Applicable learning IDs: LRN04, LRN05, LRN08, LRN13; guidance only, engine detec
 [What My Ancestors Knew That I Did Not](obsidian://open?vault=my-diary.vault&file=Reflections%2FWhat%20My%20Ancestors%20Knew%20That%20I%20Did%20Not)
 [What Prototyping Is For](obsidian://open?vault=my-diary.vault&file=Reflections%2FWhat%20Prototyping%20Is%20For)
 [Working in Sandboxes on Kinoite](obsidian://open?vault=my-diary.vault&file=Reflections%2FWorking%20in%20Sandboxes%20on%20Kinoite)
-Readiness binding: HEE3-READINESS-001; SHA-256 ea991737ce282467556e4997f28e97c4b7f0799d823aae98905fcf34f71766f7; clauses F1-C01, F1-C02, F1-C03, F1-C04, F1-C05, F2-C01, F2-C02, F2-C03, F2-C04, F2-C05, F2-C06, F3-C01, F3-C02, F3-C03, F3-C04, F3-C05, F3-C06, F4-C01, F4-C02, F4-C03, F4-C04, F4-C05, F4-C06, F4-C07, F5-C01, F5-C02, F5-C03, F5-C04, F5-C05, F5-C06, F7-C01, F7-C02, F7-C03, F7-C04, F7-C05, F7-C06; groupings R90-01, R90-03, R90-05, R90-09, R90-10; resolved contracts RC01, RC02, RC03, RC04, RC05, RC06; runtime proof pending; original task DAG controls.
+Readiness binding: HEE3-READINESS-001; SHA-256 e774f8984c7e39e85b156289fac809bded6df80ba3647cfb2024c69856447b94; clauses F1-C01, F1-C02, F1-C03, F1-C04, F1-C05, F2-C01, F2-C02, F2-C03, F2-C04, F2-C05, F2-C06, F3-C01, F3-C02, F3-C03, F3-C04, F3-C05, F3-C06, F4-C01, F4-C02, F4-C03, F4-C04, F4-C05, F4-C06, F4-C07, F5-C01, F5-C02, F5-C03, F5-C04, F5-C05, F5-C06, F7-C01, F7-C02, F7-C03, F7-C04, F7-C05, F7-C06; groupings R90-01, R90-03, R90-05, R90-09, R90-10; resolved contracts RC01, RC02, RC03, RC04, RC05, RC06; runtime proof pending; original task DAG controls.
 Completion identity: HEE3-DONE-task; all 13 applicable gates; current state unassessed. No documentation pass admits this module.
 Mandatory testing convention: at least 50 distinct qualifying module-owned cases; zero baseline warnings/errors, including pedantic Clippy on admitted Rust targets/profiles. Full qualification remains unassessed.
 
@@ -2751,7 +2754,7 @@ Applicable learning IDs: LRN01, LRN04, LRN08, LRN11; guidance only, engine detec
 [What Prototyping Is For](obsidian://open?vault=my-diary.vault&file=Reflections%2FWhat%20Prototyping%20Is%20For)
 [What the Workflow Is Worth](obsidian://open?vault=my-diary.vault&file=Reflections%2FWhat%20the%20Workflow%20Is%20Worth)
 [Working Style in This Habitat](obsidian://open?vault=my-diary.vault&file=Reflections%2FWorking%20Style%20in%20This%20Habitat)
-Readiness binding: HEE3-READINESS-001; SHA-256 ea991737ce282467556e4997f28e97c4b7f0799d823aae98905fcf34f71766f7; clauses F2-C01, F2-C02, F2-C03, F2-C04, F2-C05, F2-C06, F3-C01, F3-C02, F3-C03, F3-C04, F3-C05, F3-C06, F4-C01, F4-C02, F4-C03, F4-C04, F4-C05, F4-C06, F4-C07, F5-C01, F5-C02, F5-C03, F5-C04, F5-C05, F5-C06, F7-C01, F7-C02, F7-C03, F7-C04, F7-C05, F7-C06; groupings R90-02, R90-03, R90-05, R90-06, R90-09, R90-10; resolved contracts RC01, RC02, RC03, RC04, RC05, RC06; runtime proof pending; original task DAG controls.
+Readiness binding: HEE3-READINESS-001; SHA-256 e774f8984c7e39e85b156289fac809bded6df80ba3647cfb2024c69856447b94; clauses F2-C01, F2-C02, F2-C03, F2-C04, F2-C05, F2-C06, F3-C01, F3-C02, F3-C03, F3-C04, F3-C05, F3-C06, F4-C01, F4-C02, F4-C03, F4-C04, F4-C05, F4-C06, F4-C07, F5-C01, F5-C02, F5-C03, F5-C04, F5-C05, F5-C06, F7-C01, F7-C02, F7-C03, F7-C04, F7-C05, F7-C06; groupings R90-02, R90-03, R90-05, R90-06, R90-09, R90-10; resolved contracts RC01, RC02, RC03, RC04, RC05, RC06; runtime proof pending; original task DAG controls.
 Completion identity: HEE3-DONE-worker; all 13 applicable gates; current state unassessed. No documentation pass admits this module.
 Mandatory testing convention: at least 50 distinct qualifying module-owned cases; zero baseline warnings/errors, including pedantic Clippy on admitted Rust targets/profiles. Full qualification remains unassessed.
 
@@ -2782,6 +2785,7 @@ Future validators are proposed/unavailable; no empty or skipped check establishe
 [task TASK-T18](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Delivery%2FTasks%2FTASK-T18)
 [task TASK-T19](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Delivery%2FTasks%2FTASK-T19)
 [task TASK-T20](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Delivery%2FTasks%2FTASK-T20)
+[implementation support task TASK-T21](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Delivery%2FTasks%2FTASK-T21)
 [task TASK-T22](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Delivery%2FTasks%2FTASK-T22)
 [task TASK-T25](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Delivery%2FTasks%2FTASK-T25)
 [task TASK-T26](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Delivery%2FTasks%2FTASK-T26)
@@ -2913,7 +2917,7 @@ Applicable learning IDs: LRN03, LRN05, LRN06, LRN07, LRN08, LRN10, LRN11, LRN13;
 [Why I Stopped Trusting Green](obsidian://open?vault=my-diary.vault&file=Reflections%2FWhy%20I%20Stopped%20Trusting%20Green)
 [Working Style in This Habitat](obsidian://open?vault=my-diary.vault&file=Reflections%2FWorking%20Style%20in%20This%20Habitat)
 [Working in Sandboxes on Kinoite](obsidian://open?vault=my-diary.vault&file=Reflections%2FWorking%20in%20Sandboxes%20on%20Kinoite)
-Readiness binding: HEE3-READINESS-001; SHA-256 ea991737ce282467556e4997f28e97c4b7f0799d823aae98905fcf34f71766f7; clauses F2-C01, F2-C02, F2-C03, F2-C04, F2-C05, F2-C06, F3-C01, F3-C02, F3-C03, F3-C04, F3-C05, F3-C06, F4-C01, F4-C02, F4-C03, F4-C04, F4-C05, F4-C06, F4-C07, F5-C01, F5-C02, F5-C03, F5-C04, F5-C05, F5-C06, F7-C01, F7-C02, F7-C03, F7-C04, F7-C05, F7-C06; groupings R90-03, R90-07, R90-09, R90-10; resolved contracts RC01, RC02, RC03, RC04, RC05, RC06; runtime proof pending; original task DAG controls.
+Readiness binding: HEE3-READINESS-001; SHA-256 e774f8984c7e39e85b156289fac809bded6df80ba3647cfb2024c69856447b94; clauses F2-C01, F2-C02, F2-C03, F2-C04, F2-C05, F2-C06, F3-C01, F3-C02, F3-C03, F3-C04, F3-C05, F3-C06, F4-C01, F4-C02, F4-C03, F4-C04, F4-C05, F4-C06, F4-C07, F5-C01, F5-C02, F5-C03, F5-C04, F5-C05, F5-C06, F7-C01, F7-C02, F7-C03, F7-C04, F7-C05, F7-C06; groupings R90-03, R90-07, R90-09, R90-10; resolved contracts RC01, RC02, RC03, RC04, RC05, RC06; runtime proof pending; original task DAG controls.
 Completion identity: HEE3-DONE-workflows; all 13 applicable gates; current state unassessed. No documentation pass admits this module.
 Mandatory testing convention: at least 50 distinct qualifying module-owned cases; zero baseline warnings/errors, including pedantic Clippy on admitted Rust targets/profiles. Full qualification remains unassessed.
 
@@ -3058,8 +3062,8 @@ HEE3-ANCHORS-END
 Run `python3 -W error tools/check-quality` from the project root. This executes
 the declared Rust and Julia package checks and retains exact command arguments,
 environment, source hashes, output streams and observed statuses under
-`evidence/implementation/T05/quality-runs/` for the roster candidate (earlier runs retain their T25 paths). `--rust-only` is a partial development check.
-Neither mode admits a module or supplies the protected collector due at T06.
+`evidence/implementation/T05/quality-runs/` for the existing Store/roster/task/service/numerical composition (earlier runs retain their T25 paths). `--rust-only` is a partial development check; the numerical Rust tests still require a fresh Julia J01 report.
+Neither mode admits a module or qualifies protected collection.
 
 ## Current executable matrix
 
@@ -3067,11 +3071,12 @@ Neither mode admits a module or supplies the protected collector due at T06.
 | --- | --- |
 | Rust 1.98.0 formatting | `cargo fmt --all -- --check` succeeds |
 | Rust lint | Pedantic Clippy and all warnings denied, all declared targets |
-| Rust tests | Default/no-default features, debug/release; fixed summaries of 24, 27, 60, 34, 103, 29 and 12 cases; the transport target runs five actual-pipe controls |
+| Rust tests | Default/no-default features, debug/release; 36 fixed summaries totaling 1123 ordinary controls, plus five separate actual-pipe transport controls; exact multiplicity and nine library namespaces (161 library-unit controls) |
 | Rust documentation | Two meaningful doctests in each feature/profile configuration |
 | Rust lint sensitivity | The missing `must_use` fixture fails at that lint; its corrected neighbor passes |
 | Julia 1.12.7 tests | Locked local package, bounds checks on, deprecations as errors, startup disabled, one Julia/BLAS thread |
 | Julia baseline | One package-load assertion, zero failures/errors/warnings/skips/Broken results |
+| Julia numerical checks | Three exact groups of 82, 10 and 7 assertions; a separate bounded report must match the fresh request-bound J01 bytes |
 | Julia sensitivity | Assertion, warning, skip, Broken, bounds, deprecation and empty-result controls each fail at the intended detector |
 | Julia formatting | Pinned JuliaFormatter 2.12.5; authored bodies only, exact managed comments preserved; missing-indentation and valid-neighbor controls |
 | Process custody | Standalone supervisor controls include stream limits, deadlines, descendant settlement, interrupted/setup-failure cleanup and incomplete-cleanup refusal |
@@ -3093,8 +3098,9 @@ The root Cargo manifest explicitly lists implemented tests. Stub files do not
 become tests merely by existing. Add a new test target and its independent
 expectations when its vertical slice is implemented; update discovery and the
 quality recipe together. Repeated profiles and injected controls do not multiply
-the distinct module-case count. The current Julia assertion is a package smoke
-test and earns no numerical-module case credit. The minimum 50 meaningful
+the distinct module-case count. The package-load assertion is a smoke test and earns no numerical-module case credit.
+The separate numerical assertions are scoped development evidence; 99 assertions
+are not a claim of 99 distinct qualifying module cases. The minimum 50 meaningful
 primary-owned cases per module remains a later admission requirement.
 
 ## Invocation and custody
@@ -3102,18 +3108,65 @@ primary-owned cases per module remains a later admission requirement.
 The development runner copies its selected sources and manifests into an owned
 temporary workspace, clears the command environment, selects exact tool paths,
 and hashes source bytes before and after execution. Cargo uses the existing
-lockfile and a closed checksum-bound archive bundle with offline resolution; see [offline input setup](../tools/rust-offline.md). Julia checks the existing project and manifest;
-test-only bundled standard-library resolution is reported with its complete
-Project/Manifest bytes and hashes. Package-test hooks remain candidate code.
+lockfile and a closed checksum-bound archive bundle with offline resolution; see [offline input setup](../tools/rust-offline.md). Julia checks the existing project and manifest. The dependency-free foundation
+retains its original package-test path. The locked numerical project runs the
+unchanged Test controls directly: pinned Pkg 1.12.7 otherwise resolves a fresh
+sandbox even when re-resolution is disabled. Five selected runtime package
+trees are pinned and copied offline, and a fresh J01 report is produced before
+Rust tests. Package-test hooks remain candidate code.
 
-One monotonic origin bounds the full run to 1,200 seconds. New active work ends
-at 900 seconds, reserving 300 seconds for cleanup. Each command has a 180-second
+One monotonic origin bounds the full engineering regression to 1,800 seconds.
+New active work ends at 1,500 seconds, reserving 300 seconds for cleanup. Each command has a 180-second
 ceiling and each stream retains at most 8 MiB. Timeout, excess output, surviving
 descendants, missing results, wrong control observations and incomplete cleanup
 refuse success. On incomplete cleanup, the workspace and cleanup obligation are
 retained. Linux subreaper/group/pidfd handling is a development control; it does
 not prove hostile same-UID isolation or replace RC05's later cgroup/namespace
 qualification.
+
+This engineering-run allocation is separate from the RC02 engine task budget.
+The former 900-second active window expired during cold Julia startup after all
+four 970+5 Rust profiles passed. A separate cold measurement of the eight Julia
+controls and 99 numerical assertions took 113.77 seconds; together with the
+preceding 831 seconds and retained formatter timing, the expanded fixed workload
+requires about 978 seconds. The finite 1,200-second active window accommodated
+that workload. Per-command, stream and cleanup limits remain unchanged, and the
+failed run remains counterevidence. A fresh complete run is required for this
+revised source; partial observations are not combined into a passing run.
+
+The 1,200-second window was derived for that 970-control workload. The current
+1,042-control census runs four feature/profile combinations of five test
+commands each, and its two retained full runs on the documented tmpfs scratch
+(2026-09-21, `quality-full001-tmpfs` and `quality-full002-tmpfs`, both killed by
+the bounded owner at 1,205 seconds) measured, per profile, test commands of
+233.2 / 289.1 / 223.7 / 320.1 seconds (run 1) and 230.2 / 279.8 / 220.6 / 273.7
+seconds (run 2) for default-debug / default-release / no-default-debug /
+no-default-release, plus 4–10 seconds of Clippy and 1–3 seconds of doctests per
+profile; Rust commands summed 1,100.9 and 1,036.6 seconds, the pre-Rust setup
+(process and integration controls, offline resolution, SQLite build, J01)
+28.9 and 33.8 seconds, and the run was killed after 73.9 and 133.0 seconds of
+the Julia stage, inside the second and fourth of the eight Julia controls;
+command sums 1,203.7 and 1,203.4 seconds. Every individual command stayed
+inside its 180-second bound (the largest, no-default-release `tests-t06`, at
+125.0 seconds). That is a structural shortfall of the window, not a flaky run,
+so the active window is raised to 1,500 seconds and the total bound to 1,800
+seconds, with the 300-second cleanup reserve, the 180-second command ceiling
+and the 8 MiB stream limit unchanged. The two killed runs remain counterevidence
+and are not combined into a passing run.
+
+Open finding QC-F3b, assigned by root to the native adapter's owner: the debug
+`tests-t08-native` command costs 95.9 / 92.8 seconds (run 1) and 95.5 / 91.2
+seconds (run 2) against 9.8 / 10.6 and 9.9 / 9.7 seconds in the release
+profiles — deterministic across runs and profile-dependent, cause not traced
+by the quality recipe. It is the largest single contributor to the shortfall
+and is not repaired here.
+
+All eight Julia quality modes load source with `--compiled-modules=no`, as the
+numerical and formatter commands already do. This avoids creating cache images
+that can conflict with stdlib versions already loaded in a fresh process. The
+retained cached-mode run was refused for that diagnostic; the strict stderr
+validator remains unchanged. Pinned source, offline dependencies, bounds checks,
+expected fault outcomes and actual counts remain required.
 
 The runner owns launch and raw stream observations. Test counts, Julia summaries,
 compiler messages and exit codes remain producer claims interpreted against the
@@ -3158,8 +3211,9 @@ Selected mandatory cases determine required success. Exhaustive counts also
 retain unselected, excluded and nonmandatory outcomes; they cannot alone decide
 the verdict. The collector must resolve complete inventories, recompute counts,
 validate exact bytes/digests, assess independent expectations and observe cleanup.
-Fifteen bootstrap fault/benign specifications are frozen for T06, with zero
-collector executions claimed here. The schema and tests share an author;
+The original schema-only record froze fifteen bootstrap fault/benign specifications
+without execution credit. Later T06 bootstrap and task-loop observations are linked
+from the current context handoff; they remain separate from this schema record. The schema and tests share an author;
 independent contract review is retained separately.
 
 
@@ -3189,12 +3243,12 @@ ledgers and artifacts; worker contract tests remain fake-dispatch/output-only
 normalization observations. See [worker contract](worker-contract.md) and
 [store contract](store-contract.md) for their ownership boundaries.
 
-The historical T04 matrix required 213 ordinary Rust cases per profile. The T05
-matrix requires separate exact summaries of 24, 27, 60, 34, 103, 29 and 12 cases
+The historical T04 matrix required 213 ordinary Rust cases per profile. The historical T05
+matrix required separate exact summaries of 24, 27, 60, 34, 103, 29 and 12 cases
 (289 total), five finite transport controls and two doctests in each profile.
-The library namespace must contain exactly 68 legacy Store and 35 roster Store
-cases. Profile repetition adds no distinct case credit. The setup control suite
-has 43 cases and the bounded process suite has 17. T04 builds the
+That historical library namespace contained 68 legacy Store and 35 roster Store
+cases. Profile repetition adds no distinct case credit. Its setup control suite
+had 43 cases and the bounded process suite has 17. T04 builds the
 exact retained SQLite 3.53.4 archive in the copied private subject using the
 existing process owner and original deadline; its source, compiler, archiver,
 static output and resolved Cargo features are checked and retained.
@@ -3217,3 +3271,200 @@ faults and now checks the combined 103-case library baseline and restored suite.
 Each deliberate fault must compile and fail its exact named assertion; compiler
 failure, missing case or unchanged baseline cannot receive detection credit.
 See [roster contract](roster-contract.md) and [retained verification](qualification.md).
+
+## Historical T06 quality inventory
+
+The current engine declares 25 integration targets, two binary targets and one
+library group. Its 27 ordinary Rust summaries total 795 controls, plus the five
+finite transport controls and two doctests per feature/profile. The library
+namespaces contain 68 Store, 35 roster Store, 13 staging, 22 u64 oracle, six
+capture, six durable-control, two repair and eight namespace controls. Missing,
+extra, duplicated, filtered or misattributed summaries refuse success. These
+counts describe a source-bound development inventory; repeated profiles do not
+earn new module-case credit.
+
+The quality setup suite has 47 methods. It checks the exact T06 target/fixture
+inventory and repeated-count multiplicity, retains the previous T05 feature
+closure, and permits only the selected additional rustix/event feature for T06.
+Its temporary fixture copies use a finite inventory so they remain bounded when
+TMPDIR is the copied source workspace. The process suite remains 17 controls.
+
+The two existing app development packages under development/t06 are independent
+Cargo workspaces. Their runtime/frontend test, pedantic and separate-doctest
+matrices are recorded separately. Both explicitly declare RC02 profiles; the
+runtime retains its permitted test-only debug=0 setting. Release line debug data
+is retained. The fixed frontend's lossless ELF debug compression and exact
+build-to-package provenance are independently reviewed before fresh execution;
+this does not change the 16 MiB artifact or 64 MiB executor-identity limits.
+
+The execute/check/repair loop, source-specific bootstrap evidence, unresolved
+qualification gates and current operational status remain in the T06 handoff.
+This recipe and its metadata guards cannot admit a module or deployed release.
+
+
+## Current service and numerical composition
+
+The finite T13/T21 extension adds one service digest unit control, 50 service,
+18 probe, 16 local-probe, 74 numerical and 16 numerical-process controls to
+the earlier 795-control subject. The resulting 970 ordinary controls and five
+separate transport controls run in each of four feature/profile combinations.
+The library group is 161 controls. Exact target discovery, repeated summary
+multiplicity and unit ownership remain mandatory. These are required recipe
+expectations; acceptance requires a retained passing run on the exact source.
+
+The numerical process target runs in its own bounded command after the other
+fixed Rust targets. The two raw outputs pass the unchanged complete summary
+checker together. This split preserves every target once, the 180-second
+command limit and the cleanup reserve; the engineering active-work budget is
+the 1,500-second allocation justified above;
+it does not create additional case credit. The original combined release
+command timeout remains failed evidence.
+
+Every profile has separate service/process evidence paths. Julia numerical
+tests write a fresh separate report, leaving captured J01 stdout intact.
+The report must be a bounded regular file with exact J01 bytes and request
+digest. Same-UID development file checks are not hostile evidence custody.
+The Rust numerical process controls still name installed development paths;
+package and executable pre/post hashes do not claim hermetic deployment.
+
+Original task-contract closure, full module qualification, runtime admission
+and deployed startup/recovery remain separate evidence decisions.
+
+## Current T07 inventory composition
+
+The exact T07 inventory extension adds the explicitly registered
+`tests/t07_inventory.rs` target, now with 51 controls, and requires its
+Store-owned `src/store/recovery.rs` source. The earlier 43-control inventory
+expectation (33 groups, 1013 ordinary controls) is superseded by this recipe and
+is not accepted for the current source; no earlier 970 or 1013 full result is
+evidence for it. The T13/T21-only 970+5 and T06-only 795+5 subjects keep their
+existing expectations.
+
+T07 inventory runs in its own finite `tests-t07-inventory` command after the
+existing main and numerical-process partitions. The retained full run of
+2026-09-21 on the documented tmpfs scratch exposed one inventory case whose
+fault is timing-dependent: `regressed_selection_clock` in
+`review_nested_pin_identity_and_binding_faults_must_refuse` sets the pin's
+`selected_at.monotonic_ms` to 0, but both that value and the observation's
+`received.monotonic_ms` are milliseconds since the store opened, so when the
+fixture's observe-then-select completes within the first millisecond the
+"fault" equals the original value and the pin is admitted (five of five
+single-test runs on tmpfs, zero of two on btrfs). That repair belongs to the
+inventory test's owner, not to this recipe; until it lands, the 1042-control
+matrix has no passing run on the documented scratch. The earlier
+main release command was near its 180-second limit; the added inventory is not
+charged to that command. This preserves the 180-second per-command bound,
+the total and active budgets stated above, the 300-second cleanup reserve
+and the 8 MiB stream limit. No target is skipped or counted twice.
+
+## Current T08 native adapter composition
+
+The exact T08 native extension adds the explicitly registered
+`tests/t08_native.rs` target with 21 offline client controls and requires its
+worker-owned `src/worker/native.rs` source and the finite fixture client
+`tests/fixtures/native/client.py` (the only file under `tests/fixtures/native/`
+that a registered Rust test reads). The adapter adds no library-unit namespace.
+The combined root-engine expectation is therefore 34 summary groups totaling
+1042 ordinary controls (161 library, two empty binary groups, 24, 27, 60, 34,
+29, 12, the eighteen T06 groups, 51 inventory, 21 native, 50, 18, 16, 74 and
+16) plus the five separate transport controls, with the unchanged 161
+library-unit controls. A subject with the 51-control inventory and no native
+target is expected at 33 groups and 1021 controls. These are finite recipe
+expectations, not a claim that a full combined run has passed; acceptance
+requires a retained passing run on the exact source.
+
+The native controls run in their own finite `tests-t08-native` command after
+the inventory partition: they spawn the fixture client serially under
+`RUST_TEST_THREADS=1` and include multi-second cancellation waits, so they are
+not charged to the main command. A missing, renamed or duplicated registered
+target is refused with the differing names printed
+(`missing=[...] extra=[...] duplicate=[...]`).
+
+The eighteen T06 targets now run in their own finite `tests-t06` command
+between the main and numerical-process commands. The retained 795-control run
+of 2026-09-21T05:36 needed 148 seconds for its release test command with the
+tests still parallel and its scratch on tmpfs; the current recipe runs the
+tests serially, and `t06_store` alone publishes 4096 fsynced objects
+(`PRAGMA synchronous=FULL` plus `sync_all` per artifact). Two full runs of this
+census on 2026-09-21 (retained as counterevidence) had the command holding
+`t06_store` terminated at the 180-second bound while that test was running,
+because the runner had placed the owned scratch on btrfs rather than under
+`/tmp`; the documented invocation inherits `TMPDIR` unset and therefore uses
+tmpfs, as that earlier run's recorded workspace shows. The split keeps the
+Store-heavy suites out of the main command; the scratch location is the
+runner's responsibility and is recorded in every run. The main command keeps
+the library, the two binaries and the T01–T05, T13 and T21 analysis targets
+(14 groups); the T06 command holds exactly the `t06_` targets (18 groups, 449
+controls). All five raw outputs (main, T06, numerical process, inventory,
+native) must pass the single complete census/namespace/transport oracle
+together; every target runs exactly once. The 180-second per-command bound,
+the 300-second cleanup reserve and the 8 MiB stream limit are unchanged by the
+split; the active window's later revision is derived above.
+
+Two interpreter pins join the evidence: the runner's own Python (`path`,
+`resolved`, `sha256`) and the interpreter named by the fixture client's first
+line (`native-client-interpreter`), which the Rust tests execute directly after
+copying the fixture with mode 0700. Only an absolute, argument-free interpreter
+line is accepted; an `env`-style line is refused because it would bind the pin
+to the child's `PATH`. Both pins are re-hashed after the Rust commands and a
+change refuses the run. The fixture's bytes are part of the hashed subject.
+
+## Current composed T07 reconciliation-policy and T08 contract composition
+
+The composed subject registers two further targets, which the previous
+census refused by name (`missing=[] extra=['recovery', 't08_contract']`).
+Both counts are taken from the registered sources, not from their authors'
+reports, and both were confirmed by the retained run below.
+
+`tests/recovery.rs` (T07 engine reconciliation policy) carries 58 controls and
+reads only `habitat_engine::recovery`; `src/recovery.rs`, declared by
+`src/lib.rs`, reads no store or contracts module and declares no unit tests, so
+the target's input pins are exactly those two sources. The Store-owned
+`src/store/recovery.rs` stays pinned by the T07 inventory extension. It runs in
+its own finite `tests-recovery` command.
+
+`tests/t08_contract.rs` (T08 contract battery) carries 23 controls and no
+library-unit namespace. Its inputs are what the battery reads: the adapter
+(`src/worker/native.rs`, `src/worker/mod.rs`), the offline contract client it
+copies and executes (`tests/fixtures/native/contract-client.py`), the overbound
+prompt recipe (`prompt.txt`), the two retained actual cohort envelopes and their
+raw streams (`actual/positive-observation.json`, `actual/overbound-observation.json`,
+`actual/overbound-03-stdout`, `actual/overbound-03-stderr`), and the two example
+drivers those cohorts were produced with (`driver.rs`, `contract-cohort.rs`).
+The manifest registers those drivers as `[[example]]` targets; the recipe pins
+that example inventory exactly (name and path, in order) and refuses any other
+example target with the manifest and expected inventories printed. Clippy checks
+the examples with every other target; nothing runs them. `control-v1/` and
+`README.stub.md` under `tests/fixtures/native` are read by no registered Rust
+target and stay unpinned. The battery runs in its own finite `tests-t08-contract`
+command; it spawns its daemon stand-in and client per case.
+
+Presence of the contract battery is judged by the sources only it owns, since it
+shares the adapter with `t08_native`; the adapter keeps the native battery
+required, so a subject with the contract battery and no native battery is not
+one this recipe accepts. The two batteries now pin their daemon stand-in from
+their own `const EXECUTABLE` declaration (`/usr/bin/sleep`, the QC-F3b control:
+the adapter re-hashes that executable through `/proc/<pid>/exe`); the recipe
+records `native-daemon-stand-in` and `contract-daemon-stand-in` (path, resolved
+path, sha256, bytes, declaring source) beside the two client interpreters and
+re-hashes all of them after the Rust commands. A battery declaring two
+executables, or none where one is required, refuses.
+
+The combined root-engine expectation therefore moves from 34 groups / 1042
+ordinary controls to **36 groups / 1123 ordinary controls**: +58 (recovery)
+and +23 (contract), two new summary groups, and the 161 library-unit controls
+unchanged because neither target adds a unit namespace. Subjects without one of
+the two keep 35 groups and 1065 (no recovery) or 1100 (no contract) controls. A
+removed or renamed registration is still refused with the differing names
+printed. Every bound is as derived above: 1,800-second total, 1,500-second
+active window, 300-second cleanup reserve, 180-second command ceiling, 8 MiB
+streams.
+
+The fixed frontend package's 98 controls (its own library group plus the
+`recovery_inspect`, `recovery_cancel`, `recovery_crash` and `recovery_pi_queue`
+targets) belong to its separate app-owned package evidence and are not part of
+the 1042 root census. The pending PID-reuse continuation adds three frontend
+methods to that separate package; it is not composed into this subject and
+changes no root-census number. Neither the quality recipe nor passing private
+controls close original T07/T08 criteria, module qualification or operational
+deployment.

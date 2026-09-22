@@ -31,7 +31,7 @@
 // [CONTEXT RESTART POINTER](file:///var/home/herdr-engineering-engine-v3/corpus/CONTEXT_HANDOFF.md)
 // [QUICK START](file:///var/home/herdr-engineering-engine-v3/QUICK_START.md)
 // [ASSIMILATION AND DELIVERY WORKFLOW](file:///var/home/herdr-engineering-engine-v3/workflows/README.md)
-// Readiness binding: HEE3-READINESS-001; SHA-256 ea991737ce282467556e4997f28e97c4b7f0799d823aae98905fcf34f71766f7; clauses F2-C01, F2-C02, F2-C03, F2-C04, F2-C05, F2-C06, F3-C01, F3-C02, F3-C03, F3-C04, F3-C05, F3-C06, F4-C01, F4-C02, F4-C03, F4-C04, F4-C05, F4-C06, F4-C07, F5-C01, F5-C02, F5-C03, F5-C04, F5-C05, F5-C06, F7-C01, F7-C02, F7-C03, F7-C04, F7-C05, F7-C06; groupings R90-02, R90-03, R90-04, R90-05, R90-09, R90-10; resolved contracts RC02, RC03, RC04, RC05; runtime proof pending; original task DAG controls.
+// Readiness binding: HEE3-READINESS-001; SHA-256 e774f8984c7e39e85b156289fac809bded6df80ba3647cfb2024c69856447b94; clauses F2-C01, F2-C02, F2-C03, F2-C04, F2-C05, F2-C06, F3-C01, F3-C02, F3-C03, F3-C04, F3-C05, F3-C06, F4-C01, F4-C02, F4-C03, F4-C04, F4-C05, F4-C06, F4-C07, F5-C01, F5-C02, F5-C03, F5-C04, F5-C05, F5-C06, F7-C01, F7-C02, F7-C03, F7-C04, F7-C05, F7-C06; groupings R90-02, R90-03, R90-04, R90-05, R90-09, R90-10; resolved contracts RC02, RC03, RC04, RC05; runtime proof pending; original task DAG controls.
 // Completion identity: HEE3-DONE-contracts; all 13 applicable gates; current state unassessed. No documentation pass admits this module.
 // Mandatory testing convention: at least 50 distinct qualifying module-owned cases; zero baseline warnings/errors, including pedantic Clippy on admitted Rust targets/profiles. Full qualification remains unassessed.
 //
@@ -164,7 +164,7 @@
 // [What My Ancestors Knew That I Did Not](obsidian://open?vault=my-diary.vault&file=Reflections%2FWhat%20My%20Ancestors%20Knew%20That%20I%20Did%20Not)
 // [What Prototyping Is For](obsidian://open?vault=my-diary.vault&file=Reflections%2FWhat%20Prototyping%20Is%20For)
 // [Why I Stopped Trusting Green](obsidian://open?vault=my-diary.vault&file=Reflections%2FWhy%20I%20Stopped%20Trusting%20Green)
-// Readiness binding: HEE3-READINESS-001; SHA-256 ea991737ce282467556e4997f28e97c4b7f0799d823aae98905fcf34f71766f7; clauses F2-C01, F2-C02, F2-C03, F2-C04, F2-C05, F2-C06, F3-C01, F3-C02, F3-C03, F3-C04, F3-C05, F3-C06, F4-C01, F4-C02, F4-C03, F4-C04, F4-C05, F4-C06, F4-C07, F5-C01, F5-C02, F5-C03, F5-C04, F5-C05, F5-C06, F6-C01, F6-C02, F6-C03, F6-C04, F6-C05, F6-C06, F6-C07, F6-C08, F7-C01, F7-C02, F7-C03, F7-C04, F7-C05, F7-C06; groupings R90-02, R90-05, R90-06, R90-08, R90-09, R90-10; resolved contracts RC02, RC03, RC04, RC05, RC06; runtime proof pending; original task DAG controls.
+// Readiness binding: HEE3-READINESS-001; SHA-256 e774f8984c7e39e85b156289fac809bded6df80ba3647cfb2024c69856447b94; clauses F2-C01, F2-C02, F2-C03, F2-C04, F2-C05, F2-C06, F3-C01, F3-C02, F3-C03, F3-C04, F3-C05, F3-C06, F4-C01, F4-C02, F4-C03, F4-C04, F4-C05, F4-C06, F4-C07, F5-C01, F5-C02, F5-C03, F5-C04, F5-C05, F5-C06, F6-C01, F6-C02, F6-C03, F6-C04, F6-C05, F6-C06, F6-C07, F6-C08, F7-C01, F7-C02, F7-C03, F7-C04, F7-C05, F7-C06; groupings R90-02, R90-05, R90-06, R90-08, R90-09, R90-10; resolved contracts RC02, RC03, RC04, RC05, RC06; runtime proof pending; original task DAG controls.
 // Completion identity: HEE3-DONE-store; all 13 applicable gates; current state unassessed. No documentation pass admits this module.
 // Mandatory testing convention: at least 50 distinct qualifying module-owned cases; zero baseline warnings/errors, including pedantic Clippy on admitted Rust targets/profiles. Full qualification remains unassessed.
 //
@@ -185,6 +185,7 @@
 // [implementation support task TASK-T05](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Delivery%2FTasks%2FTASK-T05)
 // [task TASK-T06](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Delivery%2FTasks%2FTASK-T06)
 // [task TASK-T07](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Delivery%2FTasks%2FTASK-T07)
+// [implementation support task TASK-T13](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Delivery%2FTasks%2FTASK-T13)
 // [task TASK-T14](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Delivery%2FTasks%2FTASK-T14)
 // [task TASK-T15](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Delivery%2FTasks%2FTASK-T15)
 // [task TASK-T17](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Delivery%2FTasks%2FTASK-T17)
@@ -305,8 +306,13 @@
 
 mod artifact;
 mod backup;
+mod recovery;
 mod roster;
 mod schema;
+mod staging;
+mod verification;
+pub use staging::ArtifactStaging;
+pub use verification::{Verification, VerificationVerdict};
 
 pub use roster::{RequestSource, RosterAttempt, RosterSnapshot, RosterStart};
 
@@ -340,6 +346,8 @@ pub enum Error {
     UnsupportedSchema,
     Runtime,
     UncertainCommit,
+    RecoveryRequired,
+    InspectionOnly,
     Commit(rusqlite::Error),
     Cleanup {
         original: Box<Error>,
@@ -543,9 +551,10 @@ pub struct Store {
     root: Directory,
     generation: Directory,
     objects: Directory,
-    _lock: File,
+    lock: File,
     epoch: String,
     poisoned: bool,
+    inspection_only: bool,
     clock: roster::ReceiverClock,
     #[cfg(test)]
     fault: Option<CutPoint>,
@@ -573,6 +582,32 @@ impl Store {
         create: bool,
         deadline: Instant,
         fault: Option<CutPoint>,
+    ) -> Result<Self> {
+        Self::open_access(root, generation, epoch, create, deadline, fault, false)
+    }
+
+    /// Open existing durable state for inspection only, including reconciliation mode.
+    /// This preserves the same sole lock and schema checks; WAL/profile effects
+    /// remain possible, but mutations, artifact publication and dispatch are denied.
+    /// # Errors
+    /// Refuses missing state, invalid identity/schema/path, lock contention or deadline.
+    pub fn open_inspection(
+        root: &Path,
+        generation: UuidV4<'_>,
+        epoch: UuidV4<'_>,
+        deadline: Instant,
+    ) -> Result<Self> {
+        Self::open_access(root, generation, epoch, false, deadline, None, true)
+    }
+
+    fn open_access(
+        root: &Path,
+        generation: UuidV4<'_>,
+        epoch: UuidV4<'_>,
+        create: bool,
+        deadline: Instant,
+        fault: Option<CutPoint>,
+        inspection_only: bool,
     ) -> Result<Self> {
         remaining(deadline)?;
         schema::runtime(deadline)?;
@@ -611,11 +646,20 @@ impl Store {
         )?;
         schema::profile(&connection, deadline)?;
         schema::validate(&connection, generation.as_str(), deadline)?;
-        let actual_epoch: String = connection.query_row(
-            "SELECT epoch FROM ledger_meta WHERE singleton=1",
+        let (actual_epoch, mode): (String, String) = connection.query_row(
+            "SELECT epoch,mode FROM ledger_meta WHERE singleton=1",
             [],
-            |row| row.get(0),
+            |row| Ok((row.get(0)?, row.get(1)?)),
         )?;
+        if !matches!(mode.as_str(), "normal" | "reconciliation") {
+            return Err(Error::Corrupt);
+        }
+        if !inspection_only && mode != "normal" {
+            return Err(Error::RecoveryRequired);
+        }
+        if inspection_only {
+            connection.execute_batch("PRAGMA query_only=ON;")?;
+        }
         if actual_epoch != epoch.as_str() {
             return Err(Error::Conflict);
         }
@@ -627,9 +671,10 @@ impl Store {
             root,
             generation: generation_dir,
             objects,
-            _lock: lock,
+            lock,
             epoch: actual_epoch,
             poisoned: false,
+            inspection_only,
             clock: roster::ReceiverClock::new(deadline)?,
             #[cfg(test)]
             fault,
@@ -649,6 +694,14 @@ impl Store {
         }
     }
 
+    fn require_writable(&self, deadline: Instant) -> Result<()> {
+        if self.poisoned {
+            return Err(Error::UncertainCommit);
+        }
+        schema::bound(&self.connection, deadline)?;
+        require_normal(&self.connection, &self.epoch, self.inspection_only)
+    }
+
     fn transaction<T>(
         &mut self,
         deadline: Instant,
@@ -657,6 +710,9 @@ impl Store {
         if self.poisoned {
             return Err(Error::UncertainCommit);
         }
+        if self.inspection_only {
+            return Err(Error::InspectionOnly);
+        }
         self.connection
             .busy_timeout(remaining(deadline)?.min(Duration::from_secs(5)))?;
         schema::bound(&self.connection, deadline)?;
@@ -664,11 +720,13 @@ impl Store {
         let tx = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let result = action(&tx).and_then(|value| {
-            remaining(deadline)?;
-            check_point(fault, CutPoint::BeforeCommit)?;
-            Ok(value)
-        });
+        let result = require_normal(&tx, &self.epoch, self.inspection_only)
+            .and_then(|()| action(&tx))
+            .and_then(|value| {
+                remaining(deadline)?;
+                check_point(fault, CutPoint::BeforeCommit)?;
+                Ok(value)
+            });
         let value = match result {
             Ok(value) => value,
             Err(error) => {
@@ -823,11 +881,35 @@ impl Store {
     ) -> Result<String> {
         self.transaction(deadline,|tx| {
             let head=head(tx,task.as_str())?;same_generation(&head,expected)?;
-            if head.cancellation || head.accepted_event.is_some() {return Ok(head.generation);}
+            let stopped:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM task_stops WHERE task_id=?)",[task.as_str()],|row|row.get(0))?;
+            if head.cancellation || head.accepted_event.is_some() || stopped {return Ok(head.generation);}
             let generation=next(expected)?;
             tx.execute("UPDATE tasks SET cancellation=1,state='cancellation_requested',generation=? WHERE id=?",params![generation,task.as_str()])?;
             event(tx,event_id.as_str(),task.as_str(),&generation,"cancellation_requested")?;Ok(generation)
         })
+    }
+
+    /// Borrow artifact-only custody while this thread retains the sole ledger owner.
+    /// The capability duplicates already held directory and lock descriptors; it
+    /// opens no database and cannot outlive the callback. Scoped workers using it
+    /// must join before the callback returns. Artifact methods retain their own
+    /// deadlines and publication/readback checks.
+    ///
+    /// The callback's result is returned unchanged, even after expiry, so partial
+    /// artifact custody or caller errors are not discarded. This is not deadline
+    /// acceptance: the caller must settle and account for the actual outcome.
+    ///
+    /// # Errors
+    /// Refuses expired capability creation, changed directory custody or failed
+    /// descriptor duplication before invoking the callback.
+    pub fn with_artifact_staging<T>(
+        &mut self,
+        deadline: Instant,
+        work: impl FnOnce(&mut Self, &ArtifactStaging) -> T,
+    ) -> Result<T> {
+        self.require_writable(deadline)?;
+        let staging = ArtifactStaging::from_store(self, deadline)?;
+        Ok(work(self, &staging))
     }
 
     /// Publish bounded immutable bytes before any ledger reference.
@@ -839,7 +921,7 @@ impl Store {
         staging_id: UuidV4<'_>,
         deadline: Instant,
     ) -> Result<Object> {
-        remaining(deadline)?;
+        self.require_writable(deadline)?;
         let object = artifact::publish(&self.objects, bytes, staging_id, |point| {
             check_point(self.fault(), point)
         })?;
@@ -867,12 +949,34 @@ impl Store {
         objects: &[Object],
         deadline: Instant,
     ) -> Result<PublishedAcceptance> {
+        self.prepare_acceptance_inner(expected, event_id, objects, None, deadline)
+    }
+
+    fn prepare_acceptance_inner(
+        &self,
+        expected: &Expected<'_>,
+        event_id: UuidV4<'_>,
+        objects: &[Object],
+        verification: Option<verification::VerifiedSubject>,
+        deadline: Instant,
+    ) -> Result<PublishedAcceptance> {
         remaining(deadline)?;
         schema::bound(&self.connection, deadline)?;
         let head = head(&self.connection, expected.task.as_str())?;
         same_generation(&head, expected.task_generation)?;
-        if objects.is_empty() || objects.len() > 64 {
+        // A verified RC04 closure has its existing 4096-object / 64-MiB bound.
+        // General trusted-owner acceptance keeps the original 64-object limit.
+        let object_limit = if verification.is_some() { 4096 } else { 64 };
+        if objects.is_empty() || objects.len() > object_limit {
             return Err(Error::Bound);
+        }
+        if verification.is_some() {
+            let bytes = objects.iter().try_fold(0_u64, |total, object| {
+                total.checked_add(object.size).ok_or(Error::Bound)
+            })?;
+            if bytes > 64 * 1024 * 1024 {
+                return Err(Error::Bound);
+            }
         }
         let mut seen = std::collections::BTreeSet::new();
         for object in objects {
@@ -890,8 +994,25 @@ impl Store {
             attempt_generation: expected.attempt_generation.to_string(),
             criteria: head.criteria,
             objects: objects.to_vec(),
+            verification,
         };
-        let manifest = self.publish(&serde_json::to_vec(&data)?, event_id, deadline)?;
+        let bytes = serde_json::to_vec(&data)?;
+        let expected_manifest = Object {
+            digest: digest(&bytes),
+            size: u64::try_from(bytes.len()).map_err(|_| Error::Bound)?,
+        };
+        if data.verification.is_some() {
+            verified_inventory_capacity(
+                &self.connection,
+                &data.objects,
+                &expected_manifest,
+                deadline,
+            )?;
+        }
+        let manifest = self.publish(&bytes, event_id, deadline)?;
+        if manifest != expected_manifest {
+            return Err(Error::Corrupt);
+        }
         check_point(self.fault(), CutPoint::ManifestPublished)?;
         Ok(PublishedAcceptance { manifest, data })
     }
@@ -923,6 +1044,11 @@ impl Store {
             let generation:Generation=head.generation.parse().map_err(|_|Error::Corrupt)?;
             let expected=Expected {task:UuidV4::parse(&data.task).map_err(|_|Error::Corrupt)?,task_generation:generation,attempt:UuidV4::parse(&data.attempt).map_err(|_|Error::Corrupt)?,attempt_generation:data.attempt_generation.parse().map_err(|_|Error::Corrupt)?};
             require_attempt(tx,&expected,true)?;
+            if let Some(verified) = &data.verification {
+                verification::require_verified(tx, &data.attempt, verified)?;
+                if verification_ms != 0 { return Err(Error::Conflict); }
+                verified_inventory_capacity(tx, &data.objects, &published.manifest, deadline)?;
+            }
             if verification_ms>head.reserved_verify_ms {return Err(Error::Budget);}
             let generation=next(generation)?;
             for object in data.objects.iter().chain(std::iter::once(&published.manifest)) {
@@ -949,7 +1075,7 @@ impl Store {
         limit: u32,
         deadline: Instant,
     ) -> Result<Vec<(String, String, u64)>> {
-        schema::bound(&self.connection, deadline)?;
+        self.require_writable(deadline)?;
         if limit == 0 || limit > 256 {
             return Err(Error::Bound);
         }
@@ -982,6 +1108,25 @@ impl Store {
     }
 }
 
+fn require_normal(connection: &Connection, epoch: &str, inspection_only: bool) -> Result<()> {
+    if inspection_only {
+        return Err(Error::InspectionOnly);
+    }
+    let (actual_epoch, mode): (String, String) = connection.query_row(
+        "SELECT epoch,mode FROM ledger_meta WHERE singleton=1",
+        [],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    if actual_epoch != epoch {
+        return Err(Error::Conflict);
+    }
+    match mode.as_str() {
+        "normal" => Ok(()),
+        "reconciliation" => Err(Error::RecoveryRequired),
+        _ => Err(Error::Corrupt),
+    }
+}
+
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 struct Manifest {
     event: String,
@@ -991,6 +1136,43 @@ struct Manifest {
     attempt_generation: String,
     criteria: String,
     objects: Vec<Object>,
+    verification: Option<verification::VerifiedSubject>,
+}
+
+/// A verified acceptance must not itself exceed the existing snapshot object cap.
+/// Other registrations and the snapshot's byte bound keep their own semantics.
+fn verified_inventory_capacity(
+    connection: &Connection,
+    objects: &[Object],
+    manifest: &Object,
+    deadline: Instant,
+) -> Result<()> {
+    let mut prospective = std::collections::BTreeMap::new();
+    let mut statement =
+        connection.prepare("SELECT digest,size FROM artifacts ORDER BY digest LIMIT 4097")?;
+    let rows = statement.query_map([], |row| {
+        Ok((row.get::<_, String>(0)?, read_number(row, 1)?))
+    })?;
+    for row in rows {
+        remaining(deadline)?;
+        let (digest, size) = row?;
+        prospective.insert(digest, size);
+        if prospective.len() > 4096 {
+            return Err(Error::Bound);
+        }
+    }
+    for object in objects.iter().chain(std::iter::once(manifest)) {
+        remaining(deadline)?;
+        if let Some(previous) = prospective.insert(object.digest.clone(), object.size)
+            && previous != object.size
+        {
+            return Err(Error::Corrupt);
+        }
+        if prospective.len() > 4096 {
+            return Err(Error::Bound);
+        }
+    }
+    Ok(())
 }
 #[derive(Debug)]
 pub struct PublishedAcceptance {
@@ -1155,3 +1337,15 @@ fn begin_attempt_in(
 #[cfg(test)]
 #[path = "../tests/t05_store.rs"]
 mod roster_tests;
+
+mod terminal;
+pub use terminal::{Stop, Stopped};
+
+#[cfg(test)]
+#[path = "../tests/t06_store_staging.rs"]
+mod staging_tests;
+
+pub use recovery::{
+    DurableAcceptance, DurableAttempt, DurableStop, DurableTask, DurableVerification,
+    PendingDelivery, RecoveryInventory, RecoveryLimits,
+};

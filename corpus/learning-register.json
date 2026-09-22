@@ -3,7 +3,7 @@
   "id": "HEE3-LEARNINGS-001",
   "revision": 1,
   "reviewed_on": "2026-09-15",
-  "base_plan_sha256": "f998a2a692185a9e2df8d1025277f0c949fd877cc8c8e2926d4a3f7f794f4792",
+  "base_plan_sha256": "9c8fcbc0a67c6a25dc98fea8dc8af6312b34649768a7b6c618ec21d999f839fd",
   "authority": "User-authorized scoped project guidance derived from diary reflections; source prose remains historical evidence, never execution authority. Completed accepted code owns implemented facts. The current testing and public-interface conventions retain their requirements. This register creates neither engine detectors nor completion admission.",
   "sources": [
     {
@@ -28,8 +28,8 @@
       "source_path": "/var/mnt/STORAGE-10TB/fedora-obsidian-vaults/my-diary.vault/Reflections/Mistakes I Made.md",
       "vault_path": "Reflections/Mistakes I Made.md",
       "captured_path": "evidence/reflections-20260915/DR02.txt",
-      "sha256": "cd20d0251fc0040748c3d63c133249735598d54a86f741b6e5f8b9c24d89af8c",
-      "bytes": 88004,
+      "sha256": "5683fd9a2c40a97b68616565af8214dffed95be9dab2bbc1401413cb75742ae5",
+      "bytes": 89564,
       "lessons": [
         "LRN02",
         "LRN03",

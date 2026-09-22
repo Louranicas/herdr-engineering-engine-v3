@@ -33,15 +33,15 @@ The host Graphify tool environment is required for this analysis step. No PATH e
 
 ## Bounded navigation commands
 
-Run in the host terminal; these query the derived graph only:
+Run in the host terminal; these query the derived graph only. The current full graph exceeds the installed 512 MiB default file cap; the maintenance runner sets `GRAPHIFY_MAX_GRAPH_BYTES=1073741824` (1 GiB, raised from 640 MiB on 2026-09-21 when graph.json reached 728 MB). Use the explicitly bounded 640 MiB cap for each query; this is a file-size limit, not a memory-use guarantee. Keep this setting process-local and refuse a graph exceeding it until its source and resource requirements are reviewed:
 
 ```bash
-graphify explain "Module task" --graph /var/home/herdr-engineering-engine-v3/corpus/graphify-out/graph.json
-graphify path "Module task" "Module worker" --graph /var/home/herdr-engineering-engine-v3/corpus/graphify-out/graph.json
-graphify affected "Module contracts" --relation depends_on --depth 2 --graph /var/home/herdr-engineering-engine-v3/corpus/graphify-out/graph.json
+GRAPHIFY_MAX_GRAPH_BYTES=671088640 graphify explain "Module task" --graph /var/home/herdr-engineering-engine-v3/corpus/graphify-out/graph.json
+GRAPHIFY_MAX_GRAPH_BYTES=671088640 graphify path "Module task" "Module worker" --graph /var/home/herdr-engineering-engine-v3/corpus/graphify-out/graph.json
+GRAPHIFY_MAX_GRAPH_BYTES=671088640 graphify affected "Module contracts" --relation depends_on --depth 2 --graph /var/home/herdr-engineering-engine-v3/corpus/graphify-out/graph.json
 ```
 
-In Toolbx prefix the host command with `flatpak-spawn --host` and use the installed full Graphify executable path when PATH lacks it. This version’s query/explain text may display only one parallel relationship per neighbor; inspect full JSON or the path output for all retained relations. Broad lexical queries can seed similarly named maintenance/example symbols and infer an irrelevant context filter. Prefer exact-label explain/path, check the source path and entity kind, then use full JSON for exact evidence. The retained query-ambiguity controls record this observed limit. A reverse navigation link is not a reverse runtime dependency.
+In Toolbx use `flatpak-spawn --host --env=GRAPHIFY_MAX_GRAPH_BYTES=671088640 /var/home/Louranicas/.local/bin/graphify` followed by the query arguments; a local Toolbx environment assignment is not forwarded automatically. For corpus publication or graph-only recovery use `GRAPHIFY_MAX_GRAPH_BYTES=671088640 ./tools/corpus-sync` or `GRAPHIFY_MAX_GRAPH_BYTES=671088640 ./tools/corpus-sync --graph` on the host, with the same explicit `--env` when invoking through Toolbx. A separate `--check` is still required. This version’s query/explain text may display only one parallel relationship per neighbor; inspect full JSON or the path output for all retained relations. Broad lexical queries can seed similarly named maintenance/example symbols and infer an irrelevant context filter. Prefer exact-label explain/path, check the source path and entity kind, then use full JSON for exact evidence. The retained query-ambiguity controls record this observed limit. A reverse navigation link is not a reverse runtime dependency.
 
 ## Declared clusters and module stems
 

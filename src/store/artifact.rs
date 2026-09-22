@@ -42,6 +42,11 @@ impl Directory {
         Ok(Self { file, path })
     }
 
+    // Duplicate held custody; never resolve a path or acquire a new lock.
+    pub fn try_clone(&self) -> Result<Self> {
+        Self::checked(self.file.try_clone()?, self.path.clone())
+    }
+
     pub fn child(&self, name: &str, create: bool) -> Result<Self> {
         if name.is_empty() || matches!(name, "." | "..") || name.contains(['/', '\0']) {
             return Err(Error::Invalid);

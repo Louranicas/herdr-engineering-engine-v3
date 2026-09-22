@@ -31,7 +31,7 @@
 // [CONTEXT RESTART POINTER](file:///var/home/herdr-engineering-engine-v3/corpus/CONTEXT_HANDOFF.md)
 // [QUICK START](file:///var/home/herdr-engineering-engine-v3/QUICK_START.md)
 // [ASSIMILATION AND DELIVERY WORKFLOW](file:///var/home/herdr-engineering-engine-v3/workflows/README.md)
-// Readiness binding: HEE3-READINESS-001; SHA-256 ea991737ce282467556e4997f28e97c4b7f0799d823aae98905fcf34f71766f7; clauses F2-C01, F2-C02, F2-C03, F2-C04, F2-C05, F2-C06, F3-C01, F3-C02, F3-C03, F3-C04, F3-C05, F3-C06, F4-C01, F4-C02, F4-C03, F4-C04, F4-C05, F4-C06, F4-C07, F5-C01, F5-C02, F5-C03, F5-C04, F5-C05, F5-C06, F7-C01, F7-C02, F7-C03, F7-C04, F7-C05, F7-C06; groupings R90-02, R90-03, R90-04, R90-05, R90-09, R90-10; resolved contracts RC02, RC03, RC04, RC05; runtime proof pending; original task DAG controls.
+// Readiness binding: HEE3-READINESS-001; SHA-256 e774f8984c7e39e85b156289fac809bded6df80ba3647cfb2024c69856447b94; clauses F2-C01, F2-C02, F2-C03, F2-C04, F2-C05, F2-C06, F3-C01, F3-C02, F3-C03, F3-C04, F3-C05, F3-C06, F4-C01, F4-C02, F4-C03, F4-C04, F4-C05, F4-C06, F4-C07, F5-C01, F5-C02, F5-C03, F5-C04, F5-C05, F5-C06, F7-C01, F7-C02, F7-C03, F7-C04, F7-C05, F7-C06; groupings R90-02, R90-03, R90-04, R90-05, R90-09, R90-10; resolved contracts RC02, RC03, RC04, RC05; runtime proof pending; original task DAG controls.
 // Completion identity: HEE3-DONE-contracts; all 13 applicable gates; current state unassessed. No documentation pass admits this module.
 // Mandatory testing convention: at least 50 distinct qualifying module-owned cases; zero baseline warnings/errors, including pedantic Clippy on admitted Rust targets/profiles. Full qualification remains unassessed.
 //
@@ -164,7 +164,7 @@
 // [What My Ancestors Knew That I Did Not](obsidian://open?vault=my-diary.vault&file=Reflections%2FWhat%20My%20Ancestors%20Knew%20That%20I%20Did%20Not)
 // [What Prototyping Is For](obsidian://open?vault=my-diary.vault&file=Reflections%2FWhat%20Prototyping%20Is%20For)
 // [Why I Stopped Trusting Green](obsidian://open?vault=my-diary.vault&file=Reflections%2FWhy%20I%20Stopped%20Trusting%20Green)
-// Readiness binding: HEE3-READINESS-001; SHA-256 ea991737ce282467556e4997f28e97c4b7f0799d823aae98905fcf34f71766f7; clauses F1-C01, F1-C02, F1-C03, F1-C04, F1-C05, F2-C01, F2-C02, F2-C03, F2-C04, F2-C05, F2-C06, F3-C01, F3-C02, F3-C03, F3-C04, F3-C05, F3-C06, F4-C01, F4-C02, F4-C03, F4-C04, F4-C05, F4-C06, F4-C07, F5-C01, F5-C02, F5-C03, F5-C04, F5-C05, F5-C06, F7-C01, F7-C02, F7-C03, F7-C04, F7-C05, F7-C06; groupings R90-01, R90-03, R90-07, R90-09, R90-10; resolved contracts RC01, RC02, RC03, RC04, RC05; runtime proof pending; original task DAG controls.
+// Readiness binding: HEE3-READINESS-001; SHA-256 e774f8984c7e39e85b156289fac809bded6df80ba3647cfb2024c69856447b94; clauses F1-C01, F1-C02, F1-C03, F1-C04, F1-C05, F2-C01, F2-C02, F2-C03, F2-C04, F2-C05, F2-C06, F3-C01, F3-C02, F3-C03, F3-C04, F3-C05, F3-C06, F4-C01, F4-C02, F4-C03, F4-C04, F4-C05, F4-C06, F4-C07, F5-C01, F5-C02, F5-C03, F5-C04, F5-C05, F5-C06, F7-C01, F7-C02, F7-C03, F7-C04, F7-C05, F7-C06; groupings R90-01, R90-03, R90-07, R90-09, R90-10; resolved contracts RC01, RC02, RC03, RC04, RC05; runtime proof pending; original task DAG controls.
 // Completion identity: HEE3-DONE-numerical; all 13 applicable gates; current state unassessed. No documentation pass admits this module.
 // Mandatory testing convention: at least 50 distinct qualifying module-owned cases; zero baseline warnings/errors, including pedantic Clippy on admitted Rust targets/profiles. Full qualification remains unassessed.
 //
@@ -322,3 +322,329 @@
 // [Why I Stopped Trusting Green](obsidian://open?vault=my-diary.vault&file=Reflections%2FWhy%20I%20Stopped%20Trusting%20Green)
 // [Working in Sandboxes on Kinoite](obsidian://open?vault=my-diary.vault&file=Reflections%2FWorking%20in%20Sandboxes%20on%20Kinoite)
 // HEE3-ANCHORS-END
+
+//! Pure HEE3-Analysis/1 validation. Results are advisory and cannot mutate owners.
+//! Process custody and application action integration are separate obligations.
+
+use crate::contracts::{Sha256Digest, UuidV4, parse_u64_decimal};
+use serde::{Deserialize, Deserializer, Serialize};
+use sha2::{Digest, Sha256};
+use std::collections::BTreeSet;
+
+pub const MAX_REQUEST: usize = 1_048_576;
+pub const MAX_REPORT: usize = 65_536;
+pub const MAX_ROWS: usize = 4096;
+const HEX: &[u8; 16] = b"0123456789abcdef";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Invalid {
+    Bound,
+    Encoding,
+    Identity,
+    Schema,
+    Domain,
+    Stale,
+    Binding,
+    Statistics,
+}
+
+fn nullable<'de, D: Deserializer<'de>>(d: D) -> Result<Option<String>, D::Error> {
+    Option::deserialize(d)
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Subject {
+    pub task_id: String,
+    pub attempt_id: String,
+    pub generation: String,
+    pub artifact_sha256: String,
+}
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Recipe {
+    pub id: String,
+    pub version: u32,
+}
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Units {
+    pub elapsed: String,
+    pub usage: String,
+}
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Shape {
+    pub rows: u32,
+    pub fields: u32,
+}
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Outcome {
+    Accepted,
+    Failed,
+    Cancelled,
+    Abandoned,
+    Running,
+}
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Observation {
+    pub attempt_id: String,
+    pub outcome: Outcome,
+    pub elapsed_ms: f64,
+    #[serde(deserialize_with = "nullable")]
+    pub usage_tokens: Option<String>,
+    pub censored: bool,
+}
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Request {
+    pub protocol: String,
+    pub version: u32,
+    pub request_id: String,
+    pub subject: Subject,
+    pub cutoff_unix_ms: String,
+    pub expires_unix_ms: String,
+    pub recipe: Recipe,
+    pub units: Units,
+    pub shape: Shape,
+    pub observations: Vec<Observation>,
+}
+/// Canonical decimal strings, including zero, distinguish unknown usage from zero.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Counts {
+    pub total: String,
+    pub accepted: String,
+    pub failed: String,
+    pub cancelled: String,
+    pub abandoned: String,
+    pub running: String,
+    pub unknown_usage: String,
+    pub censored: String,
+    pub known_usage_sum: String,
+}
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Report {
+    pub protocol: String,
+    pub version: u32,
+    pub request_id: String,
+    pub request_sha256: String,
+    pub subject: Subject,
+    pub cutoff_unix_ms: String,
+    pub expires_unix_ms: String,
+    pub recipe: Recipe,
+    pub units: Units,
+    pub counts: Counts,
+    pub acceptance_fraction: f64,
+    pub mean_observed_ms: f64,
+}
+/// Owns exact received bytes and validated fields without exposing mutable access.
+#[derive(Debug)]
+pub struct Dataset {
+    raw: Vec<u8>,
+    request: Request,
+    digest: String,
+}
+
+impl Dataset {
+    /// Decode one bounded EOF object, including duplicate and unknown-key refusal.
+    /// # Errors
+    /// Returns explicit schema, identity, domain, time or resource refusal.
+    pub fn decode(raw: &[u8], now_ms: u64) -> Result<Self, Invalid> {
+        let request: Request = decode(raw, MAX_REQUEST)?;
+        validate(&request, now_ms)?;
+        let mut digest = String::from("sha256:");
+        for byte in Sha256::digest(raw) {
+            digest.push(char::from(HEX[usize::from(byte >> 4)]));
+            digest.push(char::from(HEX[usize::from(byte & 15)]));
+        }
+        Ok(Self {
+            raw: raw.to_vec(),
+            request,
+            digest,
+        })
+    }
+    #[must_use]
+    pub fn raw(&self) -> &[u8] {
+        &self.raw
+    }
+    #[must_use]
+    pub fn request(&self) -> &Request {
+        &self.request
+    }
+    #[must_use]
+    pub fn digest(&self) -> &str {
+        &self.digest
+    }
+
+    /// Recompute the descriptive reference over every row in its original order.
+    /// # Errors
+    /// Refuses any violated internal scalar invariant.
+    pub fn reference(&self) -> Result<Report, Invalid> {
+        let q = &self.request;
+        let mut counts = [0_u32; 5];
+        let mut unknown = 0_u64;
+        let mut usage = 0_u64;
+        let mut sum = 0.0;
+        let mut correction = 0.0;
+        for row in &q.observations {
+            counts[match row.outcome {
+                Outcome::Accepted => 0,
+                Outcome::Failed => 1,
+                Outcome::Cancelled => 2,
+                Outcome::Abandoned => 3,
+                Outcome::Running => 4,
+            }] += 1;
+            if let Some(value) = &row.usage_tokens {
+                // The immutable validated dataset bounds each value to u32.
+                usage += parse_u64_decimal(value).map_err(|_| Invalid::Domain)?;
+            } else {
+                unknown += 1;
+            }
+            let adjusted = row.elapsed_ms - correction;
+            let next = sum + adjusted;
+            correction = (next - sum) - adjusted;
+            sum = next;
+        }
+        Ok(Report {
+            protocol: q.protocol.clone(),
+            version: q.version,
+            request_id: q.request_id.clone(),
+            request_sha256: self.digest.clone(),
+            subject: q.subject.clone(),
+            cutoff_unix_ms: q.cutoff_unix_ms.clone(),
+            expires_unix_ms: q.expires_unix_ms.clone(),
+            recipe: q.recipe.clone(),
+            units: q.units.clone(),
+            counts: Counts {
+                total: q.shape.rows.to_string(),
+                accepted: counts[0].to_string(),
+                failed: counts[1].to_string(),
+                cancelled: counts[2].to_string(),
+                abandoned: counts[3].to_string(),
+                running: counts[4].to_string(),
+                unknown_usage: unknown.to_string(),
+                censored: counts[4].to_string(),
+                known_usage_sum: usage.to_string(),
+            },
+            acceptance_fraction: f64::from(counts[0]) / f64::from(q.shape.rows),
+            mean_observed_ms: sum / f64::from(q.shape.rows),
+        })
+    }
+
+    /// Validate a received report independently against the original dataset.
+    /// # Errors
+    /// Refuses malformed, stale, mismatched or numerically incorrect reports.
+    pub fn report(&self, raw: &[u8], now_ms: u64) -> Result<Report, Invalid> {
+        validate(&self.request, now_ms)?;
+        let r: Report = decode(raw, MAX_REPORT)?;
+        let expected = self.reference()?;
+        if r.protocol != expected.protocol
+            || r.version != expected.version
+            || r.request_id != expected.request_id
+            || r.request_sha256 != expected.request_sha256
+            || r.subject != expected.subject
+            || r.cutoff_unix_ms != expected.cutoff_unix_ms
+            || r.expires_unix_ms != expected.expires_unix_ms
+            || r.recipe != expected.recipe
+            || r.units != expected.units
+        {
+            return Err(Invalid::Binding);
+        }
+        if r.counts != expected.counts
+            || !r.acceptance_fraction.is_finite()
+            || !r.mean_observed_ms.is_finite()
+            || (r.acceptance_fraction - expected.acceptance_fraction).abs() > 1e-12
+            || (r.mean_observed_ms - expected.mean_observed_ms).abs()
+                > 8.0 * f64::EPSILON * expected.mean_observed_ms.abs().max(1.0)
+        {
+            return Err(Invalid::Statistics);
+        }
+        Ok(r)
+    }
+}
+
+fn decode<T: serde::de::DeserializeOwned>(raw: &[u8], cap: usize) -> Result<T, Invalid> {
+    if raw.is_empty() || raw.len() > cap {
+        return Err(Invalid::Bound);
+    }
+    // Limit nesting before serde allocation. Typed structs independently enforce
+    // decoded-key uniqueness, closed fields and the complete accepted shape.
+    let mut depth = 0_u32;
+    let mut quoted = false;
+    let mut escaped = false;
+    for &b in raw {
+        if quoted {
+            if escaped {
+                escaped = false;
+            } else if b == b'\\' {
+                escaped = true;
+            } else if b == b'"' {
+                quoted = false;
+            }
+        } else if b == b'"' {
+            quoted = true;
+        } else if b == b'{' || b == b'[' {
+            depth += 1;
+            if depth > 32 {
+                return Err(Invalid::Bound);
+            }
+        } else if b == b'}' || b == b']' {
+            depth = depth.checked_sub(1).ok_or(Invalid::Encoding)?;
+        }
+    }
+    serde_json::from_slice(raw).map_err(|_| Invalid::Encoding)
+}
+
+fn validate(q: &Request, now: u64) -> Result<(), Invalid> {
+    if q.protocol != "hee3.analysis"
+        || q.version != 1
+        || q.recipe.id != "descriptive"
+        || q.recipe.version != 1
+        || q.units.elapsed != "ms"
+        || q.units.usage != "token"
+        || q.shape.fields != 5
+    {
+        return Err(Invalid::Schema);
+    }
+    for id in [&q.request_id, &q.subject.task_id, &q.subject.attempt_id] {
+        UuidV4::parse(id).map_err(|_| Invalid::Identity)?;
+    }
+    Sha256Digest::parse(&q.subject.artifact_sha256).map_err(|_| Invalid::Identity)?;
+    parse_u64_decimal(&q.subject.generation).map_err(|_| Invalid::Identity)?;
+    let cutoff = parse_u64_decimal(&q.cutoff_unix_ms).map_err(|_| Invalid::Schema)?;
+    let expiry = parse_u64_decimal(&q.expires_unix_ms).map_err(|_| Invalid::Schema)?;
+    if cutoff > now || expiry <= now {
+        return Err(Invalid::Stale);
+    }
+    if q.observations.is_empty()
+        || q.observations.len() > MAX_ROWS
+        || usize::try_from(q.shape.rows).ok() != Some(q.observations.len())
+    {
+        return Err(Invalid::Bound);
+    }
+    let mut ids = BTreeSet::new();
+    for row in &q.observations {
+        UuidV4::parse(&row.attempt_id).map_err(|_| Invalid::Identity)?;
+        if !ids.insert(&row.attempt_id) {
+            return Err(Invalid::Identity);
+        }
+        if !row.elapsed_ms.is_finite()
+            || !(0.0..=86_400_000.0).contains(&row.elapsed_ms)
+            || row.censored != (row.outcome == Outcome::Running)
+        {
+            return Err(Invalid::Domain);
+        }
+        if let Some(value) = &row.usage_tokens {
+            let value = parse_u64_decimal(value).map_err(|_| Invalid::Domain)?;
+            u32::try_from(value).map_err(|_| Invalid::Domain)?;
+        }
+    }
+    Ok(())
+}
+
+/// Bounded advisory Julia process exchange, without task/grant authority.
+pub mod process;

@@ -97,7 +97,7 @@ Every operation inherits the catalogue requirements for caller capability, ident
 
 Observed source kind: `engine_source`. Accepted current interface: **unavailable**. No completion admission collector is implemented. A source body would be an implementation candidate, not automatically an accepted module. After verified admission exists, exact accepted source/schema and tests govern current interface facts; intended changes remain in the atlas.
 
-Convention SHA-256: `089e6c05bbe6f53db1c473153d26638028b2e3c8f99d99967d8f0e7baa97bb8d`. This binding proves which documentation convention is projected, not runtime correctness.
+Convention SHA-256: `c8a96767e52cf8b309ef5fc5ab968a1e875b0d97ab7d62aaec6f96f1d8436557`. This binding proves which documentation convention is projected, not runtime correctness.
 
 
 ## HEE3-IF-task
@@ -136,7 +136,7 @@ Every operation inherits the catalogue requirements for caller capability, ident
 
 Observed source kind: `engine_source`. Accepted current interface: **unavailable**. No completion admission collector is implemented. A source body would be an implementation candidate, not automatically an accepted module. After verified admission exists, exact accepted source/schema and tests govern current interface facts; intended changes remain in the atlas.
 
-Convention SHA-256: `089e6c05bbe6f53db1c473153d26638028b2e3c8f99d99967d8f0e7baa97bb8d`. This binding proves which documentation convention is projected, not runtime correctness.
+Convention SHA-256: `c8a96767e52cf8b309ef5fc5ab968a1e875b0d97ab7d62aaec6f96f1d8436557`. This binding proves which documentation convention is projected, not runtime correctness.
 
 
 ## HEE3-IF-store
@@ -175,7 +175,7 @@ Every operation inherits the catalogue requirements for caller capability, ident
 
 Observed source kind: `engine_source`. Accepted current interface: **unavailable**. No completion admission collector is implemented. A source body would be an implementation candidate, not automatically an accepted module. After verified admission exists, exact accepted source/schema and tests govern current interface facts; intended changes remain in the atlas.
 
-Convention SHA-256: `089e6c05bbe6f53db1c473153d26638028b2e3c8f99d99967d8f0e7baa97bb8d`. This binding proves which documentation convention is projected, not runtime correctness.
+Convention SHA-256: `c8a96767e52cf8b309ef5fc5ab968a1e875b0d97ab7d62aaec6f96f1d8436557`. This binding proves which documentation convention is projected, not runtime correctness.
 
 
 ## HEE3-IF-roster
@@ -214,7 +214,7 @@ Every operation inherits the catalogue requirements for caller capability, ident
 
 Observed source kind: `engine_source`. Accepted current interface: **unavailable**. No completion admission collector is implemented. A source body would be an implementation candidate, not automatically an accepted module. After verified admission exists, exact accepted source/schema and tests govern current interface facts; intended changes remain in the atlas.
 
-Convention SHA-256: `089e6c05bbe6f53db1c473153d26638028b2e3c8f99d99967d8f0e7baa97bb8d`. This binding proves which documentation convention is projected, not runtime correctness.
+Convention SHA-256: `c8a96767e52cf8b309ef5fc5ab968a1e875b0d97ab7d62aaec6f96f1d8436557`. This binding proves which documentation convention is projected, not runtime correctness.
 
 
 ## HEE3-IF-route
@@ -253,7 +253,7 @@ Every operation inherits the catalogue requirements for caller capability, ident
 
 Observed source kind: `comment_stub`. Accepted current interface: **unavailable**. No completion admission collector is implemented. A source body would be an implementation candidate, not automatically an accepted module. After verified admission exists, exact accepted source/schema and tests govern current interface facts; intended changes remain in the atlas.
 
-Convention SHA-256: `089e6c05bbe6f53db1c473153d26638028b2e3c8f99d99967d8f0e7baa97bb8d`. This binding proves which documentation convention is projected, not runtime correctness.
+Convention SHA-256: `c8a96767e52cf8b309ef5fc5ab968a1e875b0d97ab7d62aaec6f96f1d8436557`. This binding proves which documentation convention is projected, not runtime correctness.
 
 
 ## HEE3-IF-budget
@@ -292,7 +292,7 @@ Every operation inherits the catalogue requirements for caller capability, ident
 
 Observed source kind: `comment_stub`. Accepted current interface: **unavailable**. No completion admission collector is implemented. A source body would be an implementation candidate, not automatically an accepted module. After verified admission exists, exact accepted source/schema and tests govern current interface facts; intended changes remain in the atlas.
 
-Convention SHA-256: `089e6c05bbe6f53db1c473153d26638028b2e3c8f99d99967d8f0e7baa97bb8d`. This binding proves which documentation convention is projected, not runtime correctness.
+Convention SHA-256: `c8a96767e52cf8b309ef5fc5ab968a1e875b0d97ab7d62aaec6f96f1d8436557`. This binding proves which documentation convention is projected, not runtime correctness.
 
 
 ## HEE3-IF-worker
@@ -331,7 +331,7 @@ Every operation inherits the catalogue requirements for caller capability, ident
 
 Observed source kind: `engine_source`. Accepted current interface: **unavailable**. No completion admission collector is implemented. A source body would be an implementation candidate, not automatically an accepted module. After verified admission exists, exact accepted source/schema and tests govern current interface facts; intended changes remain in the atlas.
 
-Convention SHA-256: `089e6c05bbe6f53db1c473153d26638028b2e3c8f99d99967d8f0e7baa97bb8d`. This binding proves which documentation convention is projected, not runtime correctness.
+Convention SHA-256: `c8a96767e52cf8b309ef5fc5ab968a1e875b0d97ab7d62aaec6f96f1d8436557`. This binding proves which documentation convention is projected, not runtime correctness.
 
 
 ## HEE3-IF-check
@@ -368,9 +368,9 @@ Every operation inherits the catalogue requirements for caller capability, ident
 
 ### Accepted current interface and implementation
 
-Observed source kind: `comment_stub`. Accepted current interface: **unavailable**. No completion admission collector is implemented. A source body would be an implementation candidate, not automatically an accepted module. After verified admission exists, exact accepted source/schema and tests govern current interface facts; intended changes remain in the atlas.
+Observed source kind: `engine_source`. Accepted current interface: **unavailable**. No completion admission collector is implemented. A source body would be an implementation candidate, not automatically an accepted module. After verified admission exists, exact accepted source/schema and tests govern current interface facts; intended changes remain in the atlas.
 
-Convention SHA-256: `089e6c05bbe6f53db1c473153d26638028b2e3c8f99d99967d8f0e7baa97bb8d`. This binding proves which documentation convention is projected, not runtime correctness.
+Convention SHA-256: `c8a96767e52cf8b309ef5fc5ab968a1e875b0d97ab7d62aaec6f96f1d8436557`. This binding proves which documentation convention is projected, not runtime correctness.
 
 
 ## HEE3-IF-recovery
@@ -407,9 +407,9 @@ Every operation inherits the catalogue requirements for caller capability, ident
 
 ### Accepted current interface and implementation
 
-Observed source kind: `comment_stub`. Accepted current interface: **unavailable**. No completion admission collector is implemented. A source body would be an implementation candidate, not automatically an accepted module. After verified admission exists, exact accepted source/schema and tests govern current interface facts; intended changes remain in the atlas.
+Observed source kind: `engine_source`. Accepted current interface: **unavailable**. No completion admission collector is implemented. A source body would be an implementation candidate, not automatically an accepted module. After verified admission exists, exact accepted source/schema and tests govern current interface facts; intended changes remain in the atlas.
 
-Convention SHA-256: `089e6c05bbe6f53db1c473153d26638028b2e3c8f99d99967d8f0e7baa97bb8d`. This binding proves which documentation convention is projected, not runtime correctness.
+Convention SHA-256: `c8a96767e52cf8b309ef5fc5ab968a1e875b0d97ab7d62aaec6f96f1d8436557`. This binding proves which documentation convention is projected, not runtime correctness.
 
 
 ## HEE3-IF-cohort
@@ -448,7 +448,7 @@ Every operation inherits the catalogue requirements for caller capability, ident
 
 Observed source kind: `comment_stub`. Accepted current interface: **unavailable**. No completion admission collector is implemented. A source body would be an implementation candidate, not automatically an accepted module. After verified admission exists, exact accepted source/schema and tests govern current interface facts; intended changes remain in the atlas.
 
-Convention SHA-256: `089e6c05bbe6f53db1c473153d26638028b2e3c8f99d99967d8f0e7baa97bb8d`. This binding proves which documentation convention is projected, not runtime correctness.
+Convention SHA-256: `c8a96767e52cf8b309ef5fc5ab968a1e875b0d97ab7d62aaec6f96f1d8436557`. This binding proves which documentation convention is projected, not runtime correctness.
 
 
 ## HEE3-IF-context
@@ -487,7 +487,7 @@ Every operation inherits the catalogue requirements for caller capability, ident
 
 Observed source kind: `comment_stub`. Accepted current interface: **unavailable**. No completion admission collector is implemented. A source body would be an implementation candidate, not automatically an accepted module. After verified admission exists, exact accepted source/schema and tests govern current interface facts; intended changes remain in the atlas.
 
-Convention SHA-256: `089e6c05bbe6f53db1c473153d26638028b2e3c8f99d99967d8f0e7baa97bb8d`. This binding proves which documentation convention is projected, not runtime correctness.
+Convention SHA-256: `c8a96767e52cf8b309ef5fc5ab968a1e875b0d97ab7d62aaec6f96f1d8436557`. This binding proves which documentation convention is projected, not runtime correctness.
 
 
 ## HEE3-IF-notify
@@ -526,7 +526,7 @@ Every operation inherits the catalogue requirements for caller capability, ident
 
 Observed source kind: `comment_stub`. Accepted current interface: **unavailable**. No completion admission collector is implemented. A source body would be an implementation candidate, not automatically an accepted module. After verified admission exists, exact accepted source/schema and tests govern current interface facts; intended changes remain in the atlas.
 
-Convention SHA-256: `089e6c05bbe6f53db1c473153d26638028b2e3c8f99d99967d8f0e7baa97bb8d`. This binding proves which documentation convention is projected, not runtime correctness.
+Convention SHA-256: `c8a96767e52cf8b309ef5fc5ab968a1e875b0d97ab7d62aaec6f96f1d8436557`. This binding proves which documentation convention is projected, not runtime correctness.
 
 
 ## HEE3-IF-service
@@ -563,9 +563,9 @@ Every operation inherits the catalogue requirements for caller capability, ident
 
 ### Accepted current interface and implementation
 
-Observed source kind: `comment_stub`. Accepted current interface: **unavailable**. No completion admission collector is implemented. A source body would be an implementation candidate, not automatically an accepted module. After verified admission exists, exact accepted source/schema and tests govern current interface facts; intended changes remain in the atlas.
+Observed source kind: `engine_source`. Accepted current interface: **unavailable**. No completion admission collector is implemented. A source body would be an implementation candidate, not automatically an accepted module. After verified admission exists, exact accepted source/schema and tests govern current interface facts; intended changes remain in the atlas.
 
-Convention SHA-256: `089e6c05bbe6f53db1c473153d26638028b2e3c8f99d99967d8f0e7baa97bb8d`. This binding proves which documentation convention is projected, not runtime correctness.
+Convention SHA-256: `c8a96767e52cf8b309ef5fc5ab968a1e875b0d97ab7d62aaec6f96f1d8436557`. This binding proves which documentation convention is projected, not runtime correctness.
 
 
 ## HEE3-IF-herdr
@@ -604,7 +604,7 @@ Every operation inherits the catalogue requirements for caller capability, ident
 
 Observed source kind: `comment_stub`. Accepted current interface: **unavailable**. No completion admission collector is implemented. A source body would be an implementation candidate, not automatically an accepted module. After verified admission exists, exact accepted source/schema and tests govern current interface facts; intended changes remain in the atlas.
 
-Convention SHA-256: `089e6c05bbe6f53db1c473153d26638028b2e3c8f99d99967d8f0e7baa97bb8d`. This binding proves which documentation convention is projected, not runtime correctness.
+Convention SHA-256: `c8a96767e52cf8b309ef5fc5ab968a1e875b0d97ab7d62aaec6f96f1d8436557`. This binding proves which documentation convention is projected, not runtime correctness.
 
 
 ## HEE3-IF-numerical
@@ -641,9 +641,9 @@ Every operation inherits the catalogue requirements for caller capability, ident
 
 ### Accepted current interface and implementation
 
-Observed source kind: `comment_stub`. Accepted current interface: **unavailable**. No completion admission collector is implemented. A source body would be an implementation candidate, not automatically an accepted module. After verified admission exists, exact accepted source/schema and tests govern current interface facts; intended changes remain in the atlas.
+Observed source kind: `engine_source`. Accepted current interface: **unavailable**. No completion admission collector is implemented. A source body would be an implementation candidate, not automatically an accepted module. After verified admission exists, exact accepted source/schema and tests govern current interface facts; intended changes remain in the atlas.
 
-Convention SHA-256: `089e6c05bbe6f53db1c473153d26638028b2e3c8f99d99967d8f0e7baa97bb8d`. This binding proves which documentation convention is projected, not runtime correctness.
+Convention SHA-256: `c8a96767e52cf8b309ef5fc5ab968a1e875b0d97ab7d62aaec6f96f1d8436557`. This binding proves which documentation convention is projected, not runtime correctness.
 
 
 ## HEE3-IF-julia
@@ -682,7 +682,7 @@ Every operation inherits the catalogue requirements for caller capability, ident
 
 Observed source kind: `engine_source`. Accepted current interface: **unavailable**. No completion admission collector is implemented. A source body would be an implementation candidate, not automatically an accepted module. After verified admission exists, exact accepted source/schema and tests govern current interface facts; intended changes remain in the atlas.
 
-Convention SHA-256: `089e6c05bbe6f53db1c473153d26638028b2e3c8f99d99967d8f0e7baa97bb8d`. This binding proves which documentation convention is projected, not runtime correctness.
+Convention SHA-256: `c8a96767e52cf8b309ef5fc5ab968a1e875b0d97ab7d62aaec6f96f1d8436557`. This binding proves which documentation convention is projected, not runtime correctness.
 
 
 ## HEE3-IF-app
@@ -719,9 +719,9 @@ Every operation inherits the catalogue requirements for caller capability, ident
 
 ### Accepted current interface and implementation
 
-Observed source kind: `comment_stub`. Accepted current interface: **unavailable**. No completion admission collector is implemented. A source body would be an implementation candidate, not automatically an accepted module. After verified admission exists, exact accepted source/schema and tests govern current interface facts; intended changes remain in the atlas.
+Observed source kind: `engine_source`. Accepted current interface: **unavailable**. No completion admission collector is implemented. A source body would be an implementation candidate, not automatically an accepted module. After verified admission exists, exact accepted source/schema and tests govern current interface facts; intended changes remain in the atlas.
 
-Convention SHA-256: `089e6c05bbe6f53db1c473153d26638028b2e3c8f99d99967d8f0e7baa97bb8d`. This binding proves which documentation convention is projected, not runtime correctness.
+Convention SHA-256: `c8a96767e52cf8b309ef5fc5ab968a1e875b0d97ab7d62aaec6f96f1d8436557`. This binding proves which documentation convention is projected, not runtime correctness.
 
 
 ## HEE3-IF-actions
@@ -760,7 +760,7 @@ Every operation inherits the catalogue requirements for caller capability, ident
 
 Observed source kind: `comment_stub`. Accepted current interface: **unavailable**. No completion admission collector is implemented. A source body would be an implementation candidate, not automatically an accepted module. After verified admission exists, exact accepted source/schema and tests govern current interface facts; intended changes remain in the atlas.
 
-Convention SHA-256: `089e6c05bbe6f53db1c473153d26638028b2e3c8f99d99967d8f0e7baa97bb8d`. This binding proves which documentation convention is projected, not runtime correctness.
+Convention SHA-256: `c8a96767e52cf8b309ef5fc5ab968a1e875b0d97ab7d62aaec6f96f1d8436557`. This binding proves which documentation convention is projected, not runtime correctness.
 
 
 ## HEE3-IF-bash
@@ -799,7 +799,7 @@ Every operation inherits the catalogue requirements for caller capability, ident
 
 Observed source kind: `comment_stub`. Accepted current interface: **unavailable**. No completion admission collector is implemented. A source body would be an implementation candidate, not automatically an accepted module. After verified admission exists, exact accepted source/schema and tests govern current interface facts; intended changes remain in the atlas.
 
-Convention SHA-256: `089e6c05bbe6f53db1c473153d26638028b2e3c8f99d99967d8f0e7baa97bb8d`. This binding proves which documentation convention is projected, not runtime correctness.
+Convention SHA-256: `c8a96767e52cf8b309ef5fc5ab968a1e875b0d97ab7d62aaec6f96f1d8436557`. This binding proves which documentation convention is projected, not runtime correctness.
 
 
 ## HEE3-IF-pi_extension
@@ -838,7 +838,7 @@ Every operation inherits the catalogue requirements for caller capability, ident
 
 Observed source kind: `comment_stub`. Accepted current interface: **unavailable**. No completion admission collector is implemented. A source body would be an implementation candidate, not automatically an accepted module. After verified admission exists, exact accepted source/schema and tests govern current interface facts; intended changes remain in the atlas.
 
-Convention SHA-256: `089e6c05bbe6f53db1c473153d26638028b2e3c8f99d99967d8f0e7baa97bb8d`. This binding proves which documentation convention is projected, not runtime correctness.
+Convention SHA-256: `c8a96767e52cf8b309ef5fc5ab968a1e875b0d97ab7d62aaec6f96f1d8436557`. This binding proves which documentation convention is projected, not runtime correctness.
 
 
 ## HEE3-IF-skills
@@ -877,7 +877,7 @@ Every operation inherits the catalogue requirements for caller capability, ident
 
 Observed source kind: `comment_stub`. Accepted current interface: **unavailable**. No completion admission collector is implemented. A source body would be an implementation candidate, not automatically an accepted module. After verified admission exists, exact accepted source/schema and tests govern current interface facts; intended changes remain in the atlas.
 
-Convention SHA-256: `089e6c05bbe6f53db1c473153d26638028b2e3c8f99d99967d8f0e7baa97bb8d`. This binding proves which documentation convention is projected, not runtime correctness.
+Convention SHA-256: `c8a96767e52cf8b309ef5fc5ab968a1e875b0d97ab7d62aaec6f96f1d8436557`. This binding proves which documentation convention is projected, not runtime correctness.
 
 
 ## HEE3-IF-workflows
@@ -916,7 +916,7 @@ Every operation inherits the catalogue requirements for caller capability, ident
 
 Observed source kind: `comment_stub`. Accepted current interface: **unavailable**. No completion admission collector is implemented. A source body would be an implementation candidate, not automatically an accepted module. After verified admission exists, exact accepted source/schema and tests govern current interface facts; intended changes remain in the atlas.
 
-Convention SHA-256: `089e6c05bbe6f53db1c473153d26638028b2e3c8f99d99967d8f0e7baa97bb8d`. This binding proves which documentation convention is projected, not runtime correctness.
+Convention SHA-256: `c8a96767e52cf8b309ef5fc5ab968a1e875b0d97ab7d62aaec6f96f1d8436557`. This binding proves which documentation convention is projected, not runtime correctness.
 
 ## Interface evidence base
 

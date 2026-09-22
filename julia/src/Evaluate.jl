@@ -31,7 +31,7 @@
 # [CONTEXT RESTART POINTER](file:///var/home/herdr-engineering-engine-v3/corpus/CONTEXT_HANDOFF.md)
 # [QUICK START](file:///var/home/herdr-engineering-engine-v3/QUICK_START.md)
 # [ASSIMILATION AND DELIVERY WORKFLOW](file:///var/home/herdr-engineering-engine-v3/workflows/README.md)
-# Readiness binding: HEE3-READINESS-001; SHA-256 ea991737ce282467556e4997f28e97c4b7f0799d823aae98905fcf34f71766f7; clauses F1-C01, F1-C02, F1-C03, F1-C04, F1-C05, F2-C01, F2-C02, F2-C03, F2-C04, F2-C05, F2-C06, F3-C01, F3-C02, F3-C03, F3-C04, F3-C05, F3-C06, F4-C01, F4-C02, F4-C03, F4-C04, F4-C05, F4-C06, F4-C07, F5-C01, F5-C02, F5-C03, F5-C04, F5-C05, F5-C06, F7-C01, F7-C02, F7-C03, F7-C04, F7-C05, F7-C06; groupings R90-01, R90-05, R90-07, R90-09, R90-10; resolved contracts RC01, RC02, RC03, RC04, RC05, RC06; runtime proof pending; original task DAG controls.
+# Readiness binding: HEE3-READINESS-001; SHA-256 e774f8984c7e39e85b156289fac809bded6df80ba3647cfb2024c69856447b94; clauses F1-C01, F1-C02, F1-C03, F1-C04, F1-C05, F2-C01, F2-C02, F2-C03, F2-C04, F2-C05, F2-C06, F3-C01, F3-C02, F3-C03, F3-C04, F3-C05, F3-C06, F4-C01, F4-C02, F4-C03, F4-C04, F4-C05, F4-C06, F4-C07, F5-C01, F5-C02, F5-C03, F5-C04, F5-C05, F5-C06, F7-C01, F7-C02, F7-C03, F7-C04, F7-C05, F7-C06; groupings R90-01, R90-05, R90-07, R90-09, R90-10; resolved contracts RC01, RC02, RC03, RC04, RC05, RC06; runtime proof pending; original task DAG controls.
 # Completion identity: HEE3-DONE-budget; all 13 applicable gates; current state unassessed. No documentation pass admits this module.
 # Mandatory testing convention: at least 50 distinct qualifying module-owned cases; zero baseline warnings/errors, including pedantic Clippy on admitted Rust targets/profiles. Full qualification remains unassessed.
 # 
@@ -161,7 +161,7 @@
 # [Thematic Analysis of the Vaults](obsidian://open?vault=my-diary.vault&file=Reflections%2FThematic%20Analysis%20of%20the%20Vaults)
 # [What My Ancestors Knew That I Did Not](obsidian://open?vault=my-diary.vault&file=Reflections%2FWhat%20My%20Ancestors%20Knew%20That%20I%20Did%20Not)
 # [What the Workflow Is Worth](obsidian://open?vault=my-diary.vault&file=Reflections%2FWhat%20the%20Workflow%20Is%20Worth)
-# Readiness binding: HEE3-READINESS-001; SHA-256 ea991737ce282467556e4997f28e97c4b7f0799d823aae98905fcf34f71766f7; clauses F1-C01, F1-C02, F1-C03, F1-C04, F1-C05, F2-C01, F2-C02, F2-C03, F2-C04, F2-C05, F2-C06, F3-C01, F3-C02, F3-C03, F3-C04, F3-C05, F3-C06, F4-C01, F4-C02, F4-C03, F4-C04, F4-C05, F4-C06, F4-C07, F5-C01, F5-C02, F5-C03, F5-C04, F5-C05, F5-C06, F7-C01, F7-C02, F7-C03, F7-C04, F7-C05, F7-C06; groupings R90-01, R90-02, R90-03, R90-04, R90-07, R90-09, R90-10; resolved contracts RC01, RC02, RC03, RC04, RC05; runtime proof pending; original task DAG controls.
+# Readiness binding: HEE3-READINESS-001; SHA-256 e774f8984c7e39e85b156289fac809bded6df80ba3647cfb2024c69856447b94; clauses F1-C01, F1-C02, F1-C03, F1-C04, F1-C05, F2-C01, F2-C02, F2-C03, F2-C04, F2-C05, F2-C06, F3-C01, F3-C02, F3-C03, F3-C04, F3-C05, F3-C06, F4-C01, F4-C02, F4-C03, F4-C04, F4-C05, F4-C06, F4-C07, F5-C01, F5-C02, F5-C03, F5-C04, F5-C05, F5-C06, F7-C01, F7-C02, F7-C03, F7-C04, F7-C05, F7-C06; groupings R90-01, R90-02, R90-03, R90-04, R90-07, R90-09, R90-10; resolved contracts RC01, RC02, RC03, RC04, RC05; runtime proof pending; original task DAG controls.
 # Completion identity: HEE3-DONE-julia; all 13 applicable gates; current state unassessed. No documentation pass admits this module.
 # Mandatory testing convention: at least 50 distinct qualifying module-owned cases; zero baseline warnings/errors, including pedantic Clippy on admitted Rust targets/profiles. Full qualification remains unassessed.
 # 
@@ -312,7 +312,7 @@
 # [What the Workflow Is Worth](obsidian://open?vault=my-diary.vault&file=Reflections%2FWhat%20the%20Workflow%20Is%20Worth)
 # [Why I Stopped Trusting Green](obsidian://open?vault=my-diary.vault&file=Reflections%2FWhy%20I%20Stopped%20Trusting%20Green)
 # [Working in Sandboxes on Kinoite](obsidian://open?vault=my-diary.vault&file=Reflections%2FWorking%20in%20Sandboxes%20on%20Kinoite)
-# Readiness binding: HEE3-READINESS-001; SHA-256 ea991737ce282467556e4997f28e97c4b7f0799d823aae98905fcf34f71766f7; clauses F1-C01, F1-C02, F1-C03, F1-C04, F1-C05, F2-C01, F2-C02, F2-C03, F2-C04, F2-C05, F2-C06, F3-C01, F3-C02, F3-C03, F3-C04, F3-C05, F3-C06, F4-C01, F4-C02, F4-C03, F4-C04, F4-C05, F4-C06, F4-C07, F5-C01, F5-C02, F5-C03, F5-C04, F5-C05, F5-C06, F7-C01, F7-C02, F7-C03, F7-C04, F7-C05, F7-C06; groupings R90-01, R90-03, R90-07, R90-09, R90-10; resolved contracts RC01, RC02, RC03, RC04, RC05; runtime proof pending; original task DAG controls.
+# Readiness binding: HEE3-READINESS-001; SHA-256 e774f8984c7e39e85b156289fac809bded6df80ba3647cfb2024c69856447b94; clauses F1-C01, F1-C02, F1-C03, F1-C04, F1-C05, F2-C01, F2-C02, F2-C03, F2-C04, F2-C05, F2-C06, F3-C01, F3-C02, F3-C03, F3-C04, F3-C05, F3-C06, F4-C01, F4-C02, F4-C03, F4-C04, F4-C05, F4-C06, F4-C07, F5-C01, F5-C02, F5-C03, F5-C04, F5-C05, F5-C06, F7-C01, F7-C02, F7-C03, F7-C04, F7-C05, F7-C06; groupings R90-01, R90-03, R90-07, R90-09, R90-10; resolved contracts RC01, RC02, RC03, RC04, RC05; runtime proof pending; original task DAG controls.
 # Completion identity: HEE3-DONE-numerical; all 13 applicable gates; current state unassessed. No documentation pass admits this module.
 # Mandatory testing convention: at least 50 distinct qualifying module-owned cases; zero baseline warnings/errors, including pedantic Clippy on admitted Rust targets/profiles. Full qualification remains unassessed.
 # 
@@ -469,7 +469,7 @@
 # [What the Workflow Is Worth](obsidian://open?vault=my-diary.vault&file=Reflections%2FWhat%20the%20Workflow%20Is%20Worth)
 # [Why I Stopped Trusting Green](obsidian://open?vault=my-diary.vault&file=Reflections%2FWhy%20I%20Stopped%20Trusting%20Green)
 # [Working in Sandboxes on Kinoite](obsidian://open?vault=my-diary.vault&file=Reflections%2FWorking%20in%20Sandboxes%20on%20Kinoite)
-# Readiness binding: HEE3-READINESS-001; SHA-256 ea991737ce282467556e4997f28e97c4b7f0799d823aae98905fcf34f71766f7; clauses F1-C01, F1-C02, F1-C03, F1-C04, F1-C05, F2-C01, F2-C02, F2-C03, F2-C04, F2-C05, F2-C06, F3-C01, F3-C02, F3-C03, F3-C04, F3-C05, F3-C06, F4-C01, F4-C02, F4-C03, F4-C04, F4-C05, F4-C06, F4-C07, F5-C01, F5-C02, F5-C03, F5-C04, F5-C05, F5-C06, F7-C01, F7-C02, F7-C03, F7-C04, F7-C05, F7-C06; groupings R90-01, R90-07, R90-09, R90-10; resolved contracts RC01, RC02, RC03, RC04, RC05; runtime proof pending; original task DAG controls.
+# Readiness binding: HEE3-READINESS-001; SHA-256 e774f8984c7e39e85b156289fac809bded6df80ba3647cfb2024c69856447b94; clauses F1-C01, F1-C02, F1-C03, F1-C04, F1-C05, F2-C01, F2-C02, F2-C03, F2-C04, F2-C05, F2-C06, F3-C01, F3-C02, F3-C03, F3-C04, F3-C05, F3-C06, F4-C01, F4-C02, F4-C03, F4-C04, F4-C05, F4-C06, F4-C07, F5-C01, F5-C02, F5-C03, F5-C04, F5-C05, F5-C06, F7-C01, F7-C02, F7-C03, F7-C04, F7-C05, F7-C06; groupings R90-01, R90-07, R90-09, R90-10; resolved contracts RC01, RC02, RC03, RC04, RC05; runtime proof pending; original task DAG controls.
 # Completion identity: HEE3-DONE-route; all 13 applicable gates; current state unassessed. No documentation pass admits this module.
 # Mandatory testing convention: at least 50 distinct qualifying module-owned cases; zero baseline warnings/errors, including pedantic Clippy on admitted Rust targets/profiles. Full qualification remains unassessed.
 # 
@@ -603,3 +603,277 @@
 # [What Prototyping Is For](obsidian://open?vault=my-diary.vault&file=Reflections%2FWhat%20Prototyping%20Is%20For)
 # [What the Workflow Is Worth](obsidian://open?vault=my-diary.vault&file=Reflections%2FWhat%20the%20Workflow%20Is%20Worth)
 # HEE3-ANCHORS-END
+
+"""A stable validation refusal. No input text or owner mutation is retained."""
+struct AnalysisError <: Exception
+    code::Symbol
+end
+Base.showerror(io::IO, e::AnalysisError) = print(io, "analysis refusal: ", e.code)
+refuse(code) = throw(AnalysisError(code))
+
+# JSON3 iterates all tape keys, even when its lookup map selects the last key.
+# Validate iteration before ANY lookup, including escaped duplicate spellings.
+function closed(value, names)
+    value isa JSON3.Object || refuse(:schema)
+    seen = Set{Symbol}()
+    for (key, _) in value
+        key in seen && refuse(:duplicate)
+        key in names || refuse(:schema)
+        push!(seen, key)
+    end
+    seen == Set(names) || refuse(:schema)
+    return value
+end
+
+function decimal(value, bound = typemax(UInt64))
+    value isa AbstractString || refuse(:schema)
+    occursin(r"\A(?:0|[1-9][0-9]*)\z", value) || refuse(:domain)
+    number = tryparse(UInt64, value)
+    number === nothing && refuse(:domain)
+    number <= bound || refuse(:domain)
+    return number
+end
+function uuid(value)
+    value isa AbstractString || refuse(:identity)
+    occursin(
+        r"\A[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\z",
+        value,
+    ) || refuse(:identity)
+end
+integer(value, expected) = value isa Integer && !(value isa Bool) && value == expected
+
+# JSON3 normalizes integral float spellings (1.0) to Int64. Keep the integer
+# schema lexical too, including escaped keys, before that representation loses it.
+function numeric_spelling(bytes)
+    i = 1
+    while i <= length(bytes)
+        b = bytes[i]
+        if b == 0x22
+            start = i
+            i += 1
+            escaped = false
+            while i <= length(bytes)
+                if escaped
+                    escaped = false
+                elseif bytes[i] == 0x5c
+                    escaped = true
+                elseif bytes[i] == 0x22
+                    break
+                end
+                i += 1
+            end
+            i <= length(bytes) || refuse(:encoding)
+            after = i + 1
+            while after <= length(bytes) && bytes[after] in (0x20, 0x09, 0x0a, 0x0d)
+                after += 1
+            end
+            if after <= length(bytes) && bytes[after] == 0x3a
+                key = try
+                    JSON3.read(String(bytes[start:i]))
+                catch error
+                    error isa ArgumentError || rethrow()
+                    refuse(:encoding)
+                end
+                if key in ("version", "rows", "fields")
+                    after += 1
+                    while after <= length(bytes) && bytes[after] in (0x20, 0x09, 0x0a, 0x0d)
+                        after += 1
+                    end
+                    stop = after
+                    while stop <= length(bytes) &&
+                          !(bytes[stop] in (0x20, 0x09, 0x0a, 0x0d, 0x2c, 0x7d, 0x5d))
+                        stop += 1
+                    end
+                    token = String(bytes[after:(stop-1)])
+                    occursin(r"\A(?:0|[1-9][0-9]*)\z", token) || refuse(:schema)
+                end
+            end
+        elseif b in (0x2d, 0x2b, 0x2e) || 0x30 <= b <= 0x39
+            stop = i
+            while stop <= length(bytes) &&
+                  !(bytes[stop] in (0x20, 0x09, 0x0a, 0x0d, 0x2c, 0x7d, 0x5d))
+                stop += 1
+            end
+            token = String(bytes[i:(stop-1)])
+            occursin(r"\A-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?\z", token) ||
+                refuse(:encoding)
+            i = stop - 1
+        end
+        i += 1
+    end
+end
+
+# Enforce a single root object and depth before JSON3 allocation. This is only
+# framing; JSON3 parses the JSON grammar and closed() validates decoded keys.
+function framing(bytes)
+    1 <= length(bytes) <= 1_048_576 || refuse(:bound)
+    depth = 0
+    quoted = false
+    escaped = false
+    started = false
+    finished = false
+    for b in bytes
+        if finished
+            b in (0x20, 0x09, 0x0a, 0x0d) || refuse(:encoding)
+        elseif quoted
+            if escaped
+                escaped = false
+            elseif b == 0x5c
+                escaped = true
+            elseif b == 0x22
+                quoted = false
+            elseif b < 0x20
+                refuse(:encoding)
+            end
+        elseif b == 0x22
+            started || refuse(:encoding)
+            quoted = true
+        elseif b in (0x7b, 0x5b)
+            !started && b != 0x7b && refuse(:encoding)
+            started = true
+            depth += 1
+            depth <= 32 || refuse(:bound)
+        elseif b in (0x7d, 0x5d)
+            depth -= 1
+            depth >= 0 || refuse(:encoding)
+            finished = depth == 0
+        elseif !started && !(b in (0x20, 0x09, 0x0a, 0x0d))
+            refuse(:encoding)
+        end
+    end
+    finished && !quoted || refuse(:encoding)
+end
+
+# JSON3 defers string unescaping until values are visited. Force that work
+# while still inside the parser's ArgumentError normalization boundary.
+function decode_strings(value)
+    if value isa JSON3.Object
+        for (_, child) in value
+            decode_strings(child)
+        end
+    elseif value isa JSON3.Array
+        for child in value
+            decode_strings(child)
+        end
+    elseif value isa AbstractString
+        isvalid(value) || throw(ArgumentError("invalid decoded JSON string"))
+    end
+    return value
+end
+
+"""
+    analyze(raw::Vector{UInt8}, receive_unix_ms::UInt64) -> Vector{UInt8}
+
+Validate an immutable HEE3-Analysis/1 EOF request and return a descriptive/1
+report. Exact raw bytes define request_sha256. This pure evaluator opens no files,
+spawns no process and changes no task/policy state. Throws AnalysisError on refusal.
+The process owner must supply trusted time, bounds, EOF and failure custody.
+"""
+function analyze(raw::Vector{UInt8}, receive_unix_ms::UInt64)
+    bytes = copy(raw)
+    framing(bytes)
+    numeric_spelling(bytes)
+    text = String(copy(bytes))
+    isvalid(text) || refuse(:encoding)
+    q = try
+        decode_strings(JSON3.read(text; allow_inf = false))
+    catch error
+        error isa ArgumentError || rethrow()
+        refuse(:encoding)
+    end
+    closed(
+        q,
+        (
+            :protocol,
+            :version,
+            :request_id,
+            :subject,
+            :cutoff_unix_ms,
+            :expires_unix_ms,
+            :recipe,
+            :units,
+            :shape,
+            :observations,
+        ),
+    )
+    q.protocol == "hee3.analysis" && integer(q.version, 1) || refuse(:schema)
+    uuid(q.request_id)
+    closed(q.subject, (:task_id, :attempt_id, :generation, :artifact_sha256))
+    uuid(q.subject.task_id)
+    uuid(q.subject.attempt_id)
+    decimal(q.subject.generation)
+    digest = q.subject.artifact_sha256
+    digest isa AbstractString && occursin(r"\Asha256:[0-9a-f]{64}\z", digest) ||
+        refuse(:identity)
+    cutoff = decimal(q.cutoff_unix_ms)
+    expiry = decimal(q.expires_unix_ms)
+    cutoff <= receive_unix_ms < expiry || refuse(:stale)
+    closed(q.recipe, (:id, :version))
+    q.recipe.id == "descriptive" && integer(q.recipe.version, 1) || refuse(:schema)
+    closed(q.units, (:elapsed, :usage))
+    q.units.elapsed == "ms" && q.units.usage == "token" || refuse(:schema)
+    closed(q.shape, (:rows, :fields))
+    q.observations isa JSON3.Array || refuse(:schema)
+    1 <= length(q.observations) <= 4096 || refuse(:bound)
+    integer(q.shape.rows, length(q.observations)) && integer(q.shape.fields, 5) ||
+        refuse(:schema)
+    outcomes = ("accepted", "failed", "cancelled", "abandoned", "running")
+    counts = zeros(UInt64, 5)
+    unknown = UInt64(0)
+    usage = UInt64(0)
+    ids = Set{String}()
+    total = 0.0
+    correction = 0.0
+    for row in q.observations
+        closed(row, (:attempt_id, :outcome, :elapsed_ms, :usage_tokens, :censored))
+        uuid(row.attempt_id)
+        row.attempt_id in ids && refuse(:identity)
+        push!(ids, row.attempt_id)
+        index = findfirst(==(row.outcome), outcomes)
+        index === nothing && refuse(:schema)
+        counts[index] += 1
+        row.censored isa Bool && row.censored == (row.outcome == "running") ||
+            refuse(:domain)
+        value = row.elapsed_ms
+        value isa Real &&
+        !(value isa Bool) &&
+        isfinite(value) &&
+        0 <= value <= 86_400_000 || refuse(:domain)
+        adjusted = Float64(value) - correction
+        next = total + adjusted
+        correction = (next - total) - adjusted
+        total = next
+        if row.usage_tokens === nothing
+            unknown += 1
+        else
+            usage += decimal(row.usage_tokens, typemax(UInt32))
+        end
+    end
+    report = (;
+        protocol = q.protocol,
+        version = 1,
+        request_id = q.request_id,
+        request_sha256 = "sha256:" * bytes2hex(sha256(bytes)),
+        subject = q.subject,
+        cutoff_unix_ms = q.cutoff_unix_ms,
+        expires_unix_ms = q.expires_unix_ms,
+        recipe = q.recipe,
+        units = q.units,
+        counts = (;
+            total = string(length(q.observations)),
+            accepted = string(counts[1]),
+            failed = string(counts[2]),
+            cancelled = string(counts[3]),
+            abandoned = string(counts[4]),
+            running = string(counts[5]),
+            unknown_usage = string(unknown),
+            censored = string(counts[5]),
+            known_usage_sum = string(usage),
+        ),
+        acceptance_fraction = counts[1] / length(q.observations),
+        mean_observed_ms = total / length(q.observations),
+    )
+    result = Vector{UInt8}(codeunits(JSON3.write(report; allow_inf = false)))
+    length(result) <= 65_536 || refuse(:bound)
+    return result
+end

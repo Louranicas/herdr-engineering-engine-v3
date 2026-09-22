@@ -14,11 +14,11 @@
     "proposal_role": "Historical advisory input; this adopted convention is the maintained owner. Historical proposal hashes and scores do not claim current publication freshness."
   },
   "bound_sources": {
-    "PLAN_habitat_engine.json": "f998a2a692185a9e2df8d1025277f0c949fd877cc8c8e2926d4a3f7f794f4792",
-    "TESTING_STANDARD_habitat_engine.json": "1004749abf352815dc13b8317c4277ea124d06612137e9010666977bfd059986",
-    "MODULE_INTERFACES_habitat_engine.json": "089e6c05bbe6f53db1c473153d26638028b2e3c8f99d99967d8f0e7baa97bb8d",
-    "COMPLETION_STANDARD_habitat_engine.json": "860dc3c4021b780b94ddcb8b9af22c4fd09fe3590e7785de0bcf5a3b5025c3ea",
-    "SECURITY_PROFILE_habitat_engine.json": "7df993b06a0802f4a58c4fa6c721fa04578bc77a8a85a8e0c7e069f45c24694a",
+    "PLAN_habitat_engine.json": "9c8fcbc0a67c6a25dc98fea8dc8af6312b34649768a7b6c618ec21d999f839fd",
+    "TESTING_STANDARD_habitat_engine.json": "14a29dad1d089bc529ff9a132e5f80d5195e81aba2c2c0a07229e1c7c8960b09",
+    "MODULE_INTERFACES_habitat_engine.json": "c8a96767e52cf8b309ef5fc5ab968a1e875b0d97ab7d62aaec6f96f1d8436557",
+    "COMPLETION_STANDARD_habitat_engine.json": "a36374a796816c1ea4c85c3292d376942fe9da226d714012b87da2588f598594",
+    "SECURITY_PROFILE_habitat_engine.json": "03303308bedfa6e35a6b70363038bc9b43b305f409005f9e90f7af74b3d9e4c4",
     "evidence/final-review-20260915/assessment.md": "2b01b4a81e77929738c21adc43181881dffe05b9dfe66fb989d31ee8afed5b1d",
     "evidence/readiness-adoption-20260915/PLAN_readiness.json": "e9e113691d00d77794af09a092a425d0a2cd30406dee9461045b334de13997ec",
     "evidence/readiness-adoption-20260915/PLAN_readiness.md": "e795395ba7e7f000caaf8156058c863c6bbecc8eee0837306c062ab114633073",
@@ -43,7 +43,23 @@
     "evidence/consolidation-20260915/T26-model-runtime-observation.json": "09c8180cd8f32b4cda7a29b9193b000eaebf085d847627930f0f2de3b1f79c7f",
     "evidence/consolidation-20260915/receipt-contract-addendum.md": "93116bb5568a7061e915ca40bd1fe4e745eec662a07d850b50c2bbc9e1b00bc2",
     "evidence/foundation-T25-20260915/T25-closure.json": "2985ed835d7860e46f7b9834d8fd508c2f895d53b808c31f25003804904f52e7",
-    "evidence/foundation-T26-20260915/T26-closure.json": "6625551bdde48d4ccf140232653c652260b2d7259ad253e59c50fcdfc519b82f"
+    "evidence/foundation-T26-20260915/T26-closure.json": "6625551bdde48d4ccf140232653c652260b2d7259ad253e59c50fcdfc519b82f",
+    "evidence/implementation-T06-20260921/progress.json": "73a29c010c2f9505bf5eb0bb06664dfd81ca42f7f82bdfcee0a14a9c32c607d2",
+    "evidence/implementation-T06-20260921/closure-final/T06-closure.json": "ebf5c49c1b3e82d8bb9a960d8739b323ceeb6b0716b2e6fe3a3817081c876a07",
+    "evidence/implementation-T13-20260921/progress.json": "101bdbadd08e7ff3db89ce66749042cedd7ea03ef34571361a6f06f7b1cc1561",
+    "evidence/implementation-T21-20260921/progress.json": "4e3eeefb42e0e1d40b64cf9570612092453b20f1614c995c03077eec58a9e351",
+    "evidence/implementation-T13-20260921/closure-final/T13-closure.json": "9e94b785f5dbaeedf9c12ab08777d9e7774ca21531b55b413f00fa1346688df7",
+    "evidence/implementation-T21-20260921/closure-final/T21-closure.json": "173d7d77b728a54ad4b3377b962deff6bdd7248a59c2cec32a16bc7d3bd097fd",
+    "evidence/implementation-T07-20260921/progress.json": "fe3c93a8aa1bd4f74c670adc3fae92b534acf41a7c2224904d32caf9855f9445",
+    "evidence/implementation-T08-20260921/progress.json": "d0fd634618a3c56ab565b4e7d4296bb3716d0d0640bf737a368266bed9c4fe5f",
+    "evidence/implementation-T07-20260921/progress-pid-reuse.json": "26bb44665194c191d5ce7ff8b379805047a6c4784c9381ac4a78fd20adb4d641",
+    "evidence/implementation-T08-20260921/progress-overbound.json": "2e5e020371e27b18e40478952426b7dfda48104aa5f63e8a1b27d4ff60650573",
+    "evidence/foundation-T02-20260915/T02-closure.json": "f8dd4178289eee9d8e0efe6186babe6308808ed1aafc5f4a3048899b337a38bb",
+    "evidence/foundation-T03-20260915/T03-closure.json": "3a4ca83839dd38c939be66440939015ed9bb14ac337290e10b0e3d9eb459be79",
+    "evidence/foundation-T04-20260915/T04-closure.json": "752066ca3e930b4e9612cc815f8a4f56dc0ae943b0ce6d330f7f6352c9600d69",
+    "evidence/foundation-T05-20260915/T05-closure.json": "b26693e3a30d628f1b1cb4658d9b6ba59faf79c9ed99bc42ca4bd7573e8b5dc6",
+    "evidence/implementation-T07-20260921/progress-3.json": "4e26b521365e5e69de0e63f6f3667ba96b9a25c7b6cf0fb7e3b5ff81387c07f0",
+    "evidence/implementation-T08-20260921/closure-final/T08-closure.json": "8047176b2c07203dfa89909fc23c04f5a02f24a02f99fbd7c31726a435dd53c0"
   },
   "facets": [
     {

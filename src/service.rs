@@ -31,7 +31,7 @@
 // [CONTEXT RESTART POINTER](file:///var/home/herdr-engineering-engine-v3/corpus/CONTEXT_HANDOFF.md)
 // [QUICK START](file:///var/home/herdr-engineering-engine-v3/QUICK_START.md)
 // [ASSIMILATION AND DELIVERY WORKFLOW](file:///var/home/herdr-engineering-engine-v3/workflows/README.md)
-// Readiness binding: HEE3-READINESS-001; SHA-256 ea991737ce282467556e4997f28e97c4b7f0799d823aae98905fcf34f71766f7; clauses F2-C01, F2-C02, F2-C03, F2-C04, F2-C05, F2-C06, F3-C01, F3-C02, F3-C03, F3-C04, F3-C05, F3-C06, F4-C01, F4-C02, F4-C03, F4-C04, F4-C05, F4-C06, F4-C07, F5-C01, F5-C02, F5-C03, F5-C04, F5-C05, F5-C06, F7-C01, F7-C02, F7-C03, F7-C04, F7-C05, F7-C06; groupings R90-02, R90-03, R90-04, R90-05, R90-09, R90-10; resolved contracts RC02, RC03, RC04, RC05; runtime proof pending; original task DAG controls.
+// Readiness binding: HEE3-READINESS-001; SHA-256 e774f8984c7e39e85b156289fac809bded6df80ba3647cfb2024c69856447b94; clauses F2-C01, F2-C02, F2-C03, F2-C04, F2-C05, F2-C06, F3-C01, F3-C02, F3-C03, F3-C04, F3-C05, F3-C06, F4-C01, F4-C02, F4-C03, F4-C04, F4-C05, F4-C06, F4-C07, F5-C01, F5-C02, F5-C03, F5-C04, F5-C05, F5-C06, F7-C01, F7-C02, F7-C03, F7-C04, F7-C05, F7-C06; groupings R90-02, R90-03, R90-04, R90-05, R90-09, R90-10; resolved contracts RC02, RC03, RC04, RC05; runtime proof pending; original task DAG controls.
 // Completion identity: HEE3-DONE-contracts; all 13 applicable gates; current state unassessed. No documentation pass admits this module.
 // Mandatory testing convention: at least 50 distinct qualifying module-owned cases; zero baseline warnings/errors, including pedantic Clippy on admitted Rust targets/profiles. Full qualification remains unassessed.
 //
@@ -164,7 +164,7 @@
 // [What My Ancestors Knew That I Did Not](obsidian://open?vault=my-diary.vault&file=Reflections%2FWhat%20My%20Ancestors%20Knew%20That%20I%20Did%20Not)
 // [What Prototyping Is For](obsidian://open?vault=my-diary.vault&file=Reflections%2FWhat%20Prototyping%20Is%20For)
 // [Why I Stopped Trusting Green](obsidian://open?vault=my-diary.vault&file=Reflections%2FWhy%20I%20Stopped%20Trusting%20Green)
-// Readiness binding: HEE3-READINESS-001; SHA-256 ea991737ce282467556e4997f28e97c4b7f0799d823aae98905fcf34f71766f7; clauses F2-C01, F2-C02, F2-C03, F2-C04, F2-C05, F2-C06, F3-C01, F3-C02, F3-C03, F3-C04, F3-C05, F3-C06, F4-C01, F4-C02, F4-C03, F4-C04, F4-C05, F4-C06, F4-C07, F5-C01, F5-C02, F5-C03, F5-C04, F5-C05, F5-C06, F6-C01, F6-C02, F6-C03, F6-C04, F6-C05, F6-C06, F6-C07, F6-C08, F7-C01, F7-C02, F7-C03, F7-C04, F7-C05, F7-C06; groupings R90-02, R90-06, R90-07, R90-08, R90-09, R90-10; resolved contracts RC02, RC03, RC04, RC05, RC06; runtime proof pending; original task DAG controls.
+// Readiness binding: HEE3-READINESS-001; SHA-256 e774f8984c7e39e85b156289fac809bded6df80ba3647cfb2024c69856447b94; clauses F2-C01, F2-C02, F2-C03, F2-C04, F2-C05, F2-C06, F3-C01, F3-C02, F3-C03, F3-C04, F3-C05, F3-C06, F4-C01, F4-C02, F4-C03, F4-C04, F4-C05, F4-C06, F4-C07, F5-C01, F5-C02, F5-C03, F5-C04, F5-C05, F5-C06, F6-C01, F6-C02, F6-C03, F6-C04, F6-C05, F6-C06, F6-C07, F6-C08, F7-C01, F7-C02, F7-C03, F7-C04, F7-C05, F7-C06; groupings R90-02, R90-06, R90-07, R90-08, R90-09, R90-10; resolved contracts RC02, RC03, RC04, RC05, RC06; runtime proof pending; original task DAG controls.
 // Completion identity: HEE3-DONE-service; all 13 applicable gates; current state unassessed. No documentation pass admits this module.
 // Mandatory testing convention: at least 50 distinct qualifying module-owned cases; zero baseline warnings/errors, including pedantic Clippy on admitted Rust targets/profiles. Full qualification remains unassessed.
 //
@@ -306,3 +306,276 @@
 // [Why I Stopped Trusting Green](obsidian://open?vault=my-diary.vault&file=Reflections%2FWhy%20I%20Stopped%20Trusting%20Green)
 // [Working in Sandboxes on Kinoite](obsidian://open?vault=my-diary.vault&file=Reflections%2FWorking%20in%20Sandboxes%20on%20Kinoite)
 // HEE3-ANCHORS-END
+
+// Internal T13 inventory and trusted useful-observation adapter. This is not a
+// transport action, probe dispatcher, grant issuer, or lifecycle owner.
+mod observations;
+mod probe;
+pub use probe::{ProbeError, ProbePreparation, prepare_probe};
+mod profile;
+use crate::contracts::UuidV4;
+use crate::contracts::roster::{
+    self, Availability, Freshness, Kind, Observation, ObservationInput, ObservationSource, Record,
+    Snapshot,
+};
+use crate::store::{self, Principal, Store};
+pub use observations::{Facts, Health, ProbeObservation, UsefulResult};
+pub use profile::{Class, Profile};
+use std::time::Instant;
+
+#[derive(Debug)]
+pub enum Error {
+    Store(store::Error),
+    InvalidProfile,
+    WrongKind,
+    Disabled,
+    Binding,
+    Bounds,
+    FutureObservation,
+}
+impl From<store::Error> for Error {
+    fn from(value: store::Error) -> Self {
+        Self::Store(value)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum UnknownReason {
+    Disabled,
+    MissingProfile,
+    AmbiguousProfile,
+    ProfileBinding,
+    Freshness(Freshness),
+    UnconfirmedUsefulProbe,
+    ActualIdentity,
+    UnknownAvailability,
+    MissingEvidence,
+    EvidenceBinding,
+}
+/// Read projection only. A useful observation never grants execution authority.
+#[derive(Clone, Debug)]
+pub struct Inspection {
+    pub record: Record,
+    pub class: Option<Class>,
+    pub health: Health,
+    pub unknown: Option<UnknownReason>,
+    pub snapshot_cutoff: u64,
+    pub receiver_now: roster::ReceiptTime,
+}
+/// Caller retains these exact facts with its existing evidence owner. Store stores
+/// the attributable observation and evidence UUID; this is no new evidence ledger.
+#[derive(Clone, Debug)]
+pub struct Recorded {
+    observation: Observation,
+    health: Health,
+    facts: ProbeObservation,
+    profile: Profile,
+}
+impl Recorded {
+    #[must_use]
+    pub const fn observation(&self) -> &Observation {
+        &self.observation
+    }
+    #[must_use]
+    pub const fn health(&self) -> Health {
+        self.health
+    }
+    #[must_use]
+    pub const fn facts(&self) -> &ProbeObservation {
+        &self.facts
+    }
+}
+
+/// Cached inspection of a visible admitted service, without a probe or side effect.
+/// Profiles are trusted protected-configuration values, never public request data.
+/// # Errors
+/// Refuses malformed/bounded input, invisible records, wrong kind or Store failure.
+pub fn inspect(
+    store: &Store,
+    principal: &Principal,
+    id: UuidV4<'_>,
+    profiles: &[Profile],
+    evidence: Option<&Recorded>,
+    ttl_ms: u64,
+    deadline: Instant,
+) -> Result<Inspection, Error> {
+    let snapshot = store.roster_snapshot(principal, deadline)?;
+    inspect_snapshot(&snapshot, id, profiles, evidence, ttl_ms)
+}
+
+/// Evaluate one Store snapshot without claiming it is newer than its receiver time.
+/// # Errors
+/// Refuses excess profiles, invalid TTL, invisible records and non-service records.
+pub fn inspect_snapshot(
+    snapshot: &Snapshot,
+    id: UuidV4<'_>,
+    profiles: &[Profile],
+    evidence: Option<&Recorded>,
+    ttl_ms: u64,
+) -> Result<Inspection, Error> {
+    if profiles.len() > roster::MAX_RECORDS || !(1..=roster::MAX_TTL_MS).contains(&ttl_ms) {
+        return Err(Error::Bounds);
+    }
+    let record = snapshot
+        .records
+        .iter()
+        .find(|record| record.head.record_id == id.as_str())
+        .ok_or(store::Error::NotFound)?;
+    if record.head.definition.kind != Kind::Service {
+        return Err(Error::WrongKind);
+    }
+    let matches: Vec<_> = profiles
+        .iter()
+        .filter(|profile| profile.record_id == id.as_str())
+        .collect();
+    let profile = if matches.len() == 1 {
+        Some(matches[0])
+    } else {
+        None
+    };
+    let unknown = if record.head.disabled {
+        Some(UnknownReason::Disabled)
+    } else {
+        match matches.as_slice() {
+            [] => Some(UnknownReason::MissingProfile),
+            [profile] => unknown(record, profile, evidence, snapshot, ttl_ms),
+            _ => Some(UnknownReason::AmbiguousProfile),
+        }
+    };
+    let health = match (unknown, record.observation.as_ref()) {
+        (None, Some(observed)) => match observed.input.availability {
+            Availability::Available => Health::Useful,
+            Availability::Unavailable => Health::Unavailable,
+            Availability::Unknown => Health::Unknown,
+        },
+        _ => Health::Unknown,
+    };
+    Ok(Inspection {
+        record: record.clone(),
+        class: profile.map(|profile| profile.class),
+        health,
+        unknown,
+        snapshot_cutoff: snapshot.cutoff,
+        receiver_now: snapshot.now.clone(),
+    })
+}
+fn unknown(
+    record: &Record,
+    profile: &Profile,
+    evidence: Option<&Recorded>,
+    snapshot: &Snapshot,
+    ttl_ms: u64,
+) -> Option<UnknownReason> {
+    if profile.bind(&record.head).is_err() {
+        return Some(UnknownReason::ProfileBinding);
+    }
+    let freshness = roster::freshness(
+        &record.head,
+        record.observation.as_ref(),
+        &snapshot.now,
+        ttl_ms,
+    );
+    if freshness != Freshness::Fresh {
+        return Some(UnknownReason::Freshness(freshness));
+    }
+    let Some(evidence) = evidence else {
+        return Some(UnknownReason::MissingEvidence);
+    };
+    if &evidence.profile != profile
+        || record.observation.as_ref() != Some(&evidence.observation)
+        || evidence.facts.health(profile) != evidence.health
+    {
+        return Some(UnknownReason::EvidenceBinding);
+    }
+    // Publication time cannot renew a dated useful observation's lifetime.
+    // Legacy trusted facts without source time retain their receiver-only scope.
+    if let Some(source_time) = evidence.facts.observed_unix_ms {
+        match snapshot.now.unix_ms.checked_sub(source_time) {
+            None => return Some(UnknownReason::Freshness(Freshness::FutureSource)),
+            Some(age) if age >= ttl_ms => {
+                return Some(UnknownReason::Freshness(Freshness::Expired));
+            }
+            Some(_) => {}
+        }
+    }
+    let observed = &record.observation.as_ref()?.input;
+    if observed.source != ObservationSource::ServiceProbe {
+        return Some(UnknownReason::UnconfirmedUsefulProbe);
+    }
+    if observed.actual_identity.as_deref() != Some(profile.actual_identity.as_str())
+        || observed.immutable_revision.as_deref() != Some(profile.immutable_revision.as_str())
+    {
+        return Some(UnknownReason::ActualIdentity);
+    }
+    if observed.availability == Availability::Unknown {
+        return Some(UnknownReason::UnknownAvailability);
+    }
+    None
+}
+
+/// Record a return from the trusted service owner. This does not dispatch a probe,
+/// authenticate a transport grant, claim its evidence UUID exists, or infer cost.
+/// The coordinator must retain the returned facts through the existing evidence owner.
+/// # Errors
+/// Refuses stale/foreign/disabled/non-service binding, class mismatch, invalid bounds,
+/// future source time and Store publication failure. Unknown cost/cleanup stays unknown.
+pub fn record_probe(
+    store: &mut Store,
+    principal: &Principal,
+    profile: &Profile,
+    facts: &ProbeObservation,
+    deadline: Instant,
+) -> Result<Recorded, Error> {
+    profile.validate()?;
+    facts.validate()?;
+    let snapshot = store.roster_snapshot(principal, deadline)?;
+    let record = snapshot
+        .records
+        .iter()
+        .find(|record| record.head.record_id == profile.record_id)
+        .ok_or(store::Error::NotFound)?;
+    profile.bind(&record.head)?;
+    if record.head.disabled {
+        return Err(Error::Disabled);
+    }
+    if facts.facts.class() != profile.class {
+        return Err(Error::Binding);
+    }
+    if facts
+        .observed_unix_ms
+        .is_some_and(|time| time > snapshot.now.unix_ms)
+    {
+        return Err(Error::FutureObservation);
+    }
+    let health = facts.health(profile);
+    let input = ObservationInput {
+        record_id: profile.record_id.clone(),
+        record_version: profile.record_version.clone(),
+        owner_id: profile.owner_id.clone(),
+        endpoint_ref: profile.endpoint_ref.clone(),
+        instance_id: None,
+        instance_generation: None,
+        source: ObservationSource::ServiceProbe,
+        observed_unix_ms: facts.observed_unix_ms,
+        availability: match health {
+            Health::Useful => Availability::Available,
+            Health::Unavailable => Availability::Unavailable,
+            Health::Unknown => Availability::Unknown,
+        },
+        actual_identity: facts.actual_identity.clone(),
+        immutable_revision: facts.immutable_revision.clone(),
+        capabilities: Vec::new(),
+        evidence_ref: facts.evidence_ref.clone(),
+    };
+    let observation = store.roster_observe_service_probe(principal, &input, deadline)?;
+    Ok(Recorded {
+        observation,
+        health,
+        facts: facts.clone(),
+        profile: profile.clone(),
+    })
+}
+
+// Local T13 composition; existing owner retained.
+mod local_probe;
+pub use local_probe::{LocalProbe, LocalProbeError, LocalRecipe, run_local_probe};
