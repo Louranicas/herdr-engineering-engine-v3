@@ -1029,3 +1029,89 @@ fn claim_overlap_agrees_with_the_shared_table() -> Result<(), Box<dyn Error>> {
     );
     Ok(())
 }
+
+/// Replay one cohesion fixture's rows through [`Cohort`] and return what `join` decides.
+///
+/// Claims are replaced by one private path per row: they bear on assignment, not on the join,
+/// and C02 deliberately carries an overlap `assign` refuses. Rows are assigned in ascending
+/// brief order with the cohort revised to each brief first, so a row's revision is the one it
+/// was assigned against; each reports on its own brief, and the cohort is then revised to the
+/// fixture's current brief — which is what makes the earlier rows stale.
+fn replay(fixture: &serde_json::Value) -> Result<Join, Box<dyn Error>> {
+    let decimal = |value: &serde_json::Value| -> Result<u64, Box<dyn Error>> {
+        Ok(value
+            .as_str()
+            .ok_or("revision is not a decimal string")?
+            .parse()?)
+    };
+    let current = decimal(&fixture["brief_revision"])?;
+    let rows = fixture["threads"]
+        .as_array()
+        .ok_or("fixture without threads")?;
+    let mut ordered = Vec::with_capacity(rows.len());
+    for (index, row) in rows.iter().enumerate() {
+        ordered.push((decimal(&row["brief_revision"])?, index, row));
+    }
+    ordered.sort_by_key(|&(brief, index, _)| (brief, index));
+    let mut cohort = Cohort::new(0);
+    for (brief, index, row) in ordered {
+        cohort.revise(brief);
+        let identity = row["thread_id"].as_str().ok_or("row without identity")?;
+        let required = row["required"].as_bool().ok_or("row without required")?;
+        cohort.assign(identity, &[], claim(&format!("fixture/{index}"))?, required)?;
+        let name = row["outcome"].as_str().ok_or("row without outcome")?;
+        let outcome = Outcome::ALL
+            .into_iter()
+            .find(|outcome| outcome.name() == name)
+            .ok_or("row with an unknown outcome")?;
+        cohort.report(identity, outcome, "fixture")?;
+    }
+    cohort.revise(current);
+    Ok(cohort.join())
+}
+
+/// The join a cohesion request declares is `cohort::join`'s verdict over the same rows.
+///
+/// Julia's `cohesion` derives the join and refuses a declaration that disagrees, so the
+/// fixtures' declarations are the expected answers on that side; this test is where they come
+/// from. Before it existed both fixtures carried hand-typed joins that no implementation
+/// computed (review N10): C02 declared `integrable` over a required dissent and a stale row.
+#[test]
+fn fixture_joins_agree_with_cohort_join() -> Result<(), Box<dyn Error>> {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/t22");
+    let mut verdicts = std::collections::BTreeSet::new();
+    for name in ["C01", "C02"] {
+        let fixture: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(root.join(format!("{name}.json")))?)?;
+        let join = replay(&fixture)?;
+        let declared = &fixture["join"];
+        let verdict = if join.is_integrable() {
+            "integrable"
+        } else {
+            "blocked"
+        };
+        assert_eq!(
+            declared["verdict"].as_str(),
+            Some(verdict),
+            "{name}: verdict"
+        );
+        let reasons: Vec<&str> = declared["reasons"]
+            .as_array()
+            .ok_or("declared join without reasons")?
+            .iter()
+            .map(|reason| reason.as_str().unwrap_or("<not a string>"))
+            .collect();
+        assert_eq!(
+            reasons,
+            blocked_names(&join),
+            "{name}: reasons, in the rule's order"
+        );
+        verdicts.insert(blocked_names(&join).join(","));
+    }
+    assert_eq!(
+        verdicts.len(),
+        2,
+        "two fixtures with one join pin that join only where they agree"
+    );
+    Ok(())
+}

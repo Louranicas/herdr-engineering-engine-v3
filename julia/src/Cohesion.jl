@@ -643,6 +643,32 @@ const COHORT_OUTCOMES = ("met", "unmet", "dissent", "indeterminate")
 const JOIN_VERDICTS = ("integrable", "blocked")
 const BLOCKED_REASONS = ("missing-child", "unmet", "dissent", "stale-brief")
 
+"""The parent join over `rows`, by `cohort::join`'s rule, which owns it.
+
+A row assigned on an earlier brief than the cohort's is stale and nothing else -- its outcome
+is not read, so a stale dissent blocks as `stale-brief`, not `dissent`. Of the current rows, any
+dissent blocks, required or not; a required `unmet` or `indeterminate` blocks as `unmet`; an
+optional one does not. Reasons come out in `BLOCKED_REASONS` order, which is the order
+`cohort::join` pushes them in.
+
+`missing-child` is never derived: every row here carries an outcome, and a required thread that
+has reported nothing cannot be written in this request. A declaration naming it is refused,
+because these rows do not show it."""
+function derive_join(rows, brief::UInt64)
+    found = Set{String}()
+    for row in rows
+        if row.assigned < brief
+            push!(found, "stale-brief")
+        elseif COHORT_OUTCOMES[row.outcome] == "dissent"
+            push!(found, "dissent")
+        elseif COHORT_OUTCOMES[row.outcome] in ("unmet", "indeterminate") && row.required
+            push!(found, "unmet")
+        end
+    end
+    reasons = String[reason for reason in BLOCKED_REASONS if reason in found]
+    return (; verdict = isempty(reasons) ? "integrable" : "blocked", reasons = reasons)
+end
+
 """Kahan-compensated sum, so a long cost column does not accumulate drift.
 
 Returns the total; `Evaluate.analyze` uses the same compensation inline and this is the same
@@ -805,6 +831,11 @@ function cohesion(raw::Vector{UInt8}, receive_unix_ms::UInt64)
     seen = Set{String}()
     rows = [thread_row(row, brief, seen) for row in q.threads]
 
+    # The declared join is a claim about these rows, so it is checked against them rather
+    # than published on trust -- the same stance the claim-overlap scan below takes.
+    derived = derive_join(rows, brief)
+    (q.join.verdict == derived.verdict && reasons == derived.reasons) || refuse(:join)
+
     counts = zeros(UInt64, length(COHORT_OUTCOMES))
     required = UInt64(0)
     rework = UInt64(0)
@@ -878,7 +909,7 @@ function cohesion(raw::Vector{UInt8}, receive_unix_ms::UInt64)
             accounted_tokens = string(reserved + spent + unknown),
             conserved = true,
         ),
-        join = (; verdict = q.join.verdict, reasons = reasons),
+        join = (; verdict = derived.verdict, reasons = derived.reasons),
         comparison = (;
             cohort = (;
                 cost_tokens = string(round(UInt64, cohort_cost)),

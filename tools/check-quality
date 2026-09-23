@@ -162,16 +162,18 @@ T08_CONTRACT_OWN_SOURCES = tuple(name for name in T08_CONTRACT_INPUTS if name no
 # wave. Each pins its own count and the sources it owns; a battery whose size changes must
 # change its line here, which is what makes this a census rather than a tally. None reads a
 # fixture with include_str!, so the inputs are the module sources themselves -- except
-# t22_cohort, which reads the shared claim-overlap table at run time through
-# CARGO_MANIFEST_DIR and therefore pins it too.
+# t22_cohort, which reads the shared claim-overlap table and the two cohesion fixtures (whose
+# declared joins it replays through cohort::join) at run time through CARGO_MANIFEST_DIR and
+# therefore pins them too.
 BUDGET_TARGET_COUNTS = {"accounting": 77}
 BUDGET_INPUTS = ("src/budget.rs",)
 NOTIFY_TARGET_COUNTS = {"t11_notify": 69}
 NOTIFY_INPUTS = ("src/notify.rs",)
 CONTEXT_TARGET_COUNTS = {"t11_context": 59}
 CONTEXT_INPUTS = ("src/context.rs",)
-COHORT_TARGET_COUNTS = {"t22_cohort": 57}
-COHORT_INPUTS = ("src/cohort.rs", "evaluation/cohorts/claim-overlap-v1.json")
+COHORT_TARGET_COUNTS = {"t22_cohort": 58}
+COHORT_INPUTS = ("src/cohort.rs", "evaluation/cohorts/claim-overlap-v1.json",
+                 "tests/fixtures/t22/C01.json", "tests/fixtures/t22/C02.json")
 ACTIONS_TARGET_COUNTS = {"t28_actions": 65}
 ACTIONS_INPUTS = ("src/actions.rs", "src/worker/tools.rs")
 HERDR_TARGET_COUNTS = {"t16_herdr": 52}
@@ -443,7 +445,7 @@ def require_t21_julia_summaries(stdout, stderr, cohort=False):
     expected = {"T21 descriptive evaluator": 82, "T21 numerical boundary controls": 10,
                 "T21 deferred string decoding": 7}
     if cohort:
-        expected["T22 cohort cohesion"] = 140
+        expected["T22 cohort cohesion"] = 159
     rows = re.findall(r"^(T2[12] [^|\n]+)\|([^\n]+)$", stdout, re.MULTILINE)
     headers = re.findall(r"^Test Summary:[^|\n]*\|([^\n]+)$", stdout, re.MULTILINE)
     if stderr or len(rows) != len(expected) or len(headers) != len(expected) or any(

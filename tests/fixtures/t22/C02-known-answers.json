@@ -1,8 +1,8 @@
 {
- "request_sha256": "sha256:efb85bab512ea7b07279cf8c96bba5265c788ae498a1c198210fd53ee5ac70c5",
+ "request_sha256": "sha256:82f4f15b1b1bba0b66ccda78da686d70146db61f7406caad2e74a49a0a88cadb",
  "counts": {
   "threads": "6",
-  "required": "5",
+  "required": "4",
   "met": "3",
   "unmet": "1",
   "dissent": "2",

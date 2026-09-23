@@ -18,7 +18,7 @@ threads = [
     T(0x20, "met",           "6", True,  "2400", ["src/budget", "src/notify"]),
     T(0x21, "dissent",       "6", True,   "900", ["src/budget/ledger"]),   # overlaps 0x20
     T(0x22, "met",           "5", True,   "750", ["src/context"]),
-    T(0x23, "unmet",         "6", True,   "300", ["src/cohort"]),
+    T(0x23, "unmet",         "6", False,  "300", ["src/cohort"]),      # optional: does not block
     T(0x24, "dissent",       "4", False,  "150", ["docs/b.md"]),
     T(0x25, "met",           "6", True,   "500", ["src/contextual"]),      # NOT an overlap of src/context
 ]
@@ -29,7 +29,9 @@ q = {
     "cutoff_unix_ms": "1769999000000", "expires_unix_ms": "1770000000000",
     "recipe": {"id": "cohesion", "version": 1},
     "units": {"usage": "token"}, "brief_revision": "6",
-    "join": {"verdict": "integrable", "reasons": []},
+    # cohort::join over these rows (tests/t22_cohort.rs replays them): 0x21 dissents on the
+    # current brief; 0x22 and 0x24 are stale. It differs from C01, which also blocks unmet.
+    "join": {"verdict": "blocked", "reasons": ["dissent", "stale-brief"]},
     "allocation": {"limit_tokens": "20000", "reserved_tokens": "2000",
                    "spent_tokens": "5000", "unknown_tokens": "0"},
     "baseline": {"cost_tokens": "3000", "errors": "3", "rework": "3"},

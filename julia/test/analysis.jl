@@ -316,14 +316,18 @@ end
     @testset "C01 independent fixed oracle" begin
         r = against_oracle(C01, oracle("C01"))
         @test r.protocol == "hee3.cohesion"
+        # The join is derived from the rows by `cohort::join`'s rule and must equal the
+        # request's declaration; the expected reasons are the ones Rust computes over these
+        # rows (`tests/t22_cohort.rs::fixture_joins_agree_with_cohort_join`), not a second
+        # hand-typed list.
         @test r.join.verdict == "blocked"
-        @test String.(r.join.reasons) == ["dissent", "unmet"]
+        @test String.(r.join.reasons) == ["unmet", "dissent", "stale-brief"]
         @test cohesion(C01, C_NOW) == cohesion(C01, C_NOW + UInt64(1000))
     end
     @testset "C02 independent fixed oracle" begin
         r = against_oracle(C02, oracle("C02"))
-        @test r.join.verdict == "integrable"
-        @test isempty(r.join.reasons)
+        @test r.join.verdict == "blocked"
+        @test String.(r.join.reasons) == ["dissent", "stale-brief"]
         @test cohesion(C02, C_NOW) == cohesion(C02, C_NOW + UInt64(1000))
         # The two fixtures must not agree anywhere the rule computes, or one of them is
         # pinning the other's answer rather than the rule.
@@ -348,6 +352,76 @@ end
             @test HabitatAnalysis.claims_conflict(case.b, case.a) == case.overlap
         end
         @test answers == Set([true, false])
+    end
+    # The join is derived, so it must be pinned at more than the two fixtures' values: a
+    # report that echoed one constant would pass both. Each case edits C01's rows, declares
+    # what `cohort::join` yields for them, and requires the report to carry exactly that.
+    # C01's rows: 1 met, 2 met, 3 dissent, 5 indeterminate (required); 4 unmet, 6 met
+    # (optional); 6 and 7 assigned on briefs 2 and 3 against the cohort's 4.
+    @testset "the join is derived from the rows" begin
+        current =
+            q -> (
+                q["threads"][6]["brief_revision"] = "4";
+                q["threads"][7]["brief_revision"] = "4"
+            )
+        settled =
+            q -> (
+                current(q);
+                q["threads"][3]["outcome"] = "met";
+                q["threads"][5]["outcome"] = "met"
+            )
+        for (name, mutate, verdict, reasons) in [
+            ("stale rows made current", current, "blocked", ["unmet", "dissent"]),
+            (
+                "every required row met on the current brief",
+                settled,
+                "integrable",
+                String[],
+            ),
+            (
+                "an optional dissent still blocks",
+                q -> (settled(q); q["threads"][4]["outcome"] = "dissent"),
+                "blocked",
+                ["dissent"],
+            ),
+            (
+                "a required indeterminate blocks as unmet",
+                q -> (settled(q); q["threads"][5]["outcome"] = "indeterminate"),
+                "blocked",
+                ["unmet"],
+            ),
+            (
+                "a stale dissent is stale, not dissent",
+                q -> (
+                    settled(q);
+                    q["threads"][3]["outcome"] = "dissent";
+                    q["threads"][3]["brief_revision"] = "3"
+                ),
+                "blocked",
+                ["stale-brief"],
+            ),
+        ]
+            @testset "$name" begin
+                q = cbase()
+                mutate(q)
+                q["join"]["verdict"] = verdict
+                q["join"]["reasons"] = reasons
+                r = JSON3.read(
+                    cohesion(Vector{UInt8}(codeunits(JSON3.write(q) * "\n")), C_NOW),
+                )
+                @test r.join.verdict == verdict
+                @test String.(r.join.reasons) == reasons
+                # The same rows under any other well-formed declaration are refused, or the
+                # acceptance above would hold for an echo as well as for a derivation.
+                other =
+                    isempty(reasons) ? ("blocked", ["dissent"]) : ("integrable", String[])
+                @test crun(function (p)
+                    mutate(p)
+                    p["join"]["verdict"] = other[1]
+                    p["join"]["reasons"] = other[2]
+                end) == :join
+            end
+        end
     end
     # Every refusal SITE in Cohesion.jl, one case each, asserting its own symbol. The site
     # set was enumerated from the module's own source and each case verified to change its
@@ -418,6 +492,28 @@ end
             ),
             ("reasons is not a list", q -> q["join"]["reasons"] = "dissent", :schema),
             (
+                "declared integrable over rows that block",
+                q -> (q["join"]["verdict"] = "integrable"; q["join"]["reasons"] = []),
+                :join,
+            ),
+            (
+                "declared join omits a reason the rows carry",
+                q -> q["join"]["reasons"] = ["unmet", "dissent"],
+                :join,
+            ),
+            (
+                "declared join names a reason the rows do not carry",
+                q ->
+                    q["join"]["reasons"] =
+                        ["missing-child", "unmet", "dissent", "stale-brief"],
+                :join,
+            ),
+            (
+                "declared reasons out of the rule's order",
+                q -> q["join"]["reasons"] = ["dissent", "unmet", "stale-brief"],
+                :join,
+            ),
+            (
                 "more reasons than the vocabulary",
                 q ->
                     q["join"]["reasons"] =
@@ -455,6 +551,10 @@ end
                     ]
                     q["shape"]["rows"] = 64
                     q["allocation"]["spent_tokens"] = "64"
+                    # Sixty-four current met rows join; the declaration must say so, or the
+                    # join site refuses before the report is ever sized.
+                    q["join"]["verdict"] = "integrable"
+                    q["join"]["reasons"] = []
                 end,
                 :bound,
             ),
