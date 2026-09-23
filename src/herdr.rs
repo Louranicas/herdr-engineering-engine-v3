@@ -329,6 +329,9 @@ pub enum Refusal {
     UnknownTask,
     /// A cursor beyond anything the engine has emitted.
     CursorAhead,
+    /// A second, different task was reported under an intent key already submitted. The
+    /// earlier outcome stands; the view does not relabel the new one as a duplicate.
+    IntentConflict,
 }
 
 impl Refusal {
@@ -343,6 +346,7 @@ impl Refusal {
             Self::ReconnectLimit => "reconnect bound reached",
             Self::UnknownTask => "unknown task in this view",
             Self::CursorAhead => "cursor follows the engine sequence",
+            Self::IntentConflict => "a different task under an intent key already submitted",
         }
     }
 }
@@ -370,10 +374,14 @@ pub struct EngineReceipt<'a> {
 }
 
 impl<'a> EngineReceipt<'a> {
-    /// Issued by the engine after durable admission.
+    /// The view's rendering of an engine admission: the task, epoch and sequence the engine
+    /// reported after durable admission.
     ///
-    /// Only the engine is positioned to call this truthfully; the client links against it
-    /// but has nothing to pass.
+    /// This is **not** authority, and no type could make it so: a client parses receipts from
+    /// engine responses, and a client can always fabricate a response. Acceptance is decided by
+    /// the store's durable admission; the protection is that no engine module takes an
+    /// `EngineReceipt` as evidence (pinned by `T16-HD-54`, which requires the type to be named
+    /// in this file and nowhere else under `src/`). Review D3.
     ///
     /// # Errors
     ///
@@ -618,7 +626,8 @@ impl View {
     ///
     /// # Errors
     ///
-    /// [`Refusal::EpochMismatch`] when the receipt belongs to another epoch.
+    /// * [`Refusal::EpochMismatch`] when the receipt belongs to another epoch;
+    /// * [`Refusal::IntentConflict`] when `key` was already submitted for a different task.
     pub fn submit<'a>(
         &mut self,
         key: &IntentKey,
@@ -630,11 +639,15 @@ impl View {
             return Err(Refusal::EpochMismatch);
         }
         if let Some(existing) = self.submitted.get(key.as_str()) {
-            let _ = existing;
-            if let Admitted::Accepted(acceptance) = outcome {
-                return Ok(Admitted::Duplicate(acceptance));
-            }
-            return Ok(outcome);
+            // The earlier outcome stands (review D2): the same task again is a duplicate; a
+            // different task under this key is refused rather than relabelled as the first.
+            return match outcome.acceptance() {
+                Some(acceptance) if acceptance.task().as_str() != existing.as_str() => {
+                    Err(Refusal::IntentConflict)
+                }
+                Some(acceptance) => Ok(Admitted::Duplicate(acceptance)),
+                None => Ok(outcome),
+            };
         }
         if let Some(acceptance) = outcome.acceptance() {
             self.submitted.insert(

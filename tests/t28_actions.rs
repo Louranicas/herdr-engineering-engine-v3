@@ -883,7 +883,7 @@ fn a_full_page_is_the_catalogue_in_order() -> Outcome {
 // ---------------------------------------------------------------------------------------
 
 use habitat_engine::worker::tools::{
-    MAX_TOOL_NAME, Omitted, Refusal as ToolRefusal, ToolDefinition, project,
+    MAX_TOOL_NAME, Omitted, Refusal as ToolRefusal, ToolDefinition, distinct_tool_names, project,
 };
 
 #[test]
@@ -1138,6 +1138,27 @@ fn the_tool_projection_and_the_cli_projection_describe_the_same_actions() -> Out
             "{}: the CLI form does not name its action",
             action.id
         );
+    }
+    Ok(())
+}
+
+/// Review D6: tool-name uniqueness is checked over the whole catalogue, before any caller
+/// filtering. It was checked per caller against only the tools that caller could see, so a
+/// duplicate whose first holder was hidden was never refused. A named action given twice is
+/// refused; the live catalogue passes; an action with no tool name cannot collide.
+#[test]
+fn tool_name_uniqueness_is_a_property_of_the_catalogue() -> Result<(), Box<dyn Error>> {
+    let named = *Catalogue::all()
+        .iter()
+        .find(|action| action.tool.is_some())
+        .ok_or("the catalogue names no tool")?;
+    assert_eq!(
+        distinct_tool_names(&[named, named]),
+        Err(ToolRefusal::DuplicateToolName)
+    );
+    assert_eq!(distinct_tool_names(Catalogue::all()), Ok(()));
+    if let Some(unnamed) = Catalogue::all().iter().find(|action| action.tool.is_none()) {
+        assert_eq!(distinct_tool_names(&[*unnamed, *unnamed]), Ok(()));
     }
     Ok(())
 }

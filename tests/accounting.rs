@@ -1066,8 +1066,8 @@ use std::error::Error;
 
 use habitat_engine::budget::{
     Amount, Applied, Balance, Candidate, Ceiling, Constraint, Ledger, MAX_CANDIDATES,
-    MAX_REPORTS_PER_RESERVATION, MAX_RESERVATIONS, MAX_TOOLS, Privacy, Provenance, Refusal,
-    SCHEMA_VERSION, Settlement, Unit, Usage,
+    MAX_REPORT_IDENTITY_BYTES, MAX_REPORTS_PER_RESERVATION, MAX_RESERVATIONS, MAX_TOOLS, Privacy,
+    Provenance, Refusal, SCHEMA_VERSION, Settlement, Unit, Usage,
 };
 use habitat_engine::contracts::UuidV4;
 
@@ -1740,15 +1740,18 @@ fn an_unmeasured_retry_does_not_inflate_the_unknown_column() -> Outcome {
     book.reserve(&id(1), tokens(100), None, None)?;
     book.report(&id(1), "u1", Usage::new(tokens(30), Provenance::Unmeasured))?;
     book.report(&id(1), "u1", Usage::new(tokens(30), Provenance::Unmeasured))?;
-    book.report(
+    // The same identity with a DIFFERENT figure is not a retry: it is refused rather than
+    // silently dropped, so a colliding producer cannot hide cost (T10 "retries are included").
+    let conflicting = book.report(
         &id(1),
         "u1",
         Usage::new(tokens(999), Provenance::Unmeasured),
-    )?;
+    );
+    assert_eq!(conflicting, Err(Refusal::ReportConflict));
     assert_eq!(
         columns(book.balance()?)?,
         (400, 70, 0, 30),
-        "the first application stands; later ones with that identity change nothing"
+        "the first application stands; an identical retry changes nothing"
     );
     Ok(())
 }
@@ -1852,7 +1855,9 @@ fn an_overrun_is_recorded_as_a_discrepancy() -> Outcome {
 }
 
 /// T10-AC-41 · an overrun larger than the whole remaining scope is still recorded; the part
-/// the scope cannot cover stays visible rather than vanishing.
+/// the scope cannot cover stays visible rather than vanishing — as `overdrawn`, with
+/// `available` at zero and conservation holding (review D1: it used to surface as an
+/// `Underflow` from `available()`, which then blocked every other open reservation).
 #[test]
 fn an_overrun_beyond_the_scope_is_still_recorded() -> Outcome {
     let mut book = ledger(100, Ceiling::Soft);
@@ -1870,10 +1875,12 @@ fn an_overrun_beyond_the_scope_is_still_recorded() -> Outcome {
         "the whole cost is on the books"
     );
     assert_eq!(
-        balance.available(),
-        Err(Refusal::Underflow),
+        balance.overdrawn(),
+        tokens(150),
         "an over-spent scope says so rather than reporting a cheerful zero"
     );
+    assert_eq!(balance.available()?, tokens(0));
+    assert!(book.conserves()?);
     Ok(())
 }
 
@@ -2208,11 +2215,12 @@ fn refusal_display_shows_the_carried_scalar_error() {
     );
 }
 
-/// T10-AC-58 · a ledger read back with a broken invariant refuses rather than reporting a
-/// cheerful zero. `conserves` is the predicate a store consults before trusting what it
-/// loaded, so it must be able to say "no".
+/// T10-AC-58 · an overspent ledger names what it owes and still conserves. `conserves` is the
+/// predicate a store will consult before trusting what it loaded; it still says "no" to a
+/// ledger whose `spent` exceeds limit plus overdrawn (an `Underflow`), which no transition can
+/// now produce — before review D1, `report` itself produced it.
 #[test]
-fn an_overspent_ledger_reports_that_it_does_not_conserve() -> Outcome {
+fn an_overspent_ledger_names_its_overdraft_and_conserves() -> Outcome {
     let mut book = ledger(50, Ceiling::Soft);
     book.reserve(&id(1), tokens(50), None, None)?;
     book.report(
@@ -2220,9 +2228,15 @@ fn an_overspent_ledger_reports_that_it_does_not_conserve() -> Outcome {
         "r",
         Usage::new(tokens(500), Provenance::WorkerSettled),
     )?;
-    assert_eq!(book.conserves(), Err(Refusal::Underflow));
-    assert_eq!(book.available(), Err(Refusal::Underflow));
-    assert_eq!(book.balance()?.spent(), tokens(500));
+    // Review D1: this state is reached through `report` itself, so it must conserve. What the
+    // ledger owes is named, not hidden: 450 overdrawn, 500 spent, nothing available.
+    assert_eq!(book.conserves(), Ok(true));
+    assert_eq!(book.available(), Ok(tokens(0)));
+    let balance = book.balance()?;
+    assert_eq!(
+        (balance.spent(), balance.overdrawn()),
+        (tokens(500), tokens(450))
+    );
     Ok(())
 }
 
@@ -2596,5 +2610,61 @@ fn a_constraint_only_ever_reports_what_it_was_built_with() -> Outcome {
     assert_eq!(permitted.privacy(), Privacy::OnHost);
     assert!(permitted.permits_tool("read") && permitted.permits_tool("search"));
     assert!(!permitted.permits_tool("write") && !permitted.permits_tool(""));
+    Ok(())
+}
+
+/// T10-AC-59 · review D1: an overrun on one reservation must not stop the ledger recording
+/// usage on the others. The uncovered part of an overrun used to be added to `spent` from no
+/// column, so the four columns summed past the limit and the next report on any other open
+/// reservation failed at `available()` with `Underflow` — real cost, unrecorded.
+#[test]
+fn an_overrun_leaves_every_other_open_reservation_reportable() -> Outcome {
+    let mut book = ledger(100, Ceiling::Soft);
+    book.reserve(&id(1), tokens(50), None, None)?;
+    book.reserve(&id(2), tokens(50), None, None)?;
+    let applied = book.report(
+        &id(1),
+        "r1",
+        Usage::new(tokens(200), Provenance::WorkerSettled),
+    )?;
+    assert_eq!(applied.discrepancy, Some(tokens(150)));
+    let second = book.report(
+        &id(2),
+        "r2",
+        Usage::new(tokens(30), Provenance::WorkerSettled),
+    )?;
+    assert_eq!(second.held, tokens(20));
+    assert_eq!(second.discrepancy, None);
+    assert_eq!(book.available()?, tokens(0));
+    assert_eq!(columns(book.balance()?)?, (0, 20, 230, 0));
+    Ok(())
+}
+
+/// T10-AC-60 · a report identity is bounded where it is acquired: it is stored as a key for the
+/// life of the reservation, so an unbounded one is an unbounded allocation per report. An
+/// over-long identity is refused before anything is recorded; one at the bound is accepted.
+#[test]
+fn an_over_long_report_identity_is_refused_before_it_is_stored() -> Outcome {
+    let mut book = ledger(1_000, Ceiling::Soft);
+    book.reserve(&id(1), tokens(100), None, None)?;
+    let long = "r".repeat(4096);
+    let refused = book.report(
+        &id(1),
+        &long,
+        Usage::new(tokens(5), Provenance::WorkerSettled),
+    );
+    assert_eq!(refused, Err(Refusal::ReportIdentityBound));
+    assert_eq!(
+        columns(book.balance()?)?,
+        (900, 100, 0, 0),
+        "nothing recorded"
+    );
+    let at_bound = "r".repeat(MAX_REPORT_IDENTITY_BYTES);
+    book.report(
+        &id(1),
+        &at_bound,
+        Usage::new(tokens(5), Provenance::WorkerSettled),
+    )?;
+    assert_eq!(columns(book.balance()?)?, (900, 95, 5, 0));
     Ok(())
 }

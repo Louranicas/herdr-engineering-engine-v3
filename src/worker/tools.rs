@@ -806,6 +806,29 @@ impl Projection {
     }
 }
 
+/// Refuse a set of actions in which two project to one tool name.
+///
+/// Uniqueness is a property of the catalogue, not of a caller. It used to be checked inside
+/// the per-caller loop, against only the tools already projected FOR THAT CALLER — so a
+/// duplicate whose first holder the caller could not see was never refused, and one caller's
+/// namespace could differ from the catalogue's (review D6). [`project`] runs this over the
+/// whole catalogue before any caller filtering; a coordinator can run it once at startup.
+///
+/// # Errors
+///
+/// [`Refusal::DuplicateToolName`], or a name fault from [`ToolDefinition::of`].
+pub fn distinct_tool_names(actions: &[Action]) -> Result<(), Refusal> {
+    let mut seen = std::collections::BTreeSet::new();
+    for action in actions {
+        if let Some(definition) = ToolDefinition::of(*action)?
+            && !seen.insert(definition.name().to_owned())
+        {
+            return Err(Refusal::DuplicateToolName);
+        }
+    }
+    Ok(())
+}
+
 /// Project the whole catalogue for `caller`.
 ///
 /// Total by construction: every action becomes a tool or an [`Omission`], so a caller can
@@ -816,6 +839,7 @@ impl Projection {
 /// [`Refusal::DuplicateToolName`] if two actions declare one name, and the name faults from
 /// [`ToolDefinition::of`]. All three are faults in the catalogue itself, not in the caller.
 pub fn project(caller: &Caller) -> Result<Projection, Refusal> {
+    distinct_tool_names(Catalogue::all())?;
     let mut tools: Vec<ToolDefinition> = Vec::new();
     let mut omissions = Vec::new();
     for action in Catalogue::all() {
@@ -826,9 +850,6 @@ pub fn project(caller: &Caller) -> Result<Projection, Refusal> {
             });
             continue;
         };
-        if tools.iter().any(|held| held.name() == definition.name()) {
-            return Err(Refusal::DuplicateToolName);
-        }
         if !caller.sees(definition.owner()) {
             omissions.push(Omission {
                 action: *action,

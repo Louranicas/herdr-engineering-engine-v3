@@ -385,7 +385,7 @@ fn revising_the_brief_makes_reported_work_stale() -> Outcome_ {
     cohort.report(&id(1), Outcome::Met, "a")?;
     cohort.report(&id(2), Outcome::Met, "b")?;
     assert!(cohort.join().is_integrable());
-    cohort.revise(2);
+    cohort.revise(2)?;
     let join = cohort.join();
     assert!(
         !join.is_integrable(),
@@ -400,7 +400,7 @@ fn revising_the_brief_makes_reported_work_stale() -> Outcome_ {
 #[test]
 fn reporting_against_a_stale_brief_is_refused() -> Outcome_ {
     let mut cohort = cohort_of(1)?;
-    cohort.revise(2);
+    cohort.revise(2)?;
     assert_eq!(
         cohort.report(&id(1), Outcome::Met, "against the old brief"),
         Err(Refusal::StaleBrief)
@@ -415,7 +415,7 @@ fn rebriefing_repairs_a_stale_thread() -> Outcome_ {
     let mut cohort = cohort_of(2)?;
     cohort.report(&id(1), Outcome::Met, "a")?;
     cohort.report(&id(2), Outcome::Met, "b")?;
-    cohort.revise(2);
+    cohort.revise(2)?;
     assert!(!cohort.join().is_integrable());
     for index in 1..=2 {
         cohort.rebrief(&id(index))?;
@@ -436,7 +436,7 @@ fn rebriefing_repairs_a_stale_thread() -> Outcome_ {
 fn the_brief_travels_with_the_assignment() -> Outcome_ {
     let mut cohort = Cohort::new(1);
     cohort.assign(&id(1), &[], claim("src/a")?, true)?;
-    cohort.revise(5);
+    cohort.revise(5)?;
     cohort.assign(&id(2), &[], claim("src/b")?, true)?;
     assert_eq!(cohort.thread(&id(1))?.brief, 1);
     assert_eq!(cohort.thread(&id(2))?.brief, 5);
@@ -449,7 +449,7 @@ fn the_brief_travels_with_the_assignment() -> Outcome_ {
 #[test]
 fn a_stale_thread_is_stale_rather_than_missing() -> Outcome_ {
     let mut cohort = cohort_of(1)?;
-    cohort.revise(2);
+    cohort.revise(2)?;
     let join = cohort.join();
     assert_eq!(blocked_names(&join), vec!["stale-brief"]);
     Ok(())
@@ -799,7 +799,7 @@ fn the_integrated_scenario_splits_fails_repairs_and_reverifies() -> Outcome_ {
     assert_eq!(blocked_names(&failed), vec!["dissent"]);
 
     // Repair: the brief moves to resolve the disagreement, every thread redoes its work.
-    cohort.revise(2);
+    cohort.revise(2)?;
     for index in 1..=3 {
         cohort.rebrief(&id(index))?;
         cohort.report(&id(index), Outcome::Met, "reconciled")?;
@@ -853,7 +853,7 @@ fn ownership_survives_reporting_and_rebriefing() -> Outcome_ {
         cohort.report(&id(index), Outcome::Met, "x")?;
         assert!(cohort.claims_are_disjoint(), "after report {index}");
     }
-    cohort.revise(2);
+    cohort.revise(2)?;
     for index in 1..=4 {
         cohort.rebrief(&id(index))?;
         assert!(cohort.claims_are_disjoint(), "after rebrief {index}");
@@ -872,7 +872,7 @@ fn stale_and_dissent_block_together() -> Outcome_ {
     let mut cohort = Cohort::new(1);
     cohort.assign(&id(1), &[], claim("src/a")?, true)?;
     cohort.report(&id(1), Outcome::Dissent, "disagree")?;
-    cohort.revise(2);
+    cohort.revise(2)?;
     cohort.assign(&id(2), &[], claim("src/b")?, true)?;
     cohort.report(&id(2), Outcome::Met, "ok")?;
     let join = cohort.join();
@@ -1027,6 +1027,21 @@ fn claim_overlap_agrees_with_the_shared_table() -> Result<(), Box<dyn Error>> {
         [false, true].into_iter().collect(),
         "a table that answers one way discriminates nothing"
     );
+    // Review N3: the paths the table says no implementation may admit as a claim.
+    let refused = table["refused"]
+        .as_array()
+        .ok_or("claim-overlap table has no refused list")?;
+    assert!(
+        refused.iter().any(|path| path == "src/store/"),
+        "the refused list lost review N3's own example"
+    );
+    for path in refused {
+        let path = path.as_str().ok_or("refused entry is not a string")?;
+        assert!(
+            Claim::new(path).is_err(),
+            "{path:?} was admitted as a claim"
+        );
+    }
     Ok(())
 }
 
@@ -1055,7 +1070,7 @@ fn replay(fixture: &serde_json::Value) -> Result<Join, Box<dyn Error>> {
     ordered.sort_by_key(|&(brief, index, _)| (brief, index));
     let mut cohort = Cohort::new(0);
     for (brief, index, row) in ordered {
-        cohort.revise(brief);
+        cohort.revise(brief)?;
         let identity = row["thread_id"].as_str().ok_or("row without identity")?;
         let required = row["required"].as_bool().ok_or("row without required")?;
         cohort.assign(identity, &[], claim(&format!("fixture/{index}"))?, required)?;
@@ -1066,7 +1081,7 @@ fn replay(fixture: &serde_json::Value) -> Result<Join, Box<dyn Error>> {
             .ok_or("row with an unknown outcome")?;
         cohort.report(identity, outcome, "fixture")?;
     }
-    cohort.revise(current);
+    cohort.revise(current)?;
     Ok(cohort.join())
 }
 
@@ -1112,6 +1127,49 @@ fn fixture_joins_agree_with_cohort_join() -> Result<(), Box<dyn Error>> {
         verdicts.len(),
         2,
         "two fixtures with one join pin that join only where they agree"
+    );
+    Ok(())
+}
+
+/// Review N3: a claim with an empty segment slipped past the overlap rule — `src/store/` did
+/// not conflict with `src/store/x.rs`, because every statement of the rule (Rust, Julia and
+/// the shared table's generator) split it into `[src, store, ""]`. A claim is now admitted only
+/// in canonical form, so a writer cannot spell its way around a sibling's claim.
+#[test]
+fn a_non_canonical_claim_is_refused_at_construction() {
+    for path in [
+        "src/store/",
+        "/src/store",
+        "src//store",
+        "./src",
+        "src/../x",
+        "src/./x",
+    ] {
+        assert!(Claim::new(path).is_err(), "{path:?} was admitted");
+    }
+    for path in ["src/store", "src/store/x.rs", "a", "docs/a.md"] {
+        assert!(Claim::new(path).is_ok(), "{path:?} was refused");
+    }
+}
+
+/// Review D5: a brief revision never moves backwards. `revise` used to assign any value, so a
+/// regression made threads assigned against the newer brief read as stale and threads from an
+/// OLDER brief read as current again — stale work re-admitted to the join.
+#[test]
+fn a_brief_revision_cannot_move_backwards() -> Result<(), Box<dyn Error>> {
+    let mut cohort = Cohort::new(3);
+    cohort.assign(&id(1), &[], claim("src/a")?, true)?;
+    cohort.report(&id(1), Outcome::Met, "on brief 3")?;
+    assert_eq!(cohort.revise(2), Err(Refusal::BriefRegressed));
+    assert_eq!(
+        cohort.revise(3),
+        Ok(()),
+        "revising to the current value changes nothing"
+    );
+    assert_eq!(cohort.brief(), 3);
+    assert!(
+        cohort.join().is_integrable(),
+        "the brief-3 work is still current"
     );
     Ok(())
 }

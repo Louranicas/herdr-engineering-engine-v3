@@ -352,6 +352,12 @@ end
             @test HabitatAnalysis.claims_conflict(case.b, case.a) == case.overlap
         end
         @test answers == Set([true, false])
+        # Review N3: what the table says no implementation may admit as a claim.
+        @test "src/store/" in table.refused
+        for path in table.refused
+            @test !HabitatAnalysis.claim_canonical(path)
+        end
+        @test crun(q -> q["threads"][1]["claims"] = ["src/store/"]) == :schema
     end
     # The join is derived, so it must be pinned at more than the two fixtures' values: a
     # report that echoed one constant would pass both. Each case edits C01's rows, declares

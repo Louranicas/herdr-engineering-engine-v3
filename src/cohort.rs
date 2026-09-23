@@ -373,6 +373,12 @@ pub enum Refusal {
     ChildOutstanding,
     /// An empty claim path was declared.
     EmptyClaim,
+    /// A claim path that is not in canonical form: absolute, or with an empty, `.` or `..`
+    /// segment. Such a path could name a claimed resource without matching it (review N3).
+    NonCanonicalClaim,
+    /// A brief revision lower than the current one: a regression would re-admit work done
+    /// against an older brief (review D5).
+    BriefRegressed,
 }
 
 impl Refusal {
@@ -394,6 +400,8 @@ impl Refusal {
             Self::AlreadyReported => "thread has already reported",
             Self::ChildOutstanding => "a required thread has not reported",
             Self::EmptyClaim => "an empty resource claim",
+            Self::NonCanonicalClaim => "a resource claim not in canonical form",
+            Self::BriefRegressed => "a brief revision lower than the current one",
         }
     }
 }
@@ -468,14 +476,24 @@ pub struct Claim {
 }
 
 impl Claim {
-    /// A claim on `path`.
+    /// A claim on `path`, which must be in canonical form: relative, with no empty, `.` or
+    /// `..` segment. The overlap rule compares segments, so a path that spells one resource two
+    /// ways (`src/store/` for `src/store`) would otherwise slip past a sibling's claim — every
+    /// statement of the rule read `src/store/` as `[src, store, ""]` (review N3).
     ///
     /// # Errors
     ///
-    /// [`Refusal::EmptyClaim`] for an empty path.
+    /// * [`Refusal::EmptyClaim`] for an empty path;
+    /// * [`Refusal::NonCanonicalClaim`] for any other path not in canonical form.
     pub fn new(path: &str) -> Result<Self, Refusal> {
         if path.is_empty() {
             return Err(Refusal::EmptyClaim);
+        }
+        if path
+            .split('/')
+            .any(|segment| segment.is_empty() || segment == "." || segment == "..")
+        {
+            return Err(Refusal::NonCanonicalClaim);
         }
         Ok(Self {
             path: path.to_owned(),
@@ -625,9 +643,18 @@ impl Cohort {
     ///
     /// Threads assigned against the old revision become stale and block the join until they
     /// are reassigned. Nothing is silently migrated: a thread that did its work against an
-    /// old brief did different work.
-    pub const fn revise(&mut self, brief: u64) {
+    /// old brief did different work. Revising to the current value changes nothing.
+    ///
+    /// # Errors
+    ///
+    /// [`Refusal::BriefRegressed`] when `brief` is lower than the current revision; a
+    /// regression would make work done against an older brief read as current (review D5).
+    pub const fn revise(&mut self, brief: u64) -> Result<(), Refusal> {
+        if brief < self.brief {
+            return Err(Refusal::BriefRegressed);
+        }
         self.brief = brief;
+        Ok(())
     }
 
     /// Assign one bounded thread.

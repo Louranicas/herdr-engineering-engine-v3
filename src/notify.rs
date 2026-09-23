@@ -449,6 +449,9 @@ pub enum Refusal {
     DuplicateEvent,
     /// A sequence number left `u64`.
     SequenceOverflow,
+    /// `restore` was given an epoch that is not newer than the current one: a same-epoch or
+    /// earlier cursor would then name new events (review D4).
+    EpochNotNewer,
 }
 
 impl Refusal {
@@ -467,6 +470,7 @@ impl Refusal {
             Self::UnknownEvent => "unknown event",
             Self::DuplicateEvent => "duplicate event identity",
             Self::SequenceOverflow => "sequence exceeds the permitted integer range",
+            Self::EpochNotNewer => "restored epoch is not newer than the current epoch",
         }
     }
 }
@@ -1080,17 +1084,38 @@ impl Outbox {
         before - self.records.len()
     }
 
-    /// Begin a new epoch, discarding every retained event.
+    /// Begin a new epoch. Delivered history is discarded; an event with any unsettled delivery
+    /// obligation is carried into the new epoch, re-sequenced from 1 in its old order.
     ///
     /// A subscriber holding a cursor from the old epoch receives [`Refusal::EpochMismatch`]
     /// and must resync — the contract's *"invalid/restored epoch requires resync"*. The
-    /// sequence counter restarts, which is why a cursor carries its epoch: without it, an
-    /// old sequence would silently name a new event.
-    pub fn restore(&mut self, epoch: u64) {
+    /// sequence counter restarts, which is why a cursor carries its epoch and why the new
+    /// epoch must be **newer** (review D4): a same-epoch or earlier cursor would otherwise name
+    /// new events. Carrying obligations is `compact`'s rule applied here too (review N4):
+    /// forgetting an event must never discharge a delivery.
+    ///
+    /// Returns the number of events carried.
+    ///
+    /// # Errors
+    ///
+    /// [`Refusal::EpochNotNewer`] when `epoch` is not greater than the current epoch; nothing
+    /// changes.
+    pub fn restore(&mut self, epoch: u64) -> Result<usize, Refusal> {
+        if epoch <= self.epoch {
+            return Err(Refusal::EpochNotNewer);
+        }
+        self.records
+            .retain(|record| record.deliveries.values().any(|d| !d.is_settled()));
+        self.records.sort_by_key(|record| record.sequence);
+        let mut next = 1_u64;
+        for record in &mut self.records {
+            record.sequence = next;
+            next = next.checked_add(1).ok_or(Refusal::SequenceOverflow)?;
+        }
         self.epoch = epoch;
-        self.next_sequence = 1;
+        self.next_sequence = next;
         self.retained_from = 1;
-        self.records.clear();
+        Ok(self.records.len())
     }
 
     fn find(&self, identity: &str) -> Option<usize> {

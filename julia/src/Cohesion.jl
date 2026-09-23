@@ -710,7 +710,7 @@ function thread_row(row, brief::UInt64, seen::Set{String})
     row.claims isa JSON3.Array || refuse(:schema)
     length(row.claims) <= 64 || refuse(:bound)
     for claim in row.claims
-        claim isa AbstractString && !isempty(claim) || refuse(:schema)
+        claim isa AbstractString && claim_canonical(claim) || refuse(:schema)
     end
     return (;
         id = row.thread_id,
@@ -720,6 +720,14 @@ function thread_row(row, brief::UInt64, seen::Set{String})
         cost = cost,
         claims = [String(c) for c in row.claims],
     )
+end
+
+"""Whether `path` is a claim in canonical form: non-empty, relative, and no empty, `.` or `..`
+segment. The overlap rule compares segments, so `src/store/` would otherwise read as
+`[src, store, ""]` and slip past `src/store/x.rs` (review N3); `src/cohort.rs::Claim::new`
+refuses the same paths, and `evaluation/cohorts/claim-overlap-v1.json` lists them."""
+function claim_canonical(path::AbstractString)
+    return !isempty(path) && all(part -> !(part in ("", ".", "..")), split(path, '/'))
 end
 
 """Whether two claim paths overlap, segment-wise.

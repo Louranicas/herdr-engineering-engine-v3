@@ -841,3 +841,53 @@ fn the_cycle_across_an_epoch_boundary_carries_nothing_stale() -> Outcome {
     assert_eq!(view.task(&old_task).map(|_| ()), Err(Refusal::UnknownTask));
     Ok(())
 }
+
+/// T16-HD-53 · review D2: a second, different task under an intent key already submitted is
+/// refused, and the earlier outcome stands. `submit` used to discard the earlier outcome and
+/// return the CURRENT acceptance labelled `Duplicate` — so the view reported task B as the
+/// same submission as task A.
+#[test]
+fn a_different_task_under_a_submitted_key_is_refused_and_the_first_stands() -> Outcome {
+    let (first_task, second_task) = (id(1), id(2));
+    let mut view = View::new(1);
+    let key = IntentKey::new("operator-enter-1");
+    view.submit(
+        &key,
+        Admitted::from_engine(EngineReceipt::issue(&first_task, 1, 1)?),
+    )?;
+    let second = view.submit(
+        &key,
+        Admitted::from_engine(EngineReceipt::issue(&second_task, 1, 2)?),
+    );
+    assert_eq!(second, Err(Refusal::IntentConflict));
+    assert_eq!(view.submitted(&key), Some(first_task.as_str()));
+    Ok(())
+}
+
+/// T16-HD-54 · review D3: `EngineReceipt` is a view's rendering of what the engine said, not
+/// authority. A client can always fabricate a response, so the protection is that no engine
+/// module takes a receipt as evidence: the type is named in `src/herdr.rs` and nowhere else
+/// under `src/`. Enumerated from the directory, so a new module is in the denominator.
+#[test]
+fn no_engine_module_takes_an_engine_receipt_as_authority() -> Outcome {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut pending = vec![root.clone()];
+    let mut scanned = 0;
+    let mut naming = Vec::new();
+    while let Some(dir) = pending.pop() {
+        for entry in std::fs::read_dir(&dir)? {
+            let path = entry?.path();
+            if path.is_dir() {
+                pending.push(path);
+            } else if path.extension().is_some_and(|ext| ext == "rs") {
+                scanned += 1;
+                if std::fs::read_to_string(&path)?.contains("EngineReceipt") {
+                    naming.push(path.strip_prefix(&root)?.display().to_string());
+                }
+            }
+        }
+    }
+    assert!(scanned > 20, "only {scanned} source files found under src/");
+    assert_eq!(naming, ["herdr.rs"], "EngineReceipt named outside the view");
+    Ok(())
+}

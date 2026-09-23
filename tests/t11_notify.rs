@@ -596,7 +596,7 @@ fn compacting_everything_leaves_a_coherent_boundary() -> Outcome {
 fn restore_starts_a_new_epoch_and_forces_resync() -> Outcome {
     let mut outbox = filled(5)?;
     let stale = Cursor::after(1, 2);
-    outbox.restore(2);
+    assert_eq!(outbox.restore(2), Ok(0));
     assert_eq!(outbox.epoch(), 2);
     assert_eq!(outbox.retained(), 0);
     assert_eq!(outbox.next_sequence(), 1);
@@ -618,7 +618,7 @@ fn an_identity_may_be_reused_in_a_new_epoch() -> Outcome {
         Committed::new(&event, Visibility::Public, Commit::witness(1, 1))?,
         &[],
     )?;
-    outbox.restore(2);
+    assert_eq!(outbox.restore(2), Ok(0));
     assert_eq!(
         outbox.enqueue(
             Committed::new(&event, Visibility::Public, Commit::witness(2, 1))?,
@@ -633,7 +633,7 @@ fn an_identity_may_be_reused_in_a_new_epoch() -> Outcome {
 #[test]
 fn a_new_epoch_reads_from_genesis() -> Outcome {
     let mut outbox = filled(3)?;
-    outbox.restore(7);
+    assert_eq!(outbox.restore(7), Ok(0));
     let event = id(50);
     outbox.enqueue(
         Committed::new(&event, Visibility::Public, Commit::witness(7, 1))?,
@@ -978,7 +978,7 @@ fn behaviour_does_not_depend_on_the_epoch_value() -> Outcome {
     );
     outbox.record(&event, &recipient, Delivery::Delivered)?;
     assert_eq!(outbox.compact(1), 1);
-    outbox.restore(epoch + 1);
+    assert_eq!(outbox.restore(epoch + 1), Ok(0));
     assert_eq!(outbox.epoch(), epoch + 1);
     Ok(())
 }
@@ -1272,5 +1272,78 @@ fn a_pending_failure_still_wakes_because_it_is_not_settled() -> Outcome {
         Delivery::Pending(FailureCategory::Unreachable),
     )?;
     assert!(outbox.wake(&worker, WakeMark::new(), 0).is_actionable());
+    Ok(())
+}
+
+/// T11-NT-55 · review D4: restore refuses an epoch that is not newer than the current one.
+/// Restoring the SAME epoch used to reset the sequence to 1, so a subscriber's same-epoch
+/// cursor then named new events and skipped them silently — the one thing the epoch in a
+/// cursor exists to prevent. An older epoch is refused for the same reason.
+#[test]
+fn restore_refuses_an_epoch_that_is_not_newer() -> Outcome {
+    for epoch in [5_u64, 4] {
+        let mut outbox = Outbox::new(5);
+        for index in 1..=3 {
+            let event = id(index);
+            outbox.enqueue(
+                Committed::new(
+                    &event,
+                    Visibility::Public,
+                    Commit::witness(5, u64::try_from(index)?),
+                )?,
+                &[],
+            )?;
+        }
+        let refused = outbox.restore(epoch);
+        assert_eq!(refused, Err(Refusal::EpochNotNewer), "epoch {epoch}");
+        assert_eq!(
+            (outbox.epoch(), outbox.retained(), outbox.next_sequence()),
+            (5, 3, 4),
+            "a refused restore changes nothing (epoch {epoch})"
+        );
+    }
+    Ok(())
+}
+
+/// T11-NT-56 · review N4: restore never discards an unsettled delivery obligation — the rule
+/// `compact` already keeps. Delivered history is dropped; an event with an obligation still
+/// open is carried into the new epoch, re-sequenced from 1, with the obligation intact.
+#[test]
+fn restore_carries_unsettled_obligations_into_the_new_epoch() -> Outcome {
+    let mut outbox = Outbox::new(1);
+    let (open, delivered, silent) = (id(1), id(2), id(3));
+    let recipient = id(900);
+    for (index, event, recipients) in [
+        (1, &open, vec![recipient.as_str()]),
+        (2, &delivered, vec![recipient.as_str()]),
+        (3, &silent, vec![]),
+    ] {
+        outbox.enqueue(
+            Committed::new(event, Visibility::Public, Commit::witness(1, index))?,
+            &recipients,
+        )?;
+    }
+    outbox.record(&delivered, &recipient, Delivery::Delivered)?;
+    assert_eq!(outbox.restore(2), Ok(1), "one event carried");
+    assert_eq!(
+        (outbox.epoch(), outbox.retained(), outbox.next_sequence()),
+        (2, 1, 2)
+    );
+    assert_eq!(outbox.obligation(&open, &recipient), Ok(Delivery::Unknown));
+    let stream = outbox.subscribe(Visibility::Public, Cursor::genesis(2), MAX_REPLAY)?;
+    assert_eq!(stream.events.len(), 1);
+    assert_eq!(
+        (
+            stream.events[0].identity.as_str(),
+            stream.events[0].sequence
+        ),
+        (open.as_str(), 1)
+    );
+    outbox.record(&open, &recipient, Delivery::Delivered)?;
+    assert_eq!(
+        outbox.compact(1),
+        1,
+        "the carried obligation settles in the new epoch"
+    );
     Ok(())
 }

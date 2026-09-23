@@ -307,9 +307,13 @@
 //! Three properties are structural rather than asserted, because a test cannot prove the
 //! absence of a second writer:
 //!
-//! * **Conservation.** `available + reserved + spent + unknown == limit` after every
-//!   operation. Nothing mutates a counter directly; each transition moves an exact
-//!   [`Amount`] between two columns, so the sum cannot drift.
+//! * **Conservation.** `available + reserved + spent + unknown == limit + overdrawn` after
+//!   every operation. Nothing mutates a counter directly; each transition moves an exact
+//!   [`Amount`] between two columns, so the sum cannot drift. `overdrawn` is the one column
+//!   that is not a share of the limit: usage reported beyond everything the scope could cover
+//!   is still recorded in `spent` or `unknown` (a real cost does not vanish), and the same
+//!   amount is recorded as overdrawn, so `available` reads zero rather than going negative
+//!   and every other open reservation can still report (review D1).
 //! * **Unknown usage is not zero.** [`Provenance::Unmeasured`] moves cost into its own
 //!   column that no read collapses into `spent`, so an unmeasured worker stays visible in
 //!   [`Balance::unknown`] instead of silently freeing budget.
@@ -340,6 +344,10 @@ pub const MAX_RESERVATIONS: usize = 4096;
 /// list per reservation is still an unbounded allocation, so the derived set takes its own
 /// bound and the refusal names both numbers.
 pub const MAX_REPORTS_PER_RESERVATION: usize = 256;
+
+/// The longest report identity accepted. A report identity is kept as a key for the life of its
+/// reservation, so it is bounded where it is acquired, not after it is stored.
+pub const MAX_REPORT_IDENTITY_BYTES: usize = 128;
 
 /// The most tools one constraint or candidate may name.
 pub const MAX_TOOLS: usize = 32;
@@ -583,6 +591,12 @@ pub enum Refusal {
     ReservationLimit,
     /// This reservation already holds [`MAX_REPORTS_PER_RESERVATION`] reports.
     ReportLimit,
+    /// A report identity already applied arrived with a different usage. An identical report is
+    /// a retry and changes nothing; a different one is not a retry, and dropping it silently
+    /// would hide cost (T10: retries are included).
+    ReportConflict,
+    /// A report identity empty or longer than [`MAX_REPORT_IDENTITY_BYTES`].
+    ReportIdentityBound,
     /// The caller's expected revision is not the ledger's current revision.
     StaleRevision,
     /// Release was attempted while a child reservation is still open.
@@ -637,6 +651,8 @@ impl Refusal {
             Self::SelfParent => "a reservation cannot be its own parent",
             Self::ReservationLimit => "reservation count bound reached",
             Self::ReportLimit => "usage report count bound reached",
+            Self::ReportConflict => "a report identity reused with a different usage",
+            Self::ReportIdentityBound => "report identity is empty or over its length bound",
             Self::StaleRevision => "expected ledger revision differs",
             Self::ChildOutstanding => "a child reservation is still open",
             Self::Scalar(_) => "invalid accounting scalar",
@@ -990,6 +1006,7 @@ pub struct Balance {
     reserved: Amount,
     spent: Amount,
     unknown: Amount,
+    overdrawn: Amount,
 }
 
 impl Balance {
@@ -997,6 +1014,15 @@ impl Balance {
     #[must_use]
     pub const fn limit(self) -> Amount {
         self.limit
+    }
+
+    /// Usage recorded beyond everything the scope could cover. It is already counted in
+    /// [`Balance::spent`] or [`Balance::unknown`]; this column names how much of it the limit
+    /// did not cover, so conservation reads `available + reserved + spent + unknown ==
+    /// limit + overdrawn` and `available` is zero, not negative, while it is non-zero.
+    #[must_use]
+    pub const fn overdrawn(self) -> Amount {
+        self.overdrawn
     }
 
     /// Held by open reservations, not yet spent.
@@ -1029,6 +1055,7 @@ impl Balance {
     /// that a corrupted persisted ledger refuses instead of aborting the process.
     pub fn available(self) -> Result<Amount, Refusal> {
         self.limit
+            .checked_add(self.overdrawn)?
             .checked_sub(self.reserved)?
             .checked_sub(self.spent)?
             .checked_sub(self.unknown)
@@ -1050,6 +1077,8 @@ struct Entry {
     held: Amount,
     spent: Amount,
     unknown: Amount,
+    /// The part of this reservation's reported usage no column could cover.
+    overdrawn: Amount,
     state: State,
     /// Report identities already applied, so a retried report is idempotent **by identity**
     /// rather than by comparing figures — two honest reports can carry the same amount.
@@ -1155,16 +1184,19 @@ impl Ledger {
         let mut reserved = Amount::zero(self.unit);
         let mut spent = Amount::zero(self.unit);
         let mut unknown = Amount::zero(self.unit);
+        let mut overdrawn = Amount::zero(self.unit);
         for entry in &self.entries {
             reserved = reserved.checked_add(entry.held)?;
             spent = spent.checked_add(entry.spent)?;
             unknown = unknown.checked_add(entry.unknown)?;
+            overdrawn = overdrawn.checked_add(entry.overdrawn)?;
         }
         Ok(Balance {
             limit: self.limit,
             reserved,
             spent,
             unknown,
+            overdrawn,
         })
     }
 
@@ -1239,6 +1271,7 @@ impl Ledger {
             held: amount,
             spent: Amount::zero(self.unit),
             unknown: Amount::zero(self.unit),
+            overdrawn: Amount::zero(self.unit),
             state: State::Open,
             applied: BTreeMap::new(),
         });
@@ -1263,6 +1296,9 @@ impl Ledger {
     /// * [`Refusal::IncompatibleUnit`] when the figure is in another unit;
     /// * [`Refusal::HardCeilingIncompatible`] under [`Ceiling::Hard`] for an
     ///   [`Provenance::Unmeasured`] or [`Provenance::Estimated`] figure;
+    /// * [`Refusal::ReportIdentityBound`] for an empty `report` or one over
+    ///   [`MAX_REPORT_IDENTITY_BYTES`], refused before anything is read or stored;
+    /// * [`Refusal::ReportConflict`] when `report` was already applied with a different usage;
     /// * [`Refusal::ReportLimit`] at [`MAX_REPORTS_PER_RESERVATION`], refused before the
     ///   report is stored;
     /// * [`Refusal::Overflow`] on a sum that leaves `u64`.
@@ -1272,6 +1308,9 @@ impl Ledger {
         report: &str,
         usage: Usage,
     ) -> Result<Applied, Refusal> {
+        if report.is_empty() || report.len() > MAX_REPORT_IDENTITY_BYTES {
+            return Err(Refusal::ReportIdentityBound);
+        }
         if usage.amount().unit() != self.unit {
             return Err(Refusal::IncompatibleUnit);
         }
@@ -1283,8 +1322,10 @@ impl Ledger {
             return Err(Refusal::ReservationClosed);
         }
         if let Some(previous) = self.entries[index].applied.get(report) {
+            if *previous != usage {
+                return Err(Refusal::ReportConflict);
+            }
             let held = self.entries[index].held;
-            let _ = previous;
             return Ok(Applied {
                 fresh: false,
                 held,
@@ -1304,6 +1345,9 @@ impl Ledger {
 
         let entry = &mut self.entries[index];
         entry.held = entry.held.checked_sub(Amount::new(self.unit, from_held))?;
+        entry.overdrawn = entry
+            .overdrawn
+            .checked_add(Amount::new(self.unit, uncovered))?;
         let recorded = Amount::new(self.unit, from_held + from_available + uncovered);
         if usage.provenance().is_measured() {
             entry.spent = entry.spent.checked_add(recorded)?;
@@ -1499,7 +1543,7 @@ impl Ledger {
         }
     }
 
-    /// Whether conservation holds: the four columns sum to the limit.
+    /// Whether conservation holds: the four columns sum to the limit plus what was overdrawn.
     ///
     /// The transitions above maintain this by construction; this predicate exists so that a
     /// ledger **read back from storage** can be checked before it is trusted, and so a
@@ -1515,7 +1559,7 @@ impl Ledger {
             .checked_add(balance.reserved())?
             .checked_add(balance.spent())?
             .checked_add(balance.unknown())?;
-        Ok(total == self.limit)
+        Ok(total == self.limit.checked_add(balance.overdrawn())?)
     }
 
     fn find(&self, identity: &str) -> Option<usize> {

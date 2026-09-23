@@ -99,12 +99,6 @@
       "overlap": false
     },
     {
-      "name": "trailing separator makes an empty final segment",
-      "a": "a/b",
-      "b": "a/b/",
-      "overlap": true
-    },
-    {
       "name": "case differs in one segment",
       "a": "src/Store",
       "b": "src/store",
@@ -134,5 +128,16 @@
       "b": "a/b/c/d/e",
       "overlap": true
     }
+  ],
+  "refused": [
+    "src/store/",
+    "a/b/",
+    "/src/store",
+    "src//store",
+    "./src",
+    "src/./x",
+    "src/../x",
+    ".",
+    ""
   ]
 }

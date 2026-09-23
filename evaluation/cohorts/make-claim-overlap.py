@@ -11,6 +11,11 @@ The rule, as the T22 brief states it:
     SEGMENT boundary. `src/store` overlaps `src/store/index`; it does not overlap
     `src/storefront`, because `front` is not a new segment.
 
+    A claim is admitted only in canonical form: relative, no empty, `.` or `..` segment (review
+    N3). Every statement of the overlap rule once read `src/store/` as `[src, store, ""]`, so it
+    did not overlap `src/store/x.rs`; the `refused` list below is what both sides must refuse
+    before the overlap rule ever sees it.
+
 Run `python3 evaluation/cohorts/make-claim-overlap.py --check` to verify the committed table
 still matches this generator; that is what the Rust and Julia tests assert against.
 """
@@ -21,6 +26,11 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 TABLE = HERE / "claim-overlap-v1.json"
+
+
+def canonical(path: str) -> bool:
+    """The admission rule, stated a third time: non-empty, relative, no empty/./.. segment."""
+    return bool(path) and all(part not in ("", ".", "..") for part in path.split("/"))
 
 
 def overlaps(a: str, b: str) -> bool:
@@ -51,13 +61,15 @@ CASES = [
     ("disjoint roots", "docs/a.md", "src/store"),
     ("same leaf under different parents", "a/x", "b/x"),
     ("file extension does not make a segment", "src/main", "src/main.rs"),
-    ("trailing separator makes an empty final segment", "a/b", "a/b/"),
     ("case differs in one segment", "src/Store", "src/store"),
     ("prefix at the root segment only", "s", "src/store"),
     ("deep identical paths", "a/b/c/d/e", "a/b/c/d/e"),
     ("deep paths diverging at the last segment", "a/b/c/d/e", "a/b/c/d/f"),
     ("ancestor several segments up", "a/b", "a/b/c/d/e"),
 ]
+
+# Paths neither implementation may admit as a claim. The first is review N3's own example.
+REFUSED = ["src/store/", "a/b/", "/src/store", "src//store", "./src", "src/./x", "src/../x", ".", ""]
 # Deliberately absent: the empty path. `Claim::new` refuses it with `Refusal::EmptyClaim` and
 # `thread_row` refuses it with `:schema`, so neither `conflicts_with` nor `claims_conflict`
 # can be handed one. A row for it would pin unreachable behaviour and read as coverage.
@@ -82,12 +94,17 @@ def build():
         "cases": [
             {"name": name, "a": a, "b": b, "overlap": overlaps(a, b)} for name, a, b in CASES
         ],
+        "refused": REFUSED,
     }
 
 
 def main():
     table = build()
     names = [case["name"] for case in table["cases"]]
+    if not all(canonical(case[side]) for case in table["cases"] for side in ("a", "b")):
+        raise SystemExit("every overlap case must be canonical; non-canonical paths go in REFUSED")
+    if any(canonical(path) for path in table["refused"]):
+        raise SystemExit("a REFUSED path is canonical; it would be admitted")
     if len(names) != len(set(names)):
         raise SystemExit("case names must be distinct; they are how a failure is reported")
     # A table whose every answer is the same value discriminates nothing.
