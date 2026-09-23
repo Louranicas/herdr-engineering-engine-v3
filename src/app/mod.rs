@@ -13,3 +13,6 @@ pub mod receipt_import;
 
 pub mod durable_control;
 pub mod startup;
+
+pub mod control_socket;
+pub mod grants;

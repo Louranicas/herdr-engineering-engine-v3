@@ -174,8 +174,17 @@ CONTEXT_INPUTS = ("src/context.rs",)
 COHORT_TARGET_COUNTS = {"t22_cohort": 60}
 COHORT_INPUTS = ("src/cohort.rs", "evaluation/cohorts/claim-overlap-v1.json",
                  "tests/fixtures/t22/C01.json", "tests/fixtures/t22/C02.json")
-ACTIONS_TARGET_COUNTS = {"t28_actions": 66}
-ACTIONS_INPUTS = ("src/actions.rs", "src/worker/tools.rs")
+ACTIONS_TARGET_COUNTS = {"t28_actions": 94}
+# The control receiver (review coordinator step 1) is served from the catalogue: its wire half in
+# contracts, its catalogue half in actions, and the independent Python oracle its cases run.
+ACTIONS_INPUTS = ("src/actions.rs", "src/worker/tools.rs", "src/actions/control.rs",
+                  "src/contracts/control.rs", "tests/t28_control.rs",
+                  # IPC01: the socket, the peer principal and the file grant store.
+                  "src/app/control_socket.rs", "src/app/grants.rs", "tests/t28_socket.rs",
+                  "tests/fixtures/native/control-v1/receiver-oracle.py",
+                  # RC03's published C01 example: the receiver's known-answer digest.
+                  "tests/fixtures/native/control-v1/C01-control-valid-cancel.jsonl",
+                  "tests/fixtures/native/control-v1/C01-metadata.json")
 HERDR_TARGET_COUNTS = {"t16_herdr": 54}
 HERDR_INPUTS = ("src/herdr.rs",)
 
@@ -389,7 +398,7 @@ def has_t05(root):
              for name in ("src/contracts/roster.rs", "src/store/roster.rs", "tests/t05_store.rs", "tests/t05_codec.rs", "tests/t05_roster.rs")))
 
 
-def validate_t05_features(metadata, *, t06=False, t21=False):
+def validate_t05_features(metadata, *, t06=False, t21=False, ipc01=False):
     """Compare resolved metadata with the reviewed T05 package/feature tuple."""
     raw_nodes = metadata["resolve"]["nodes"]
     nodes = {node["id"]: node for node in raw_nodes}
@@ -399,6 +408,11 @@ def validate_t05_features(metadata, *, t06=False, t21=False):
     if t06:
         # Fixed event polling selected by T06; no other feature broadening.
         expected["rustix"] = ("1.1.4", ["alloc", "default", "event", "fs", "process", "rand", "std"])
+    if ipc01:
+        # IPC01 reads the peer credential (SO_PEERCRED, RC03 section 5) through rustix/net: the one
+        # broadening, and only with the socket source that needs it. No crate is added.
+        version, features = expected["rustix"]
+        expected["rustix"] = (version, sorted([*features, "net"]))
     if t21:
         expected["serde_json"] = ("1.0.151", ["default", "float_roundtrip", "std"])
     for name, (version, features) in expected.items():
@@ -407,6 +421,10 @@ def validate_t05_features(metadata, *, t06=False, t21=False):
                 or packages[0]["id"] not in nodes
                 or sorted(nodes[packages[0]["id"]]["features"]) != features):
             raise ValueError("Reviewed T05 resolved features differ: " + name)
+
+
+def has_ipc01(root):
+    return (root / "src/app/control_socket.rs").is_file()
 
 
 def has_t04(root):
@@ -1092,7 +1110,7 @@ def main():
         run("skill-site-sweep", [sys.executable, "tools/check-skill-sites"],
             required_text="sites=15 killed=15 survived=0")
         run("bash-wrapper-controls", [sys.executable, "-W", "error", "tests/bash_wrapper.py"],
-            required_text="run=125 failures=0 errors=0")
+            required_text="run=126 failures=0 errors=0")
         run("bash-site-sweep", [sys.executable, "tools/check-bash-sites"],
             required_text="sites=37 plants=18 killed=55 survived=0 drifted=0")
         run("pi-extension-controls", [sys.executable, "-W", "error", "tests/pi_extension.py"],
@@ -1110,7 +1128,8 @@ def main():
         cargo = str(binaries["cargo"])
         metadata = run("offline-dependency-resolution", [cargo, "metadata", "--locked", "--offline", "--format-version=1"])
         if test_expectations["has_t05"]:
-            validate_t05_features(json.loads(metadata["stdout"]), t06=has_t06(ROOT), t21=has_t21(ROOT))
+            validate_t05_features(json.loads(metadata["stdout"]), t06=has_t06(ROOT), t21=has_t21(ROOT),
+                                  ipc01=has_ipc01(ROOT))
         if test_expectations["has_t04"]:
             sqlite_static.validate_features(json.loads(metadata["stdout"]))
             report["sqlite_static"] = {}

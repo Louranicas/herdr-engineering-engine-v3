@@ -190,13 +190,35 @@
 // [Working in Sandboxes on Kinoite](obsidian://open?vault=my-diary.vault&file=Reflections%2FWorking%20in%20Sandboxes%20on%20Kinoite)
 // HEE3-ANCHORS-END
 
+use habitat_engine::actions::Catalogue;
+use habitat_engine::actions::control::{Grants, NoGrants};
+use habitat_engine::app::control_socket::{
+    self, IDLE_TIMEOUT, RUNTIME_DIRECTORY, SOCKET_NAME, WRITE_TIMEOUT,
+};
+use habitat_engine::app::grants::{self, FileGrants};
+use habitat_engine::contracts::control::{FrameReader, MAX_FRAME_BYTES, ReadError};
 use habitat_engine::worker::namespace_shim::{self, NamespaceExec};
+use std::io::{self, Read, Write};
+use std::os::unix::net::UnixStream;
+use std::path::PathBuf;
 use std::process::ExitCode;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+// The bash wrapper's producer contract (integrations/bash/hee3): the same numbers mean the same
+// failures on both sides of the pipe.
+const EXIT_USAGE: u8 = 2;
+const EXIT_NO_ENGINE: u8 = 3;
+const EXIT_BOUNDS: u8 = 4;
+const EXIT_TIMEOUT: u8 = 5;
+const EXIT_CONTRACT: u8 = 6;
+
+/// Where the reviewed grant records live, under the operator's configuration root (RC02).
+const GRANTS_DIRECTORY: &str = ".config/herdr-engineering-engine-v3/grants";
 
 fn main() -> ExitCode {
     let Ok(args) = arguments() else {
         eprintln!("habitat-engine: invalid or overbound arguments");
-        return ExitCode::from(2);
+        return ExitCode::from(EXIT_USAGE);
     };
     if args.len() >= 4 && args[0] == "__namespace-exec" && args[2] == "--" {
         let arguments: Vec<&str> = args[4..].iter().map(String::as_str).collect();
@@ -206,8 +228,153 @@ fn main() -> ExitCode {
             working_directory: &args[1],
         });
     }
-    eprintln!("habitat-engine: no configured coordinator command");
-    ExitCode::from(2)
+    match args.as_slice() {
+        [command] if command == "serve" => serve(),
+        [action] if Catalogue::find(action).is_ok() => request(action),
+        _ => {
+            eprintln!(
+                "habitat-engine: usage: habitat-engine serve | habitat-engine <action-id> < request"
+            );
+            ExitCode::from(EXIT_USAGE)
+        }
+    }
+}
+
+fn now_unix_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |elapsed| {
+            u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX)
+        })
+}
+
+fn socket_path() -> Result<PathBuf, control_socket::Error> {
+    let root = control_socket::runtime_root(std::env::var_os("XDG_RUNTIME_DIR").as_deref())?;
+    Ok(root.join(RUNTIME_DIRECTORY).join(SOCKET_NAME))
+}
+
+/// `habitat-engine serve`: bind IPC01 and serve it until killed. A stale socket left by a killed
+/// engine is cleared at the next start; a live one refuses the start.
+fn serve() -> ExitCode {
+    let bound = control_socket::runtime_root(std::env::var_os("XDG_RUNTIME_DIR").as_deref())
+        .and_then(|root| control_socket::prepare(&root))
+        .and_then(|socket| control_socket::bind(&socket).map(|listener| (socket, listener)));
+    let (socket, listener) = match bound {
+        Ok(bound) => bound,
+        Err(error) => {
+            eprintln!("habitat-engine: control socket refused: {error:?}");
+            return ExitCode::from(EXIT_CONTRACT);
+        }
+    };
+    let Some(home) = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .filter(|home| home.is_absolute())
+    else {
+        eprintln!("habitat-engine: HOME is unset or relative");
+        return ExitCode::from(EXIT_USAGE);
+    };
+    let directory = home.join(GRANTS_DIRECTORY);
+    let store: Box<dyn Grants> = match FileGrants::open(&directory) {
+        Ok(store) => Box::new(store),
+        Err(grants::Error::Io(error)) if error.kind() == io::ErrorKind::NotFound => {
+            eprintln!(
+                "habitat-engine: no grant directory at {}; every request is refused forbidden",
+                directory.display()
+            );
+            Box::new(NoGrants)
+        }
+        Err(error) => {
+            eprintln!("habitat-engine: grant directory refused: {error:?}");
+            return ExitCode::from(EXIT_CONTRACT);
+        }
+    };
+    eprintln!("habitat-engine: serving {}", socket.display());
+    let mut report = |line: &str| eprintln!("habitat-engine: {line}");
+    match control_socket::run(&listener, store.as_ref(), &now_unix_ms, &mut report) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("habitat-engine: accept failed: {error}");
+            ExitCode::from(EXIT_CONTRACT)
+        }
+    }
+}
+
+/// `habitat-engine <action-id> < request`: the wrapper's producer. Sends the request's exact
+/// bytes as one frame and prints the one record the engine answers with.
+fn request(action: &str) -> ExitCode {
+    let mut payload = Vec::new();
+    let limit = u64::try_from(MAX_FRAME_BYTES).unwrap_or(u64::MAX) + 2;
+    if io::stdin().take(limit).read_to_end(&mut payload).is_err() {
+        eprintln!("habitat-engine: stdin unreadable");
+        return ExitCode::from(EXIT_BOUNDS);
+    }
+    if payload.last() == Some(&b'\n') {
+        payload.pop();
+    }
+    if payload.len() > MAX_FRAME_BYTES || payload.contains(&b'\n') {
+        eprintln!("habitat-engine: the request is not one frame of at most 1048576 bytes");
+        return ExitCode::from(EXIT_BOUNDS);
+    }
+    let named = serde_json::from_slice::<serde_json::Value>(&payload)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("action")
+                .and_then(|name| name.as_str().map(str::to_owned))
+        });
+    if named.as_deref() != Some(action) {
+        eprintln!("habitat-engine: the request does not name action {action}");
+        return ExitCode::from(EXIT_USAGE);
+    }
+    let stream = match socket_path()
+        .map_err(|error| format!("{error:?}"))
+        .and_then(|path| {
+            UnixStream::connect(&path).map_err(|error| format!("{}: {error}", path.display()))
+        }) {
+        Ok(stream) => stream,
+        Err(error) => {
+            eprintln!("habitat-engine: no engine is serving: {error}");
+            return ExitCode::from(EXIT_NO_ENGINE);
+        }
+    };
+    payload.push(b'\n');
+    let sent = stream
+        .set_write_timeout(Some(WRITE_TIMEOUT))
+        .and_then(|()| stream.set_read_timeout(Some(IDLE_TIMEOUT)))
+        .and_then(|()| (&stream).write_all(&payload))
+        .and_then(|()| stream.shutdown(std::net::Shutdown::Write));
+    if let Err(error) = sent {
+        eprintln!("habitat-engine: the request could not be sent: {error}");
+        return ExitCode::from(timeout_or(&error, EXIT_CONTRACT));
+    }
+    match FrameReader::new(&stream).next_frame() {
+        Ok(Some(mut record)) => {
+            record.push(b'\n');
+            if io::stdout().write_all(&record).is_err() {
+                return ExitCode::from(EXIT_CONTRACT);
+            }
+            ExitCode::SUCCESS
+        }
+        Ok(None) => {
+            eprintln!("habitat-engine: the engine closed without a reply (the frame was refused)");
+            ExitCode::from(EXIT_CONTRACT)
+        }
+        Err(ReadError::Fault(fault)) => {
+            eprintln!("habitat-engine: the reply broke framing: {}", fault.name());
+            ExitCode::from(EXIT_CONTRACT)
+        }
+        Err(ReadError::Io(error)) => {
+            eprintln!("habitat-engine: the reply could not be read: {error}");
+            ExitCode::from(timeout_or(&error, EXIT_CONTRACT))
+        }
+    }
+}
+
+fn timeout_or(error: &io::Error, otherwise: u8) -> u8 {
+    match error.kind() {
+        io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut => EXIT_TIMEOUT,
+        _ => otherwise,
+    }
 }
 
 fn arguments() -> Result<Vec<String>, ()> {

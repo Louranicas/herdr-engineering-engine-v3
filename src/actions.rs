@@ -324,7 +324,10 @@
 //! `schematic_atlas.actions`. `tests/t28_actions.rs` reads that file and compares it entry
 //! by entry: the table is checked against the artefact that declares it, not against itself.
 
+use crate::contracts::control::ResourceKind;
 use std::fmt;
+
+pub mod control;
 
 /// The number of declared actions. A projection that gains or loses one is a visible change.
 pub const DECLARED_ACTIONS: usize = 21;
@@ -440,6 +443,27 @@ impl Effect {
         }
     }
 
+    /// The effect's class on the control wire: `ActionEffectV1` in
+    /// `schemas/actions/control-v1.schema.json`, which `tools.list` and `tools.inspect` results
+    /// carry. The plan spine names ten effects; the wire has nine coarse classes, so this is a
+    /// projection, and the one place it is made (review N2: the two vocabularies differed and no
+    /// test tied them). Recording a disposition is a durable ledger write, so it projects to
+    /// `durable` rather than widening a published wire vocabulary no consumer asked for.
+    #[must_use]
+    pub const fn wire_class(self) -> &'static str {
+        match self {
+            Self::Read => "read",
+            Self::ReadStream => "stream",
+            Self::ReadOnlyPlanning => "planning",
+            Self::DurableAdmission | Self::RecordDisposition => "durable",
+            Self::CancelIntent => "cancel",
+            Self::ConfigurationMutation => "configuration",
+            Self::BoundedProbe => "probe",
+            Self::ManagedLifecycle => "lifecycle",
+            Self::BoundedAnalysis => "analysis",
+        }
+    }
+
     /// Every effect.
     pub const ALL: [Self; 10] = [
         Self::Read,
@@ -492,6 +516,39 @@ pub struct Action {
     pub tool: Option<&'static str>,
     /// The capability a caller must hold, as the plan spine states it.
     pub capability: &'static str,
+    /// What the action is for, as `tools.list` and `tools.inspect` advertise it (UTF-8,
+    /// 1..=256 bytes). The plan spine states none, so this is the catalogue's own text; it is a
+    /// description and authorises nothing.
+    pub purpose: &'static str,
+    /// What the control envelope's `precondition` must be for this action.
+    pub precondition: PreconditionRule,
+}
+
+/// What an action requires of a request's generation precondition (RC03 §4): mutations of
+/// existing state name the exact generation they expect; creation and pure reads name none.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PreconditionRule {
+    /// `precondition` must be `null`.
+    Forbidden,
+    /// `null`, or a precondition on this kind of resource.
+    Optional(ResourceKind),
+    /// A precondition on this kind of resource.
+    Required(ResourceKind),
+}
+
+impl Action {
+    /// The declared version as the control wire carries it (`action_version`, an integer):
+    /// the leading number of the spine's spelling, `"1 (proposed)"` → `Some(1)`. `None` for a
+    /// spelling with no leading number, which `tests/t28_actions.rs` refuses for every action.
+    #[must_use]
+    pub fn wire_version(&self) -> Option<u32> {
+        let digits = self
+            .version
+            .split(|c: char| !c.is_ascii_digit())
+            .next()
+            .filter(|lead| !lead.is_empty())?;
+        digits.parse().ok()
+    }
 }
 
 /// Every declared action, projected from the plan spine.
@@ -504,6 +561,8 @@ pub const CATALOGUE: [Action; DECLARED_ACTIONS] = [
         cli: "habitat-engine tools list --json",
         tool: Some("habitat_tools_list"),
         capability: "visible actions only",
+        purpose: "List the actions visible to the caller",
+        precondition: PreconditionRule::Forbidden,
     },
     Action {
         id: "tools.inspect",
@@ -513,6 +572,8 @@ pub const CATALOGUE: [Action; DECLARED_ACTIONS] = [
         cli: "habitat-engine tools inspect <action-id> --json",
         tool: Some("habitat_tools_inspect"),
         capability: "visible action only",
+        purpose: "Describe one action's contract: schemas, bounds and readback route",
+        precondition: PreconditionRule::Forbidden,
     },
     Action {
         id: "task.preview",
@@ -522,6 +583,8 @@ pub const CATALOGUE: [Action; DECLARED_ACTIONS] = [
         cli: "habitat-engine task preview --file <spec.json> --json",
         tool: Some("habitat_task_preview"),
         capability: "task preview within caller scope",
+        purpose: "Preview which recipes could run a task specification, without admitting it",
+        precondition: PreconditionRule::Optional(ResourceKind::Task),
     },
     Action {
         id: "task.submit",
@@ -531,6 +594,8 @@ pub const CATALOGUE: [Action; DECLARED_ACTIONS] = [
         cli: "habitat-engine task submit --file <spec.json> --json",
         tool: Some("habitat_task_submit"),
         capability: "root submission or bounded child allocation",
+        purpose: "Admit a task durably under an idempotency key",
+        precondition: PreconditionRule::Forbidden,
     },
     Action {
         id: "task.get",
@@ -540,6 +605,8 @@ pub const CATALOGUE: [Action; DECLARED_ACTIONS] = [
         cli: "habitat-engine task inspect <id> --json OR task inspect --request-key <key> --json",
         tool: Some("habitat_task_get"),
         capability: "task visibility for actual principal",
+        purpose: "Read one task's state, attempts, cleanup and delivery",
+        precondition: PreconditionRule::Optional(ResourceKind::Task),
     },
     Action {
         id: "task.list",
@@ -549,6 +616,8 @@ pub const CATALOGUE: [Action; DECLARED_ACTIONS] = [
         cli: "habitat-engine task list --json",
         tool: Some("habitat_task_list"),
         capability: "scoped visible tasks",
+        purpose: "List visible tasks by state, class or parent",
+        precondition: PreconditionRule::Optional(ResourceKind::Task),
     },
     Action {
         id: "task.cancel",
@@ -558,6 +627,8 @@ pub const CATALOGUE: [Action; DECLARED_ACTIONS] = [
         cli: "habitat-engine task cancel <id> --json",
         tool: Some("habitat_task_cancel"),
         capability: "cancellation grant for target",
+        purpose: "Record an intent to cancel a task at an expected generation",
+        precondition: PreconditionRule::Required(ResourceKind::Task),
     },
     Action {
         id: "task.resolve",
@@ -567,6 +638,8 @@ pub const CATALOGUE: [Action; DECLARED_ACTIONS] = [
         cli: "habitat-engine task resolve <id> --file <disposition.json> --json",
         tool: None,
         capability: "operator only",
+        purpose: "Record an operator disposition for a task's unresolved obligation",
+        precondition: PreconditionRule::Required(ResourceKind::Task),
     },
     Action {
         id: "thread.get",
@@ -576,6 +649,8 @@ pub const CATALOGUE: [Action; DECLARED_ACTIONS] = [
         cli: "habitat-engine thread inspect <id> --json",
         tool: Some("habitat_thread_get"),
         capability: "thread/task visibility",
+        purpose: "Read one specialist thread with its obligations, children and artifacts",
+        precondition: PreconditionRule::Optional(ResourceKind::Thread),
     },
     Action {
         id: "thread.list",
@@ -585,6 +660,8 @@ pub const CATALOGUE: [Action; DECLARED_ACTIONS] = [
         cli: "habitat-engine thread list --json",
         tool: Some("habitat_thread_list"),
         capability: "thread/task visibility",
+        purpose: "List visible specialist threads",
+        precondition: PreconditionRule::Optional(ResourceKind::Thread),
     },
     Action {
         id: "roster.list",
@@ -594,6 +671,8 @@ pub const CATALOGUE: [Action; DECLARED_ACTIONS] = [
         cli: "habitat-engine roster list --kind <kind> --json",
         tool: Some("habitat_roster_list"),
         capability: "visible profile/instance/service records",
+        purpose: "List agent, model and service roster records",
+        precondition: PreconditionRule::Optional(ResourceKind::Roster),
     },
     Action {
         id: "roster.inspect",
@@ -603,6 +682,8 @@ pub const CATALOGUE: [Action; DECLARED_ACTIONS] = [
         cli: "habitat-engine roster inspect <id> --json",
         tool: Some("habitat_roster_inspect"),
         capability: "visible record",
+        purpose: "Read one roster record and its last operation",
+        precondition: PreconditionRule::Optional(ResourceKind::Roster),
     },
     Action {
         id: "roster.update",
@@ -612,6 +693,8 @@ pub const CATALOGUE: [Action; DECLARED_ACTIONS] = [
         cli: "habitat-engine roster update <id> --file <record.json> --json",
         tool: None,
         capability: "operator only",
+        purpose: "Create or update a roster record",
+        precondition: PreconditionRule::Optional(ResourceKind::Roster),
     },
     Action {
         id: "roster.disable",
@@ -621,6 +704,8 @@ pub const CATALOGUE: [Action; DECLARED_ACTIONS] = [
         cli: "habitat-engine roster disable <id> --json",
         tool: None,
         capability: "operator only",
+        purpose: "Disable a roster record and decide what happens to its active attempts",
+        precondition: PreconditionRule::Required(ResourceKind::Roster),
     },
     Action {
         id: "service.inspect",
@@ -630,6 +715,8 @@ pub const CATALOGUE: [Action; DECLARED_ACTIONS] = [
         cli: "habitat-engine service inspect <id> --json",
         tool: Some("habitat_service_inspect"),
         capability: "visible registered service",
+        purpose: "Read a habitat service's cached health and lifecycle operation",
+        precondition: PreconditionRule::Optional(ResourceKind::Service),
     },
     Action {
         id: "service.probe",
@@ -639,6 +726,8 @@ pub const CATALOGUE: [Action; DECLARED_ACTIONS] = [
         cli: "habitat-engine service probe <id> --json",
         tool: Some("habitat_service_probe"),
         capability: "specific approved probe capability",
+        purpose: "Run one bounded, declared probe of a habitat service",
+        precondition: PreconditionRule::Optional(ResourceKind::Service),
     },
     Action {
         id: "service.action",
@@ -648,6 +737,8 @@ pub const CATALOGUE: [Action; DECLARED_ACTIONS] = [
         cli: "habitat-engine service action <id> <action> --json",
         tool: Some("habitat_service_action"),
         capability: "specific service/action grant",
+        purpose: "Start, stop, restart or reload a managed habitat service",
+        precondition: PreconditionRule::Required(ResourceKind::Service),
     },
     Action {
         id: "analysis.request",
@@ -657,6 +748,8 @@ pub const CATALOGUE: [Action; DECLARED_ACTIONS] = [
         cli: "habitat-engine analysis request --dataset <id> --recipe <id> --json",
         tool: Some("habitat_analysis_request"),
         capability: "analysis grant + resource allocation",
+        purpose: "Request bounded descriptive analysis of an evidence dataset",
+        precondition: PreconditionRule::Optional(ResourceKind::Analysis),
     },
     Action {
         id: "analysis.get",
@@ -666,6 +759,8 @@ pub const CATALOGUE: [Action; DECLARED_ACTIONS] = [
         cli: "habitat-engine analysis inspect <id> --json OR analysis inspect --request-key <key> --json",
         tool: Some("habitat_analysis_get"),
         capability: "analysis/task visibility",
+        purpose: "Read one analysis request's state and report",
+        precondition: PreconditionRule::Optional(ResourceKind::Analysis),
     },
     Action {
         id: "events.subscribe",
@@ -675,6 +770,8 @@ pub const CATALOGUE: [Action; DECLARED_ACTIONS] = [
         cli: "habitat-engine events follow [--cursor <cursor>] --json",
         tool: None,
         capability: "filtered event visibility",
+        purpose: "Subscribe to committed engine events from a durable cursor",
+        precondition: PreconditionRule::Forbidden,
     },
     Action {
         id: "health",
@@ -684,6 +781,8 @@ pub const CATALOGUE: [Action; DECLARED_ACTIONS] = [
         cli: "habitat-engine health --json",
         tool: None,
         capability: "trusted operator health",
+        purpose: "Report engine readiness, recovery, database and socket state",
+        precondition: PreconditionRule::Forbidden,
     },
 ];
 
@@ -832,13 +931,43 @@ impl Catalogue {
     /// [`Refusal::PageTooWide`] beyond [`MAX_PAGE`], refused before any entry is copied;
     /// [`Refusal::PageOutOfRange`] for a token past the end.
     pub fn list(caller: &Caller, from: usize, limit: usize) -> Result<Page, Refusal> {
+        Self::page(caller, None, from, limit)
+    }
+
+    /// The visible actions whose identity contains `query`, resuming after the action named
+    /// `after` — the listing `tools.list` serves. Visibility is the same door as [`Self::list`].
+    ///
+    /// # Errors
+    ///
+    /// [`Refusal::PageTooWide`] beyond [`MAX_PAGE`]; [`Refusal::PageOutOfRange`] when `after`
+    /// names no action in this caller's filtered listing.
+    pub fn search(
+        caller: &Caller,
+        query: Option<&str>,
+        after: Option<&str>,
+        limit: usize,
+    ) -> Result<Page, Refusal> {
+        let from = match after {
+            None => 0,
+            Some(key) => visible(caller, query)
+                .iter()
+                .position(|action| action.id == key)
+                .map(|at| at + 1)
+                .ok_or(Refusal::PageOutOfRange)?,
+        };
+        Self::page(caller, query, from, limit)
+    }
+
+    fn page(
+        caller: &Caller,
+        query: Option<&str>,
+        from: usize,
+        limit: usize,
+    ) -> Result<Page, Refusal> {
         if limit > MAX_PAGE {
             return Err(Refusal::PageTooWide);
         }
-        let visible: Vec<Action> = CATALOGUE
-            .into_iter()
-            .filter(|action| caller.sees(action.owner))
-            .collect();
+        let visible = visible(caller, query);
         if from > visible.len() {
             return Err(Refusal::PageOutOfRange);
         }
@@ -898,4 +1027,13 @@ impl Catalogue {
             .find(|action| action.id == id)
             .ok_or(Refusal::UnknownAction)
     }
+}
+
+/// The actions `caller` may see whose identity contains `query`, in catalogue order.
+fn visible(caller: &Caller, query: Option<&str>) -> Vec<Action> {
+    CATALOGUE
+        .into_iter()
+        .filter(|action| caller.sees(action.owner))
+        .filter(|action| query.is_none_or(|query| action.id.contains(query)))
+        .collect()
 }

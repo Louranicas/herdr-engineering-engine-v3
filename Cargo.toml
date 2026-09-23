@@ -2452,7 +2452,7 @@ debug = "line-tables-only"
 serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = { version = "=1.0.151", features = ["float_roundtrip"] }
 rusqlite = { version = "=0.40.2", default-features = false, features = ["backup", "modern_sqlite", "hooks"] }
-rustix = { version = "=1.1.4", features = ["fs", "process", "rand", "event"] }
+rustix = { version = "=1.1.4", features = ["fs", "process", "rand", "event", "net"] }
 sha2 = "=0.11.0"
 
 [[test]]

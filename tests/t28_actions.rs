@@ -20,6 +20,14 @@ use habitat_engine::actions::{
 };
 use serde_json::Value;
 
+/// The HEE3-Control/1 receiver's cases: the catalogue served over the wire.
+#[path = "t28_control.rs"]
+mod control;
+
+/// IPC01: the socket, its custody, the peer principal, the grant store and the binary.
+#[path = "t28_socket.rs"]
+mod socket;
+
 type Outcome = Result<(), Box<dyn Error>>;
 
 /// The plan spine's own action list — the independent source these cases compare against.
@@ -1161,4 +1169,67 @@ fn tool_name_uniqueness_is_a_property_of_the_catalogue() -> Result<(), Box<dyn E
         assert_eq!(distinct_tool_names(&[*unnamed, *unnamed]), Ok(()));
     }
     Ok(())
+}
+
+/// Review N2: the Rust catalogue and the control-v1 schema describe the same actions, and one
+/// test now ties them. The wire classes the Rust effects project to are exactly the schema's
+/// `ActionEffectV1` enum (every class reached, none invented), every declared action has a
+/// request definition, and each action's wire version is that definition's `action_version`.
+#[test]
+fn the_catalogue_projects_exactly_onto_the_control_schema() -> Result<(), Box<dyn Error>> {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("schemas/actions/control-v1.schema.json");
+    let schema: serde_json::Value = serde_json::from_str(&fs::read_to_string(&path)?)?;
+    let defs = &schema["$defs"];
+    let wire: std::collections::BTreeSet<&str> = defs["ActionEffectV1"]["enum"]
+        .as_array()
+        .ok_or("ActionEffectV1 has no enum")?
+        .iter()
+        .filter_map(serde_json::Value::as_str)
+        .collect();
+    let projected: std::collections::BTreeSet<&str> = Effect::ALL
+        .iter()
+        .map(|effect| effect.wire_class())
+        .collect();
+    assert_eq!(
+        projected, wire,
+        "the effect projection and the wire vocabulary differ"
+    );
+    for action in Catalogue::all() {
+        let name = format!("Request_{}", action.id.replace('.', "_"));
+        let declared = defs[&name]["properties"]["action_version"]["const"].as_u64();
+        assert!(
+            declared.is_some(),
+            "{} has no request definition",
+            action.id
+        );
+        assert_eq!(
+            action.wire_version().map(u64::from),
+            declared,
+            "{}: spine version {:?}",
+            action.id,
+            action.version
+        );
+    }
+    Ok(())
+}
+
+/// The wire version is read, not assumed: every live action is version 1, so a projection that
+/// answered 1 regardless would pass the schema tie above. Pinned off that value (F129).
+#[test]
+fn the_wire_version_is_parsed_from_the_spelling() {
+    let base = Catalogue::all()[0];
+    for (spelling, wire) in [
+        ("2 (proposed)", Some(2)),
+        ("12", Some(12)),
+        ("1 (proposed)", Some(1)),
+        ("(proposed)", None),
+        ("v1", None),
+    ] {
+        let action = Action {
+            version: spelling,
+            ..base
+        };
+        assert_eq!(action.wire_version(), wire, "{spelling:?}");
+    }
 }

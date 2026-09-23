@@ -508,6 +508,30 @@ class Envelope(WrapperCase):
                               "idempotency_key", "authority", "precondition", "body"):
                     self.assertEqual(got[field], want[field], field)
 
+    def test_every_request_is_one_compact_frame_as_rc03_requires(self):
+        # RC03 section 3: exactly one compact UTF-8 object and one LF; whitespace outside a
+        # string closes the frame unanswered. json.dump's default separators put a space after
+        # every comma and colon, and the engine's receiver refused every wrapper request for it.
+        for case in self.cases:
+            want = case["request"]
+            with self.subTest(action=case["action"]):
+                result = self.run_wrapper("--check", case["action"], *self.argv_for(want),
+                                          env=self.authority_env(want))
+                self.assertEqual(result.returncode, 0, result.stderr)
+                raw = result.stdout
+                self.assertEqual(raw.count("\n"), 1)
+                self.assertTrue(raw.endswith("\n"))
+                compact = json.dumps(json.loads(raw), sort_keys=True, ensure_ascii=False,
+                                     separators=(",", ":"))
+                self.assertEqual(raw[:-1], compact)
+        # Compact outside strings only: a value's own spaces and non-ASCII are data, untouched.
+        env = self.authority_env(self.cases[0]["request"])
+        result = self.run_wrapper("--check", "tools.list", "query=a b, c: \u00e9",
+                                  'page:={"limit": 2, "cursor": null}', env=env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('"body":{"page":{"cursor":null,"limit":2},"query":"a b, c: \u00e9"}',
+                      result.stdout)
+
     def test_each_request_carries_a_fresh_request_id(self):
         env = self.authority_env(self.cases[0]["request"])
         first, second = (self.check("health", env=env)["request_id"] for _ in range(2))

@@ -452,6 +452,12 @@ impl Principal {
             role: role.to_owned(),
         })
     }
+    /// Whether this is the principal with `uid` and the configured `role`: how a record naming
+    /// its principal (a grant) is matched without exposing either field.
+    #[must_use]
+    pub fn is(&self, uid: u32, role: &str) -> bool {
+        self.uid == uid && self.role == role
+    }
     fn recipient(&self) -> String {
         format!("{}:{}", self.uid, self.role)
     }

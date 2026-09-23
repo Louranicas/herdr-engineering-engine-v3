@@ -378,3 +378,5 @@ pub mod receipt;
 
 /// Closed event cursor selectors; parsing never grants replay authority.
 pub mod events;
+
+pub mod control;

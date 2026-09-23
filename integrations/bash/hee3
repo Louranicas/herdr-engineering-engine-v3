@@ -228,7 +228,10 @@ request = {
     "precondition": envelope.get("precondition"),
     "body": body,
 }
-json.dump(request, sys.stdout, sort_keys=True, ensure_ascii=False, allow_nan=False)
+# RC03 section 3: one COMPACT object. json.dump's default separators add a space after every
+# comma and colon, and a strict receiver closes such a frame without a reply.
+json.dump(request, sys.stdout, sort_keys=True, ensure_ascii=False, allow_nan=False,
+          separators=(",", ":"))
 sys.stdout.write("\n")
 PY
 }
