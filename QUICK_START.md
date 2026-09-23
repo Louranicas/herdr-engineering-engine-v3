@@ -1,7 +1,7 @@
 # Herdr Engineering Engine v3 — quick start
 
 <!-- HEE3-RESUME-NAVIGATION-BEGIN -->
-[Current saved restart — 22 of 22 modules carry code, 2026-09-23](file:///var/home/Louranicas/handoffs/HEE3_RESTART_20260923.md) ↔ this quick start. This is the latest saved implementation checkpoint; its pending publication and exact evidence supersede older restart-status prose.
+[Current saved restart — module completion review and route to done, 2026-09-23](file:///var/home/Louranicas/handoffs/HEE3_RESTART_20260923_NIGHT.md) ↔ this quick start. This is the latest saved implementation checkpoint; its pending publication and exact evidence supersede older restart-status prose.
 
 [Complete useful-skill route and Jev boundaries](file:///var/home/Louranicas/handoffs/HEE3_RESTART_20260921.md) — [context-handoff](file:///var/home/Louranicas/.codex/skills/context-handoff/SKILL.md), [prime](file:///var/home/Louranicas/.codex/skills/prime/SKILL.md), [consolidate-and-code](file:///var/home/Louranicas/.codex/skills/consolidate-and-code/SKILL.md), [hee-module-scout](file:///var/home/Louranicas/.codex/skills/hee-module-scout/SKILL.md), [habitat-context](file:///var/home/Louranicas/.codex/skills/habitat-context/SKILL.md), [planwright](file:///var/home/Louranicas/.codex/skills/planwright/SKILL.md), [hee-v3-corpus](file:///var/home/Louranicas/.claude/skills/hee-v3-corpus/SKILL.md), [claim-discipline](file:///var/home/Louranicas/.claude/skills/claim-discipline/SKILL.md), [cli-ground-truth](file:///var/home/Louranicas/.claude/skills/cli-ground-truth/SKILL.md), [kinoite-containers](file:///var/home/Louranicas/.claude/skills/kinoite-containers/SKILL.md), [vault-mining](file:///var/home/Louranicas/.claude/skills/vault-mining/SKILL.md), [corpus-recon](file:///var/home/Louranicas/.claude/skills/corpus-recon/SKILL.md), [layer-trace](file:///var/home/Louranicas/.claude/skills/layer-trace/SKILL.md), [workspace-cluster](file:///var/home/Louranicas/.claude/skills/workspace-cluster/SKILL.md), [habitat-ops](file:///var/home/Louranicas/.claude/skills/habitat-ops/SKILL.md).
 
@@ -10,7 +10,7 @@ Jev: [Jev master index](file:///var/mnt/STORAGE-10TB/fedora-obsidian-vaults/jev.
 
 **Start with the corpus tools, current handoff and module contracts. All 22 module boundaries remain unaccepted.** Inspect source bodies and the evidence index for comment stubs and substantive candidates. The handoff records original task progress and candidate evidence limits; no qualified coordinator, routing service or installed migration is supplied by corpus publication.
 
-[Detailed session restart — 2026-09-23](file:///var/home/Louranicas/handoffs/HEE3_RESTART_20260923.md) ↔ this quick start. Use the detailed checkpoint for the saved implementation state, exact evidence and immediate next action; revalidate it before resuming.
+[Detailed session restart — 2026-09-23](file:///var/home/Louranicas/handoffs/HEE3_RESTART_20260923_NIGHT.md) ↔ this quick start. Use the detailed checkpoint for the saved implementation state, exact evidence and immediate next action; revalidate it before resuming.
 
 [Codebase README](file:///var/home/herdr-engineering-engine-v3/README.md) · [Vault master](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=00%20-%20Master%20Index) · [Atlas master](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Atlas%2FMASTER_INDEX_habitat_engine) · [Ultra map](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Ultra%20Map%2FIndex)
 

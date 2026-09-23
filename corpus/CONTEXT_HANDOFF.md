@@ -8,7 +8,7 @@ Engine coding is not authorized until human operator Luke types start coding as 
 
 ## Latest detailed session checkpoint
 
-[Detailed session restart — 2026-09-23](file:///var/home/Louranicas/handoffs/HEE3_RESTART_20260923.md) ↔ [QUICK_START.md](file:///var/home/herdr-engineering-engine-v3/QUICK_START.md). Read that checkpoint first for the current private candidate, exact evidence, ownership, host-path correction and next action. It supersedes older session observations in this generated overview where explicitly stated; the original task ledger and acceptance contracts retain authority. The ledger below is the authority on task state, not this sentence: read it rather than any count written into prose here.
+[Detailed session restart — 2026-09-23](file:///var/home/Louranicas/handoffs/HEE3_RESTART_20260923_NIGHT.md) ↔ [QUICK_START.md](file:///var/home/herdr-engineering-engine-v3/QUICK_START.md). Read that checkpoint first for the current private candidate, exact evidence, ownership, host-path correction and next action. It supersedes older session observations in this generated overview where explicitly stated; the original task ledger and acceptance contracts retain authority. The ledger below is the authority on task state, not this sentence: read it rather than any count written into prose here.
 
 ## Current original-task ledger
 
