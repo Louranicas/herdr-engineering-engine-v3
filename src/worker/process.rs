@@ -824,12 +824,16 @@ impl Census {
                 Mode::empty(),
             ) {
                 Ok(fd) => fd,
-                Err(rustix::io::Errno::NOENT) => continue,
+                Err(error) if exited_during_census(Some(error.raw_os_error())) => continue,
                 Err(_) => return Err(ScanError::Io),
             };
             check_scan_budget(deadline, cancelled)?;
             let mut bytes = [0_u8; 4097];
-            let size = File::from(fd).read(&mut bytes).map_err(|_| ScanError::Io)?;
+            let size = match File::from(fd).read(&mut bytes) {
+                Ok(size) => size,
+                Err(error) if exited_during_census(error.raw_os_error()) => continue,
+                Err(_) => return Err(ScanError::Io),
+            };
             check_scan_budget(deadline, cancelled)?;
             if size == 0 || size == bytes.len() {
                 return Err(ScanError::Io);
@@ -841,6 +845,24 @@ impl Census {
         Ok(GroupState::Unknown)
     }
 }
+/// Whether a failed `/proc/<pid>/stat` open or read means only that the process exited
+/// between the census listing it and reading it: `ENOENT` at the open, `ESRCH` at the open or
+/// at a read on a descriptor opened while it was alive. Such a process is not a member of the
+/// group -- it is gone -- and the census moves on.
+///
+/// Every other errno is an unobserved census. Before this, `ESRCH` on the read was reported
+/// as I/O failure, so ANY process on the machine exiting in that window turned a clean
+/// exchange into `Interruption::WaitError`: `t08_contract` failed about one run in four under
+/// load, on whichever case's exchange lost the race. Pure, so it is reachable by argument
+/// rather than only by arranging a process to die mid-census (F95).
+#[must_use]
+pub fn exited_during_census(raw_os_error: Option<i32>) -> bool {
+    raw_os_error.is_some_and(|code| {
+        code == rustix::io::Errno::NOENT.raw_os_error()
+            || code == rustix::io::Errno::SRCH.raw_os_error()
+    })
+}
+
 fn stat_is_live(bytes: &[u8], group: Pid) -> Result<bool, ScanError> {
     // Process comm may be arbitrary non-UTF8 bytes and contain ') '. Split at the
     // final delimiter, then parse only the kernel-authored ASCII suffix.

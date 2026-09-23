@@ -131,16 +131,14 @@ pub fn live_read(pid: u32, deadline: Instant) -> LiveRead {
     }
     let stat = match read_stat(pid) {
         Ok(text) => text,
-        Err(error) if gone(&error) => return LiveRead::Absent,
-        Err(error) => return LiveRead::Unreadable(format!("stat: {error}")),
+        Err(error) => return proc_read_failure(&error, "stat"),
     };
     let Some((state, start_ticks)) = parse_stat(&stat) else {
         return LiveRead::Unreadable("malformed stat".into());
     };
     let namespace = match fs::read_link(format!("/proc/{pid}/ns/pid")) {
         Ok(link) => link,
-        Err(error) if gone(&error) => return LiveRead::Absent,
-        Err(error) => return LiveRead::Unreadable(format!("ns: {error}")),
+        Err(error) => return proc_read_failure(&error, "ns"),
     };
     let Some(namespace) = namespace.to_str() else {
         return LiveRead::Unreadable("non-UTF-8 namespace link".into());
@@ -162,6 +160,43 @@ pub fn live_read(pid: u32, deadline: Instant) -> LiveRead {
 pub fn gone(error: &io::Error) -> bool {
     error.kind() == io::ErrorKind::NotFound
         || error.raw_os_error() == Some(rustix::io::Errno::SRCH.raw_os_error())
+}
+
+/// What one failed `/proc` read means for [`live_read`]: absent when the process is
+/// [`gone`], otherwise unreadable with the read named. The whole decision, extracted from
+/// the shell so each outcome is reachable by argument (F95): as match guards inside
+/// `live_read` they could be replaced by `true` or `false` with no test able to notice,
+/// because only an arranged `/proc` entry reaches the non-gone branch.
+#[must_use]
+pub fn proc_read_failure(error: &io::Error, what: &str) -> LiveRead {
+    if gone(error) {
+        LiveRead::Absent
+    } else {
+        LiveRead::Unreadable(format!("{what}: {error}"))
+    }
+}
+
+/// What one `symlink_metadata` read says about a path.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Presence {
+    /// The path exists.
+    Present,
+    /// `ENOENT`: the path is not there.
+    Absent,
+    /// Any other failure: the read did not happen, so nothing is known.
+    Unreadable,
+}
+
+/// Classify one path read. Only `NotFound` is absence; every other error is an unread
+/// path, never a released one -- reporting a permission failure as absence would settle a
+/// cleanup from a read that never happened. Pure, so each arm is reachable by argument.
+#[must_use]
+pub fn presence(read: &io::Result<()>) -> Presence {
+    match read {
+        Ok(()) => Presence::Present,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Presence::Absent,
+        Err(_) => Presence::Unreadable,
+    }
 }
 
 fn read_stat(pid: u32) -> io::Result<String> {
@@ -409,22 +444,22 @@ impl Physical for Host {
         let Some(path) = self.workspaces.get(subject.attempt) else {
             return CleanupReadback::NotRead;
         };
-        match fs::symlink_metadata(path) {
-            Ok(_) => CleanupReadback::Partial {
+        match presence(&fs::symlink_metadata(path).map(|_| ())) {
+            Presence::Present => CleanupReadback::Partial {
                 remaining: vec!["workspace".into()],
             },
-            Err(error) if error.kind() == io::ErrorKind::NotFound => CleanupReadback::Complete,
-            Err(_) => CleanupReadback::NotRead,
+            Presence::Absent => CleanupReadback::Complete,
+            Presence::Unreadable => CleanupReadback::NotRead,
         }
     }
     fn workspace(&mut self, subject: &Subject<'_>) -> WorkspaceReadback {
         let Some(path) = self.workspaces.get(subject.attempt) else {
             return WorkspaceReadback::NotRead;
         };
-        match fs::symlink_metadata(path) {
-            Err(error) if error.kind() == io::ErrorKind::NotFound => WorkspaceReadback::Released,
-            Err(_) => WorkspaceReadback::NotRead,
-            Ok(_) => {
+        match presence(&fs::symlink_metadata(path).map(|_| ())) {
+            Presence::Absent => WorkspaceReadback::Released,
+            Presence::Unreadable => WorkspaceReadback::NotRead,
+            Presence::Present => {
                 if owned_private_dir(path).is_err() {
                     return WorkspaceReadback::NotRead;
                 }
@@ -711,6 +746,11 @@ impl From<serde_json::Error> for Error {
 
 // ---- the pass ------------------------------------------------------------------------------
 
+/// Everything one read of the ledger returns. Compared WHOLE between the inspection read
+/// and the action read, by the derived equality: a field-by-field `||` chain let mutation
+/// shard C weaken either link to `&&` unnoticed, and would have silently skipped any field
+/// added here later. The derive cannot forget one.
+#[derive(PartialEq)]
 struct Inspected {
     inventory: RecoveryInventory,
     ordinals: BTreeMap<String, TerminalOrdinals>,
@@ -774,11 +814,7 @@ pub fn run(startup: &Startup<'_>, physical: &mut dyn Physical) -> Result<Pass, E
                 false,
                 startup.deadline,
             )?;
-            let again = read(&mut store, startup)?;
-            if again.inventory != inspected.inventory
-                || again.ordinals != inspected.ordinals
-                || again.evidence != inspected.evidence
-            {
+            if read(&mut store, startup)? != inspected {
                 return Err(Error::Changed);
             }
             Some(store)

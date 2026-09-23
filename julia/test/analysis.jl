@@ -246,8 +246,9 @@ end
 const C01 = read(joinpath(@__DIR__, "../../tests/fixtures/t22/C01.json"))
 const C02 = read(joinpath(@__DIR__, "../../tests/fixtures/t22/C02.json"))
 const C_NOW = UInt64(1_769_999_500_000)
-oracle(name) =
-    JSON3.read(read(joinpath(@__DIR__, "../../tests/fixtures/t22/$name-known-answers.json"), String))
+oracle(name) = JSON3.read(
+    read(joinpath(@__DIR__, "../../tests/fixtures/t22/$name-known-answers.json"), String),
+)
 
 """Assert one report field-for-field against answers computed outside this language.
 
@@ -258,7 +259,16 @@ leaves `overlapping_claims` empty and `errors_delta` at zero, which pin nothing 
 function against_oracle(raw, want)
     r = JSON3.read(cohesion(raw, C_NOW))
     @test r.request_sha256 == want.request_sha256
-    for key in (:threads, :required, :met, :unmet, :dissent, :indeterminate, :rework, :unknown_cost)
+    for key in (
+        :threads,
+        :required,
+        :met,
+        :unmet,
+        :dissent,
+        :indeterminate,
+        :rework,
+        :unknown_cost,
+    )
         @test r.counts[key] == want.counts[key]
     end
     for key in (:met, :dissent, :rework, :error)
@@ -324,7 +334,10 @@ end
         # Both read this file; neither owns it. `evaluation/cohorts/make-claim-overlap.py`
         # generates it from a third statement of the rule and `--check` re-derives it.
         table = JSON3.read(
-            read(joinpath(@__DIR__, "../../evaluation/cohorts/claim-overlap-v1.json"), String),
+            read(
+                joinpath(@__DIR__, "../../evaluation/cohorts/claim-overlap-v1.json"),
+                String,
+            ),
         )
         @test table.schema == "hee3.evaluation.claim-overlap.v1"
         @test length(table.cases) >= 20
@@ -348,47 +361,103 @@ end
             ("wrong usage unit", q -> q["units"]["usage"] = "microcent", :schema),
             ("extra top-level key", q -> q["surprise"] = 1, :schema),
             ("malformed cohort id", q -> q["subject"]["cohort_id"] = "nope", :identity),
-            ("malformed artifact digest", q -> q["subject"]["artifact_sha256"] = "nope", :identity),
+            (
+                "malformed artifact digest",
+                q -> q["subject"]["artifact_sha256"] = "nope",
+                :identity,
+            ),
             ("expired request", q -> q["expires_unix_ms"] = "1769999000001", :stale),
-            ("request from before its own cutoff", q -> q["cutoff_unix_ms"] = "1769999600000", :stale),
+            (
+                "request from before its own cutoff",
+                q -> q["cutoff_unix_ms"] = "1769999600000",
+                :stale,
+            ),
             ("unknown outcome name", q -> q["threads"][1]["outcome"] = "approved", :schema),
-            ("thread brief ahead of the cohort", q -> q["threads"][1]["brief_revision"] = "5", :domain),
-            ("duplicate thread identity",
-                q -> (q["threads"][2]["thread_id"] = q["threads"][1]["thread_id"]), :identity),
-            ("allocation does not conserve", q -> q["allocation"]["spent_tokens"] = "9000", :conservation),
-            ("integrable join carrying a reason",
-                q -> (q["join"]["verdict"] = "integrable"; q["join"]["reasons"] = ["dissent"]), :domain),
-            ("blocked join carrying no reason",
-                q -> (q["join"]["verdict"] = "blocked"; q["join"]["reasons"] = []), :domain),
-            ("unknown join verdict",
-                q -> (q["join"]["verdict"] = "unknown"; q["join"]["reasons"] = []), :schema),
-            ("unknown blocked reason", q -> q["join"]["reasons"] = ["whatever", "unmet"], :schema),
-            ("duplicate blocked reason", q -> q["join"]["reasons"] = ["dissent", "dissent"], :duplicate),
+            (
+                "thread brief ahead of the cohort",
+                q -> q["threads"][1]["brief_revision"] = "5",
+                :domain,
+            ),
+            (
+                "duplicate thread identity",
+                q -> (q["threads"][2]["thread_id"] = q["threads"][1]["thread_id"]),
+                :identity,
+            ),
+            (
+                "allocation does not conserve",
+                q -> q["allocation"]["spent_tokens"] = "9000",
+                :conservation,
+            ),
+            (
+                "integrable join carrying a reason",
+                q -> (
+                    q["join"]["verdict"] = "integrable";
+                    q["join"]["reasons"] = ["dissent"]
+                ),
+                :domain,
+            ),
+            (
+                "blocked join carrying no reason",
+                q -> (q["join"]["verdict"] = "blocked"; q["join"]["reasons"] = []),
+                :domain,
+            ),
+            (
+                "unknown join verdict",
+                q -> (q["join"]["verdict"] = "unknown"; q["join"]["reasons"] = []),
+                :schema,
+            ),
+            (
+                "unknown blocked reason",
+                q -> q["join"]["reasons"] = ["whatever", "unmet"],
+                :schema,
+            ),
+            (
+                "duplicate blocked reason",
+                q -> q["join"]["reasons"] = ["dissent", "dissent"],
+                :duplicate,
+            ),
             ("reasons is not a list", q -> q["join"]["reasons"] = "dissent", :schema),
-            ("more reasons than the vocabulary",
-                q -> q["join"]["reasons"] =
-                    ["dissent", "unmet", "missing-child", "stale-brief", "dissent"], :bound),
+            (
+                "more reasons than the vocabulary",
+                q ->
+                    q["join"]["reasons"] =
+                        ["dissent", "unmet", "missing-child", "stale-brief", "dissent"],
+                :bound,
+            ),
             ("shape rows disagree with threads", q -> q["shape"]["rows"] = 9, :schema),
             ("shape fields disagree with the row", q -> q["shape"]["fields"] = 5, :schema),
-            ("threads is not a list",
-                q -> (q["threads"] = Dict{String,Any}(); q["shape"]["rows"] = 0), :schema),
+            (
+                "threads is not a list",
+                q -> (q["threads"] = Dict{String,Any}(); q["shape"]["rows"] = 0),
+                :schema,
+            ),
             ("empty thread list", q -> (q["threads"] = []; q["shape"]["rows"] = 0), :bound),
             ("non-boolean required", q -> q["threads"][1]["required"] = "yes", :schema),
             ("empty claim path", q -> q["threads"][1]["claims"] = [""], :schema),
             ("claims is not a list", q -> q["threads"][1]["claims"] = "", :schema),
-            ("too many claims on one thread",
-                q -> q["threads"][1]["claims"] = ["p/$i" for i = 1:65], :bound),
-            ("report exceeds the admitted bound", q -> begin
-                q["threads"] = [
-                    Dict{String,Any}(
-                        "thread_id" => cu(0x100 + i), "outcome" => "met",
-                        "brief_revision" => "4", "required" => true,
-                        "cost_tokens" => "1", "claims" => ["src/store"],
-                    ) for i = 1:64
-                ]
-                q["shape"]["rows"] = 64
-                q["allocation"]["spent_tokens"] = "64"
-            end, :bound),
+            (
+                "too many claims on one thread",
+                q -> q["threads"][1]["claims"] = ["p/$i" for i = 1:65],
+                :bound,
+            ),
+            (
+                "report exceeds the admitted bound",
+                q -> begin
+                    q["threads"] = [
+                        Dict{String,Any}(
+                            "thread_id" => cu(0x100 + i),
+                            "outcome" => "met",
+                            "brief_revision" => "4",
+                            "required" => true,
+                            "cost_tokens" => "1",
+                            "claims" => ["src/store"],
+                        ) for i = 1:64
+                    ]
+                    q["shape"]["rows"] = 64
+                    q["allocation"]["spent_tokens"] = "64"
+                end,
+                :bound,
+            ),
         ]
             @testset "$name" begin
                 @test crun(mutate) == expected

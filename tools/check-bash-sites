@@ -13,7 +13,13 @@ Two populations, because the runner has two kinds of rule:
     not on it.
 
 Every mutant runs in a disposable copy of the three paths the suite reads, so an
-interrupted sweep cannot leave the live wrapper mutated, and four run at once.
+interrupted sweep cannot leave the live wrapper mutated, and eight run at once.
+
+The sweep runs inside tools/check-quality, whose every command is bounded at 180 s, and the
+full suite takes up to half a minute there. So a plant runs ONLY the test named for it --
+its claim is that test fails -- and a site runs the suite with --failfast, which stops at the
+first failure: a kill needs one. A survivor still runs every case, so neither shortcut can
+turn a survivor into a kill; they only make kills cheaper.
 
 Run: python3 tools/check-bash-sites
 """
@@ -30,8 +36,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 WRAPPER = "integrations/bash/hee3"
 COPIED = (WRAPPER, "tests/bash_wrapper.py", "schemas/actions/control-v1.schema.json")
-BUDGET_S = 900
-WORKERS = 4
+BUDGET_S = 120
+WORKERS = 8
 
 # (name, exact fragment, replacement, tests of which at least one must fail). Each fragment
 # must occur exactly once; a plant whose anchor has drifted is reported, never skipped.
@@ -115,8 +121,11 @@ def sites(text):
     return sorted(found)
 
 
-def run_suite(text):
-    """Run the suite against `text` in a disposable copy; return (rc, failing test names)."""
+def run_suite(text, selection=()):
+    """Run the suite against `text` in a disposable copy; return (rc, failing test names).
+
+    `selection` is extra unittest arguments: `-k <test>` for a plant, `--failfast` for a site.
+    """
     with tempfile.TemporaryDirectory(prefix="hee3-bash-sites-") as scratch:
         root = Path(scratch)
         for relative in COPIED:
@@ -124,7 +133,8 @@ def run_suite(text):
             shutil.copyfile(ROOT / relative, root / relative)
         (root / WRAPPER).write_text(text)
         try:
-            result = subprocess.run([sys.executable, "-W", "error", "tests/bash_wrapper.py"],
+            result = subprocess.run([sys.executable, "-W", "error", "tests/bash_wrapper.py",
+                                     *selection],
                                     cwd=root, capture_output=True, text=True, check=False,
                                     timeout=BUDGET_S)
         except subprocess.TimeoutExpired:
@@ -135,11 +145,10 @@ def run_suite(text):
 
 def main():
     original = (ROOT / WRAPPER).read_text()
-    rc, failing = run_suite(original)
-    if rc != 0:
-        raise SystemExit(f"the suite is not green before the sweep (rc={rc}): {sorted(failing)}")
-
-    jobs = []
+    # The green baseline runs in the same pool as the mutants, not before them, and the verdict
+    # refuses below if it was not green: a kill only means something against a suite that
+    # passes on the unmutated wrapper.
+    jobs = [("baseline", "unmutated", original, None)]
     for begin, end, label in sites(original):
         jobs.append(("site", label, original[:begin] + "None" + original[end:], None))
     drifted = []
@@ -151,8 +160,24 @@ def main():
     if not any(kind == "site" for kind, *_ in jobs):
         raise SystemExit("no refuse/finish sites found; the enumeration is broken")
 
+    def selection(job):
+        kind, _, _, tests = job
+        if kind == "baseline":
+            return []
+        if kind == "plant":
+            return [argument for test in tests for argument in ("-k", test)]
+        return ["--failfast"]
+
     with ThreadPoolExecutor(max_workers=WORKERS) as pool:
-        outcomes = list(pool.map(lambda job: run_suite(job[2]), jobs))
+        outcomes = list(pool.map(lambda job: run_suite(job[2], selection(job)), jobs))
+
+    (_, baseline), = [(job, outcome) for job, outcome in zip(jobs, outcomes)
+                      if job[0] == "baseline"]
+    if baseline[0] != 0:
+        raise SystemExit(f"the suite is not green on the unmutated wrapper (rc={baseline[0]}): "
+                         f"{sorted(baseline[1])}")
+    jobs, outcomes = zip(*[(job, outcome) for job, outcome in zip(jobs, outcomes)
+                           if job[0] != "baseline"])
 
     survivors = []
     for (kind, label, _, tests), (rc, failing) in zip(jobs, outcomes):

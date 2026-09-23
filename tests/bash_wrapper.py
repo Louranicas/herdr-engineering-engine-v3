@@ -12,6 +12,7 @@ separation; failing producer through pipeline; cancellation and dependency/versi
 mismatch"*, and each class below names which part it covers.
 """
 
+import ctypes
 import json
 import os
 import shutil
@@ -30,10 +31,72 @@ WRAPPER = ROOT / "integrations/bash/hee3"
 CATALOGUE = ROOT / "schemas/actions/control-v1.schema.json"
 EXIT_USAGE, EXIT_NO_PRODUCER, EXIT_BOUNDS, EXIT_TIMEOUT, EXIT_CONTRACT = 2, 3, 4, 5, 6
 RUN_BUDGET_S = 30
+PR_SET_CHILD_SUBREAPER = 36
+REAP_BUDGET_S = 10.0
+LIVE_GRACE_S = 1.0
+
+
+def become_subreaper():
+    """Adopt this suite's orphans instead of handing them to whoever runs it.
+
+    The chain cases kill process trees on purpose, and a parent that dies before its child
+    orphans it. Without this, every orphan -- dead or alive -- re-parents to the nearest
+    subreaper above the suite: tools/check-quality, which rightly reports it as a descendant
+    the step left behind. The suite owns what it starts; it reaps it itself.
+    """
+    libc = ctypes.CDLL(None, use_errno=True)
+    if libc.prctl(PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) != 0:
+        raise OSError(ctypes.get_errno(), "prctl(PR_SET_CHILD_SUBREAPER)")
+
+
+def adopted():
+    """This process's children that it did not wait for itself: adopted orphans."""
+    return [int(pid) for pid in
+            Path(f"/proc/self/task/{os.getpid()}/children").read_text().split()]
+
+
+def reap_adopted():
+    """Reap adopted zombies; fail on any adopted descendant still ALIVE after the test.
+
+    A dead orphan is the expected residue of killing a tree. A live one is a custody leak,
+    and it is attributed to the test that left it rather than surfacing as an anonymous
+    `descendants_detected` on the whole suite. Bounded: a descendant that will not die fails
+    the case with both numbers, it does not hang it.
+    """
+    deadline = time.monotonic() + REAP_BUDGET_S
+    first_seen, live = {}, set()
+    while True:
+        remaining = adopted()
+        if not remaining:
+            break
+        now = time.monotonic()
+        for pid in remaining:
+            try:
+                state = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[0]
+            except FileNotFoundError:
+                continue
+            # A process mid-exit is briefly not yet a zombie; only one still running a full
+            # second after it was first seen is a leak.
+            if state != "Z" and now - first_seen.setdefault(pid, now) > LIVE_GRACE_S:
+                live.add(pid)
+                os.kill(pid, signal.SIGKILL)
+            try:
+                os.waitpid(pid, os.WNOHANG)
+            except ChildProcessError:
+                pass
+        if time.monotonic() > deadline:
+            raise AssertionError(f"{len(remaining)} adopted descendants survived "
+                                 f"{REAP_BUDGET_S}s: {remaining}")
+        time.sleep(0.01)
+    if live:
+        raise AssertionError(f"the case left {len(live)} live descendant(s): {sorted(live)}")
 
 
 class WrapperCase(unittest.TestCase):
     def setUp(self):
+        # Registered first, so it runs LAST: every other cleanup -- a Popen killed and
+        # waited -- has collected its own child before this one reaps what is left.
+        self.addCleanup(reap_adopted)
         self.work = Path(tempfile.mkdtemp(prefix="hee3-bash-"))
         self.addCleanup(shutil.rmtree, self.work, ignore_errors=True)
 
@@ -867,6 +930,8 @@ class ChainTimeout(ChainCase):
     """*"timeout propagation"*: the budget in force reaches the step, and a step that
     outruns it is stopped -- with everything it started."""
 
+    SLOW = True
+
     def test_the_step_is_told_its_budget(self):
         result = self.chain([{"id": "a", "action": "health", "timeout_ms": 3000},
                              {"id": "b", "action": "health"}], timeout_ms=20000)
@@ -919,6 +984,8 @@ class ChainCancellation(ChainCase):
     """*"cancellation"*: a signal to the chain stops the running step and everything it
     started, runs nothing further, and is reported as a cancellation, not a failure."""
 
+    SLOW = True
+
     def cancel(self, sig, expected):
         started = self.work / "started"
         grandchild = self.work / "grandchild.pid"
@@ -965,6 +1032,8 @@ class ChainBetweenSteps(ChainCase):
     step, before the next. A signal or a spent budget that lands then must stop the chain
     before the next step starts, and must be reported as exactly that.
     """
+
+    SLOW = True
 
     def start_parked(self, timeout_ms):
         self.behave("big", "head -c 300000 /dev/zero | tr '\\0' x\n")
@@ -1013,6 +1082,8 @@ class ChainCheckPhase(ChainCase):
     catalogue; pointing it at a FIFO with no writer parks the check where the test can see it:
     a non-blocking open for writing succeeds only once a reader is waiting."""
 
+    SLOW = True
+
     def parked_check(self):
         fifo = self.work / "catalogue.fifo"
         os.mkfifo(fifo)
@@ -1047,7 +1118,7 @@ class ChainCheckPhase(ChainCase):
         process = self.parked_check()
         _, stderr = process.communicate(timeout=RUN_BUDGET_S)
         self.assertEqual(process.returncode, EXIT_USAGE, stderr)
-        self.assertIn("checking step 'a' did not finish in 10000 ms", stderr)
+        self.assertIn("checking step 'a' did not finish in 3000 ms", stderr)
         self.assertEqual(self.calls(), [])
 
 
@@ -1055,7 +1126,21 @@ def shlex_quote(text):
     return "'" + text.replace("'", "'\"'\"'") + "'"
 
 
+def load_tests(loader, tests, pattern):
+    """Cheap cases first, the cases that wait on real budgets last.
+
+    tools/check-bash-sites runs each site mutant with --failfast, so a kill costs only the
+    cases before the first failure; with the waiting classes first, every kill paid for them.
+    Order changes nothing about what runs -- every case still runs on a green suite.
+    """
+    cases = [case for group in tests for case in group]
+    fast = [case for case in cases if not getattr(case, "SLOW", False)]
+    slow = [case for case in cases if getattr(case, "SLOW", False)]
+    return unittest.TestSuite(fast + slow)
+
+
 if __name__ == "__main__":
+    become_subreaper()
     result = unittest.main(exit=False, verbosity=1).result
     print(f"bash wrapper tests: run={result.testsRun} failures={len(result.failures)} "
           f"errors={len(result.errors)}")

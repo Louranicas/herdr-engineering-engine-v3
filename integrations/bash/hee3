@@ -41,7 +41,7 @@ readonly MAX_STEPS=16
 readonly MAX_SPEC_BYTES=65536
 readonly MAX_CHAIN_MS=3600000
 readonly GRACE_MS=2000      # TERM to KILL, and KILL to giving up, each
-readonly CHECK_MS=10000     # one step's --check; a local encode, never a producer call
+readonly CHECK_MS=3000      # one step's --check: a local encode (~0.1 s), never a producer call
 readonly SLICE_MS=100       # how often a waiting chain looks for a cancellation
 
 # Diagnostics go to stderr, results to stdout. A caller that redirects one must still be able

@@ -15,6 +15,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import subprocess
 import sys
 import tempfile
 import time
@@ -45,6 +46,15 @@ INVENTORY_FILE_LIMIT = 4096
 INVENTORY_BYTE_LIMIT = 512 * 1024 * 1024
 UNSUPPORTED_CARGO_INPUTS = ("build.rs", ".cargo", "examples", "benches")
 RUST_OFFLINE_BUNDLE = "tools/rust-offline-inputs"
+# Required inputs git deliberately does not carry, each with the reason a clone still has
+# them. The offline bundles are fetched archives verified by digest against their manifests
+# (tools/rust-offline.py, tools/sqlite-static.py); bytecode caches are written by the
+# interpreter and swept into the package directories' file lists.
+UNTRACKED_BY_DESIGN = (
+    (RUST_OFFLINE_BUNDLE + "/", "fetched"),
+    ("tools/sqlite-inputs/", "fetched"),
+    ("__pycache__/", "bytecode"),
+)
 T03_IMPLEMENTATION_PATHS = ("src/worker/mod.rs", "src/worker/inference.rs")
 T04_IMPLEMENTATION_PATHS = ("src/store.rs", "src/store/artifact.rs", "src/store/backup.rs",
                             "src/store/schema.rs", "migrations/001.sql", "tests/t04_store.rs")
@@ -116,7 +126,7 @@ RECOVERY_INPUTS = ("src/recovery.rs", "tests/recovery.rs")
 # reads/writes. The pure policy src/recovery.rs stays pinned by RECOVERY_INPUTS and
 # the inventory reader src/store/recovery.rs by T07_INPUTS; both are read by this
 # battery too, and a file is pinned once by the battery that owns it.
-T07_STARTUP_TARGET_COUNTS = {"t07_startup": 78}
+T07_STARTUP_TARGET_COUNTS = {"t07_startup": 86}
 T07_STARTUP_INPUTS = ("src/app/startup.rs", "src/store/reconciliation.rs", "tests/t07_startup.rs")
 # Reviewed T08 contract battery: 23 controls, no library-unit namespace. The
 # inputs are what tests/t08_contract.rs reads (the offline contract client it
@@ -125,7 +135,7 @@ T07_STARTUP_INPUTS = ("src/app/startup.rs", "src/store/reconciliation.rs", "test
 # cohorts were produced with, registered in the manifest as an exact inventory
 # that Clippy checks and nothing runs. control-v1/ and README.stub.md under
 # tests/fixtures/native are read by no registered Rust target and stay unpinned.
-T08_CONTRACT_TARGET_COUNTS = {"t08_contract": 23}
+T08_CONTRACT_TARGET_COUNTS = {"t08_contract": 24}
 T08_CONTRACT_INPUTS = (
     "src/worker/native.rs", "src/worker/mod.rs", "tests/t08_contract.rs",
     "tests/fixtures/native/contract-client.py", "tests/fixtures/native/prompt.txt",
@@ -162,7 +172,7 @@ CONTEXT_TARGET_COUNTS = {"t11_context": 59}
 CONTEXT_INPUTS = ("src/context.rs",)
 COHORT_TARGET_COUNTS = {"t22_cohort": 57}
 COHORT_INPUTS = ("src/cohort.rs", "evaluation/cohorts/claim-overlap-v1.json")
-ACTIONS_TARGET_COUNTS = {"t28_actions": 64}
+ACTIONS_TARGET_COUNTS = {"t28_actions": 65}
 ACTIONS_INPUTS = ("src/actions.rs", "src/worker/tools.rs")
 HERDR_TARGET_COUNTS = {"t16_herdr": 52}
 HERDR_INPUTS = ("src/herdr.rs",)
@@ -426,12 +436,17 @@ def require_t21_analysis_report(path, expected_j01, request_sha256):
             "bytes": len(raw), "request_sha256": "sha256:" + request_sha256}
 
 
-def require_t21_julia_summaries(stdout, stderr):
+def require_t21_julia_summaries(stdout, stderr, cohort=False):
+    """The Julia analysis file's assertion groups, exactly. `cohort` adds T22's group, which
+    julia/test/analysis.jl appends to the T21 file (see its comment for why); without it the
+    gate required three headers and refused a file that had correctly grown a fourth."""
     expected = {"T21 descriptive evaluator": 82, "T21 numerical boundary controls": 10,
                 "T21 deferred string decoding": 7}
-    rows = re.findall(r"^(T21 [^|\n]+)\|([^\n]+)$", stdout, re.MULTILINE)
+    if cohort:
+        expected["T22 cohort cohesion"] = 140
+    rows = re.findall(r"^(T2[12] [^|\n]+)\|([^\n]+)$", stdout, re.MULTILINE)
     headers = re.findall(r"^Test Summary:[^|\n]*\|([^\n]+)$", stdout, re.MULTILINE)
-    if stderr or len(rows) != 3 or len(headers) != 3 or any(
+    if stderr or len(rows) != len(expected) or len(headers) != len(expected) or any(
             header.split() not in (["Pass", "Total"], ["Pass", "Total", "Time"])
             for header in headers):
         raise ValueError("Unexpected T21 Julia evaluator summary or diagnostics")
@@ -514,6 +529,50 @@ def refuse_unsupported_cargo_inputs(root):
             raise ValueError("Unsupported Cargo input path: " + name)
 
 
+def refuse_untracked_inputs(root, names, deadline):
+    """Refuse a required input that git would not carry.
+
+    The gate reads this working tree; a clone reads only what git carries. Two required files
+    sat under an ignored directory for a whole wave -- the survivor declarations and a
+    recorded SDK fixture -- so every run here passed while a clone of the committed tree
+    could not pass its own suite. Outside a git work tree the check cannot be made, and says
+    so rather than reading as clean.
+    """
+    require_work_time(deadline, "git tracking check")
+    probe = subprocess.run(["git", "-C", str(root), "rev-parse", "--is-inside-work-tree"],
+                           capture_output=True, text=True, check=False,
+                           timeout=max(1.0, deadline - time.monotonic()))
+    if probe.returncode != 0 or probe.stdout.strip() != "true":
+        print(f"required_inputs={len(names)} git_tracking=unmeasured (not a git work tree)",
+              file=sys.stderr)
+        return
+    ignored = subprocess.run(["git", "-C", str(root), "check-ignore", "--no-index", "--stdin"],
+                             input="\n".join(names) + "\n", capture_output=True, text=True,
+                             check=False, timeout=max(1.0, deadline - time.monotonic()))
+    if ignored.returncode not in (0, 1):
+        raise ValueError("git check-ignore failed: " + ignored.stderr.strip())
+    hidden = [line for line in ignored.stdout.splitlines() if line]
+    # Excused by reason, never by silence: the rule is about AUTHORED inputs a clone cannot
+    # regenerate or fetch. Every excused path is counted under its reason, so an exclusion
+    # that starts swallowing authored files shows up as a moving number.
+    excused = Counter()
+    unexcused = []
+    for name in hidden:
+        reason = next((why for prefix, why in UNTRACKED_BY_DESIGN if name.startswith(prefix)
+                       or f"/{prefix}" in f"/{name}"), None)
+        if reason is None:
+            unexcused.append(name)
+        else:
+            excused[reason] += 1
+    detail = " ".join(f"{reason}={count}" for reason, count in sorted(excused.items()))
+    print(f"required_inputs={len(names)} git_ignored={len(hidden)} "
+          f"excused={sum(excused.values())} ({detail or 'none'}) unexcused={len(unexcused)}",
+          file=sys.stderr)
+    if unexcused:
+        raise ValueError("Required input is ignored by git, so a clone cannot pass this gate: "
+                         + ", ".join(unexcused))
+
+
 def quality_subject_paths(root, deadline, rust_only):
     required = ["Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "tools/check-quality",
                 "tools/development_process.py", "tools/rust-offline.py", "tools/sqlite-static.py", "tools/check-store-mutations", "tests/t25_process.py",
@@ -555,6 +614,10 @@ def quality_subject_paths(root, deadline, rust_only):
         required += COHORT_INPUTS
     if has_actions_battery(root):
         required += ACTIONS_INPUTS
+        # t28_actions compares the catalogue against the plan spine it was written from --
+        # its independent source. Not an input the battery owns, so not in ACTIONS_INPUTS;
+        # but absent from the copied subject, sixteen of its cases failed with NotFound.
+        required += ["corpus/PLAN_habitat_engine.json"]
     if has_herdr_battery(root):
         required += HERDR_INPUTS
     if has_t08_contract(root):
@@ -572,7 +635,12 @@ def quality_subject_paths(root, deadline, rust_only):
     required += ["tests/procedure_schema.py", "tests/skill_schema.py", "tests/bash_wrapper.py",
                  "tests/pi_extension.py", "tests/mutation_survivors.py",
                  "tools/check-mutation-survivors", "evidence/mutation-equivalences.json",
-                 "tools/check-bash-sites"]
+                 "tools/check-bash-sites",
+                 # The action vocabulary every interface package reads rather than retypes:
+                 # three generators, the bash wrapper and six suites open it by this path.
+                 # Absent from this list, the copied subject had none, and the procedure
+                 # controls failed on a file the gate never copied.
+                 "schemas/actions/control-v1.schema.json"]
     if not rust_only or has_t21(root):
         required += tree_files(root, "julia", deadline)
         required += ["tools/julia-quality.jl"]
@@ -899,6 +967,7 @@ def main():
     rust_offline.validate_bundle(ROOT / "Cargo.lock", ROOT / RUST_OFFLINE_BUNDLE, work_deadline)
     test_expectations = rust_test_expectations(ROOT)
     required = quality_subject_paths(ROOT, work_deadline, arguments.rust_only)
+    refuse_untracked_inputs(ROOT, sorted(set(required)), work_deadline)
     subject = {}
     subject_bytes = 0
     for name in sorted(set(required)):
@@ -1138,7 +1207,8 @@ def main():
                 analysis_env = t21_analysis_environment(julia_env, output)
                 analysis = run("julia-t21-analysis", [*prefix, "--compiled-modules=no", "--project=" + str(work / "julia"),
                                "julia/test/analysis.jl"], command_env=analysis_env)
-                require_t21_julia_summaries(analysis["stdout"], analysis["stderr"])
+                require_t21_julia_summaries(analysis["stdout"], analysis["stderr"],
+                                            cohort=has_cohort_battery(ROOT))
                 report["t21_numerical_report"] = require_t21_analysis_report(
                     Path(analysis_env["T21_JULIA_REPORT"]), j01["stdout"].encode("utf-8"),
                     digest(work / "tests/fixtures/t21/J01.json"),

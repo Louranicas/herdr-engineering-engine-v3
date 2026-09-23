@@ -671,10 +671,7 @@ end
 
 """Validate one thread row and return its normalised tuple."""
 function thread_row(row, brief::UInt64, seen::Set{String})
-    closed(
-        row,
-        (:thread_id, :outcome, :brief_revision, :required, :cost_tokens, :claims),
-    )
+    closed(row, (:thread_id, :outcome, :brief_revision, :required, :cost_tokens, :claims))
     uuid(row.thread_id)
     row.thread_id in seen && refuse(:identity)
     push!(seen, row.thread_id)
@@ -802,7 +799,8 @@ function cohesion(raw::Vector{UInt8}, receive_unix_ms::UInt64)
     closed(q.shape, (:rows, :fields))
     q.threads isa JSON3.Array || refuse(:schema)
     1 <= length(q.threads) <= 64 || refuse(:bound)
-    integer(q.shape.rows, length(q.threads)) && integer(q.shape.fields, 6) || refuse(:schema)
+    integer(q.shape.rows, length(q.threads)) && integer(q.shape.fields, 6) ||
+        refuse(:schema)
 
     seen = Set{String}()
     rows = [thread_row(row, brief, seen) for row in q.threads]
@@ -831,7 +829,7 @@ function cohesion(raw::Vector{UInt8}, receive_unix_ms::UInt64)
     # Disjointness is a property of the assignment, not of the outcome; it is recomputed here
     # from the claims the request carries rather than taken on trust from the producer.
     overlapping = String[]
-    for i in eachindex(rows), j in (i + 1):length(rows)
+    for i in eachindex(rows), j = (i+1):length(rows)
         for a in rows[i].claims, b in rows[j].claims
             if claims_conflict(a, b)
                 push!(overlapping, string(rows[i].id, " ", rows[j].id))
@@ -842,7 +840,10 @@ function cohesion(raw::Vector{UInt8}, receive_unix_ms::UInt64)
     end
 
     excluded = String[]
-    unknown_cost > 0 && push!(excluded, string(unknown_cost, " threads report no usage; cost totals exclude them"))
+    unknown_cost > 0 && push!(
+        excluded,
+        string(unknown_cost, " threads report no usage; cost totals exclude them"),
+    )
     isempty(excluded) && push!(excluded, "none")
 
     report = (;

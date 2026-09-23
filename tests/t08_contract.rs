@@ -9,7 +9,7 @@
 //! Synthetic model/runtime observations are never backend qualification.
 use habitat_engine::contracts::{Sha256Digest, UuidV4};
 use habitat_engine::worker::native::{self, Daemon, Error, FilePin, Profile, ProviderState};
-use habitat_engine::worker::process::Interruption;
+use habitat_engine::worker::process::{Interruption, exited_during_census};
 use habitat_engine::worker::{
     self, CancelDispatch, CancelReason, Cancellation, Candidate, Capabilities, ContractError,
     Envelope, Event, Feature, Finish, Identity, IdentityOrigin, Phase, Request, Selection,
@@ -888,4 +888,33 @@ fn t08c22_catalogue_digest_mismatch_refused_at_tags_readback() {
 #[test]
 fn t08c23_loaded_digest_mismatch_refused_at_ps_readback() {
     digest_control("ps", &["version", "tags", "ps"]);
+}
+
+/// T08C-24 · A process that exits between the group census listing it and reading its stat
+/// is gone, not an unobserved census. `ESRCH` on the read was reported as I/O failure, so
+/// any process on the machine exiting in that window made a clean exchange end in
+/// `Interruption::WaitError` -- this target failed about one run in four under load, on
+/// whichever case's exchange lost the race (T08C-06, -08 and -19 all observed). The
+/// decision is pure, so it is pinned here by argument.
+#[test]
+fn t08c24_a_process_gone_mid_census_is_not_a_census_failure() {
+    use rustix::io::Errno;
+    assert!(exited_during_census(Some(Errno::SRCH.raw_os_error())));
+    assert!(exited_during_census(Some(Errno::NOENT.raw_os_error())));
+    for errno in [
+        Errno::ACCESS,
+        Errno::PERM,
+        Errno::IO,
+        Errno::INVAL,
+        Errno::NOTDIR,
+    ] {
+        assert!(
+            !exited_during_census(Some(errno.raw_os_error())),
+            "{errno:?} is an unobserved census, not an exited process"
+        );
+    }
+    assert!(
+        !exited_during_census(None),
+        "an error with no errno is not an exit"
+    );
 }

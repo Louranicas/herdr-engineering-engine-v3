@@ -8,8 +8,8 @@
 //! directory.
 use habitat_engine::app::startup::{
     self, Action, Claim, Cursor, Entry, Host, LedgerAccess, LiveIdentity, LiveRead, Pass, Physical,
-    PiLink, ProcessIdentity, Startup, Subject, SubjectValue, classify, gone, intended, live_read,
-    parse_stat,
+    PiLink, Presence, ProcessIdentity, Startup, Subject, SubjectValue, classify, gone, intended,
+    live_read, parse_stat, presence, proc_read_failure,
 };
 use habitat_engine::contracts::roster::{
     Availability, Kind, Locality, ObservationInput, ObservationSource, ReceiptTime,
@@ -23,8 +23,9 @@ use habitat_engine::recovery::{
 };
 use habitat_engine::store::{
     Allocation, Effect, Error as StoreError, Expected, Object, Principal, RECORD_BODY_LIMIT,
-    ReconciliationRecord, RecordKind, RecordRow, RecoveryInventory, RecoveryLimits, RequestSource,
-    RosterStart, Settlement, Stop, Store, Submission, VerificationVerdict, record_id,
+    RECORD_SCAN_LIMIT, ReconciliationRecord, RecordKind, RecordRow, RecoveryInventory,
+    RecoveryLimits, RequestSource, RosterStart, Settlement, Stop, Store, Submission,
+    VerificationVerdict, record_id,
 };
 use rusqlite::{Connection, OpenFlags};
 use serde_json::{Value, json};
@@ -131,6 +132,10 @@ struct World {
     attach_refusal: Option<String>,
     clean_refusals: BTreeSet<String>,
     calls: Vec<Call>,
+    /// A second writer: when set, the readback AFTER the effect (the second `cleanup`
+    /// read) first settles the attempt's cleanup column through its own connection -- the
+    /// ledger changing under the pass, which only a concurrent writer can do.
+    concurrent_settle: Option<PathBuf>,
 }
 
 impl World {
@@ -214,6 +219,24 @@ impl Physical for World {
     }
     fn cleanup(&mut self, subject: &Subject<'_>) -> CleanupReadback {
         self.calls.push(Call::Cleanup(subject.to_value()));
+        if let Some(db) = &self.concurrent_settle
+            && self.calls_of("cleanup").len() == 2
+        {
+            let db = Connection::open_with_flags(
+                db,
+                OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NOFOLLOW,
+            )
+            .unwrap();
+            assert_eq!(
+                db.execute(
+                    "UPDATE attempts SET cleanup='settled' WHERE id=?",
+                    [subject.attempt]
+                )
+                .unwrap(),
+                1
+            );
+            db.close().unwrap();
+        }
         match self.obligations.get(subject.attempt) {
             None => CleanupReadback::NotRead,
             Some(remaining) if remaining.is_empty() => CleanupReadback::Complete,
@@ -1553,6 +1576,43 @@ fn complete_readback_settles_the_ledger_cleanup_column_with_the_readback_row() {
     assert_eq!(body(&r.records()[1])["settle_cleanup"], true);
 }
 
+/// `T07-AP-30b` · the settlement races a second writer: between the readback and its row,
+/// the attempt's cleanup column is settled elsewhere. The store refuses the settlement as a
+/// conflict, and the pass records the readback WITHOUT it and names the refusal, rather
+/// than failing the pass or claiming a settlement it did not make. This arm was reachable
+/// only by a concurrent writer, so no case had reached it; mutation shard C found its
+/// guard free to flip either way.
+#[test]
+fn a_settlement_lost_to_a_concurrent_writer_is_recorded_as_refused() {
+    let mut r = Rig::running();
+    r.settle(Effect::Committed, Some(100), false);
+    let mut world = World::new().with_obligations(&[]);
+    world.concurrent_settle = Some(r.area.db());
+    let pass = r.pass(&mut world);
+    let entry = only(&pass);
+    assert_eq!(
+        entry.action,
+        Some(Action::CleanupPerformed {
+            targets: vec![CleanupTarget::LedgerSettlement {
+                cleanup: Cleanup::Unknown
+            }],
+            effects: vec![],
+            readback: CleanupReadback::Complete,
+            ledger_settled: false,
+            ledger_refusal: Some("conflict".into()),
+        })
+    );
+    assert!(!entry.records[1].cleanup_settled);
+    let readback = body(&r.records()[1]);
+    assert_eq!(readback["settle_cleanup"], false);
+    assert_eq!(readback["settle_refused"], "conflict");
+    assert_eq!(
+        r.area.attempt_row(),
+        ("unknown".into(), "committed".into(), "settled".into()),
+        "the column is the other writer's, not this pass's"
+    );
+}
+
 /// `T07-AP-31` · after the settlement the world is different, so the next pass
 /// decides differently once (the task stays `effect_unknown`, explicit) and the
 /// pass after that writes nothing.
@@ -1940,6 +2000,127 @@ fn later_cancellation_cannot_rewrite_a_committed_acceptance() {
         r.area.task_row(),
         ("accepted".into(), false, Some(ACCEPT.into()))
     );
+}
+
+/// `T07-AP-44b` · a ledger holding BOTH commits for one task -- the row flagged cancelled
+/// and accepted, and both events journalled -- is handed to the policy as `Both` and ordered
+/// by R03: acceptance first, so it stands and names the later cancellation. The store never
+/// writes such a ledger (AP-44: a cancellation after acceptance is neither flagged nor
+/// journalled; acceptance after cancellation is refused), so it is reached through the
+/// test-only row edit the inventory admits, as AP-70 reaches its state. R03 exists for a
+/// ledger this store did not write; without this case the `(Some, Some)` arm of
+/// `task_history` could be deleted and every such ledger would read as contradictory --
+/// mutation shard C found exactly that.
+#[test]
+fn a_ledger_holding_both_commits_is_ordered_by_its_journal() {
+    let mut r = Rig::ready();
+    r.verify(VerificationVerdict::Passed, true);
+    r.accept();
+    r.close();
+    {
+        let db = Connection::open_with_flags(
+            r.area.db(),
+            OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NOFOLLOW,
+        )
+        .unwrap();
+        assert_eq!(
+            db.execute("UPDATE tasks SET cancellation=1 WHERE id=?", [TASK])
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            db.execute(
+                "INSERT INTO events(id,task_id,generation,kind,body) \
+                 SELECT ?1,task_id,generation,'cancellation_requested',x'7b7d' \
+                 FROM events WHERE id=?2",
+                [CANCEL, ACCEPT],
+            )
+            .unwrap(),
+            1
+        );
+        db.close().unwrap();
+    }
+    let ordinals = r.ordinals();
+    let (_, acceptance) = ordinals.accepted.clone().unwrap();
+    let cancellation = ordinals.cancellation.unwrap();
+    assert!(
+        cancellation > acceptance,
+        "{cancellation} after {acceptance}"
+    );
+    let mut world = World::new();
+    let pass = r.pass(&mut world);
+    let entry = only(&pass);
+    assert_eq!(entry.decision.rule, Rule::R03CommitOrdering);
+    assert_eq!(
+        entry.handed.history,
+        startup::HistoryValue::Both {
+            cancellation,
+            acceptance_event: ACCEPT.into(),
+            acceptance,
+        }
+    );
+    assert!(matches!(
+        entry.decision.reconciliation,
+        Reconciliation::AcceptanceStands {
+            later_cancellation: Some(later),
+            ..
+        } if later == cancellation
+    ));
+}
+
+/// Journal `count` reconciliation records for `attempt` on TASK in one statement, through the
+/// test-only row edit: writing 4097 through `record_reconciliation` would measure the store's
+/// commit rate, not the read bound under test.
+fn journal_records(r: &mut Rig, attempt: &str, count: usize, tag: &str) {
+    r.close();
+    let db = Connection::open_with_flags(
+        r.area.db(),
+        OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NOFOLLOW,
+    )
+    .unwrap();
+    let written = db
+        .execute(
+            "INSERT INTO events(id,task_id,generation,kind,body) \
+             WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i<?1) \
+             SELECT ?2||'-'||i, ?3, (SELECT generation FROM tasks WHERE id=?3), \
+                    'reconciliation_decided', CAST('{\"attempt\":\"'||?4||'\"}' AS BLOB) FROM n",
+            rusqlite::params![i64::try_from(count).unwrap(), tag, TASK, attempt],
+        )
+        .unwrap();
+    assert_eq!(written, count);
+    db.close().unwrap();
+}
+
+fn read_records(r: &mut Rig) -> Result<usize, StoreError> {
+    r.close();
+    let store = Store::open_inspection(&r.area.store(), id(GEN), id(EPOCH), deadline()).unwrap();
+    store
+        .reconciliation_records(id(ATTEMPT), deadline())
+        .map(|rows| rows.len())
+}
+
+/// `T07-AP-71` · the reconciliation read bound, from both sides: exactly the bound is read
+/// whole, one more is refused by name. Mutation shard C found the bound free to move to
+/// `>= 4096` or `== 4096` -- nothing read exactly 4096 records.
+#[test]
+fn reconciliation_records_are_read_whole_at_the_bound_and_refused_past_it() {
+    assert_eq!(RECORD_SCAN_LIMIT, 4096);
+    let mut r = Rig::ready();
+    journal_records(&mut r, ATTEMPT, RECORD_SCAN_LIMIT, "at");
+    assert!(matches!(read_records(&mut r), Ok(n) if n == RECORD_SCAN_LIMIT));
+    journal_records(&mut r, ATTEMPT, 1, "past");
+    assert!(matches!(read_records(&mut r), Err(StoreError::Bound)));
+}
+
+/// `T07-AP-72` · the bound is on what the read ACQUIRED, not on what survived the attempt
+/// filter. A sibling attempt's 4097 records ahead of this attempt's one used to fill the
+/// query's LIMIT and return this attempt's history as an empty Ok -- a silent truncation.
+#[test]
+fn a_sibling_attempts_records_cannot_truncate_this_attempts_history() {
+    let mut r = Rig::ready();
+    journal_records(&mut r, OTHER, RECORD_SCAN_LIMIT + 1, "sibling");
+    journal_records(&mut r, ATTEMPT, 1, "mine");
+    assert!(matches!(read_records(&mut r), Err(StoreError::Bound)));
 }
 
 /// `T07-AP-45` · a committed cancellation stands for a settled worker with its
@@ -2495,15 +2676,37 @@ struct Peer {
     reader: Option<BufReader<std::process::ChildStdout>>,
     pid: u32,
 }
+/// How a `Peer` shapes its one reply line.
+#[derive(Clone, Copy)]
+enum Reply {
+    /// The compact reply, newline-terminated.
+    Line,
+    /// Newline-terminated, padded (inside `sessionId`) to exactly this many bytes before
+    /// the newline.
+    Sized(usize),
+    /// The compact reply, one stray byte, then end-of-file with the peer still alive: an
+    /// unterminated frame whose parse would succeed if the stray byte were dropped.
+    Unterminated,
+}
+
 impl Peer {
     fn spawn(idle: bool) -> Self {
+        Self::spawn_with(idle, Reply::Line)
+    }
+    fn spawn_with(idle: bool, reply: Reply) -> Self {
+        let (target, stray) = match reply {
+            Reply::Line => (0, false),
+            Reply::Sized(bytes) => (bytes, false),
+            Reply::Unterminated => (0, true),
+        };
         let state = if idle {
             r#"{"thinkingLevel":"off","isStreaming":false,"isCompacting":false,"steeringMode":"all","followUpMode":"one-at-a-time","sessionId":"owned-pi-peer","autoCompactionEnabled":false,"messageCount":0,"pendingMessageCount":0}"#
         } else {
             r#"{"thinkingLevel":"off","isStreaming":true,"isCompacting":false,"steeringMode":"all","followUpMode":"one-at-a-time","sessionId":"owned-pi-peer","autoCompactionEnabled":false,"messageCount":3,"pendingMessageCount":2}"#
         };
+        let stray = if stray { "True" } else { "False" };
         let script = format!(
-            "import json,sys\nsys.stdout.write('ready\\n');sys.stdout.flush()\nfor line in sys.stdin:\n    q=json.loads(line)\n    if q.get('type')=='get_state':\n        sys.stdout.write(json.dumps({{'type':'response','id':q['id'],'command':'get_state','success':True,'data':json.loads('{state}')}},separators=(',',':'))+'\\n');sys.stdout.flush()\n"
+            "import json,os,sys\nsys.stdout.write('ready\\n');sys.stdout.flush()\nfor line in sys.stdin:\n    q=json.loads(line)\n    if q.get('type')=='get_state':\n        d=json.loads('{state}')\n        r=lambda: json.dumps({{'type':'response','id':q['id'],'command':'get_state','success':True,'data':d}},separators=(',',':'))\n        if {target}:\n            d['sessionId']=''\n            d['sessionId']='p'*({target}-len(r().encode()))\n            assert len(r().encode())=={target}, len(r().encode())\n        if {stray}:\n            sys.stdout.write(r()+'Z');sys.stdout.flush();os.close(1)\n        else:\n            sys.stdout.write(r()+'\\n');sys.stdout.flush()\n"
         );
         let mut child = Command::new("/usr/bin/python3")
             .args(["-B", "-c", &script])
@@ -2603,6 +2806,41 @@ fn host_keeps_a_real_live_child_unknown_when_its_pi_session_is_busy() {
         &ProcessCustody::LiveSameIdentity,
     );
     assert!(host.attached().is_empty());
+}
+
+/// The Pi queue custody `Host` reads from a real peer whose reply has the given shape.
+fn pi_queue_through(reply: Reply) -> PiQueueCustody {
+    let mut peer = Peer::spawn_with(true, reply);
+    let text = peer.identity_text();
+    let mut r = Rig::rostered(&text, 60_000);
+    let mut host = Host::new(deadline());
+    host.pi.insert(ATTEMPT.into(), peer.link());
+    let pass = r.pass(&mut host);
+    only(&pass).handed.pi_queue.clone()
+}
+
+/// `T07-AP-63b` · the Pi frame bound from both sides, through a real peer: a frame of
+/// exactly 4096 bytes is read, one of 4097 is refused. Mutation shard C found the bound
+/// free to move to `== 4096` -- no case had ever sent a frame at the bound.
+#[test]
+fn a_pi_frame_at_the_bound_is_read_and_one_past_it_is_refused() {
+    assert_eq!(pi_queue_through(Reply::Sized(4096)), PiQueueCustody::Idle);
+    assert_eq!(
+        pi_queue_through(Reply::Sized(4097)),
+        PiQueueCustody::Unreconciled
+    );
+}
+
+/// `T07-AP-63c` · a frame that ends without its newline is refused, even when dropping the
+/// last byte would leave a valid reply. Shard C found `||` free to become `&&`, which reads
+/// the unterminated reply as an idle queue.
+#[test]
+fn an_unterminated_pi_frame_is_refused() {
+    assert_eq!(pi_queue_through(Reply::Line), PiQueueCustody::Idle);
+    assert_eq!(
+        pi_queue_through(Reply::Unterminated),
+        PiQueueCustody::Unreconciled
+    );
 }
 
 /// `T07-AP-64` · the real child killed by its handle and reaped: `/proc` says
@@ -3003,6 +3241,63 @@ fn only_enoent_and_esrch_mean_the_process_is_gone() {
             !gone(&error),
             "{errno:?} was read as absence: {error} kind={:?}",
             error.kind()
+        );
+    }
+}
+
+/// `T07-AP-75b` · the whole `/proc` failure decision, reached by argument. As match guards
+/// inside `live_read` it survived mutation shard C both ways (`gone` replaced by `true` and
+/// by `false`): only an arranged `/proc` entry reached the non-gone branch. Two unreadable
+/// fixtures differ in both the read named and the errno, and each is asserted whole.
+#[test]
+fn a_failed_proc_read_is_absence_only_when_the_process_is_gone() {
+    use std::io::Error as IoError;
+    let errno = |e: rustix::io::Errno| IoError::from_raw_os_error(e.raw_os_error());
+    assert_eq!(
+        proc_read_failure(&errno(rustix::io::Errno::NOENT), "stat"),
+        LiveRead::Absent
+    );
+    assert_eq!(
+        proc_read_failure(&errno(rustix::io::Errno::SRCH), "ns"),
+        LiveRead::Absent
+    );
+    let access = errno(rustix::io::Errno::ACCESS);
+    assert_eq!(
+        proc_read_failure(&access, "stat"),
+        LiveRead::Unreadable(format!("stat: {access}"))
+    );
+    let io = errno(rustix::io::Errno::IO);
+    assert_eq!(
+        proc_read_failure(&io, "ns"),
+        LiveRead::Unreadable(format!("ns: {io}"))
+    );
+    assert_ne!(
+        format!("{access}"),
+        format!("{io}"),
+        "the fixtures must differ"
+    );
+}
+
+/// `T07-AP-75c` · a path read is absent only on `NotFound`. The `Host` cleanup and
+/// workspace readbacks map these three outcomes; their guards survived shard C as `true`,
+/// which would have settled a cleanup from a permission failure.
+#[test]
+fn a_path_is_absent_only_when_it_is_not_found() {
+    use std::io::{Error as IoError, ErrorKind};
+    assert_eq!(presence(&Ok(())), Presence::Present);
+    assert_eq!(
+        presence(&Err(IoError::from(ErrorKind::NotFound))),
+        Presence::Absent
+    );
+    for kind in [
+        ErrorKind::PermissionDenied,
+        ErrorKind::NotADirectory,
+        ErrorKind::Other,
+    ] {
+        assert_eq!(
+            presence(&Err(IoError::from(kind))),
+            Presence::Unreadable,
+            "{kind:?} was read as absence"
         );
     }
 }

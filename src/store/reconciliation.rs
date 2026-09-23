@@ -16,6 +16,9 @@ use std::time::Instant;
 
 /// Largest record body the ledger accepts, in bytes.
 pub const RECORD_BODY_LIMIT: usize = 65_536;
+/// The most reconciliation records one read acquires for a task, across all its attempts;
+/// one more is refused by name rather than truncated.
+pub const RECORD_SCAN_LIMIT: usize = 4096;
 
 /// Which of the two record kinds an event row is.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -152,11 +155,11 @@ impl Store {
         let epoch = self.epoch.clone();
         let id = record_id(&epoch, record.attempt.as_str(), record.kind, record.body);
         self.transaction(deadline, |tx| {
-            let (task, state, cleanup): (String, String, String) = tx
+            let task: String = tx
                 .query_row(
-                    "SELECT task_id,state,cleanup FROM attempts WHERE id=?",
+                    "SELECT task_id FROM attempts WHERE id=?",
                     [record.attempt.as_str()],
-                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                    |row| row.get(0),
                 )
                 .optional()?
                 .ok_or(Error::NotFound)?;
@@ -180,9 +183,10 @@ impl Store {
                 })?;
             let mut cleanup_settled = false;
             if record.settle_cleanup {
-                if state != "unknown" || cleanup == "settled" {
-                    return Err(Error::Conflict);
-                }
+                // One door: the guarded UPDATE is the whole admission rule. A pre-check of
+                // the same two columns ahead of it refused exactly the rows the WHERE clause
+                // does not match, so mutation shard C could weaken it (`||` -> `&&`) with no
+                // test able to notice -- two doors keeping one rule, the second unpinnable.
                 if tx.execute(
                     "UPDATE attempts SET cleanup='settled' WHERE id=? AND state='unknown' AND cleanup!='settled'",
                     [record.attempt.as_str()],
@@ -218,9 +222,11 @@ impl Store {
             return Err(Error::UncertainCommit);
         }
         schema::bound(&self.connection, deadline)?;
-        let mut statement = self.connection.prepare(
-            "SELECT e.id,e.sequence,e.kind,e.generation,e.body FROM events e WHERE e.task_id=(SELECT task_id FROM attempts WHERE id=?) AND e.kind IN ('reconciliation_decided','reconciliation_readback') ORDER BY e.sequence LIMIT 4097",
-        )?;
+        // One past the bound, so an overrun is seen rather than cut off.
+        let mut statement = self.connection.prepare(&format!(
+            "SELECT e.id,e.sequence,e.kind,e.generation,e.body FROM events e WHERE e.task_id=(SELECT task_id FROM attempts WHERE id=?) AND e.kind IN ('reconciliation_decided','reconciliation_readback') ORDER BY e.sequence LIMIT {}",
+            RECORD_SCAN_LIMIT + 1
+        ))?;
         let rows = statement.query_map([attempt.as_str()], |row| {
             Ok((
                 row.get::<_, String>(0)?,
@@ -230,9 +236,18 @@ impl Store {
                 row.get::<_, Vec<u8>>(4)?,
             ))
         })?;
+        // The bound is on what was ACQUIRED, not on what survived the filter. `LIMIT 4097`
+        // counts the task's records of every attempt; counting only this attempt's would let
+        // 4097 rows of a sibling attempt truncate the query and drop this attempt's later
+        // records silently, as a short Ok rather than a refusal.
         let mut records = Vec::new();
+        let mut scanned = 0_usize;
         for row in rows {
             remaining(deadline)?;
+            scanned += 1;
+            if scanned > RECORD_SCAN_LIMIT {
+                return Err(Error::Bound);
+            }
             let (event, sequence, kind, generation, body) = row?;
             let kind = RecordKind::parse(&kind).ok_or(Error::Corrupt)?;
             let value: serde_json::Value = serde_json::from_slice(&body)?;
@@ -246,9 +261,6 @@ impl Store {
                 generation,
                 body,
             });
-            if records.len() > 4096 {
-                return Err(Error::Bound);
-            }
         }
         Ok(records)
     }

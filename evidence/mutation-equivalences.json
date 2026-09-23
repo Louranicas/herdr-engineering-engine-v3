@@ -63,6 +63,34 @@
     "a_caller_that_cannot_see_an_owner_is_not_offered_its_tools"
    ],
    "history": "Reported as a live survivor by the first mutation run over src/worker/tools.rs on 2026-09-23 (39 mutants: 26 caught, 4 missed, 9 unviable). The other three survivors -- Refusal::name and its Display -- were real gaps and are killed by every_tool_refusal_renders_its_own_diagnostic."
+  },
+  {
+   "id": "startup-permits-execution-never-true",
+   "file": "src/app/startup.rs",
+   "function": "run",
+   "mutants": [
+    "replace |= with &= in run"
+   ],
+   "argument": "pass.permits_execution starts false and is only ever combined with Reconciliation::permits_execution(), which is true only for ReattachObservationOnly{redispatch: true} or CursorSnapshotOnly{replay: true}. No policy arm in src/recovery.rs constructs either with true (the only constructions write redispatch: false and replay: false), so every operand is false; false |= false and false &= false are both false, at both sites.",
+   "falsifier": "Any policy arm that builds redispatch: true or replay: true -- the first decision that permits execution makes |= and &= differ, and this declaration wrong.",
+   "pinned_by": [
+    "receipt_reads_permission_from_every_decision"
+   ],
+   "history": "Reported by mutation shard C on 2026-09-23 (two sites, one description). T07-AP-69 already asserts the flag is read from every decision and is false because no arm carries a true flag."
+  },
+  {
+   "id": "startup-clean-conflict-implies-settle",
+   "file": "src/app/startup.rs",
+   "function": "clean",
+   "mutants": [
+    "replace match guard settle with true in clean"
+   ],
+   "argument": "store::Error::Conflict has exactly one source in record_reconciliation: the guarded settlement UPDATE, run only when settle_cleanup is true (the redundant pre-check that was a second source was removed on 2026-09-23). readback_record passes `settle` as settle_cleanup, so a Conflict there implies settle == true, and the guard `if settle` is true whenever the arm can be reached: replacing it with `true` changes nothing reachable.",
+   "falsifier": "A second Conflict source in record_reconciliation reachable with settle_cleanup = false; the guard then protects a non-settling record from being reported as a refused settlement, and the `true` mutant becomes a live defect.",
+   "pinned_by": [
+    "a_settlement_lost_to_a_concurrent_writer_is_recorded_as_refused"
+   ],
+   "history": "Reported by mutation shard C on 2026-09-23 together with its `false` twin. The `false` mutant was real -- the conflict arm had never been reached -- and is killed by T07-AP-30b, which settles the column through a second connection between the readback and its row."
   }
  ]
 }

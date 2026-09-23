@@ -1352,6 +1352,6 @@ pub use recovery::{
 };
 
 pub use reconciliation::{
-    EvidenceAvailability, RECORD_BODY_LIMIT, ReconciliationRecord, RecordKind, RecordRow, Recorded,
-    TerminalOrdinals, record_id,
+    EvidenceAvailability, RECORD_BODY_LIMIT, RECORD_SCAN_LIMIT, ReconciliationRecord, RecordKind,
+    RecordRow, Recorded, TerminalOrdinals, record_id,
 };
