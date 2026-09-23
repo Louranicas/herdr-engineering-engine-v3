@@ -7,7 +7,7 @@ and grants no action — an action the wrapper can name is one the engine alread
 one it cannot name simply does not run.
 
 ```
-hee3 <action> [name=value ...]     invoke one admitted action
+hee3 <action> [argument ...]       invoke one admitted action
 hee3 chain <spec.json | ->         run a declared sequence of actions, in order
 hee3 --check <action> [...]        print the request that would be sent; send nothing
 hee3 --actions                     list the actions this wrapper can name
@@ -15,9 +15,37 @@ hee3 --inspect <action>            that action's prerequisites and the bounds in
 hee3 --version                     wrapper version and producer diagnostics
 ```
 
-`HEE3_PRODUCER` names the producer executable. `HEE3_CATALOGUE` overrides where the action
+`HEE3_PRODUCER` names the producer executable; `HEE3_GRANT_ID` and `HEE3_SCOPE_SHA256` name the
+authority every request is made under, and a request without them is refused by name. `HEE3_CATALOGUE` overrides where the action
 vocabulary is read from; the default is `schemas/actions/control-v1.schema.json`, so an
 action added to the engine is nameable here without anyone editing a list.
+
+## Requests
+
+Every invocation sends one control-v1 request — the `Request_<action>` definition in the same
+catalogue the action list comes from (review N1: the first version sent
+`{protocol, version, action, arguments}`, which no definition accepts). The schema supplies
+`protocol`, `version`, `kind` and `action_version`, and decides whether the action requires or
+forbids an idempotency key or a precondition; the wrapper adds a fresh `request_id`, a
+`deadline_unix_ms` of now plus `HEE3_TIMEOUT_MS` (default 30 s, never more than 60 s ahead) and
+the authority. The caller supplies the rest:
+
+| Argument | Becomes |
+|---|---|
+| `name=value` | body field `name`, this literal text |
+| `name:=JSON` | body field `name`, this JSON value — parsed strictly: a duplicated key or `NaN` is refused |
+| `@idempotency_key=UUID` | the envelope key; required by every effectful action, refused by name when missing |
+| `@precondition:=JSON` | the envelope precondition; refused where the action takes none |
+
+```
+hee3 --check task.get 'selector:={"task_id":"123e4567-e89b-42d3-a456-000000000007"}' evidence=summary
+```
+
+The body is not validated here — that needs a schema engine this stdlib-only builder does not
+have, and the engine validates every request it receives. `tests/bash_wrapper.py::Envelope`
+feeds each of the 21 hand-authored requests in `tests/fixtures/native/control-v1/actions.json`
+back through `--check` and requires the schema's definition, with body, authority, key and
+precondition unchanged.
 
 ## Three rules, and why each is a mechanism
 
@@ -72,10 +100,16 @@ encoding, `PIPESTATUS` — reaches a chained step through the same code, not a c
 ```json
 {"protocol": "hee3.chain", "version": 1, "timeout_ms": 20000,
  "steps": [
-   {"id": "find", "action": "task.list", "arguments": {"state": "running"},
+   {"id": "find", "action": "task.list",
+    "arguments": {"states": ["running"], "task_class": null, "parent_task_id": null,
+                  "page": {"limit": 10, "cursor": null}},
     "output": "json", "provides": ["task_id"]},
-   {"id": "get", "action": "task.get",
-    "inputs": {"task_id": {"step": "find", "field": "task_id"}}, "timeout_ms": 5000}]}
+   {"id": "stop", "action": "task.cancel",
+    "arguments": {"reason": "operator_request",
+                  "@idempotency_key": "123e4567-e89b-42d3-a456-000000000008",
+                  "@precondition": {"resource": "task", "generation": "1",
+                                    "id": "123e4567-e89b-42d3-a456-000000000007"}},
+    "inputs": {"note": {"step": "find", "field": "task_id"}}, "timeout_ms": 5000}]}
 ```
 
 **Declared contracts, checked twice.** Before the first step runs, the whole spec is
@@ -89,7 +123,10 @@ deciding what the producer meant, so it refuses instead.
 
 **Inputs stay literal.** A step's input is a named string field of an earlier step's output,
 passed on as one `name=value` argument — never spliced into a command, and bounded by the same
-8 KiB rule when it is sent.
+8 KiB rule when it is sent. An input fills a top-level body field only; it cannot reach inside an
+object such as `task.get`'s `selector` (a stated limit, not an oversight). A literal argument may
+be any JSON value and travels as `name:=JSON`; an argument name ending in `:` is refused, since
+it would reach the request door as the typed form of another name.
 
 **Ordered results.** One JSON record per step, printed as each finishes, then a `summary`:
 
@@ -120,7 +157,7 @@ than waited on forever. A signal outranks what the step did after it: a step tha
 An exit code alone cannot tell a producer's own `5` from a chain timeout. The `summary`
 record is the decisive verdict; the code is a convenience.
 
-`hee3 --check <action> [name=value ...]` prints the request that `invoke` would send and sends
+`hee3 --check <action> [argument ...]` prints the request that `invoke` would send and sends
 nothing, and needs no producer.
 
 ## Bounds
@@ -128,7 +165,7 @@ nothing, and needs no producer.
 | Bound | Value | On overrun |
 |---|---|---|
 | arguments | 64 | exit 4 |
-| bytes per `name=value` | 8192 | exit 4 |
+| bytes per argument | 8192 | exit 4 |
 | producer stdout | 1 MiB | bounded in the stream; the producer's own status is reported |
 | chain steps | 16 | exit 2, before any step runs |
 | chain spec | 64 KiB | exit 2; read one byte past the bound, never the whole input first |

@@ -638,6 +638,10 @@ def quality_subject_paths(root, deadline, rust_only):
                  "tests/pi_extension.py", "tests/mutation_survivors.py",
                  "tools/check-mutation-survivors", "evidence/mutation-equivalences.json",
                  "tools/check-bash-sites",
+                 # tests/bash_wrapper.py's Envelope class replays these hand-authored control-v1
+                 # requests through the wrapper (review N1); absent here, the copied subject had
+                 # none and the class errored in setUpClass with 9 cases unrun.
+                 "tests/fixtures/native/control-v1/actions.json",
                  # The action vocabulary every interface package reads rather than retypes:
                  # three generators, the bash wrapper and six suites open it by this path.
                  # Absent from this list, the copied subject had none, and the procedure
@@ -1086,7 +1090,7 @@ def main():
         run("skill-site-sweep", [sys.executable, "tools/check-skill-sites"],
             required_text="sites=15 killed=15 survived=0")
         run("bash-wrapper-controls", [sys.executable, "-W", "error", "tests/bash_wrapper.py"],
-            required_text="run=115 failures=0 errors=0")
+            required_text="run=125 failures=0 errors=0")
         run("bash-site-sweep", [sys.executable, "tools/check-bash-sites"],
             required_text="sites=37 plants=18 killed=55 survived=0 drifted=0")
         run("pi-extension-controls", [sys.executable, "-W", "error", "tests/pi_extension.py"],

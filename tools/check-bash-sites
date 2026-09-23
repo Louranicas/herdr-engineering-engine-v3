@@ -25,6 +25,7 @@ Run: python3 tools/check-bash-sites
 """
 
 import ast
+import os
 import re
 import shutil
 import subprocess
@@ -35,7 +36,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 WRAPPER = "integrations/bash/hee3"
-COPIED = (WRAPPER, "tests/bash_wrapper.py", "schemas/actions/control-v1.schema.json")
+# The fixture table is read by the suite's `Envelope` class (the expected control-v1 requests).
+COPIED = (WRAPPER, "tests/bash_wrapper.py", "schemas/actions/control-v1.schema.json",
+          "tests/fixtures/native/control-v1/actions.json")
 BUDGET_S = 120
 WORKERS = 8
 
@@ -121,6 +124,19 @@ def sites(text):
     return sorted(found)
 
 
+def plain_environment():
+    """The caller's environment with colour turned off.
+
+    The kill parser reads `^FAIL: name` lines. Python 3.14's unittest colours them whenever
+    FORCE_COLOR is set -- as it is in some agent shells -- and a coloured line starts with an
+    escape code, so every kill read as a survivor there while the same sweep passed under
+    tools/check-quality's clean environment. A verdict must not depend on who ran it.
+    """
+    environment = dict(os.environ, PYTHON_COLORS="0", NO_COLOR="1")
+    environment.pop("FORCE_COLOR", None)
+    return environment
+
+
 def run_suite(text, selection=()):
     """Run the suite against `text` in a disposable copy; return (rc, failing test names).
 
@@ -136,7 +152,7 @@ def run_suite(text, selection=()):
             result = subprocess.run([sys.executable, "-W", "error", "tests/bash_wrapper.py",
                                      *selection],
                                     cwd=root, capture_output=True, text=True, check=False,
-                                    timeout=BUDGET_S)
+                                    timeout=BUDGET_S, env=plain_environment())
         except subprocess.TimeoutExpired:
             return None, set()
         output = result.stdout + result.stderr

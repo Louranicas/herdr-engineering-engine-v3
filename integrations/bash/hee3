@@ -55,16 +55,22 @@ fail() {
 
 usage() {
     cat <<'USAGE'
-hee3 <action> [name=value ...]     invoke one admitted action
+hee3 <action> [argument ...]       invoke one admitted action
 hee3 --actions                     list the actions this wrapper can name
-hee3 --check <action> [name=value ...]
+hee3 --check <action> [argument ...]
                                    print the request that would be sent; send nothing
 hee3 chain <spec.json | ->         run a declared sequence of actions, in order
 hee3 --inspect <action>            that action's arguments and the producer it needs
 hee3 --version                     wrapper version and producer diagnostics
 
-Values are literal. A value is never re-parsed as shell, so spaces, quotes, newlines,
-$(...) and ; are data. Set HEE3_PRODUCER to the producer executable.
+Arguments build a control-v1 request for the action:
+  name=value         body field, this literal text
+  name:=JSON         body field, this JSON value (object, array, number, true/false, null)
+  @idempotency_key=UUID  @precondition:=JSON   required where the action requires them
+Values are never re-parsed as shell, so spaces, quotes, newlines, $(...) and ; are data;
+a :=JSON value is parsed strictly as JSON and as nothing else.
+Set HEE3_PRODUCER to the producer executable, HEE3_GRANT_ID and HEE3_SCOPE_SHA256 to the
+authority the request is made under, and optionally HEE3_TIMEOUT_MS (deadline, at most 60 s).
 USAGE
 }
 
@@ -78,11 +84,14 @@ actions() {
     # Read through PIPESTATUS even here: a python that dies mid-stream must not look like an
     # empty catalogue, which would make every action name "unknown" rather than report the
     # real fault.
-    names=$(python3 -c '
+    # Python arrives through a quoted heredoc, as the chain runner's does: nothing in it can
+    # expand, and a JSON key such as `$defs` is plainly data rather than a shell word.
+    names=$(python3 - "$CATALOGUE" <<'PY'
 import json, sys
 with open(sys.argv[1], encoding="utf-8") as handle:
     print("\n".join(json.load(handle)["$defs"]["ActionId"]["enum"]))
-' "$CATALOGUE") || status=$?
+PY
+) || status=$?
     status=${status:-0}
     (( status == 0 )) || fail "$EXIT_NO_PRODUCER" "could not read the action catalogue (rc=$status)"
     [[ -n $names ]] || fail "$EXIT_NO_PRODUCER" "the action catalogue is empty"
@@ -107,26 +116,121 @@ producer() {
 # Build the request with python's json writer rather than string concatenation: a value
 # containing a quote or a backslash must be encoded, and hand-built JSON is where that goes
 # wrong silently.
+#
+# The request is a control-v1 `Request_<action>` (review N1: the first version sent a shape
+# no definition accepts). Everything the schema fixes -- protocol, version, kind,
+# action_version, and whether this action requires or forbids an idempotency key or a
+# precondition -- is read from that definition in the same catalogue the action list comes
+# from, so the wrapper cannot drift from it. What only the caller can know arrives as:
+#
+#   name=value       a body field whose value is this literal string
+#   name:=JSON       a body field whose value is this JSON (objects, arrays, numbers, null)
+#   @idempotency_key=UUID   @precondition:=JSON   the two envelope fields a caller supplies
+#   HEE3_GRANT_ID, HEE3_SCOPE_SHA256    the authority; refused by name when either is unset
+#   HEE3_TIMEOUT_MS  the budget; the deadline is now plus it, never more than 60 s ahead
+#
+# The body is not validated here: that needs a schema engine this stdlib-only builder does
+# not have, and the engine validates every request it receives. JSON values are parsed
+# strictly -- a duplicated key or a non-finite number is refused, never silently resolved.
 build_request() {
     local action=$1
     shift
-    python3 -c '
-import json, sys
-action, pairs = sys.argv[1], sys.argv[2:]
-arguments = {}
+    python3 - "$CATALOGUE" "$action" "$@" <<'PY'
+import json, os, sys, time, uuid
+
+MAX_AHEAD_MS, DEFAULT_MS = 60000, 30000
+catalogue, action, pairs = sys.argv[1], sys.argv[2], sys.argv[3:]
+
+
+def refuse(message):
+    sys.exit(message)
+
+
+def unique(items):
+    seen = {}
+    for key, value in items:
+        if key in seen:
+            raise ValueError(f"key {key!r} appears twice")
+        seen[key] = value
+    return seen
+
+
+def strict(name, text):
+    def constant(token):
+        raise ValueError(f"non-finite number {token}")
+    try:
+        return json.loads(text, object_pairs_hook=unique, parse_constant=constant)
+    except ValueError as error:
+        refuse(f"{name}:= is not strict JSON: {error}")
+
+
+with open(catalogue, encoding="utf-8") as handle:
+    definitions = json.load(handle)["$defs"]
+definition = definitions.get("Request_" + action.replace(".", "_"))
+if definition is None:
+    refuse("the catalogue has no request definition for " + action)
+fields = definition["properties"]
+
+
+def nullable(field):
+    shape = fields[field]
+    return shape.get("type") == "null" or any(
+        option.get("type") == "null" for option in shape.get("oneOf", ()))
+
+
+def only_null(field):
+    return fields[field].get("type") == "null"
+
+
+body, envelope = {}, {}
 for pair in pairs:
     if "=" not in pair:
-        sys.exit("argument is not name=value: " + repr(pair))
+        refuse("argument is not name=value or name:=JSON: " + repr(pair))
     name, _, value = pair.partition("=")
+    typed = name.endswith(":")
+    name = name[:-1] if typed else name
+    target = envelope if name.startswith("@") else body
+    name = name[1:] if name.startswith("@") else name
     if not name:
-        sys.exit("argument has an empty name: " + repr(pair))
-    if name in arguments:
-        sys.exit("argument named twice: " + repr(name))
-    arguments[name] = value
-json.dump({"protocol": "hee3.control", "version": 1, "action": action,
-           "arguments": arguments}, sys.stdout, sort_keys=True)
+        refuse("argument has an empty name: " + repr(pair))
+    if target is envelope and name not in ("idempotency_key", "precondition"):
+        refuse(f"@{name} is not an envelope field a caller supplies; "
+               "only @idempotency_key and @precondition are")
+    if name in target:
+        refuse("argument named twice: " + repr(name))
+    target[name] = strict(name, value) if typed else value
+
+grant, scope = os.environ.get("HEE3_GRANT_ID", ""), os.environ.get("HEE3_SCOPE_SHA256", "")
+for variable, value in (("HEE3_GRANT_ID", grant), ("HEE3_SCOPE_SHA256", scope)):
+    if not value:
+        refuse(f"{variable} is unset; a request carries the authority it is made under")
+
+for field in ("idempotency_key", "precondition"):
+    if field in envelope and only_null(field):
+        refuse(f"{action} takes no {field}")
+    if field not in envelope and not nullable(field):
+        refuse(f"{action} requires @{field}")
+
+budget = os.environ.get("HEE3_TIMEOUT_MS", "")
+ahead = int(budget) if budget.isdigit() and int(budget) > 0 else DEFAULT_MS
+now = time.time_ns() // 1_000_000
+
+request = {
+    "protocol": fields["protocol"]["const"],
+    "version": fields["version"]["const"],
+    "kind": fields["kind"]["const"],
+    "request_id": str(uuid.uuid4()),
+    "action": fields["action"]["const"],
+    "action_version": fields["action_version"]["const"],
+    "idempotency_key": envelope.get("idempotency_key"),
+    "deadline_unix_ms": str(now + min(ahead, MAX_AHEAD_MS)),
+    "authority": {"grant_id": grant, "scope_sha256": scope},
+    "precondition": envelope.get("precondition"),
+    "body": body,
+}
+json.dump(request, sys.stdout, sort_keys=True, ensure_ascii=False, allow_nan=False)
 sys.stdout.write("\n")
-' "$action" "$@"
+PY
 }
 
 # The one door every request passes: bounds, admission, encoding. `invoke` sends what this
@@ -379,6 +483,21 @@ def argument_name(name, where):
     # value. That is the encoding this runner performs, so the rule is this runner's.
     if not isinstance(name, str) or not name or "=" in name:
         refuse(f"{where}: argument name {name!r} must be a non-empty string without '='")
+    # A trailing ':' would reach the builder as `name:=`, the typed form of another name.
+    if name.endswith(":"):
+        refuse(f"{where}: argument name {name!r} must not end in ':'")
+
+
+def pair(name, value):
+    """One argument for the request door: text as `name=value`, any other JSON as `name:=JSON`.
+
+    A control-v1 body is typed (task.get's selector is an object), so a step's argument may
+    be any JSON value; the builder parses `:=` strictly, and this is its only encoder here.
+    """
+    if isinstance(value, str):
+        return f"{name}={value}"
+    return f"{name}:=" + json.dumps(value, ensure_ascii=False, allow_nan=False,
+                                   separators=(",", ":"))
 
 
 try:
@@ -412,10 +531,8 @@ for index, step in enumerate(steps):
     arguments = step.setdefault("arguments", {})
     if not isinstance(arguments, dict):
         refuse(f"{where}: arguments must be an object")
-    for name, value in arguments.items():
+    for name in arguments:
         argument_name(name, where)
-        if not isinstance(value, str):
-            refuse(f"{where}: argument {name!r} must be a string; values are literal text")
     output = step.setdefault("output", "text")
     if output not in ("text", "json"):
         refuse(f"{where}: output must be text or json")
@@ -452,7 +569,7 @@ for index, step in enumerate(steps):
 # same door, when the step runs.
 for step in steps:
     argv = ["bash", wrapper, "--check", step["action"],
-            *(f"{name}={value}" for name, value in step["arguments"].items()),
+            *(pair(name, value) for name, value in step["arguments"].items()),
             *(f"{name}=" for name in step["inputs"])]
     outcome, returncode, _, _ = run_child(argv, check_ms / 1000, dict(os.environ))
     if STATE["signal"] is not None:
@@ -503,7 +620,7 @@ for index, step in enumerate(steps):
                "chain")
     step_s = step.get("timeout_ms", chain_ms) / 1000
     budget, limit = (step_s, "step") if step_s < left else (left, "chain")
-    pairs = [f"{name}={value}" for name, value in step["arguments"].items()]
+    pairs = [pair(name, value) for name, value in step["arguments"].items()]
     pairs += [f"{name}={produced[source['step']][source['field']]}"
               for name, source in step["inputs"].items()]
     env = dict(os.environ, HEE3_CHAIN_STEP=sid,

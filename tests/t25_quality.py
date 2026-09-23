@@ -1553,7 +1553,10 @@ class T06QualityInventoryControls(unittest.TestCase):
         for name in quality.T08_INPUTS:
             self.assertIn(name, paths)
         self.assertFalse(any(name.startswith("development/t06/") for name in paths))
-        self.assertFalse(any(name.startswith("tests/fixtures/native/control-v1/") for name in paths))
+        # Exactly one control-v1 fixture is a gate input: the request table the bash suite's
+        # Envelope class replays (review N1). The rest stay unpinned.
+        self.assertEqual({name for name in paths if name.startswith("tests/fixtures/native/control-v1/")},
+                         {"tests/fixtures/native/control-v1/actions.json"})
 
     def test_t08_native_battery_cannot_leave_while_the_adapter_stays(self):
         # The adapter source keeps the native battery required; the contract battery reads
@@ -1751,7 +1754,10 @@ class T06QualityInventoryControls(unittest.TestCase):
             self.assertIn(name, paths)
         for row in quality.T08_CONTRACT_EXAMPLES:
             self.assertIn(row["path"], quality.T08_CONTRACT_INPUTS)
-        self.assertFalse(any(name.startswith("tests/fixtures/native/control-v1/") for name in paths))
+        # Exactly one control-v1 fixture is a gate input: the request table the bash suite's
+        # Envelope class replays (review N1). The rest stay unpinned.
+        self.assertEqual({name for name in paths if name.startswith("tests/fixtures/native/control-v1/")},
+                         {"tests/fixtures/native/control-v1/actions.json"})
         self.assertNotIn("tests/fixtures/native/README.stub.md", paths)
         self.assertFalse(any(name.startswith("development/t06/") for name in paths))
         # The inputs are what the sources read: every include of the battery is pinned.

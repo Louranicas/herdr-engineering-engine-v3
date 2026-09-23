@@ -2,7 +2,8 @@
 """HEE3-IF-bash wrapper tests.
 
 Run: python3 -W error tests/bash_wrapper.py
-No dependency beyond the standard library and bash. The wrapper author also implemented these
+Dependencies: the standard library and bash, plus installed jsonschema for the `Envelope`
+class only (test tooling, as `tests/control_schema.py` declares). The wrapper author also implemented these
 tests; independent oracle authorship is NOT claimed. No engine, transport or admission is
 exercised: the producer is a fixture this file writes, and every case runs in a temporary
 directory.
@@ -34,6 +35,24 @@ RUN_BUDGET_S = 30
 PR_SET_CHILD_SUBREAPER = 36
 REAP_BUDGET_S = 10.0
 LIVE_GRACE_S = 1.0
+TEST_GRANT = "123e4567-e89b-42d3-a456-00000000abcd"
+TEST_SCOPE = "sha256:" + "ab" * 32
+
+
+def wrapper_environment(**overrides):
+    """The one environment every invocation in this file starts from.
+
+    A request carries its authority (control-v1 `AuthorityV1`), so the fixture grant and scope
+    are here -- values that grant nothing -- and `Envelope` replaces or blanks them where
+    authority is the subject. Five call sites once built this by hand; the authority reached
+    one of them.
+    """
+    environment = dict(os.environ, HEE3_CATALOGUE=str(CATALOGUE), LC_ALL="C",
+                       HEE3_GRANT_ID=TEST_GRANT, HEE3_SCOPE_SHA256=TEST_SCOPE)
+    environment.pop("HEE3_PRODUCER", None)
+    environment.pop("HEE3_TIMEOUT_MS", None)
+    environment.update(overrides)
+    return environment
 
 
 def become_subreaper():
@@ -108,8 +127,7 @@ class WrapperCase(unittest.TestCase):
         return path
 
     def run_wrapper(self, *argv, producer=None, env=None):
-        environment = dict(os.environ, HEE3_CATALOGUE=str(CATALOGUE), LC_ALL="C")
-        environment.pop("HEE3_PRODUCER", None)
+        environment = wrapper_environment()
         if producer is not None:
             environment["HEE3_PRODUCER"] = str(producer)
         if env:
@@ -265,12 +283,12 @@ class HostileValues(WrapperCase):
     ECHO = '''
         python3 -c '
 import json, sys
-print(json.dumps(json.load(sys.stdin)["arguments"], sort_keys=True))
+print(json.dumps(json.load(sys.stdin)["body"], sort_keys=True))
 '
     '''
 
     def arrived(self, *pairs):
-        result = self.run_wrapper("task.submit", *pairs, producer=self.producer(self.ECHO))
+        result = self.run_wrapper("task.get", *pairs, producer=self.producer(self.ECHO))
         self.assertEqual(result.returncode, 0, result.stderr)
         return json.loads(result.stdout)
 
@@ -317,15 +335,15 @@ print(json.dumps(json.load(sys.stdin)["arguments"], sort_keys=True))
         self.assertEqual(self.arrived("filter=state=running"), {"filter": "state=running"})
 
     def test_an_argument_without_an_equals_sign_is_usage(self):
-        result = self.run_wrapper("task.submit", "bare", producer=self.producer(self.ECHO))
+        result = self.run_wrapper("task.get", "bare", producer=self.producer(self.ECHO))
         self.assertEqual(result.returncode, EXIT_USAGE)
 
     def test_an_argument_with_an_empty_name_is_usage(self):
-        result = self.run_wrapper("task.submit", "=value", producer=self.producer(self.ECHO))
+        result = self.run_wrapper("task.get", "=value", producer=self.producer(self.ECHO))
         self.assertEqual(result.returncode, EXIT_USAGE)
 
     def test_an_argument_named_twice_is_usage(self):
-        result = self.run_wrapper("task.submit", "a=1", "a=2", producer=self.producer(self.ECHO))
+        result = self.run_wrapper("task.get", "a=1", "a=2", producer=self.producer(self.ECHO))
         self.assertEqual(result.returncode, EXIT_USAGE)
 
     def test_no_arguments_is_a_valid_request(self):
@@ -335,7 +353,7 @@ print(json.dumps(json.load(sys.stdin)["arguments"], sort_keys=True))
 class Bounds(WrapperCase):
     def test_too_many_arguments_is_refused(self):
         pairs = [f"a{i}=1" for i in range(65)]
-        result = self.run_wrapper("task.submit", *pairs, producer=self.producer("exit 0\n"))
+        result = self.run_wrapper("task.get", *pairs, producer=self.producer("exit 0\n"))
         self.assertEqual(result.returncode, EXIT_BOUNDS)
         self.assertIn("64", result.stderr)
 
@@ -343,17 +361,17 @@ class Bounds(WrapperCase):
         # The boundary from the other side: 64 must pass, or the bound is off by one and
         # only the refusing half was ever checked.
         pairs = [f"a{i}=1" for i in range(64)]
-        result = self.run_wrapper("task.submit", *pairs, producer=self.producer("exit 0\n"))
+        result = self.run_wrapper("task.get", *pairs, producer=self.producer("exit 0\n"))
         self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_an_oversized_value_is_refused(self):
-        result = self.run_wrapper("task.submit", "note=" + "x" * 8193,
+        result = self.run_wrapper("task.get", "note=" + "x" * 8193,
                                   producer=self.producer("exit 0\n"))
         self.assertEqual(result.returncode, EXIT_BOUNDS)
 
     def test_a_value_at_the_bound_is_accepted(self):
         pair = "note=" + "x" * (8192 - len("note="))
-        result = self.run_wrapper("task.submit", pair, producer=self.producer("exit 0\n"))
+        result = self.run_wrapper("task.get", pair, producer=self.producer("exit 0\n"))
         self.assertEqual(result.returncode, 0, result.stderr)
 
 
@@ -404,9 +422,9 @@ class RequestShape(WrapperCase):
         result = self.run_wrapper("task.get", "task_id=abc", producer=producer)
         self.assertEqual(result.returncode, 0)
         request = json.loads(result.stdout)
-        self.assertEqual(request["protocol"], "hee3.control")
+        self.assertEqual((request["protocol"], request["kind"]), ("hee3.control", "request"))
         self.assertEqual(request["action"], "task.get")
-        self.assertEqual(request["arguments"], {"task_id": "abc"})
+        self.assertEqual(request["body"], {"task_id": "abc"})
 
     def test_trailing_newlines_are_not_edited_away(self):
         # $(...) strips them. A wrapper that reports its producer's result must not rewrite
@@ -435,15 +453,145 @@ class RequestShape(WrapperCase):
         self.assertEqual(result.stdout, "task.list\n")
 
 
+class Envelope(WrapperCase):
+    """The request is a control-v1 request, or the engine cannot read it (review N1).
+
+    The wrapper once sent `{protocol, version, action, arguments}`, a shape no control-v1
+    definition accepts, and every case above pinned it. The expected requests here are the
+    hand-authored fixtures in `tests/fixtures/native/control-v1/actions.json`, which the RC03
+    schema suite validates independently of this wrapper; each one's body is fed back through
+    `--check` and the result must be that action's `Request_*` definition with the same body,
+    authority, idempotency key and precondition. This class uses `jsonschema`, the test-only
+    dependency `tests/control_schema.py` already declares.
+    """
+
+    FIXTURES = ROOT / "tests/fixtures/native/control-v1/actions.json"
+
+    @classmethod
+    def setUpClass(cls):
+        from jsonschema import Draft202012Validator
+        cls.schema = json.loads(CATALOGUE.read_text())
+        cls.cases = json.loads(cls.FIXTURES.read_text())["cases"]
+        cls.validator = staticmethod(lambda name: Draft202012Validator(
+            {"$defs": cls.schema["$defs"], "$ref": "#/$defs/" + name}))
+
+    @staticmethod
+    def argv_for(request):
+        argv = [f"{name}={value}" if isinstance(value, str) else f"{name}:={json.dumps(value)}"
+                for name, value in request["body"].items()]
+        if request["idempotency_key"] is not None:
+            argv.append("@idempotency_key=" + request["idempotency_key"])
+        if request["precondition"] is not None:
+            argv.append("@precondition:=" + json.dumps(request["precondition"]))
+        return argv
+
+    @staticmethod
+    def authority_env(request):
+        return {"HEE3_GRANT_ID": request["authority"]["grant_id"],
+                "HEE3_SCOPE_SHA256": request["authority"]["scope_sha256"]}
+
+    def check(self, action, *argv, env=None):
+        result = self.run_wrapper("--check", action, *argv, env=env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return json.loads(result.stdout)
+
+    def test_every_fixture_request_round_trips_as_its_definition(self):
+        self.assertEqual(len(self.cases), 21, "the fixture table is not the one this was written against")
+        for case in self.cases:
+            want = case["request"]
+            with self.subTest(action=case["action"]):
+                got = self.check(case["action"], *self.argv_for(want), env=self.authority_env(want))
+                name = "Request_" + case["action"].replace(".", "_")
+                error = next(self.validator(name).iter_errors(got), None)
+                self.assertIsNone(error, str(error))
+                for field in ("protocol", "version", "kind", "action", "action_version",
+                              "idempotency_key", "authority", "precondition", "body"):
+                    self.assertEqual(got[field], want[field], field)
+
+    def test_each_request_carries_a_fresh_request_id(self):
+        env = self.authority_env(self.cases[0]["request"])
+        first, second = (self.check("health", env=env)["request_id"] for _ in range(2))
+        self.assertNotEqual(first, second)
+        for value in (first, second):
+            self.assertRegex(value, r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
+
+    def test_the_deadline_is_the_budget_ahead_and_never_past_sixty_seconds(self):
+        base = self.authority_env(self.cases[0]["request"])
+        for budget, ahead in (("5000", 5000), ("999999", 60000), (None, 30000)):
+            env = dict(base, **({"HEE3_TIMEOUT_MS": budget} if budget else {}))
+            with self.subTest(budget=budget):
+                before = int(time.time() * 1000)
+                deadline = int(self.check("health", env=env)["deadline_unix_ms"])
+                after = int(time.time() * 1000)
+                self.assertGreaterEqual(deadline, before + ahead)
+                self.assertLessEqual(deadline, after + ahead)
+
+    def test_a_request_without_authority_is_refused_by_name(self):
+        for missing in ("HEE3_GRANT_ID", "HEE3_SCOPE_SHA256"):
+            env = self.authority_env(self.cases[0]["request"])
+            env[missing] = ""
+            with self.subTest(missing=missing):
+                result = self.run_wrapper("--check", "health", env=env)
+                self.assertEqual(result.returncode, EXIT_USAGE)
+                self.assertIn(missing, result.stderr)
+
+    def test_an_effectful_action_without_its_idempotency_key_is_refused(self):
+        want = next(case["request"] for case in self.cases if case["action"] == "task.cancel")
+        argv = [arg for arg in self.argv_for(want) if not arg.startswith("@idempotency_key=")]
+        result = self.run_wrapper("--check", "task.cancel", *argv, env=self.authority_env(want))
+        self.assertEqual(result.returncode, EXIT_USAGE)
+        self.assertIn("idempotency_key", result.stderr)
+
+    def test_a_precondition_the_action_forbids_is_refused(self):
+        want = next(case["request"] for case in self.cases if case["action"] == "task.submit")
+        other = next(case["request"]["precondition"] for case in self.cases
+                     if case["request"]["precondition"] is not None)
+        result = self.run_wrapper("--check", "task.submit", *self.argv_for(want),
+                                  "@precondition:=" + json.dumps(other), env=self.authority_env(want))
+        self.assertEqual(result.returncode, EXIT_USAGE)
+        self.assertIn("precondition", result.stderr)
+
+    def test_a_typed_value_is_strict_json(self):
+        env = self.authority_env(self.cases[0]["request"])
+        for value in ('{"a":1,"a":2}', "NaN", "[1,", ""):
+            with self.subTest(value=value):
+                self.assertEqual(self.run_wrapper("--check", "task.get", "selector:=" + value,
+                                                  env=env).returncode, EXIT_USAGE)
+
+    def test_an_admitted_action_without_a_request_definition_is_refused(self):
+        # The action list and the request shapes come from one catalogue; a catalogue that
+        # names an action it does not define is refused, not sent as a guessed shape.
+        catalogue = json.loads(CATALOGUE.read_text())
+        del catalogue["$defs"]["Request_health"]
+        path = self.work / "catalogue.json"
+        path.write_text(json.dumps(catalogue))
+        result = self.run_wrapper("--check", "health", env={"HEE3_CATALOGUE": str(path)})
+        self.assertEqual(result.returncode, EXIT_USAGE)
+        self.assertIn("no request definition for health", result.stderr)
+
+    def test_an_unknown_envelope_field_is_refused(self):
+        env = self.authority_env(self.cases[0]["request"])
+        for arg in ("@kind=request", "@request_id=x", "@=x"):
+            with self.subTest(arg=arg):
+                self.assertEqual(self.run_wrapper("--check", "health", arg, env=env).returncode,
+                                 EXIT_USAGE)
+
+
 class Check(WrapperCase):
     """`--check` is the door `invoke` and `chain` share; it must refuse what they refuse."""
 
     def test_check_prints_the_request_and_needs_no_producer(self):
         result = self.run_wrapper("--check", "task.get", "task_id=$(x) y")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(json.loads(result.stdout),
-                         {"action": "task.get", "arguments": {"task_id": "$(x) y"},
-                          "protocol": "hee3.control", "version": 1})
+        request = json.loads(result.stdout)
+        # The whole request, less the two fields that change per call (a fresh id and a
+        # deadline read from the clock), which `Envelope` pins on their own.
+        self.assertEqual({key: value for key, value in request.items()
+                          if key not in ("request_id", "deadline_unix_ms")},
+                         {"protocol": "hee3.control", "version": 1, "kind": "request",
+                          "action": "task.get", "action_version": 1, "idempotency_key": None,
+                          "authority": {"grant_id": TEST_GRANT, "scope_sha256": TEST_SCOPE},
+                          "precondition": None, "body": {"task_id": "$(x) y"}})
 
     def test_check_does_not_invoke_the_producer(self):
         marker = self.work / "invoked"
@@ -473,8 +621,7 @@ class Cleanup(WrapperCase):
         tmp.mkdir()
         started = self.work / "started"
         producer = self.producer(f"touch '{started}'\nexec sleep 30\n")
-        environment = dict(os.environ, HEE3_CATALOGUE=str(CATALOGUE), LC_ALL="C",
-                           HEE3_PRODUCER=str(producer), TMPDIR=str(tmp))
+        environment = wrapper_environment(HEE3_PRODUCER=str(producer), TMPDIR=str(tmp))
         process = subprocess.Popen(["bash", str(WRAPPER), "health"], env=environment,
                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                    start_new_session=True)
@@ -523,7 +670,7 @@ class ChainCase(WrapperCase):
 import json, sys
 action, request, step, budget = sys.argv[1:5]
 print(json.dumps({"action": action, "step": step, "budget": budget,
-                  "arguments": json.loads(request)["arguments"]}, sort_keys=True))
+                  "arguments": json.loads(request)["body"]}, sort_keys=True))
 PY
         behaviour="$BEHAVIOUR_DIR/$HEE3_CHAIN_STEP"
         if [[ -f $behaviour ]]; then source "$behaviour"; fi
@@ -599,8 +746,7 @@ class ChainOrder(ChainCase):
 
     def test_spec_can_be_read_from_stdin(self):
         path = self.spec([{"id": "only", "action": "health"}])
-        environment = dict(os.environ, HEE3_CATALOGUE=str(CATALOGUE), LC_ALL="C",
-                           HEE3_PRODUCER=str(self.model), **self.environment())
+        environment = wrapper_environment(HEE3_PRODUCER=str(self.model), **self.environment())
         result = subprocess.run(["bash", str(WRAPPER), "chain", "-"], input=path.read_text(),
                                 capture_output=True, text=True, env=environment,
                                 cwd=self.work, check=False, timeout=RUN_BUDGET_S)
@@ -717,9 +863,19 @@ class ChainContracts(ChainCase):
         self.static_refusal([{"id": "a", "action": "task.get", "arguments": {"a=b": "c"}}],
                             "without '='")
 
-    def test_a_non_string_argument_value_is_refused(self):
-        self.static_refusal([{"id": "a", "action": "task.get", "arguments": {"n": 5}}],
-                            "must be a string")
+    def test_a_typed_argument_arrives_typed(self):
+        # A control-v1 body is typed -- task.get's selector is an object -- so a step's
+        # argument is any JSON value, handed to the one request door as `name:=JSON`.
+        body = {"selector": {"task_id": "123e4567-e89b-42d3-a456-000000000007"},
+                "evidence": "summary", "limit": 3, "flags": [True, None]}
+        result = self.chain([{"id": "a", "action": "task.get", "arguments": body}])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.calls()[0]["arguments"], body)
+
+    def test_an_argument_name_ending_in_a_colon_is_refused(self):
+        # `n:` would reach the request builder as `n:=...`, the typed form of a different name.
+        self.static_refusal([{"id": "a", "action": "task.get", "arguments": {"n:": "5"}}],
+                            "must not end in ':'")
 
     def test_an_unknown_action_in_a_late_step_stops_the_chain_before_the_first(self):
         result = self.chain([{"id": "a", "action": "health"}, {"id": "b", "action": "health"},
@@ -993,8 +1149,7 @@ class ChainCancellation(ChainCase):
         path = self.spec([{"id": "quick", "action": "health"},
                           {"id": "long", "action": "health"},
                           {"id": "after", "action": "health"}])
-        environment = dict(os.environ, HEE3_CATALOGUE=str(CATALOGUE), LC_ALL="C",
-                           HEE3_PRODUCER=str(self.model), **self.environment())
+        environment = wrapper_environment(HEE3_PRODUCER=str(self.model), **self.environment())
         process = subprocess.Popen(["bash", str(WRAPPER), "chain", str(path)], env=environment,
                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         wait_for(started)
@@ -1039,8 +1194,7 @@ class ChainBetweenSteps(ChainCase):
         self.behave("big", "head -c 300000 /dev/zero | tr '\\0' x\n")
         path = self.spec([{"id": "big", "action": "health"},
                           {"id": "next", "action": "health"}], timeout_ms)
-        environment = dict(os.environ, HEE3_CATALOGUE=str(CATALOGUE), LC_ALL="C",
-                           HEE3_PRODUCER=str(self.model), **self.environment())
+        environment = wrapper_environment(HEE3_PRODUCER=str(self.model), **self.environment())
         process = subprocess.Popen(["bash", str(WRAPPER), "chain", str(path)], env=environment,
                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         self.addCleanup(lambda: process.poll() is None and process.kill())
@@ -1088,8 +1242,7 @@ class ChainCheckPhase(ChainCase):
         fifo = self.work / "catalogue.fifo"
         os.mkfifo(fifo)
         path = self.spec([{"id": "a", "action": "health"}])
-        environment = dict(os.environ, HEE3_CATALOGUE=str(fifo), LC_ALL="C",
-                           HEE3_PRODUCER=str(self.model), **self.environment())
+        environment = wrapper_environment(HEE3_CATALOGUE=str(fifo), HEE3_PRODUCER=str(self.model), **self.environment())
         process = subprocess.Popen(["bash", str(WRAPPER), "chain", str(path)], env=environment,
                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         self.addCleanup(lambda: process.poll() is None and process.kill())
