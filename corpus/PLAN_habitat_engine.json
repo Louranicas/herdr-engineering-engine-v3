@@ -596,13 +596,13 @@
             "validation_cmd": "Proposed, not implemented: habitat-engine-check case T09 --fixture-root <disposable-fixtures>",
             "validator_available": false,
             "acceptance": "Capability/context/privacy/availability constraints exclude invalid recipes; rules choose a valid recipe with stable explanation; ties and insufficient evidence use an explicit baseline; routing itself makes zero model calls.",
-            "state": "wip",
+            "state": "done",
             "evidence": [
               {
-                "path": "evidence/implementation-T09-20260923/progress.json",
-                "sha256": "5ed90915f7ba0ba7fdef724683972011b673f0a263dde55d650d5bb772e8d403",
+                "path": "evidence/implementation-T09-20260924/closure/T09-closure.json",
+                "sha256": "746b0caf65a908befb6f6ab1a3689a14204598f12b054625d169418237a32343",
                 "task_id": "T09",
-                "scope": "implementation_candidate"
+                "scope": "task_contract_review"
               }
             ],
             "research_refs": [

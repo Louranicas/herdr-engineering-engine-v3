@@ -6,44 +6,44 @@
     "vault": "/var/mnt/STORAGE-10TB/fedora-obsidian-vaults/herdr-engineering-engine-v3.vault",
     "codebase": "/var/home/herdr-engineering-engine-v3"
   },
-  "source_plan_sha256": "cf20feb143419c6c36651ffcfa0a5446c2f2420107d52502d8949361e872ad82",
+  "source_plan_sha256": "a14363806a84c8d6e34a13a1ac9437bf7516fd4ce0f2546b75ec470a884a3330",
   "catalogue_sha256": "8a96e05fe0f32f7cc21d0b1dda2df5f1b0a934d9216acfb4b7d510a476e36025",
   "readiness": {
     "id": "HEE3-READINESS-001",
-    "sha256": "ee8829ad2c95fe5d344c1e7cff10c583d36a9b01cceca807d69e3666e7ae1d06",
+    "sha256": "3bcde91b4617c1a38bcbb97c36bddbc9e999c7692a69b0ba21caec9f559fe250",
     "note": "Delivery/Readiness/Index.md",
     "engine_proof": "pending",
     "scores_promoted": false
   },
   "security_profile": {
     "id": "HEE3-SECURITY-DAYBREAK-001",
-    "sha256": "2718a69253dd3953fbecf18f44fe43ed4258ab23229eb0f493ac2a8bc41a5e2f",
+    "sha256": "11286ae726e81930616012017569108e7c39eb2bc625fcb08674ab6a47355c08",
     "requested_model": "gpt-daybreak-blue-latest",
     "runtime_enabled": false,
     "qualification": "unassessed"
   },
   "completion": {
     "id": "HEE3-COMPLETION-001",
-    "sha256": "5b3cc45542365f8abc31063b23da0fe824829d093fd3605025a9e6d2a7c0e250",
+    "sha256": "d593a1eef4c78de87afe0202ff1dcfbdd3c782692fae6480a425e40774b6a85b",
     "note": "Standards/Module Completion.md",
     "admission_validator_available": false,
     "accepted_modules": []
   },
   "testing_standard": {
     "id": "HEE3-TEST-STD-001",
-    "sha256": "db23abb7dd2d94ab58f51dd48be852fed57635378eb853399ee1ca26f3ac39cc",
+    "sha256": "f68d836a62a0522f46459f630f3beca159d1e87b6294a337101bd72392b5c578",
     "note": "Standards/Module Testing.md"
   },
   "learnings": {
     "id": "HEE3-LEARNINGS-001",
-    "sha256": "b99d095e943cdd00fb3d02b2801bf0a69ead03a6009ad85ac17b1fa21337f6a2",
+    "sha256": "c891722d3a43c58acbcb9de19739e1f865c9d34ef4c5f75acafde399bf2ba4e5",
     "note": "Learnings/Index.md",
     "sources": 13,
     "lessons": 14
   },
   "public_interfaces": {
     "id": "HEE3-INTERFACES-001",
-    "sha256": "8b8a8d5d82749ad03a7a0eed7882f8d7d72bdf89064d7812e4980b7f2b8d819f",
+    "sha256": "fe9171dc482e2121ffb85acc0fec7cc794ac64ed853a7f76cda794fead8124ec",
     "note": "Interfaces/Module Public Contracts.md",
     "admission_validator_available": false,
     "accepted_modules": []
@@ -1044,13 +1044,13 @@
           "validation_cmd": "Proposed, not implemented: habitat-engine-check case T09 --fixture-root <disposable-fixtures>",
           "validator_available": false,
           "acceptance": "Capability/context/privacy/availability constraints exclude invalid recipes; rules choose a valid recipe with stable explanation; ties and insufficient evidence use an explicit baseline; routing itself makes zero model calls.",
-          "state": "wip",
+          "state": "done",
           "evidence": [
             {
-              "path": "evidence/implementation-T09-20260923/progress.json",
-              "sha256": "5ed90915f7ba0ba7fdef724683972011b673f0a263dde55d650d5bb772e8d403",
+              "path": "evidence/implementation-T09-20260924/closure/T09-closure.json",
+              "sha256": "746b0caf65a908befb6f6ab1a3689a14204598f12b054625d169418237a32343",
               "task_id": "T09",
-              "scope": "implementation_candidate"
+              "scope": "task_contract_review"
             }
           ],
           "research_refs": [
@@ -3551,7 +3551,7 @@
       ],
       "readiness": {
         "id": "HEE3-READINESS-001",
-        "sha256": "ee8829ad2c95fe5d344c1e7cff10c583d36a9b01cceca807d69e3666e7ae1d06",
+        "sha256": "3bcde91b4617c1a38bcbb97c36bddbc9e999c7692a69b0ba21caec9f559fe250",
         "facets": [
           "F2",
           "F3",
@@ -3610,7 +3610,7 @@
       },
       "testing_standard": {
         "standard_id": "HEE3-TEST-STD-001",
-        "standard_sha256": "db23abb7dd2d94ab58f51dd48be852fed57635378eb853399ee1ca26f3ac39cc",
+        "standard_sha256": "f68d836a62a0522f46459f630f3beca159d1e87b6294a337101bd72392b5c578",
         "minimum_qualifying_cases": 50,
         "maximum_baseline_warnings": 0,
         "maximum_baseline_errors": 0,
@@ -3626,7 +3626,7 @@
       },
       "public_interface": {
         "convention_id": "HEE3-INTERFACES-001",
-        "convention_sha256": "8b8a8d5d82749ad03a7a0eed7882f8d7d72bdf89064d7812e4980b7f2b8d819f",
+        "convention_sha256": "fe9171dc482e2121ffb85acc0fec7cc794ac64ed853a7f76cda794fead8124ec",
         "accepted_current_interface": null,
         "admission_validator_available": false,
         "profile": {
@@ -3658,7 +3658,7 @@
       },
       "completion": {
         "standard_id": "HEE3-COMPLETION-001",
-        "standard_sha256": "5b3cc45542365f8abc31063b23da0fe824829d093fd3605025a9e6d2a7c0e250",
+        "standard_sha256": "d593a1eef4c78de87afe0202ff1dcfbdd3c782692fae6480a425e40774b6a85b",
         "state": "unassessed",
         "admission_validator_available": false,
         "profile": {
@@ -3694,7 +3694,7 @@
       },
       "security_review": {
         "requested_model": "gpt-daybreak-blue-latest",
-        "profile_sha256": "2718a69253dd3953fbecf18f44fe43ed4258ab23229eb0f493ac2a8bc41a5e2f",
+        "profile_sha256": "11286ae726e81930616012017569108e7c39eb2bc625fcb08674ab6a47355c08",
         "runtime_enabled": false,
         "completion_authority": false,
         "silent_fallback_allowed": false,
@@ -3708,7 +3708,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "b99d095e943cdd00fb3d02b2801bf0a69ead03a6009ad85ac17b1fa21337f6a2",
+        "convention_sha256": "c891722d3a43c58acbcb9de19739e1f865c9d34ef4c5f75acafde399bf2ba4e5",
         "lessons": [
           "LRN01",
           "LRN03",
@@ -6854,7 +6854,7 @@
       ],
       "readiness": {
         "id": "HEE3-READINESS-001",
-        "sha256": "ee8829ad2c95fe5d344c1e7cff10c583d36a9b01cceca807d69e3666e7ae1d06",
+        "sha256": "3bcde91b4617c1a38bcbb97c36bddbc9e999c7692a69b0ba21caec9f559fe250",
         "facets": [
           "F1",
           "F2",
@@ -6920,7 +6920,7 @@
       },
       "testing_standard": {
         "standard_id": "HEE3-TEST-STD-001",
-        "standard_sha256": "db23abb7dd2d94ab58f51dd48be852fed57635378eb853399ee1ca26f3ac39cc",
+        "standard_sha256": "f68d836a62a0522f46459f630f3beca159d1e87b6294a337101bd72392b5c578",
         "minimum_qualifying_cases": 50,
         "maximum_baseline_warnings": 0,
         "maximum_baseline_errors": 0,
@@ -6936,7 +6936,7 @@
       },
       "public_interface": {
         "convention_id": "HEE3-INTERFACES-001",
-        "convention_sha256": "8b8a8d5d82749ad03a7a0eed7882f8d7d72bdf89064d7812e4980b7f2b8d819f",
+        "convention_sha256": "fe9171dc482e2121ffb85acc0fec7cc794ac64ed853a7f76cda794fead8124ec",
         "accepted_current_interface": null,
         "admission_validator_available": false,
         "profile": {
@@ -6968,7 +6968,7 @@
       },
       "completion": {
         "standard_id": "HEE3-COMPLETION-001",
-        "standard_sha256": "5b3cc45542365f8abc31063b23da0fe824829d093fd3605025a9e6d2a7c0e250",
+        "standard_sha256": "d593a1eef4c78de87afe0202ff1dcfbdd3c782692fae6480a425e40774b6a85b",
         "state": "unassessed",
         "admission_validator_available": false,
         "profile": {
@@ -7004,7 +7004,7 @@
       },
       "security_review": {
         "requested_model": "gpt-daybreak-blue-latest",
-        "profile_sha256": "2718a69253dd3953fbecf18f44fe43ed4258ab23229eb0f493ac2a8bc41a5e2f",
+        "profile_sha256": "11286ae726e81930616012017569108e7c39eb2bc625fcb08674ab6a47355c08",
         "runtime_enabled": false,
         "completion_authority": false,
         "silent_fallback_allowed": false,
@@ -7018,7 +7018,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "b99d095e943cdd00fb3d02b2801bf0a69ead03a6009ad85ac17b1fa21337f6a2",
+        "convention_sha256": "c891722d3a43c58acbcb9de19739e1f865c9d34ef4c5f75acafde399bf2ba4e5",
         "lessons": [
           "LRN01",
           "LRN04",
@@ -9783,7 +9783,7 @@
       ],
       "readiness": {
         "id": "HEE3-READINESS-001",
-        "sha256": "ee8829ad2c95fe5d344c1e7cff10c583d36a9b01cceca807d69e3666e7ae1d06",
+        "sha256": "3bcde91b4617c1a38bcbb97c36bddbc9e999c7692a69b0ba21caec9f559fe250",
         "facets": [
           "F2",
           "F3",
@@ -9852,7 +9852,7 @@
       },
       "testing_standard": {
         "standard_id": "HEE3-TEST-STD-001",
-        "standard_sha256": "db23abb7dd2d94ab58f51dd48be852fed57635378eb853399ee1ca26f3ac39cc",
+        "standard_sha256": "f68d836a62a0522f46459f630f3beca159d1e87b6294a337101bd72392b5c578",
         "minimum_qualifying_cases": 50,
         "maximum_baseline_warnings": 0,
         "maximum_baseline_errors": 0,
@@ -9868,7 +9868,7 @@
       },
       "public_interface": {
         "convention_id": "HEE3-INTERFACES-001",
-        "convention_sha256": "8b8a8d5d82749ad03a7a0eed7882f8d7d72bdf89064d7812e4980b7f2b8d819f",
+        "convention_sha256": "fe9171dc482e2121ffb85acc0fec7cc794ac64ed853a7f76cda794fead8124ec",
         "accepted_current_interface": null,
         "admission_validator_available": false,
         "profile": {
@@ -9900,7 +9900,7 @@
       },
       "completion": {
         "standard_id": "HEE3-COMPLETION-001",
-        "standard_sha256": "5b3cc45542365f8abc31063b23da0fe824829d093fd3605025a9e6d2a7c0e250",
+        "standard_sha256": "d593a1eef4c78de87afe0202ff1dcfbdd3c782692fae6480a425e40774b6a85b",
         "state": "unassessed",
         "admission_validator_available": false,
         "profile": {
@@ -9936,7 +9936,7 @@
       },
       "security_review": {
         "requested_model": "gpt-daybreak-blue-latest",
-        "profile_sha256": "2718a69253dd3953fbecf18f44fe43ed4258ab23229eb0f493ac2a8bc41a5e2f",
+        "profile_sha256": "11286ae726e81930616012017569108e7c39eb2bc625fcb08674ab6a47355c08",
         "runtime_enabled": false,
         "completion_authority": false,
         "silent_fallback_allowed": false,
@@ -9950,7 +9950,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "b99d095e943cdd00fb3d02b2801bf0a69ead03a6009ad85ac17b1fa21337f6a2",
+        "convention_sha256": "c891722d3a43c58acbcb9de19739e1f865c9d34ef4c5f75acafde399bf2ba4e5",
         "lessons": [
           "LRN04",
           "LRN05",
@@ -10747,13 +10747,13 @@
           "validation_cmd": "Proposed, not implemented: habitat-engine-check case T09 --fixture-root <disposable-fixtures>",
           "validator_available": false,
           "acceptance": "Capability/context/privacy/availability constraints exclude invalid recipes; rules choose a valid recipe with stable explanation; ties and insufficient evidence use an explicit baseline; routing itself makes zero model calls.",
-          "state": "wip",
+          "state": "done",
           "evidence": [
             {
-              "path": "evidence/implementation-T09-20260923/progress.json",
-              "sha256": "5ed90915f7ba0ba7fdef724683972011b673f0a263dde55d650d5bb772e8d403",
+              "path": "evidence/implementation-T09-20260924/closure/T09-closure.json",
+              "sha256": "746b0caf65a908befb6f6ab1a3689a14204598f12b054625d169418237a32343",
               "task_id": "T09",
-              "scope": "implementation_candidate"
+              "scope": "task_contract_review"
             }
           ],
           "research_refs": [
@@ -11645,7 +11645,7 @@
       ],
       "readiness": {
         "id": "HEE3-READINESS-001",
-        "sha256": "ee8829ad2c95fe5d344c1e7cff10c583d36a9b01cceca807d69e3666e7ae1d06",
+        "sha256": "3bcde91b4617c1a38bcbb97c36bddbc9e999c7692a69b0ba21caec9f559fe250",
         "facets": [
           "F2",
           "F3",
@@ -11702,7 +11702,7 @@
       },
       "testing_standard": {
         "standard_id": "HEE3-TEST-STD-001",
-        "standard_sha256": "db23abb7dd2d94ab58f51dd48be852fed57635378eb853399ee1ca26f3ac39cc",
+        "standard_sha256": "f68d836a62a0522f46459f630f3beca159d1e87b6294a337101bd72392b5c578",
         "minimum_qualifying_cases": 50,
         "maximum_baseline_warnings": 0,
         "maximum_baseline_errors": 0,
@@ -11718,7 +11718,7 @@
       },
       "public_interface": {
         "convention_id": "HEE3-INTERFACES-001",
-        "convention_sha256": "8b8a8d5d82749ad03a7a0eed7882f8d7d72bdf89064d7812e4980b7f2b8d819f",
+        "convention_sha256": "fe9171dc482e2121ffb85acc0fec7cc794ac64ed853a7f76cda794fead8124ec",
         "accepted_current_interface": null,
         "admission_validator_available": false,
         "profile": {
@@ -11750,7 +11750,7 @@
       },
       "completion": {
         "standard_id": "HEE3-COMPLETION-001",
-        "standard_sha256": "5b3cc45542365f8abc31063b23da0fe824829d093fd3605025a9e6d2a7c0e250",
+        "standard_sha256": "d593a1eef4c78de87afe0202ff1dcfbdd3c782692fae6480a425e40774b6a85b",
         "state": "unassessed",
         "admission_validator_available": false,
         "profile": {
@@ -11786,7 +11786,7 @@
       },
       "security_review": {
         "requested_model": "gpt-daybreak-blue-latest",
-        "profile_sha256": "2718a69253dd3953fbecf18f44fe43ed4258ab23229eb0f493ac2a8bc41a5e2f",
+        "profile_sha256": "11286ae726e81930616012017569108e7c39eb2bc625fcb08674ab6a47355c08",
         "runtime_enabled": false,
         "completion_authority": false,
         "silent_fallback_allowed": false,
@@ -11800,7 +11800,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "b99d095e943cdd00fb3d02b2801bf0a69ead03a6009ad85ac17b1fa21337f6a2",
+        "convention_sha256": "c891722d3a43c58acbcb9de19739e1f865c9d34ef4c5f75acafde399bf2ba4e5",
         "lessons": [
           "LRN05",
           "LRN08",
@@ -12466,13 +12466,13 @@
           "validation_cmd": "Proposed, not implemented: habitat-engine-check case T09 --fixture-root <disposable-fixtures>",
           "validator_available": false,
           "acceptance": "Capability/context/privacy/availability constraints exclude invalid recipes; rules choose a valid recipe with stable explanation; ties and insufficient evidence use an explicit baseline; routing itself makes zero model calls.",
-          "state": "wip",
+          "state": "done",
           "evidence": [
             {
-              "path": "evidence/implementation-T09-20260923/progress.json",
-              "sha256": "5ed90915f7ba0ba7fdef724683972011b673f0a263dde55d650d5bb772e8d403",
+              "path": "evidence/implementation-T09-20260924/closure/T09-closure.json",
+              "sha256": "746b0caf65a908befb6f6ab1a3689a14204598f12b054625d169418237a32343",
               "task_id": "T09",
-              "scope": "implementation_candidate"
+              "scope": "task_contract_review"
             }
           ],
           "research_refs": [
@@ -13279,7 +13279,7 @@
       ],
       "readiness": {
         "id": "HEE3-READINESS-001",
-        "sha256": "ee8829ad2c95fe5d344c1e7cff10c583d36a9b01cceca807d69e3666e7ae1d06",
+        "sha256": "3bcde91b4617c1a38bcbb97c36bddbc9e999c7692a69b0ba21caec9f559fe250",
         "facets": [
           "F1",
           "F2",
@@ -13343,7 +13343,7 @@
       },
       "testing_standard": {
         "standard_id": "HEE3-TEST-STD-001",
-        "standard_sha256": "db23abb7dd2d94ab58f51dd48be852fed57635378eb853399ee1ca26f3ac39cc",
+        "standard_sha256": "f68d836a62a0522f46459f630f3beca159d1e87b6294a337101bd72392b5c578",
         "minimum_qualifying_cases": 50,
         "maximum_baseline_warnings": 0,
         "maximum_baseline_errors": 0,
@@ -13359,7 +13359,7 @@
       },
       "public_interface": {
         "convention_id": "HEE3-INTERFACES-001",
-        "convention_sha256": "8b8a8d5d82749ad03a7a0eed7882f8d7d72bdf89064d7812e4980b7f2b8d819f",
+        "convention_sha256": "fe9171dc482e2121ffb85acc0fec7cc794ac64ed853a7f76cda794fead8124ec",
         "accepted_current_interface": null,
         "admission_validator_available": false,
         "profile": {
@@ -13391,7 +13391,7 @@
       },
       "completion": {
         "standard_id": "HEE3-COMPLETION-001",
-        "standard_sha256": "5b3cc45542365f8abc31063b23da0fe824829d093fd3605025a9e6d2a7c0e250",
+        "standard_sha256": "d593a1eef4c78de87afe0202ff1dcfbdd3c782692fae6480a425e40774b6a85b",
         "state": "unassessed",
         "admission_validator_available": false,
         "profile": {
@@ -13427,7 +13427,7 @@
       },
       "security_review": {
         "requested_model": "gpt-daybreak-blue-latest",
-        "profile_sha256": "2718a69253dd3953fbecf18f44fe43ed4258ab23229eb0f493ac2a8bc41a5e2f",
+        "profile_sha256": "11286ae726e81930616012017569108e7c39eb2bc625fcb08674ab6a47355c08",
         "runtime_enabled": false,
         "completion_authority": false,
         "silent_fallback_allowed": false,
@@ -13441,7 +13441,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "b99d095e943cdd00fb3d02b2801bf0a69ead03a6009ad85ac17b1fa21337f6a2",
+        "convention_sha256": "c891722d3a43c58acbcb9de19739e1f865c9d34ef4c5f75acafde399bf2ba4e5",
         "lessons": [
           "LRN05",
           "LRN08",
@@ -14141,13 +14141,13 @@
           "validation_cmd": "Proposed, not implemented: habitat-engine-check case T09 --fixture-root <disposable-fixtures>",
           "validator_available": false,
           "acceptance": "Capability/context/privacy/availability constraints exclude invalid recipes; rules choose a valid recipe with stable explanation; ties and insufficient evidence use an explicit baseline; routing itself makes zero model calls.",
-          "state": "wip",
+          "state": "done",
           "evidence": [
             {
-              "path": "evidence/implementation-T09-20260923/progress.json",
-              "sha256": "5ed90915f7ba0ba7fdef724683972011b673f0a263dde55d650d5bb772e8d403",
+              "path": "evidence/implementation-T09-20260924/closure/T09-closure.json",
+              "sha256": "746b0caf65a908befb6f6ab1a3689a14204598f12b054625d169418237a32343",
               "task_id": "T09",
-              "scope": "implementation_candidate"
+              "scope": "task_contract_review"
             }
           ],
           "research_refs": [
@@ -15085,7 +15085,7 @@
       ],
       "readiness": {
         "id": "HEE3-READINESS-001",
-        "sha256": "ee8829ad2c95fe5d344c1e7cff10c583d36a9b01cceca807d69e3666e7ae1d06",
+        "sha256": "3bcde91b4617c1a38bcbb97c36bddbc9e999c7692a69b0ba21caec9f559fe250",
         "facets": [
           "F1",
           "F2",
@@ -15151,7 +15151,7 @@
       },
       "testing_standard": {
         "standard_id": "HEE3-TEST-STD-001",
-        "standard_sha256": "db23abb7dd2d94ab58f51dd48be852fed57635378eb853399ee1ca26f3ac39cc",
+        "standard_sha256": "f68d836a62a0522f46459f630f3beca159d1e87b6294a337101bd72392b5c578",
         "minimum_qualifying_cases": 50,
         "maximum_baseline_warnings": 0,
         "maximum_baseline_errors": 0,
@@ -15167,7 +15167,7 @@
       },
       "public_interface": {
         "convention_id": "HEE3-INTERFACES-001",
-        "convention_sha256": "8b8a8d5d82749ad03a7a0eed7882f8d7d72bdf89064d7812e4980b7f2b8d819f",
+        "convention_sha256": "fe9171dc482e2121ffb85acc0fec7cc794ac64ed853a7f76cda794fead8124ec",
         "accepted_current_interface": null,
         "admission_validator_available": false,
         "profile": {
@@ -15199,7 +15199,7 @@
       },
       "completion": {
         "standard_id": "HEE3-COMPLETION-001",
-        "standard_sha256": "5b3cc45542365f8abc31063b23da0fe824829d093fd3605025a9e6d2a7c0e250",
+        "standard_sha256": "d593a1eef4c78de87afe0202ff1dcfbdd3c782692fae6480a425e40774b6a85b",
         "state": "unassessed",
         "admission_validator_available": false,
         "profile": {
@@ -15235,7 +15235,7 @@
       },
       "security_review": {
         "requested_model": "gpt-daybreak-blue-latest",
-        "profile_sha256": "2718a69253dd3953fbecf18f44fe43ed4258ab23229eb0f493ac2a8bc41a5e2f",
+        "profile_sha256": "11286ae726e81930616012017569108e7c39eb2bc625fcb08674ab6a47355c08",
         "runtime_enabled": false,
         "completion_authority": false,
         "silent_fallback_allowed": false,
@@ -15249,7 +15249,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "b99d095e943cdd00fb3d02b2801bf0a69ead03a6009ad85ac17b1fa21337f6a2",
+        "convention_sha256": "c891722d3a43c58acbcb9de19739e1f865c9d34ef4c5f75acafde399bf2ba4e5",
         "lessons": [
           "LRN08",
           "LRN09",
@@ -19952,7 +19952,7 @@
       ],
       "readiness": {
         "id": "HEE3-READINESS-001",
-        "sha256": "ee8829ad2c95fe5d344c1e7cff10c583d36a9b01cceca807d69e3666e7ae1d06",
+        "sha256": "3bcde91b4617c1a38bcbb97c36bddbc9e999c7692a69b0ba21caec9f559fe250",
         "facets": [
           "F2",
           "F3",
@@ -20013,7 +20013,7 @@
       },
       "testing_standard": {
         "standard_id": "HEE3-TEST-STD-001",
-        "standard_sha256": "db23abb7dd2d94ab58f51dd48be852fed57635378eb853399ee1ca26f3ac39cc",
+        "standard_sha256": "f68d836a62a0522f46459f630f3beca159d1e87b6294a337101bd72392b5c578",
         "minimum_qualifying_cases": 50,
         "maximum_baseline_warnings": 0,
         "maximum_baseline_errors": 0,
@@ -20029,7 +20029,7 @@
       },
       "public_interface": {
         "convention_id": "HEE3-INTERFACES-001",
-        "convention_sha256": "8b8a8d5d82749ad03a7a0eed7882f8d7d72bdf89064d7812e4980b7f2b8d819f",
+        "convention_sha256": "fe9171dc482e2121ffb85acc0fec7cc794ac64ed853a7f76cda794fead8124ec",
         "accepted_current_interface": null,
         "admission_validator_available": false,
         "profile": {
@@ -20061,7 +20061,7 @@
       },
       "completion": {
         "standard_id": "HEE3-COMPLETION-001",
-        "standard_sha256": "5b3cc45542365f8abc31063b23da0fe824829d093fd3605025a9e6d2a7c0e250",
+        "standard_sha256": "d593a1eef4c78de87afe0202ff1dcfbdd3c782692fae6480a425e40774b6a85b",
         "state": "unassessed",
         "admission_validator_available": false,
         "profile": {
@@ -20097,7 +20097,7 @@
       },
       "security_review": {
         "requested_model": "gpt-daybreak-blue-latest",
-        "profile_sha256": "2718a69253dd3953fbecf18f44fe43ed4258ab23229eb0f493ac2a8bc41a5e2f",
+        "profile_sha256": "11286ae726e81930616012017569108e7c39eb2bc625fcb08674ab6a47355c08",
         "runtime_enabled": false,
         "completion_authority": false,
         "silent_fallback_allowed": false,
@@ -20111,7 +20111,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "b99d095e943cdd00fb3d02b2801bf0a69ead03a6009ad85ac17b1fa21337f6a2",
+        "convention_sha256": "c891722d3a43c58acbcb9de19739e1f865c9d34ef4c5f75acafde399bf2ba4e5",
         "lessons": [
           "LRN03",
           "LRN05",
@@ -25465,7 +25465,7 @@
       ],
       "readiness": {
         "id": "HEE3-READINESS-001",
-        "sha256": "ee8829ad2c95fe5d344c1e7cff10c583d36a9b01cceca807d69e3666e7ae1d06",
+        "sha256": "3bcde91b4617c1a38bcbb97c36bddbc9e999c7692a69b0ba21caec9f559fe250",
         "facets": [
           "F2",
           "F3",
@@ -25535,7 +25535,7 @@
       },
       "testing_standard": {
         "standard_id": "HEE3-TEST-STD-001",
-        "standard_sha256": "db23abb7dd2d94ab58f51dd48be852fed57635378eb853399ee1ca26f3ac39cc",
+        "standard_sha256": "f68d836a62a0522f46459f630f3beca159d1e87b6294a337101bd72392b5c578",
         "minimum_qualifying_cases": 50,
         "maximum_baseline_warnings": 0,
         "maximum_baseline_errors": 0,
@@ -25551,7 +25551,7 @@
       },
       "public_interface": {
         "convention_id": "HEE3-INTERFACES-001",
-        "convention_sha256": "8b8a8d5d82749ad03a7a0eed7882f8d7d72bdf89064d7812e4980b7f2b8d819f",
+        "convention_sha256": "fe9171dc482e2121ffb85acc0fec7cc794ac64ed853a7f76cda794fead8124ec",
         "accepted_current_interface": null,
         "admission_validator_available": false,
         "profile": {
@@ -25583,7 +25583,7 @@
       },
       "completion": {
         "standard_id": "HEE3-COMPLETION-001",
-        "standard_sha256": "5b3cc45542365f8abc31063b23da0fe824829d093fd3605025a9e6d2a7c0e250",
+        "standard_sha256": "d593a1eef4c78de87afe0202ff1dcfbdd3c782692fae6480a425e40774b6a85b",
         "state": "unassessed",
         "admission_validator_available": false,
         "profile": {
@@ -25619,7 +25619,7 @@
       },
       "security_review": {
         "requested_model": "gpt-daybreak-blue-latest",
-        "profile_sha256": "2718a69253dd3953fbecf18f44fe43ed4258ab23229eb0f493ac2a8bc41a5e2f",
+        "profile_sha256": "11286ae726e81930616012017569108e7c39eb2bc625fcb08674ab6a47355c08",
         "runtime_enabled": false,
         "completion_authority": false,
         "silent_fallback_allowed": false,
@@ -25633,7 +25633,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "b99d095e943cdd00fb3d02b2801bf0a69ead03a6009ad85ac17b1fa21337f6a2",
+        "convention_sha256": "c891722d3a43c58acbcb9de19739e1f865c9d34ef4c5f75acafde399bf2ba4e5",
         "lessons": [
           "LRN01",
           "LRN02",
@@ -27011,7 +27011,7 @@
       ],
       "readiness": {
         "id": "HEE3-READINESS-001",
-        "sha256": "ee8829ad2c95fe5d344c1e7cff10c583d36a9b01cceca807d69e3666e7ae1d06",
+        "sha256": "3bcde91b4617c1a38bcbb97c36bddbc9e999c7692a69b0ba21caec9f559fe250",
         "facets": [
           "F2",
           "F3",
@@ -27079,7 +27079,7 @@
       },
       "testing_standard": {
         "standard_id": "HEE3-TEST-STD-001",
-        "standard_sha256": "db23abb7dd2d94ab58f51dd48be852fed57635378eb853399ee1ca26f3ac39cc",
+        "standard_sha256": "f68d836a62a0522f46459f630f3beca159d1e87b6294a337101bd72392b5c578",
         "minimum_qualifying_cases": 50,
         "maximum_baseline_warnings": 0,
         "maximum_baseline_errors": 0,
@@ -27095,7 +27095,7 @@
       },
       "public_interface": {
         "convention_id": "HEE3-INTERFACES-001",
-        "convention_sha256": "8b8a8d5d82749ad03a7a0eed7882f8d7d72bdf89064d7812e4980b7f2b8d819f",
+        "convention_sha256": "fe9171dc482e2121ffb85acc0fec7cc794ac64ed853a7f76cda794fead8124ec",
         "accepted_current_interface": null,
         "admission_validator_available": false,
         "profile": {
@@ -27127,7 +27127,7 @@
       },
       "completion": {
         "standard_id": "HEE3-COMPLETION-001",
-        "standard_sha256": "5b3cc45542365f8abc31063b23da0fe824829d093fd3605025a9e6d2a7c0e250",
+        "standard_sha256": "d593a1eef4c78de87afe0202ff1dcfbdd3c782692fae6480a425e40774b6a85b",
         "state": "unassessed",
         "admission_validator_available": false,
         "profile": {
@@ -27163,7 +27163,7 @@
       },
       "security_review": {
         "requested_model": "gpt-daybreak-blue-latest",
-        "profile_sha256": "2718a69253dd3953fbecf18f44fe43ed4258ab23229eb0f493ac2a8bc41a5e2f",
+        "profile_sha256": "11286ae726e81930616012017569108e7c39eb2bc625fcb08674ab6a47355c08",
         "runtime_enabled": false,
         "completion_authority": false,
         "silent_fallback_allowed": false,
@@ -27177,7 +27177,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "b99d095e943cdd00fb3d02b2801bf0a69ead03a6009ad85ac17b1fa21337f6a2",
+        "convention_sha256": "c891722d3a43c58acbcb9de19739e1f865c9d34ef4c5f75acafde399bf2ba4e5",
         "lessons": [
           "LRN05",
           "LRN06",
@@ -28826,7 +28826,7 @@
       ],
       "readiness": {
         "id": "HEE3-READINESS-001",
-        "sha256": "ee8829ad2c95fe5d344c1e7cff10c583d36a9b01cceca807d69e3666e7ae1d06",
+        "sha256": "3bcde91b4617c1a38bcbb97c36bddbc9e999c7692a69b0ba21caec9f559fe250",
         "facets": [
           "F2",
           "F3",
@@ -28883,7 +28883,7 @@
       },
       "testing_standard": {
         "standard_id": "HEE3-TEST-STD-001",
-        "standard_sha256": "db23abb7dd2d94ab58f51dd48be852fed57635378eb853399ee1ca26f3ac39cc",
+        "standard_sha256": "f68d836a62a0522f46459f630f3beca159d1e87b6294a337101bd72392b5c578",
         "minimum_qualifying_cases": 50,
         "maximum_baseline_warnings": 0,
         "maximum_baseline_errors": 0,
@@ -28899,7 +28899,7 @@
       },
       "public_interface": {
         "convention_id": "HEE3-INTERFACES-001",
-        "convention_sha256": "8b8a8d5d82749ad03a7a0eed7882f8d7d72bdf89064d7812e4980b7f2b8d819f",
+        "convention_sha256": "fe9171dc482e2121ffb85acc0fec7cc794ac64ed853a7f76cda794fead8124ec",
         "accepted_current_interface": null,
         "admission_validator_available": false,
         "profile": {
@@ -28931,7 +28931,7 @@
       },
       "completion": {
         "standard_id": "HEE3-COMPLETION-001",
-        "standard_sha256": "5b3cc45542365f8abc31063b23da0fe824829d093fd3605025a9e6d2a7c0e250",
+        "standard_sha256": "d593a1eef4c78de87afe0202ff1dcfbdd3c782692fae6480a425e40774b6a85b",
         "state": "unassessed",
         "admission_validator_available": false,
         "profile": {
@@ -28967,7 +28967,7 @@
       },
       "security_review": {
         "requested_model": "gpt-daybreak-blue-latest",
-        "profile_sha256": "2718a69253dd3953fbecf18f44fe43ed4258ab23229eb0f493ac2a8bc41a5e2f",
+        "profile_sha256": "11286ae726e81930616012017569108e7c39eb2bc625fcb08674ab6a47355c08",
         "runtime_enabled": false,
         "completion_authority": false,
         "silent_fallback_allowed": false,
@@ -28981,7 +28981,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "b99d095e943cdd00fb3d02b2801bf0a69ead03a6009ad85ac17b1fa21337f6a2",
+        "convention_sha256": "c891722d3a43c58acbcb9de19739e1f865c9d34ef4c5f75acafde399bf2ba4e5",
         "lessons": [
           "LRN07",
           "LRN08",
@@ -30417,7 +30417,7 @@
       ],
       "readiness": {
         "id": "HEE3-READINESS-001",
-        "sha256": "ee8829ad2c95fe5d344c1e7cff10c583d36a9b01cceca807d69e3666e7ae1d06",
+        "sha256": "3bcde91b4617c1a38bcbb97c36bddbc9e999c7692a69b0ba21caec9f559fe250",
         "facets": [
           "F2",
           "F3",
@@ -30475,7 +30475,7 @@
       },
       "testing_standard": {
         "standard_id": "HEE3-TEST-STD-001",
-        "standard_sha256": "db23abb7dd2d94ab58f51dd48be852fed57635378eb853399ee1ca26f3ac39cc",
+        "standard_sha256": "f68d836a62a0522f46459f630f3beca159d1e87b6294a337101bd72392b5c578",
         "minimum_qualifying_cases": 50,
         "maximum_baseline_warnings": 0,
         "maximum_baseline_errors": 0,
@@ -30491,7 +30491,7 @@
       },
       "public_interface": {
         "convention_id": "HEE3-INTERFACES-001",
-        "convention_sha256": "8b8a8d5d82749ad03a7a0eed7882f8d7d72bdf89064d7812e4980b7f2b8d819f",
+        "convention_sha256": "fe9171dc482e2121ffb85acc0fec7cc794ac64ed853a7f76cda794fead8124ec",
         "accepted_current_interface": null,
         "admission_validator_available": false,
         "profile": {
@@ -30523,7 +30523,7 @@
       },
       "completion": {
         "standard_id": "HEE3-COMPLETION-001",
-        "standard_sha256": "5b3cc45542365f8abc31063b23da0fe824829d093fd3605025a9e6d2a7c0e250",
+        "standard_sha256": "d593a1eef4c78de87afe0202ff1dcfbdd3c782692fae6480a425e40774b6a85b",
         "state": "unassessed",
         "admission_validator_available": false,
         "profile": {
@@ -30559,7 +30559,7 @@
       },
       "security_review": {
         "requested_model": "gpt-daybreak-blue-latest",
-        "profile_sha256": "2718a69253dd3953fbecf18f44fe43ed4258ab23229eb0f493ac2a8bc41a5e2f",
+        "profile_sha256": "11286ae726e81930616012017569108e7c39eb2bc625fcb08674ab6a47355c08",
         "runtime_enabled": false,
         "completion_authority": false,
         "silent_fallback_allowed": false,
@@ -30573,7 +30573,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "b99d095e943cdd00fb3d02b2801bf0a69ead03a6009ad85ac17b1fa21337f6a2",
+        "convention_sha256": "c891722d3a43c58acbcb9de19739e1f865c9d34ef4c5f75acafde399bf2ba4e5",
         "lessons": [
           "LRN03",
           "LRN08",
@@ -31981,7 +31981,7 @@
       ],
       "readiness": {
         "id": "HEE3-READINESS-001",
-        "sha256": "ee8829ad2c95fe5d344c1e7cff10c583d36a9b01cceca807d69e3666e7ae1d06",
+        "sha256": "3bcde91b4617c1a38bcbb97c36bddbc9e999c7692a69b0ba21caec9f559fe250",
         "facets": [
           "F2",
           "F3",
@@ -32049,7 +32049,7 @@
       },
       "testing_standard": {
         "standard_id": "HEE3-TEST-STD-001",
-        "standard_sha256": "db23abb7dd2d94ab58f51dd48be852fed57635378eb853399ee1ca26f3ac39cc",
+        "standard_sha256": "f68d836a62a0522f46459f630f3beca159d1e87b6294a337101bd72392b5c578",
         "minimum_qualifying_cases": 50,
         "maximum_baseline_warnings": 0,
         "maximum_baseline_errors": 0,
@@ -32065,7 +32065,7 @@
       },
       "public_interface": {
         "convention_id": "HEE3-INTERFACES-001",
-        "convention_sha256": "8b8a8d5d82749ad03a7a0eed7882f8d7d72bdf89064d7812e4980b7f2b8d819f",
+        "convention_sha256": "fe9171dc482e2121ffb85acc0fec7cc794ac64ed853a7f76cda794fead8124ec",
         "accepted_current_interface": null,
         "admission_validator_available": false,
         "profile": {
@@ -32097,7 +32097,7 @@
       },
       "completion": {
         "standard_id": "HEE3-COMPLETION-001",
-        "standard_sha256": "5b3cc45542365f8abc31063b23da0fe824829d093fd3605025a9e6d2a7c0e250",
+        "standard_sha256": "d593a1eef4c78de87afe0202ff1dcfbdd3c782692fae6480a425e40774b6a85b",
         "state": "unassessed",
         "admission_validator_available": false,
         "profile": {
@@ -32133,7 +32133,7 @@
       },
       "security_review": {
         "requested_model": "gpt-daybreak-blue-latest",
-        "profile_sha256": "2718a69253dd3953fbecf18f44fe43ed4258ab23229eb0f493ac2a8bc41a5e2f",
+        "profile_sha256": "11286ae726e81930616012017569108e7c39eb2bc625fcb08674ab6a47355c08",
         "runtime_enabled": false,
         "completion_authority": false,
         "silent_fallback_allowed": false,
@@ -32147,7 +32147,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "b99d095e943cdd00fb3d02b2801bf0a69ead03a6009ad85ac17b1fa21337f6a2",
+        "convention_sha256": "c891722d3a43c58acbcb9de19739e1f865c9d34ef4c5f75acafde399bf2ba4e5",
         "lessons": [
           "LRN01",
           "LRN03",
@@ -33710,7 +33710,7 @@
       ],
       "readiness": {
         "id": "HEE3-READINESS-001",
-        "sha256": "ee8829ad2c95fe5d344c1e7cff10c583d36a9b01cceca807d69e3666e7ae1d06",
+        "sha256": "3bcde91b4617c1a38bcbb97c36bddbc9e999c7692a69b0ba21caec9f559fe250",
         "facets": [
           "F2",
           "F3",
@@ -33779,7 +33779,7 @@
       },
       "testing_standard": {
         "standard_id": "HEE3-TEST-STD-001",
-        "standard_sha256": "db23abb7dd2d94ab58f51dd48be852fed57635378eb853399ee1ca26f3ac39cc",
+        "standard_sha256": "f68d836a62a0522f46459f630f3beca159d1e87b6294a337101bd72392b5c578",
         "minimum_qualifying_cases": 50,
         "maximum_baseline_warnings": 0,
         "maximum_baseline_errors": 0,
@@ -33795,7 +33795,7 @@
       },
       "public_interface": {
         "convention_id": "HEE3-INTERFACES-001",
-        "convention_sha256": "8b8a8d5d82749ad03a7a0eed7882f8d7d72bdf89064d7812e4980b7f2b8d819f",
+        "convention_sha256": "fe9171dc482e2121ffb85acc0fec7cc794ac64ed853a7f76cda794fead8124ec",
         "accepted_current_interface": null,
         "admission_validator_available": false,
         "profile": {
@@ -33827,7 +33827,7 @@
       },
       "completion": {
         "standard_id": "HEE3-COMPLETION-001",
-        "standard_sha256": "5b3cc45542365f8abc31063b23da0fe824829d093fd3605025a9e6d2a7c0e250",
+        "standard_sha256": "d593a1eef4c78de87afe0202ff1dcfbdd3c782692fae6480a425e40774b6a85b",
         "state": "unassessed",
         "admission_validator_available": false,
         "profile": {
@@ -33863,7 +33863,7 @@
       },
       "security_review": {
         "requested_model": "gpt-daybreak-blue-latest",
-        "profile_sha256": "2718a69253dd3953fbecf18f44fe43ed4258ab23229eb0f493ac2a8bc41a5e2f",
+        "profile_sha256": "11286ae726e81930616012017569108e7c39eb2bc625fcb08674ab6a47355c08",
         "runtime_enabled": false,
         "completion_authority": false,
         "silent_fallback_allowed": false,
@@ -33877,7 +33877,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "b99d095e943cdd00fb3d02b2801bf0a69ead03a6009ad85ac17b1fa21337f6a2",
+        "convention_sha256": "c891722d3a43c58acbcb9de19739e1f865c9d34ef4c5f75acafde399bf2ba4e5",
         "lessons": [
           "LRN06",
           "LRN07",
@@ -35099,7 +35099,7 @@
       ],
       "readiness": {
         "id": "HEE3-READINESS-001",
-        "sha256": "ee8829ad2c95fe5d344c1e7cff10c583d36a9b01cceca807d69e3666e7ae1d06",
+        "sha256": "3bcde91b4617c1a38bcbb97c36bddbc9e999c7692a69b0ba21caec9f559fe250",
         "facets": [
           "F2",
           "F3",
@@ -35156,7 +35156,7 @@
       },
       "testing_standard": {
         "standard_id": "HEE3-TEST-STD-001",
-        "standard_sha256": "db23abb7dd2d94ab58f51dd48be852fed57635378eb853399ee1ca26f3ac39cc",
+        "standard_sha256": "f68d836a62a0522f46459f630f3beca159d1e87b6294a337101bd72392b5c578",
         "minimum_qualifying_cases": 50,
         "maximum_baseline_warnings": 0,
         "maximum_baseline_errors": 0,
@@ -35172,7 +35172,7 @@
       },
       "public_interface": {
         "convention_id": "HEE3-INTERFACES-001",
-        "convention_sha256": "8b8a8d5d82749ad03a7a0eed7882f8d7d72bdf89064d7812e4980b7f2b8d819f",
+        "convention_sha256": "fe9171dc482e2121ffb85acc0fec7cc794ac64ed853a7f76cda794fead8124ec",
         "accepted_current_interface": null,
         "admission_validator_available": false,
         "profile": {
@@ -35204,7 +35204,7 @@
       },
       "completion": {
         "standard_id": "HEE3-COMPLETION-001",
-        "standard_sha256": "5b3cc45542365f8abc31063b23da0fe824829d093fd3605025a9e6d2a7c0e250",
+        "standard_sha256": "d593a1eef4c78de87afe0202ff1dcfbdd3c782692fae6480a425e40774b6a85b",
         "state": "unassessed",
         "admission_validator_available": false,
         "profile": {
@@ -35240,7 +35240,7 @@
       },
       "security_review": {
         "requested_model": "gpt-daybreak-blue-latest",
-        "profile_sha256": "2718a69253dd3953fbecf18f44fe43ed4258ab23229eb0f493ac2a8bc41a5e2f",
+        "profile_sha256": "11286ae726e81930616012017569108e7c39eb2bc625fcb08674ab6a47355c08",
         "runtime_enabled": false,
         "completion_authority": false,
         "silent_fallback_allowed": false,
@@ -35254,7 +35254,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "b99d095e943cdd00fb3d02b2801bf0a69ead03a6009ad85ac17b1fa21337f6a2",
+        "convention_sha256": "c891722d3a43c58acbcb9de19739e1f865c9d34ef4c5f75acafde399bf2ba4e5",
         "lessons": [
           "LRN01",
           "LRN08",
@@ -37093,7 +37093,7 @@
       ],
       "readiness": {
         "id": "HEE3-READINESS-001",
-        "sha256": "ee8829ad2c95fe5d344c1e7cff10c583d36a9b01cceca807d69e3666e7ae1d06",
+        "sha256": "3bcde91b4617c1a38bcbb97c36bddbc9e999c7692a69b0ba21caec9f559fe250",
         "facets": [
           "F1",
           "F2",
@@ -37158,7 +37158,7 @@
       },
       "testing_standard": {
         "standard_id": "HEE3-TEST-STD-001",
-        "standard_sha256": "db23abb7dd2d94ab58f51dd48be852fed57635378eb853399ee1ca26f3ac39cc",
+        "standard_sha256": "f68d836a62a0522f46459f630f3beca159d1e87b6294a337101bd72392b5c578",
         "minimum_qualifying_cases": 50,
         "maximum_baseline_warnings": 0,
         "maximum_baseline_errors": 0,
@@ -37174,7 +37174,7 @@
       },
       "public_interface": {
         "convention_id": "HEE3-INTERFACES-001",
-        "convention_sha256": "8b8a8d5d82749ad03a7a0eed7882f8d7d72bdf89064d7812e4980b7f2b8d819f",
+        "convention_sha256": "fe9171dc482e2121ffb85acc0fec7cc794ac64ed853a7f76cda794fead8124ec",
         "accepted_current_interface": null,
         "admission_validator_available": false,
         "profile": {
@@ -37206,7 +37206,7 @@
       },
       "completion": {
         "standard_id": "HEE3-COMPLETION-001",
-        "standard_sha256": "5b3cc45542365f8abc31063b23da0fe824829d093fd3605025a9e6d2a7c0e250",
+        "standard_sha256": "d593a1eef4c78de87afe0202ff1dcfbdd3c782692fae6480a425e40774b6a85b",
         "state": "unassessed",
         "admission_validator_available": false,
         "profile": {
@@ -37242,7 +37242,7 @@
       },
       "security_review": {
         "requested_model": "gpt-daybreak-blue-latest",
-        "profile_sha256": "2718a69253dd3953fbecf18f44fe43ed4258ab23229eb0f493ac2a8bc41a5e2f",
+        "profile_sha256": "11286ae726e81930616012017569108e7c39eb2bc625fcb08674ab6a47355c08",
         "runtime_enabled": false,
         "completion_authority": false,
         "silent_fallback_allowed": false,
@@ -37256,7 +37256,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "b99d095e943cdd00fb3d02b2801bf0a69ead03a6009ad85ac17b1fa21337f6a2",
+        "convention_sha256": "c891722d3a43c58acbcb9de19739e1f865c9d34ef4c5f75acafde399bf2ba4e5",
         "lessons": [
           "LRN03",
           "LRN05",
@@ -39073,7 +39073,7 @@
       ],
       "readiness": {
         "id": "HEE3-READINESS-001",
-        "sha256": "ee8829ad2c95fe5d344c1e7cff10c583d36a9b01cceca807d69e3666e7ae1d06",
+        "sha256": "3bcde91b4617c1a38bcbb97c36bddbc9e999c7692a69b0ba21caec9f559fe250",
         "facets": [
           "F1",
           "F2",
@@ -39140,7 +39140,7 @@
       },
       "testing_standard": {
         "standard_id": "HEE3-TEST-STD-001",
-        "standard_sha256": "db23abb7dd2d94ab58f51dd48be852fed57635378eb853399ee1ca26f3ac39cc",
+        "standard_sha256": "f68d836a62a0522f46459f630f3beca159d1e87b6294a337101bd72392b5c578",
         "minimum_qualifying_cases": 50,
         "maximum_baseline_warnings": 0,
         "maximum_baseline_errors": 0,
@@ -39156,7 +39156,7 @@
       },
       "public_interface": {
         "convention_id": "HEE3-INTERFACES-001",
-        "convention_sha256": "8b8a8d5d82749ad03a7a0eed7882f8d7d72bdf89064d7812e4980b7f2b8d819f",
+        "convention_sha256": "fe9171dc482e2121ffb85acc0fec7cc794ac64ed853a7f76cda794fead8124ec",
         "accepted_current_interface": null,
         "admission_validator_available": false,
         "profile": {
@@ -39188,7 +39188,7 @@
       },
       "completion": {
         "standard_id": "HEE3-COMPLETION-001",
-        "standard_sha256": "5b3cc45542365f8abc31063b23da0fe824829d093fd3605025a9e6d2a7c0e250",
+        "standard_sha256": "d593a1eef4c78de87afe0202ff1dcfbdd3c782692fae6480a425e40774b6a85b",
         "state": "unassessed",
         "admission_validator_available": false,
         "profile": {
@@ -39224,7 +39224,7 @@
       },
       "security_review": {
         "requested_model": "gpt-daybreak-blue-latest",
-        "profile_sha256": "2718a69253dd3953fbecf18f44fe43ed4258ab23229eb0f493ac2a8bc41a5e2f",
+        "profile_sha256": "11286ae726e81930616012017569108e7c39eb2bc625fcb08674ab6a47355c08",
         "runtime_enabled": false,
         "completion_authority": false,
         "silent_fallback_allowed": false,
@@ -39238,7 +39238,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "b99d095e943cdd00fb3d02b2801bf0a69ead03a6009ad85ac17b1fa21337f6a2",
+        "convention_sha256": "c891722d3a43c58acbcb9de19739e1f865c9d34ef4c5f75acafde399bf2ba4e5",
         "lessons": [
           "LRN03",
           "LRN05",
@@ -41780,7 +41780,7 @@
       ],
       "readiness": {
         "id": "HEE3-READINESS-001",
-        "sha256": "ee8829ad2c95fe5d344c1e7cff10c583d36a9b01cceca807d69e3666e7ae1d06",
+        "sha256": "3bcde91b4617c1a38bcbb97c36bddbc9e999c7692a69b0ba21caec9f559fe250",
         "facets": [
           "F1",
           "F2",
@@ -41858,7 +41858,7 @@
       },
       "testing_standard": {
         "standard_id": "HEE3-TEST-STD-001",
-        "standard_sha256": "db23abb7dd2d94ab58f51dd48be852fed57635378eb853399ee1ca26f3ac39cc",
+        "standard_sha256": "f68d836a62a0522f46459f630f3beca159d1e87b6294a337101bd72392b5c578",
         "minimum_qualifying_cases": 50,
         "maximum_baseline_warnings": 0,
         "maximum_baseline_errors": 0,
@@ -41874,7 +41874,7 @@
       },
       "public_interface": {
         "convention_id": "HEE3-INTERFACES-001",
-        "convention_sha256": "8b8a8d5d82749ad03a7a0eed7882f8d7d72bdf89064d7812e4980b7f2b8d819f",
+        "convention_sha256": "fe9171dc482e2121ffb85acc0fec7cc794ac64ed853a7f76cda794fead8124ec",
         "accepted_current_interface": null,
         "admission_validator_available": false,
         "profile": {
@@ -41906,7 +41906,7 @@
       },
       "completion": {
         "standard_id": "HEE3-COMPLETION-001",
-        "standard_sha256": "5b3cc45542365f8abc31063b23da0fe824829d093fd3605025a9e6d2a7c0e250",
+        "standard_sha256": "d593a1eef4c78de87afe0202ff1dcfbdd3c782692fae6480a425e40774b6a85b",
         "state": "unassessed",
         "admission_validator_available": false,
         "profile": {
@@ -41942,7 +41942,7 @@
       },
       "security_review": {
         "requested_model": "gpt-daybreak-blue-latest",
-        "profile_sha256": "2718a69253dd3953fbecf18f44fe43ed4258ab23229eb0f493ac2a8bc41a5e2f",
+        "profile_sha256": "11286ae726e81930616012017569108e7c39eb2bc625fcb08674ab6a47355c08",
         "runtime_enabled": false,
         "completion_authority": false,
         "silent_fallback_allowed": false,
@@ -41956,7 +41956,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "b99d095e943cdd00fb3d02b2801bf0a69ead03a6009ad85ac17b1fa21337f6a2",
+        "convention_sha256": "c891722d3a43c58acbcb9de19739e1f865c9d34ef4c5f75acafde399bf2ba4e5",
         "lessons": [
           "LRN01",
           "LRN02",
@@ -43669,7 +43669,7 @@
       ],
       "readiness": {
         "id": "HEE3-READINESS-001",
-        "sha256": "ee8829ad2c95fe5d344c1e7cff10c583d36a9b01cceca807d69e3666e7ae1d06",
+        "sha256": "3bcde91b4617c1a38bcbb97c36bddbc9e999c7692a69b0ba21caec9f559fe250",
         "facets": [
           "F2",
           "F3",
@@ -43728,7 +43728,7 @@
       },
       "testing_standard": {
         "standard_id": "HEE3-TEST-STD-001",
-        "standard_sha256": "db23abb7dd2d94ab58f51dd48be852fed57635378eb853399ee1ca26f3ac39cc",
+        "standard_sha256": "f68d836a62a0522f46459f630f3beca159d1e87b6294a337101bd72392b5c578",
         "minimum_qualifying_cases": 50,
         "maximum_baseline_warnings": 0,
         "maximum_baseline_errors": 0,
@@ -43744,7 +43744,7 @@
       },
       "public_interface": {
         "convention_id": "HEE3-INTERFACES-001",
-        "convention_sha256": "8b8a8d5d82749ad03a7a0eed7882f8d7d72bdf89064d7812e4980b7f2b8d819f",
+        "convention_sha256": "fe9171dc482e2121ffb85acc0fec7cc794ac64ed853a7f76cda794fead8124ec",
         "accepted_current_interface": null,
         "admission_validator_available": false,
         "profile": {
@@ -43776,7 +43776,7 @@
       },
       "completion": {
         "standard_id": "HEE3-COMPLETION-001",
-        "standard_sha256": "5b3cc45542365f8abc31063b23da0fe824829d093fd3605025a9e6d2a7c0e250",
+        "standard_sha256": "d593a1eef4c78de87afe0202ff1dcfbdd3c782692fae6480a425e40774b6a85b",
         "state": "unassessed",
         "admission_validator_available": false,
         "profile": {
@@ -43812,7 +43812,7 @@
       },
       "security_review": {
         "requested_model": "gpt-daybreak-blue-latest",
-        "profile_sha256": "2718a69253dd3953fbecf18f44fe43ed4258ab23229eb0f493ac2a8bc41a5e2f",
+        "profile_sha256": "11286ae726e81930616012017569108e7c39eb2bc625fcb08674ab6a47355c08",
         "runtime_enabled": false,
         "completion_authority": false,
         "silent_fallback_allowed": false,
@@ -43826,7 +43826,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "b99d095e943cdd00fb3d02b2801bf0a69ead03a6009ad85ac17b1fa21337f6a2",
+        "convention_sha256": "c891722d3a43c58acbcb9de19739e1f865c9d34ef4c5f75acafde399bf2ba4e5",
         "lessons": [
           "LRN01",
           "LRN02",
@@ -45069,7 +45069,7 @@
       ],
       "readiness": {
         "id": "HEE3-READINESS-001",
-        "sha256": "ee8829ad2c95fe5d344c1e7cff10c583d36a9b01cceca807d69e3666e7ae1d06",
+        "sha256": "3bcde91b4617c1a38bcbb97c36bddbc9e999c7692a69b0ba21caec9f559fe250",
         "facets": [
           "F2",
           "F3",
@@ -45126,7 +45126,7 @@
       },
       "testing_standard": {
         "standard_id": "HEE3-TEST-STD-001",
-        "standard_sha256": "db23abb7dd2d94ab58f51dd48be852fed57635378eb853399ee1ca26f3ac39cc",
+        "standard_sha256": "f68d836a62a0522f46459f630f3beca159d1e87b6294a337101bd72392b5c578",
         "minimum_qualifying_cases": 50,
         "maximum_baseline_warnings": 0,
         "maximum_baseline_errors": 0,
@@ -45142,7 +45142,7 @@
       },
       "public_interface": {
         "convention_id": "HEE3-INTERFACES-001",
-        "convention_sha256": "8b8a8d5d82749ad03a7a0eed7882f8d7d72bdf89064d7812e4980b7f2b8d819f",
+        "convention_sha256": "fe9171dc482e2121ffb85acc0fec7cc794ac64ed853a7f76cda794fead8124ec",
         "accepted_current_interface": null,
         "admission_validator_available": false,
         "profile": {
@@ -45174,7 +45174,7 @@
       },
       "completion": {
         "standard_id": "HEE3-COMPLETION-001",
-        "standard_sha256": "5b3cc45542365f8abc31063b23da0fe824829d093fd3605025a9e6d2a7c0e250",
+        "standard_sha256": "d593a1eef4c78de87afe0202ff1dcfbdd3c782692fae6480a425e40774b6a85b",
         "state": "unassessed",
         "admission_validator_available": false,
         "profile": {
@@ -45210,7 +45210,7 @@
       },
       "security_review": {
         "requested_model": "gpt-daybreak-blue-latest",
-        "profile_sha256": "2718a69253dd3953fbecf18f44fe43ed4258ab23229eb0f493ac2a8bc41a5e2f",
+        "profile_sha256": "11286ae726e81930616012017569108e7c39eb2bc625fcb08674ab6a47355c08",
         "runtime_enabled": false,
         "completion_authority": false,
         "silent_fallback_allowed": false,
@@ -45224,7 +45224,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "b99d095e943cdd00fb3d02b2801bf0a69ead03a6009ad85ac17b1fa21337f6a2",
+        "convention_sha256": "c891722d3a43c58acbcb9de19739e1f865c9d34ef4c5f75acafde399bf2ba4e5",
         "lessons": [
           "LRN03",
           "LRN04",
@@ -46556,7 +46556,7 @@
       ],
       "readiness": {
         "id": "HEE3-READINESS-001",
-        "sha256": "ee8829ad2c95fe5d344c1e7cff10c583d36a9b01cceca807d69e3666e7ae1d06",
+        "sha256": "3bcde91b4617c1a38bcbb97c36bddbc9e999c7692a69b0ba21caec9f559fe250",
         "facets": [
           "F2",
           "F3",
@@ -46613,7 +46613,7 @@
       },
       "testing_standard": {
         "standard_id": "HEE3-TEST-STD-001",
-        "standard_sha256": "db23abb7dd2d94ab58f51dd48be852fed57635378eb853399ee1ca26f3ac39cc",
+        "standard_sha256": "f68d836a62a0522f46459f630f3beca159d1e87b6294a337101bd72392b5c578",
         "minimum_qualifying_cases": 50,
         "maximum_baseline_warnings": 0,
         "maximum_baseline_errors": 0,
@@ -46629,7 +46629,7 @@
       },
       "public_interface": {
         "convention_id": "HEE3-INTERFACES-001",
-        "convention_sha256": "8b8a8d5d82749ad03a7a0eed7882f8d7d72bdf89064d7812e4980b7f2b8d819f",
+        "convention_sha256": "fe9171dc482e2121ffb85acc0fec7cc794ac64ed853a7f76cda794fead8124ec",
         "accepted_current_interface": null,
         "admission_validator_available": false,
         "profile": {
@@ -46661,7 +46661,7 @@
       },
       "completion": {
         "standard_id": "HEE3-COMPLETION-001",
-        "standard_sha256": "5b3cc45542365f8abc31063b23da0fe824829d093fd3605025a9e6d2a7c0e250",
+        "standard_sha256": "d593a1eef4c78de87afe0202ff1dcfbdd3c782692fae6480a425e40774b6a85b",
         "state": "unassessed",
         "admission_validator_available": false,
         "profile": {
@@ -46697,7 +46697,7 @@
       },
       "security_review": {
         "requested_model": "gpt-daybreak-blue-latest",
-        "profile_sha256": "2718a69253dd3953fbecf18f44fe43ed4258ab23229eb0f493ac2a8bc41a5e2f",
+        "profile_sha256": "11286ae726e81930616012017569108e7c39eb2bc625fcb08674ab6a47355c08",
         "runtime_enabled": false,
         "completion_authority": false,
         "silent_fallback_allowed": false,
@@ -46711,7 +46711,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "b99d095e943cdd00fb3d02b2801bf0a69ead03a6009ad85ac17b1fa21337f6a2",
+        "convention_sha256": "c891722d3a43c58acbcb9de19739e1f865c9d34ef4c5f75acafde399bf2ba4e5",
         "lessons": [
           "LRN03",
           "LRN04",
@@ -48048,7 +48048,7 @@
       ],
       "readiness": {
         "id": "HEE3-READINESS-001",
-        "sha256": "ee8829ad2c95fe5d344c1e7cff10c583d36a9b01cceca807d69e3666e7ae1d06",
+        "sha256": "3bcde91b4617c1a38bcbb97c36bddbc9e999c7692a69b0ba21caec9f559fe250",
         "facets": [
           "F2",
           "F3",
@@ -48105,7 +48105,7 @@
       },
       "testing_standard": {
         "standard_id": "HEE3-TEST-STD-001",
-        "standard_sha256": "db23abb7dd2d94ab58f51dd48be852fed57635378eb853399ee1ca26f3ac39cc",
+        "standard_sha256": "f68d836a62a0522f46459f630f3beca159d1e87b6294a337101bd72392b5c578",
         "minimum_qualifying_cases": 50,
         "maximum_baseline_warnings": 0,
         "maximum_baseline_errors": 0,
@@ -48121,7 +48121,7 @@
       },
       "public_interface": {
         "convention_id": "HEE3-INTERFACES-001",
-        "convention_sha256": "8b8a8d5d82749ad03a7a0eed7882f8d7d72bdf89064d7812e4980b7f2b8d819f",
+        "convention_sha256": "fe9171dc482e2121ffb85acc0fec7cc794ac64ed853a7f76cda794fead8124ec",
         "accepted_current_interface": null,
         "admission_validator_available": false,
         "profile": {
@@ -48153,7 +48153,7 @@
       },
       "completion": {
         "standard_id": "HEE3-COMPLETION-001",
-        "standard_sha256": "5b3cc45542365f8abc31063b23da0fe824829d093fd3605025a9e6d2a7c0e250",
+        "standard_sha256": "d593a1eef4c78de87afe0202ff1dcfbdd3c782692fae6480a425e40774b6a85b",
         "state": "unassessed",
         "admission_validator_available": false,
         "profile": {
@@ -48189,7 +48189,7 @@
       },
       "security_review": {
         "requested_model": "gpt-daybreak-blue-latest",
-        "profile_sha256": "2718a69253dd3953fbecf18f44fe43ed4258ab23229eb0f493ac2a8bc41a5e2f",
+        "profile_sha256": "11286ae726e81930616012017569108e7c39eb2bc625fcb08674ab6a47355c08",
         "runtime_enabled": false,
         "completion_authority": false,
         "silent_fallback_allowed": false,
@@ -48203,7 +48203,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "b99d095e943cdd00fb3d02b2801bf0a69ead03a6009ad85ac17b1fa21337f6a2",
+        "convention_sha256": "c891722d3a43c58acbcb9de19739e1f865c9d34ef4c5f75acafde399bf2ba4e5",
         "lessons": [
           "LRN04",
           "LRN08",
@@ -49599,7 +49599,7 @@
       ],
       "readiness": {
         "id": "HEE3-READINESS-001",
-        "sha256": "ee8829ad2c95fe5d344c1e7cff10c583d36a9b01cceca807d69e3666e7ae1d06",
+        "sha256": "3bcde91b4617c1a38bcbb97c36bddbc9e999c7692a69b0ba21caec9f559fe250",
         "facets": [
           "F2",
           "F3",
@@ -49658,7 +49658,7 @@
       },
       "testing_standard": {
         "standard_id": "HEE3-TEST-STD-001",
-        "standard_sha256": "db23abb7dd2d94ab58f51dd48be852fed57635378eb853399ee1ca26f3ac39cc",
+        "standard_sha256": "f68d836a62a0522f46459f630f3beca159d1e87b6294a337101bd72392b5c578",
         "minimum_qualifying_cases": 50,
         "maximum_baseline_warnings": 0,
         "maximum_baseline_errors": 0,
@@ -49674,7 +49674,7 @@
       },
       "public_interface": {
         "convention_id": "HEE3-INTERFACES-001",
-        "convention_sha256": "8b8a8d5d82749ad03a7a0eed7882f8d7d72bdf89064d7812e4980b7f2b8d819f",
+        "convention_sha256": "fe9171dc482e2121ffb85acc0fec7cc794ac64ed853a7f76cda794fead8124ec",
         "accepted_current_interface": null,
         "admission_validator_available": false,
         "profile": {
@@ -49706,7 +49706,7 @@
       },
       "completion": {
         "standard_id": "HEE3-COMPLETION-001",
-        "standard_sha256": "5b3cc45542365f8abc31063b23da0fe824829d093fd3605025a9e6d2a7c0e250",
+        "standard_sha256": "d593a1eef4c78de87afe0202ff1dcfbdd3c782692fae6480a425e40774b6a85b",
         "state": "unassessed",
         "admission_validator_available": false,
         "profile": {
@@ -49742,7 +49742,7 @@
       },
       "security_review": {
         "requested_model": "gpt-daybreak-blue-latest",
-        "profile_sha256": "2718a69253dd3953fbecf18f44fe43ed4258ab23229eb0f493ac2a8bc41a5e2f",
+        "profile_sha256": "11286ae726e81930616012017569108e7c39eb2bc625fcb08674ab6a47355c08",
         "runtime_enabled": false,
         "completion_authority": false,
         "silent_fallback_allowed": false,
@@ -49756,7 +49756,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "b99d095e943cdd00fb3d02b2801bf0a69ead03a6009ad85ac17b1fa21337f6a2",
+        "convention_sha256": "c891722d3a43c58acbcb9de19739e1f865c9d34ef4c5f75acafde399bf2ba4e5",
         "lessons": [
           "LRN01",
           "LRN02",
@@ -54782,8 +54782,8 @@
       "bytes": 6019
     },
     "tools/check-quality": {
-      "sha256": "5cada3136b93f7d2538bebacc973adf1941ca97a8c9ce9feecacb13c9cb1ba31",
-      "bytes": 72482
+      "sha256": "4ed3c1aee02189bcc9c9e3d091b48953540e5143f9537efed33474739c57882c",
+      "bytes": 73423
     },
     "tools/development_process.py": {
       "sha256": "e76e3a794193e5df7ee96fabf700113d718527745a0f9a9dba1e04fd5c7baaf3",
@@ -54794,8 +54794,8 @@
       "bytes": 10433
     },
     "tests/t25_quality.py": {
-      "sha256": "5543002e7020b763cb3db424b34559691397aa47a78bb782f568196ecb0581d2",
-      "bytes": 135486
+      "sha256": "58addbc1f5c6c5a24902de24581e160ddae8ed8e591674bffd78528434b76946",
+      "bytes": 136111
     },
     "julia/Manifest.toml": {
       "sha256": "097d5028df4e1667a970a8297d41eedb908e0319a0b4154c7ec12548140a9f79",
@@ -55946,11 +55946,11 @@
       "bytes": 2257
     },
     "src/contracts.rs": {
-      "sha256": "3ec9f97fbbea4f26c33d3ffb5e7a06cfb2f1f7b93f94ec17a1a07ee2f9caf9bc",
+      "sha256": "2f0c789da3c1bf563546975447f778d2188752854b0a15be1321a223aea75172",
       "bytes": 26327
     },
     "src/main.rs": {
-      "sha256": "068e51421dbcdce9b113cdf64e4c99a05f4dcddabf19d8ec3624435aeef76ac4",
+      "sha256": "4b0f78aed16caf445afa8dc6f40f466f5b4db719287911c619e322a77320769d",
       "bytes": 24298
     },
     "src/store/staging.rs": {
@@ -56086,8 +56086,8 @@
       "bytes": 3148
     },
     "julia/test/analysis.jl": {
-      "sha256": "9d9943ad928ae32e8f73088b9714a2dee18e3c97443a87f501a8e7fb3930693d",
-      "bytes": 20029
+      "sha256": "6c2fff5615952e87fc20dc11525799c4d86b8f1b1afb4dba7c1683a3289bd749",
+      "bytes": 24665
     },
     "src/numerical/process.rs": {
       "sha256": "4f67c68bdf1116bfb52a6a9dc36de7e4d801566c5b9b89d8f97d92ff58835e4f",
@@ -56138,28 +56138,28 @@
       "bytes": 20898
     },
     "tests/t09_route.rs": {
-      "sha256": "a7754009ab8cf183fedc4aba8bd6502bfafad4966790a2b4de5120ae03f554f1",
-      "bytes": 83422
+      "sha256": "9458214ec685094a0d256618c318262fbbd96846a2e70f030e9d8bd32014dc19",
+      "bytes": 90239
     },
     "tests/t11_notify.rs": {
-      "sha256": "599161dc7c387c7790e2a1ca0330fa607781c149c03dce6d028075f2863df209",
-      "bytes": 46403
+      "sha256": "e165b149a157da87eb50c91389ecc07be88e577998e0b9963763306b45eea828",
+      "bytes": 49230
     },
     "tests/t11_context.rs": {
       "sha256": "144c4539091ef2fb204c346b4c92500ccefdb60d2468766544b2e2a090c227b8",
       "bytes": 46241
     },
     "tests/t22_cohort.rs": {
-      "sha256": "41376eb5e4bf87c4f0c03c7f1919fcde4d45ee60bf0c53a35ff2c05ed429d8f5",
-      "bytes": 37484
+      "sha256": "ba119edc5ec44f5ab109ab8b2e1fe3564ada76f375e6f734a83f248ddd8ebbef",
+      "bytes": 43396
     },
     "tests/t28_actions.rs": {
-      "sha256": "ddca94bd995a7cc7d80c621c1a8e7c3aa7f7d1619241c01ddbbe02cda63768a1",
-      "bytes": 40973
+      "sha256": "eafbe6121d987b2820f8ebdfc2d54ebb96efc5210e9ff9eadf85f411d2e15001",
+      "bytes": 41953
     },
     "tests/t16_herdr.rs": {
-      "sha256": "31183535fc8f3ff932c2b4c859fa45d086a10570655807be9453d06a9ccd4c04",
-      "bytes": 29234
+      "sha256": "ef25e42123533b23baf56222f884eda85a43329aea043e53ef87d728add8d5d7",
+      "bytes": 31448
     },
     "tests/fixtures/route/fixture.json": {
       "sha256": "ff85e3a67966d2d1f7fe4142e6f41a728f934974d09efe5acbba94dbd4cd0ec4",
