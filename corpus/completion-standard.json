@@ -2,7 +2,7 @@
   "schema": 1,
   "id": "HEE3-COMPLETION-001",
   "revision": 1,
-  "base_plan_sha256": "361b948adba7030704a91e20e56242050750d3177e48a778e65fed54ec3dafef",
+  "base_plan_sha256": "cf20feb143419c6c36651ffcfa0a5446c2f2420107d52502d8949361e872ad82",
   "authority": "User-directed normative completion convention; accepted code is factual primary at its admitted revision. This document cannot grant coding authority or admit modules.",
   "authorization": {
     "operator": "Luke",

@@ -16,7 +16,7 @@ Declared build dependencies: none. Declared consumers: task, store, roster, rout
 
 Own typed identities, capability boundaries and request/result/error compatibility. Bind every supported operation and shared fixture to a version; do not become a second task ledger.
 
-[Adopted readiness requirements and evidence roadmap](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Delivery%2FReadiness%2FIndex) · [Codebase readiness plan](file:///var/home/herdr-engineering-engine-v3/docs/readiness-plan.md) · [Six resolved design contracts](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Delivery%2FContracts%2FIndex) · [Concrete contract decisions](file:///var/home/herdr-engineering-engine-v3/docs/contract-decisions.md). Binding: `HEE3-READINESS-001` / `6f71f3f7179933c26b6c2235e58a4906dc619502934f2a2fa06a590041e956a6`. Adoption is complete; the required engine proof is pending.
+[Adopted readiness requirements and evidence roadmap](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Delivery%2FReadiness%2FIndex) · [Codebase readiness plan](file:///var/home/herdr-engineering-engine-v3/docs/readiness-plan.md) · [Six resolved design contracts](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Delivery%2FContracts%2FIndex) · [Concrete contract decisions](file:///var/home/herdr-engineering-engine-v3/docs/contract-decisions.md). Binding: `HEE3-READINESS-001` / `ee8829ad2c95fe5d344c1e7cff10c583d36a9b01cceca807d69e3666e7ae1d06`. Adoption is complete; the required engine proof is pending.
 
 | Applicable facet / criterion IDs | Primary contract owners |
 | --- | --- |
@@ -66,7 +66,7 @@ Every operation inherits the catalogue requirements for caller capability, ident
 
 Observed source kind: `engine_source`. Accepted current interface: **unavailable**. No completion admission collector is implemented. A source body would be an implementation candidate, not automatically an accepted module. After verified admission exists, exact accepted source/schema and tests govern current interface facts; intended changes remain in the atlas.
 
-Convention SHA-256: `aea027f65b69ed5d48e93d452294e9b87db9ffaca1d9566664ee710bfee98608`. This binding proves which documentation convention is projected, not runtime correctness.
+Convention SHA-256: `8b8a8d5d82749ad03a7a0eed7882f8d7d72bdf89064d7812e4980b7f2b8d819f`. This binding proves which documentation convention is projected, not runtime correctness.
 
 ## Fully-complete contract
 
@@ -74,7 +74,7 @@ Convention SHA-256: `aea027f65b69ed5d48e93d452294e9b87db9ffaca1d9566664ee710bfee
 
 [Concrete module outcome, failure controls and admission checklist](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Standards%2FCompletion%2FDONE-contracts) · [Corpus architecture and update schematics](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Schematics%2FCorpus%2FIndex) · [Open clickable drawings](file:///var/home/herdr-engineering-engine-v3/docs/corpus-schematics.html) · [Fully-complete standard](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Standards%2FModule%20Completion) · [Justfile and runbooks](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Operations%2FJustfiles%20and%20Runbooks) · [Context handoff](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Context%20Handoff) · [Executive summary](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Executive%20Summary) · [Daybreak security profile](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Security%2FDaybreak%20Profile) · [Graphify full corpus](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Graphify%2FIndex) · [Adopted readiness requirements and evidence roadmap](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Delivery%2FReadiness%2FIndex) · [Codebase readiness plan](file:///var/home/herdr-engineering-engine-v3/docs/readiness-plan.md) · [Six resolved design contracts](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Delivery%2FContracts%2FIndex) · [Concrete contract decisions](file:///var/home/herdr-engineering-engine-v3/docs/contract-decisions.md)
 
-Completion standard SHA-256: `0f5e3985b9598af8e836f09f91bbbb1d1831c9c886acbb851a1db0f1bb770a5a`. All 13 gates apply; only an inapplicable subcheck may be explicitly justified.
+Completion standard SHA-256: `5b3cc45542365f8abc31063b23da0fe824829d093fd3605025a9e6d2a7c0e250`. All 13 gates apply; only an inapplicable subcheck may be explicitly justified.
 
 **Required finished behavior:** Typed request/result/error and identity/version contracts round-trip without losing semantics across declared consumers.
 
@@ -115,7 +115,7 @@ These are scoped design and review obligations. Their engine detectors remain un
 
 Bind assimilation, mutation sensitivity, lint coverage and raw evidence to the exact candidate. Property iterations, assertions, retries, lint findings and mutant runs do not multiply case credits. The current observation schema does not establish this qualification.
 
-Standard: `HEE3-TEST-STD-001`; SHA-256: `f21d963ad62ddf371cf2ec4c9c53b5012b4367d133ab1b0f1c729e5236eea4bb`. Full-standard qualification: **unassessed; collector/validator not implemented**.
+Standard: `HEE3-TEST-STD-001`; SHA-256: `db23abb7dd2d94ab58f51dd48be852fed57635378eb853399ee1ca26f3ac39cc`. Full-standard qualification: **unassessed; collector/validator not implemented**.
 
 Module priorities: schema/version compatibility; identity/correlation integrity; bounded decode and malformed inputs; typed errors and serialization invariants.
 
@@ -371,7 +371,7 @@ Dependencies: T03, T06. Atlas task state: `done`.
 
 [Owning task and current atlas state](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Delivery%2FTasks%2FTASK-T09)
 
-Dependencies: T05, T08. Atlas task state: `idle`.
+Dependencies: T05, T08. Atlas task state: `wip`.
 
 **Acceptance:** Capability/context/privacy/availability constraints exclude invalid recipes; rules choose a valid recipe with stable explanation; ties and insufficient evidence use an explicit baseline; routing itself makes zero model calls.
 
