@@ -746,6 +746,12 @@
                 "sha256": "b37953dfabfceef80d1eea7aebe0e250158c88b30aeb0a5d6e06c76cff226a1e",
                 "task_id": "T28",
                 "scope": "implementation_candidate"
+              },
+              {
+                "path": "evidence/implementation-T28-20260923/progress.json",
+                "sha256": "682d846a3eff4c408bff6599a3138afa7a0e8d5b1ecda4d83ac72b30541b9302",
+                "task_id": "T28",
+                "scope": "implementation_candidate"
               }
             ],
             "research_refs": [
@@ -896,6 +902,12 @@
               {
                 "path": "evidence/implementation-T29-20260922/progress.json",
                 "sha256": "d23d0145a056cf3dd3a3f86f534734826a3e52e4c47157162ee1e3af2dd13461",
+                "task_id": "T29",
+                "scope": "implementation_candidate"
+              },
+              {
+                "path": "evidence/implementation-T29-20260923/progress.json",
+                "sha256": "ade2ec8420dad66f7bff7e507144dd64abd1058db9e1ca65057389cae60bf941",
                 "task_id": "T29",
                 "scope": "implementation_candidate"
               }

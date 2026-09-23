@@ -3,7 +3,7 @@
   "id": "HEE3-INTERFACES-001",
   "revision": 1,
   "reviewed_on": "2026-09-15",
-  "base_plan_sha256": "c280a547b058df5b414b18c81a64153633d48b94671fc397ece02ec1cefed160",
+  "base_plan_sha256": "6f52aa08ccf77b01a654f6b37b2aa7e417520f26986f0878a582dbdcfaca04f4",
   "status": "active authority convention and planned interface contracts",
   "admission_validator_available": false,
   "accepted_interfaces": [],
