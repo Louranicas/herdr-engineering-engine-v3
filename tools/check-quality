@@ -180,8 +180,10 @@ HERDR_TARGET_COUNTS = {"t16_herdr": 52}
 HERDR_INPUTS = ("src/herdr.rs",)
 
 T09_TARGET_COUNTS = {"t09_route": 61}
+# make-known-answers.py is the independent Python oracle that wrote known-answers.json; the gate
+# re-derives the table with it (review N9: it had lived only in the evidence store).
 T09_INPUTS = ("config/routes.toml", "src/route.rs", "tests/fixtures/route/fixture.json",
-              "tests/fixtures/route/known-answers.json")
+              "tests/fixtures/route/known-answers.json", "tests/fixtures/route/make-known-answers.py")
 
 T13_TARGET_COUNTS = {"t13_service": 50, "t13_probe": 18, "t13_local_probe": 16}
 T21_TARGET_COUNTS = {"t21_analysis": 74, "t21_process": 16}
@@ -1101,6 +1103,9 @@ def main():
             required_text="run=11 failures=0 errors=0")
         run("claim-overlap-table", [sys.executable, "evaluation/cohorts/make-claim-overlap.py", "--check"],
             required_text="matches_generator=yes")
+        if has_t09(ROOT):
+            run("route-oracle-table", [sys.executable, "tests/fixtures/route/make-known-answers.py", "--check"],
+                required_text="answers=12 matches_generator=yes")
         run("rustc-identity", [str(compiler), "-vV"], required_text="rustc 1.98.0 ")
         cargo = str(binaries["cargo"])
         metadata = run("offline-dependency-resolution", [cargo, "metadata", "--locked", "--offline", "--format-version=1"])

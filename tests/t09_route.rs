@@ -1745,43 +1745,211 @@ fn an_ineligible_baseline_is_never_dispatched_by_a_fallback() -> Outcome {
 
 // -------------------------------------------------------- purity and known answers
 
-/// T09-RT-55 · routing makes zero model calls, zero I/O and reads zero clocks: the policy body
-/// after its anchor block names no adapter, filesystem, process, network, clock or store item.
+/// T09-RT-55 · routing makes zero model calls, zero I/O and reads zero clocks. The policy body
+/// after its anchor block may reference only the paths in `ROUTE_MAY_REFERENCE` — an allowlist
+/// (a world, not a list of suspects): a helper, alias or third-party crate is refused because it is
+/// not on it, where the first version of this case named 21 suspect tokens and passed anything else.
+/// Every entry must be used, so the list cannot quietly grow into an open door, and the checker must
+/// catch four planted violations and pass the same text inside a comment, a string and a raw string.
 #[test]
 fn policy_source_names_no_effectful_item() {
     let source = include_str!("../src/route.rs");
     let body = source.split("HEE3-ANCHORS-END").nth(1).unwrap_or_default();
-    let code: String = body
-        .lines()
-        .map(|line| line.split("//").next().unwrap_or_default())
-        .collect::<Vec<_>>()
-        .join("\n");
-    for token in [
-        "std::fs",
-        "std::io",
-        "std::net",
-        "std::env",
-        "std::process",
-        "std::thread",
-        "Instant",
-        "SystemTime",
-        "/proc",
-        "Command",
-        "worker::",
-        "native",
-        "inference",
-        "Store",
-        "rusqlite",
-        "unsafe",
-        "unwrap()",
-        "expect(",
-        "panic!",
-        "unreachable!",
-        "todo!",
-    ] {
-        assert!(!code.contains(token), "policy body names {token}");
+    let used = referenced_paths(body);
+    let outside: Vec<&String> = used.iter().filter(|path| !permitted(path)).collect();
+    assert!(outside.is_empty(), "the policy body references {outside:?}");
+    for entry in ROUTE_MAY_REFERENCE {
+        assert!(
+            used.iter().any(|path| under(path, entry)),
+            "allowlist entry {entry} is used nowhere; remove it"
+        );
     }
-    assert!(code.contains("pub fn route<'a>("));
+    assert!(body.contains("pub fn route<'a>("));
+    for plant in [
+        "fn f() { let _ = std::process::Command::new(\"x\"); }",
+        "use crate::worker as w;\nfn f() { w::call(); }",
+        "fn f() { crate::store::Store::open(p); }",
+        "fn f() { reqwest::get(u); }",
+        "fn f() { let _ = std::time::UNIX_EPOCH; }",
+        "fn f() { let _ = std::fmtx::leak(); }",
+    ] {
+        let found = referenced_paths(plant);
+        assert!(
+            found.iter().any(|path| !permitted(path)),
+            "planted source passed the allowlist: {plant} -> {found:?}"
+        );
+    }
+    for benign in [
+        "// std::process::Command in a comment\nfn f() {}",
+        "/* std::fs /* nested */ std::net */ fn f() {}",
+        "fn f() -> &'static str { \"std::net::TcpStream\" }",
+        "fn f() -> &'static str { r#\"std::fs::read\"# }",
+        "fn f<'a>(x: &'a str) -> char { let _ = x; 'x' }",
+    ] {
+        let found = referenced_paths(benign);
+        assert!(
+            found.iter().all(|path| permitted(path)),
+            "benign source tripped the allowlist: {benign} -> {found:?}"
+        );
+    }
+}
+
+/// Everything `src/route.rs` may name: its declared build dependency (`contracts`), the derive it
+/// serialises with, the pure `std` modules it uses, the TOML value types `Policy::load` parses a
+/// `&str` into, and associated items of the primitive integers. Nothing here performs I/O.
+const ROUTE_MAY_REFERENCE: &[&str] = &[
+    "crate::contracts::roster",
+    "serde::Serialize",
+    "std::cmp",
+    "std::collections",
+    "std::fmt",
+    "std::error",
+    "fmt",
+    "toml",
+    "u64",
+    "i64",
+];
+
+/// Segment-aware: an entry admits itself and anything below it, so `std::fmt` admits
+/// `std::fmt::Display` but not a sibling spelled `std::fmtx`.
+fn under(path: &str, entry: &str) -> bool {
+    path == entry
+        || path
+            .strip_prefix(entry)
+            .is_some_and(|rest| rest.starts_with("::"))
+}
+
+fn permitted(path: &str) -> bool {
+    ROUTE_MAY_REFERENCE.iter().any(|entry| under(path, entry))
+}
+
+/// Every path in `code` whose first segment starts lowercase (`std::…`, `crate::…`, `serde::…`,
+/// `w::…`), after comments, strings, raw strings and char literals are removed. Paths rooted at a
+/// type (`Route::Chosen`, `Self::…`) name this module's own items and are not collected. A `use`
+/// of `a::b as c` is collected as `a::b`, and a later `c::…` as `c::…` — refused unless listed.
+fn referenced_paths(code: &str) -> BTreeSet<String> {
+    let text = strip_comments_and_literals(code);
+    let bytes = text.as_bytes();
+    let mut found = BTreeSet::new();
+    let mut index = 0;
+    while index < bytes.len() {
+        let starts_word = index == 0 || !is_ident(bytes[index - 1]);
+        if starts_word && bytes[index].is_ascii_lowercase() {
+            let begin = index;
+            let mut end = index;
+            let mut segments = 1;
+            loop {
+                while end < bytes.len() && is_ident(bytes[end]) {
+                    end += 1;
+                }
+                if end + 2 < bytes.len()
+                    && &bytes[end..end + 2] == b"::"
+                    && is_ident(bytes[end + 2])
+                {
+                    end += 2;
+                    segments += 1;
+                } else {
+                    break;
+                }
+            }
+            if segments > 1 {
+                found.insert(text[begin..end].to_owned());
+            }
+            index = end.max(index + 1);
+        } else {
+            index += 1;
+        }
+    }
+    found
+}
+
+fn is_ident(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || byte == b'_'
+}
+
+/// Replace comments and literal contents with spaces, keeping everything else byte-for-byte.
+/// Handles nested block comments, escapes, raw strings of any hash count, byte strings, and the
+/// difference between a char literal (`'x'`, `'\\n'`) and a lifetime (`'a`).
+fn strip_comments_and_literals(code: &str) -> String {
+    let bytes = code.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let rest = &bytes[i..];
+        if rest.starts_with(b"//") {
+            while i < bytes.len() && bytes[i] != b'\n' {
+                i += 1;
+            }
+        } else if rest.starts_with(b"/*") {
+            let mut depth = 0usize;
+            while i < bytes.len() {
+                if bytes[i..].starts_with(b"/*") {
+                    depth += 1;
+                    i += 2;
+                } else if bytes[i..].starts_with(b"*/") {
+                    depth -= 1;
+                    i += 2;
+                    if depth == 0 {
+                        break;
+                    }
+                } else {
+                    i += 1;
+                }
+            }
+            out.push(b' ');
+        } else if (rest.starts_with(b"r#") || rest.starts_with(b"r\"") || rest.starts_with(b"br"))
+            && (i == 0 || !is_ident(bytes[i - 1]))
+        {
+            let mut j = i + usize::from(rest[0] == b'b') + 1;
+            let mut hashes = 0;
+            while j < bytes.len() && bytes[j] == b'#' {
+                hashes += 1;
+                j += 1;
+            }
+            if j < bytes.len() && bytes[j] == b'"' {
+                let closing: Vec<u8> = std::iter::once(b'"')
+                    .chain(std::iter::repeat_n(b'#', hashes))
+                    .collect();
+                j += 1;
+                while j < bytes.len() && !bytes[j..].starts_with(&closing) {
+                    j += 1;
+                }
+                i = (j + closing.len()).min(bytes.len());
+                out.extend_from_slice(b"\"\"");
+            } else {
+                out.push(bytes[i]);
+                i += 1;
+            }
+        } else if bytes[i] == b'"' {
+            i += 1;
+            while i < bytes.len() && bytes[i] != b'"' {
+                i += if bytes[i] == b'\\' { 2 } else { 1 };
+            }
+            i += 1;
+            out.extend_from_slice(b"\"\"");
+        } else if bytes[i] == b'\'' {
+            let char_literal = match rest.get(1) {
+                Some(b'\\') => true,
+                Some(_) => rest.get(2) == Some(&b'\''),
+                None => false,
+            };
+            if char_literal {
+                i += 1;
+                while i < bytes.len() && bytes[i] != b'\'' {
+                    i += if bytes[i] == b'\\' { 2 } else { 1 };
+                }
+                i += 1;
+                out.extend_from_slice(b"' '");
+            } else {
+                out.push(bytes[i]);
+                i += 1;
+            }
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 /// T09-RT-56 · known answers from an independent implementation: the retained table
