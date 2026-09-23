@@ -195,6 +195,8 @@ HEE3-ANCHORS-END
 
 **Start coding in a new context:** [Canonical restart pointer and launch message](corpus/CONTEXT_HANDOFF.md) ↔ [Quick start](QUICK_START.md). Recover authority, ownership and current publication; scout the earliest original task before the next authorized slice. The handoff records the initial unaccepted T01 candidate; T01 remains first and T25/T26 precede T02.
 
+**Current resume point:** [Restart note](file:///var/home/Louranicas/handoffs/HEE3_RESTART_20260923_NIGHT.md) → [Module completion review — per-module definition of done, schematics and route](file:///var/home/Louranicas/handoffs/HEE3_MODULE_COMPLETION_REVIEW_20260923.md) · [Architecture atlas — what complete means (L1 implemented · L2 composed · L3 admitted) and measured schematics](file:///var/home/Louranicas/handoffs/HEE3_ARCHITECTURE_ATLAS_20260923.md) — each links back to this README.
+
 **Before each coding task:** [Progressive module context workflow](docs/module-context.md) provides 22 focused context cards and the $hee-module-scout skill. Scout contracts, callers, evidence and tool availability; retain omissions and re-scout changed boundaries.
 
 The planned stack has source/configuration anchors and detailed deployment contracts. Inspect declared source bodies and the evidence index to distinguish comment stubs from substantive implementation candidates. Full engine implementation, qualification and installation remain subject to the owning atlas tasks. No service or model call is started by this corpus.
