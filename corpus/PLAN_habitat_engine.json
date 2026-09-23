@@ -500,6 +500,12 @@
                 "sha256": "4e26b521365e5e69de0e63f6f3667ba96b9a25c7b6cf0fb7e3b5ff81387c07f0",
                 "task_id": "T07",
                 "scope": "implementation_candidate"
+              },
+              {
+                "path": "evidence/implementation-T07-20260923/progress.json",
+                "sha256": "b231848e1c29113a7a091b13a409d565239294ef8e861e11bc9bfb66662c3634",
+                "task_id": "T07",
+                "scope": "implementation_candidate"
               }
             ],
             "research_refs": [
