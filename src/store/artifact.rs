@@ -1,12 +1,13 @@
 //! Fixed, fd-relative immutable object publication for the store owner.
 
-use super::{Error, Result, digest};
+use super::{Error, LOCK_SETTLE, Result, digest};
 use crate::contracts::UuidV4;
 use rustix::fs::{Mode, OFlags, RenameFlags, mkdirat, open, openat, renameat_with, unlinkat};
 use std::fs::{File, Permissions};
 use std::io::{Read, Write};
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 pub(super) const OBJECT_LIMIT: usize = 16 * 1024 * 1024;
 
@@ -94,7 +95,19 @@ impl Directory {
         )?))
     }
 
-    pub fn lock(&self) -> Result<File> {
+    /// Take the store's single-writer lock, waiting at most [`LOCK_SETTLE`] (and never past
+    /// `deadline`) for a holder that is only momentarily present.
+    ///
+    /// `flock` belongs to the open file description, so a fork anywhere in the process — another
+    /// thread spawning a worker — duplicates this descriptor until the child execs. A single
+    /// non-blocking attempt therefore refused spuriously; a genuine second writer is still
+    /// refused, promptly. Only "would block" is `Locked`: any other failure is the I/O error.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Locked`] when the lock is still held after the settle window; the I/O error for
+    /// any other failure; custody and path refusals as before.
+    pub fn lock(&self, deadline: Instant) -> Result<File> {
         let file = match self.create_file("store.lock") {
             Ok(file) => {
                 file.sync_all()?;
@@ -106,7 +119,17 @@ impl Directory {
             }
             Err(error) => return Err(error),
         };
-        file.try_lock().map_err(|_| Error::Locked)?;
+        let until = deadline.min(Instant::now() + LOCK_SETTLE);
+        loop {
+            match file.try_lock() {
+                Ok(()) => break,
+                Err(std::fs::TryLockError::WouldBlock) if Instant::now() < until => {
+                    std::thread::sleep(Duration::from_millis(2));
+                }
+                Err(std::fs::TryLockError::WouldBlock) => return Err(Error::Locked),
+                Err(std::fs::TryLockError::Error(error)) => return Err(error.into()),
+            }
+        }
         let named = self.regular("store.lock")?;
         let held = file.metadata()?;
         let current = named.metadata()?;

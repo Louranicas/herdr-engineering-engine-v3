@@ -25,7 +25,7 @@ impl ArtifactStaging {
     pub fn open(root: &Path, create: bool, deadline: Instant) -> Result<Self> {
         remaining(deadline)?;
         let root = artifact::Directory::root(root)?;
-        let lock = root.lock()?;
+        let lock = root.lock(deadline)?;
         let objects = root.child("sha256", create)?;
         remaining(deadline)?;
         Ok(Self {

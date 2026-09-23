@@ -1056,20 +1056,16 @@ fn running(
                 observed,
             ),
         ),
-        ProcessCustody::Unreadable { error } => decide(
-            Rule::R07ProcessNotOurs,
-            retain(
-                Unknown::ProcessUnreadable {
-                    error: error.clone(),
-                },
-                task,
-                observed,
-            ),
+        ProcessCustody::Unreadable { error } => unestablished_custody(
+            Unknown::ProcessUnreadable {
+                error: error.clone(),
+            },
+            task,
+            observed,
         ),
-        ProcessCustody::Unobserved => decide(
-            Rule::R07ProcessNotOurs,
-            retain(Unknown::ProcessUnobserved, task, observed),
-        ),
+        ProcessCustody::Unobserved => {
+            unestablished_custody(Unknown::ProcessUnobserved, task, observed)
+        }
         ProcessCustody::Absent => {
             if let WorkspaceReadback::Writable { bytes } = observed.workspace {
                 return decide(
@@ -1118,12 +1114,37 @@ fn lease_refusal(lease: Lease<'_>, clock: Option<Clock<'_>>, bytes: u64) -> Reus
     }
 }
 
+/// R07: custody we could not establish. On the unsettled path both unreadable and unobserved
+/// custody stop everything; on the settled path unreadable custody does ("we could not look" is
+/// not evidence the holder is gone) — it once checked only for a live holder and released a
+/// workspace under unreadable custody. One rule, called from both paths.
+fn unestablished_custody(
+    reason: Unknown,
+    task: &TaskFacts<'_>,
+    observed: &Observations<'_>,
+) -> Decision {
+    decide(Rule::R07ProcessNotOurs, retain(reason, task, observed))
+}
+
 /// R09, R11, R12: a settled worker's cleanup and verification obligations.
 fn settled(
     task: &TaskFacts<'_>,
     attempt: &AttemptFacts<'_>,
     observed: &Observations<'_>,
 ) -> Decision {
+    // Unreadable custody (we tried to read the process and failed) may hide a live holder, so
+    // nothing follows. Unobserved custody on a SETTLED attempt is different: its observation was
+    // never a local process (RC-24), so no local holder exists to protect, and cleanup proceeds —
+    // a still-writable workspace is refused below either way.
+    if let ProcessCustody::Unreadable { error } = &observed.process {
+        return unestablished_custody(
+            Unknown::ProcessUnreadable {
+                error: error.clone(),
+            },
+            task,
+            observed,
+        );
+    }
     if observed.process == ProcessCustody::LiveSameIdentity {
         return decide(
             Rule::R09WorkspaceReuse,
@@ -1176,14 +1197,28 @@ fn settled(
                 TaskState::Failed
                 | TaskState::Cancelled
                 | TaskState::Abandoned
-                | TaskState::Blocked => decide(
-                    Rule::R11CleanupReadback,
-                    Reconciliation::WorkspaceReleasable {
-                        cleanup_readback: observed.cleanup.clone(),
-                        process: observed.process.clone(),
-                        task_state: task.state,
-                    },
-                ),
+                | TaskState::Blocked => {
+                    // A workspace still writable is never released, however complete the
+                    // cleanup readback: the unsettled path refuses it through `lease_refusal`,
+                    // and this path now goes through the same rule (T07 obligation 9).
+                    if let WorkspaceReadback::Writable { bytes } = observed.workspace {
+                        return decide(
+                            Rule::R09WorkspaceReuse,
+                            Reconciliation::WorkspaceReuseRefused {
+                                reason: lease_refusal(attempt.lease, observed.clock, bytes),
+                                process: observed.process.clone(),
+                            },
+                        );
+                    }
+                    decide(
+                        Rule::R11CleanupReadback,
+                        Reconciliation::WorkspaceReleasable {
+                            cleanup_readback: observed.cleanup.clone(),
+                            process: observed.process.clone(),
+                            task_state: task.state,
+                        },
+                    )
+                }
                 TaskState::Admitted
                 | TaskState::Queued
                 | TaskState::Running

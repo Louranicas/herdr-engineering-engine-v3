@@ -366,6 +366,12 @@ pub enum Error {
     Injected(String),
 }
 
+/// How long the store's single-writer lock is waited for when it is found held. A fork-to-exec
+/// window in a multi-threaded process holds a duplicated descriptor for microseconds to a few
+/// milliseconds; 250 ms covers that under load while a genuine duplicate start still refuses
+/// promptly rather than after the caller's whole deadline.
+pub const LOCK_SETTLE: Duration = Duration::from_millis(250);
+
 impl From<std::io::Error> for Error {
     fn from(value: std::io::Error) -> Self {
         Self::Io(value)
@@ -613,7 +619,7 @@ impl Store {
         remaining(deadline)?;
         schema::runtime(deadline)?;
         let root = Directory::root(root)?;
-        let lock = root.lock()?;
+        let lock = root.lock(deadline)?;
         let generations = root.child("generations", create)?;
         let generation_dir = generations.child(generation.as_str(), create)?;
         let created = if create {

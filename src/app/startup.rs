@@ -334,6 +334,10 @@ impl Host {
 const WALK_ENTRY_LIMIT: usize = 4096;
 const WALK_DEPTH_LIMIT: usize = 16;
 
+/// How long one workspace removal may walk. The owner's entry and depth bounds cap the work;
+/// this caps the wall time of an effect that `Physical::clean` has no deadline for.
+const WORKSPACE_REMOVAL_BUDGET: std::time::Duration = std::time::Duration::from_secs(30);
+
 fn owned_private_dir(path: &Path) -> Result<fs::Metadata, String> {
     let meta = fs::symlink_metadata(path).map_err(|e| format!("metadata: {e}"))?;
     if !meta.is_dir() {
@@ -510,8 +514,14 @@ impl Physical for Host {
         if !path.is_absolute() {
             return Err("workspace path is not absolute".into());
         }
-        owned_private_dir(path)?;
-        fs::remove_dir_all(path).map_err(|e| format!("remove: {e}"))
+        // The workspace owner removes it, descriptor-relative: the path is opened once, its
+        // custody read from that descriptor, and the name re-checked before the final unlink
+        // (review N6; this shell used to check the path and then remove the path).
+        crate::worker::workspace::remove_owned(
+            path,
+            std::time::Instant::now() + WORKSPACE_REMOVAL_BUDGET,
+        )
+        .map_err(|error| format!("remove: {error:?}"))
     }
 }
 
@@ -786,6 +796,23 @@ fn read(store: &mut Store, startup: &Startup<'_>) -> Result<Inspected, Error> {
     })
 }
 
+/// The ledger read for action must equal the one inspected.
+///
+/// Extracted from [`run`] (review §3, T07): the branch is reachable only when another writer
+/// changes the ledger between the inspection read and the writable read, which no input can
+/// arrange, so the rule is a value function a test reaches directly; `run` makes one call.
+///
+/// # Errors
+///
+/// [`Error::Changed`] when the two reads differ.
+pub fn confirm_unchanged<T: PartialEq>(inspected: &T, reread: &T) -> Result<(), Error> {
+    if reread == inspected {
+        Ok(())
+    } else {
+        Err(Error::Changed)
+    }
+}
+
 /// Run one startup pass. Inspection first; effects only through a normally
 /// opened ledger whose inventory equals the inspected one.
 /// # Errors
@@ -814,9 +841,7 @@ pub fn run(startup: &Startup<'_>, physical: &mut dyn Physical) -> Result<Pass, E
                 false,
                 startup.deadline,
             )?;
-            if read(&mut store, startup)? != inspected {
-                return Err(Error::Changed);
-            }
+            confirm_unchanged(&inspected, &read(&mut store, startup)?)?;
             Some(store)
         }
         Mode::Reconciliation => None,

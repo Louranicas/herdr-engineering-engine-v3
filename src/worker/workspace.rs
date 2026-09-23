@@ -1,7 +1,10 @@
 //! Bounded source capture and fresh copies under the trusted worker owner.
 //! These local filesystem observations do not establish hostile same-UID isolation.
 
-use rustix::fs::{Dir, Mode, OFlags, fcntl_getfl, fstatfs, mkdirat, open, openat};
+use rustix::fs::{
+    AtFlags, Dir, Mode, OFlags, fcntl_getfl, fstat, fstatfs, mkdirat, open, openat, statat,
+    unlinkat,
+};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{File, Metadata, Permissions};
@@ -92,6 +95,88 @@ pub enum Error {
     Deadline,
     Io,
     Policy,
+}
+
+/// Remove a workspace directory this process's user owns, descriptor-relative throughout.
+///
+/// The recovery shell used to check the path's ownership and then call `remove_dir_all` on the
+/// path itself: an effect outside the workspace owner, with a window between the check and the
+/// removal in which the name could come to mean something else (review N6). Here the directory
+/// is opened once without following a final symlink, its owner and mode are read from that
+/// descriptor, every child is unlinked relative to a descriptor, and the final entry is removed
+/// only if the name still names the inode that was opened.
+///
+/// # Errors
+///
+/// [`Error::Path`] for a relative or rootless path; [`Error::Custody`] when the directory is
+/// not ours or not 0700; [`Error::Changed`] when the name no longer names the opened directory;
+/// [`Error::Bound`] past [`MAX_ENTRIES`] or [`MAX_DEPTH`]; [`Error::Deadline`]; [`Error::Io`].
+pub fn remove_owned(path: &Path, deadline: Instant) -> Result<(), Error> {
+    let (Some(parent), Some(name)) = (path.parent(), path.file_name()) else {
+        return Err(Error::Path);
+    };
+    if !path.is_absolute() {
+        return Err(Error::Path);
+    }
+    let parent =
+        open(parent, READ_FLAGS | OFlags::DIRECTORY, Mode::empty()).map_err(|_| Error::Io)?;
+    let directory = openat(&parent, name, READ_FLAGS | OFlags::DIRECTORY, Mode::empty())
+        .map_err(|_| Error::Type)?;
+    let held = fstat(&directory).map_err(|_| Error::Io)?;
+    if held.st_uid != rustix::process::geteuid().as_raw() || held.st_mode & 0o777 != 0o700 {
+        return Err(Error::Custody);
+    }
+    let mut entries = 0;
+    empty_directory(&directory, 0, &mut entries, deadline)?;
+    let named = statat(&parent, name, AtFlags::SYMLINK_NOFOLLOW).map_err(|_| Error::Changed)?;
+    if (named.st_dev, named.st_ino) != (held.st_dev, held.st_ino) {
+        return Err(Error::Changed);
+    }
+    unlinkat(&parent, name, AtFlags::REMOVEDIR).map_err(|_| Error::Io)
+}
+
+fn empty_directory(
+    directory: &rustix::fd::OwnedFd,
+    depth: usize,
+    entries: &mut usize,
+    deadline: Instant,
+) -> Result<(), Error> {
+    if depth > MAX_DEPTH {
+        return Err(Error::Bound);
+    }
+    let mut names = Vec::new();
+    for entry in Dir::read_from(directory).map_err(|_| Error::Io)? {
+        let entry = entry.map_err(|_| Error::Io)?;
+        let name = entry.file_name().to_owned();
+        if name.as_bytes() == b"." || name.as_bytes() == b".." {
+            continue;
+        }
+        *entries += 1;
+        if *entries > MAX_ENTRIES {
+            return Err(Error::Bound);
+        }
+        names.push(name);
+    }
+    for name in names {
+        if Instant::now() >= deadline {
+            return Err(Error::Deadline);
+        }
+        let stat = statat(directory, &name, AtFlags::SYMLINK_NOFOLLOW).map_err(|_| Error::Io)?;
+        if rustix::fs::FileType::from_raw_mode(stat.st_mode) == rustix::fs::FileType::Directory {
+            let child = openat(
+                directory,
+                &name,
+                READ_FLAGS | OFlags::DIRECTORY,
+                Mode::empty(),
+            )
+            .map_err(|_| Error::Changed)?;
+            empty_directory(&child, depth + 1, entries, deadline)?;
+            unlinkat(directory, &name, AtFlags::REMOVEDIR).map_err(|_| Error::Io)?;
+        } else {
+            unlinkat(directory, &name, AtFlags::empty()).map_err(|_| Error::Io)?;
+        }
+    }
+    Ok(())
 }
 
 /// An incomplete copy is retained at its owned path for explicit reconciliation.

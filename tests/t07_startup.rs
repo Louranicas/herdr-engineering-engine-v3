@@ -22,11 +22,12 @@ use habitat_engine::recovery::{
     ReuseRefusal, Rule, TaskState, Unknown, Verdict, Verification, WorkspaceReadback,
 };
 use habitat_engine::store::{
-    Allocation, Effect, Error as StoreError, Expected, Object, Principal, RECORD_BODY_LIMIT,
-    RECORD_SCAN_LIMIT, ReconciliationRecord, RecordKind, RecordRow, RecoveryInventory,
-    RecoveryLimits, RequestSource, RosterStart, Settlement, Stop, Store, Submission,
-    VerificationVerdict, record_id,
+    Allocation, Effect, Error as StoreError, Expected, LOCK_SETTLE, Object, Principal,
+    RECORD_BODY_LIMIT, RECORD_SCAN_LIMIT, ReconciliationRecord, RecordKind, RecordRow,
+    RecoveryInventory, RecoveryLimits, RequestSource, RosterStart, Settlement, Stop, Store,
+    Submission, VerificationVerdict, record_id,
 };
+use habitat_engine::worker::workspace::{Error as WorkspaceError, remove_owned};
 use rusqlite::{Connection, OpenFlags};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
@@ -136,6 +137,9 @@ struct World {
     /// read) first settles the attempt's cleanup column through its own connection -- the
     /// ledger changing under the pass, which only a concurrent writer can do.
     concurrent_settle: Option<PathBuf>,
+    /// Block inside the cleanup effect after announcing it on stdout: the kill test's child
+    /// uses it to be killed with `SIGKILL` between the durable intent row and the effect.
+    block_in_clean: bool,
 }
 
 impl World {
@@ -278,6 +282,16 @@ impl Physical for World {
             subject: subject.to_value(),
             target: target.into(),
         });
+        if self.block_in_clean {
+            use std::io::Write as _;
+            let mut out = std::io::stdout().lock();
+            let _ = writeln!(out, "{KILL_MARKER}");
+            let _ = out.flush();
+            drop(out);
+            // Bounded: the parent kills within its own budget; if it never does, give up.
+            std::thread::sleep(std::time::Duration::from_secs(60));
+            return Err("the kill never came".into());
+        }
         if self.clean_refusals.contains(target) {
             return Err(format!("refused: {target}"));
         }
@@ -3420,4 +3434,237 @@ fn workspace_walk_refuses_past_its_entry_bound() {
         WorkspaceReadback::NotRead,
         "4097 entries must refuse, not report a size"
     );
+}
+
+/// T07-AP-79 · a ledger that changed between the inspection read and the writable read is
+/// refused as `Changed`, never acted on. The branch in `run` is reachable only through a
+/// concurrent writer, so its rule was extracted (review §3: "add the test reaching
+/// startup.rs:817-818"); this reaches it with values, from both sides.
+#[test]
+fn a_ledger_that_changed_between_reads_is_refused() {
+    assert!(startup::confirm_unchanged(&["task-a", "gen-1"], &["task-a", "gen-1"]).is_ok());
+    for reread in [["task-a", "gen-2"], ["task-b", "gen-1"]] {
+        assert!(
+            matches!(
+                startup::confirm_unchanged(&["task-a", "gen-1"], &reread),
+                Err(startup::Error::Changed)
+            ),
+            "{reread:?} was accepted as unchanged"
+        );
+    }
+}
+
+const KILL_MARKER: &str = "HEE3-T07-AP80-IN-EFFECT";
+const KILL_CHILD_ENV: &str = "HEE3_T07_KILL_CHILD_STORE";
+
+/// The child half of T07-AP-80. Inert unless the parent names a store through the
+/// environment; then it runs one real startup pass whose cleanup effect blocks after the
+/// intent row is durable, and waits to be killed.
+#[test]
+fn kill_child_entrypoint() {
+    let Ok(root) = std::env::var(KILL_CHILD_ENV) else {
+        return;
+    };
+    let root = PathBuf::from(root);
+    let mut world = World::new().with_obligations(&["workspace"]);
+    world.block_in_clean = true;
+    let _ = startup::run(
+        &Startup {
+            root: &root,
+            generation: id(GEN),
+            epoch: id(EPOCH),
+            limits: limits(),
+            restored_from: None,
+            cursors: &[],
+            claims: &[],
+            deadline: deadline(),
+        },
+        &mut world,
+    );
+}
+
+/// T07-AP-80 · obligation 6 under a REAL kill (F132: only a real writer under a real kill can
+/// show "recorded before"). A child process runs a startup pass and is killed with `SIGKILL` inside the
+/// cleanup effect, after the intent row is journaled. The intent survives, alone, with no
+/// readback; the next pass performs the effect once and journals its readback, and the intent is
+/// not written twice.
+#[test]
+fn a_pass_killed_inside_its_effect_recovers_without_a_duplicate_intent()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut r = Rig::ready();
+    r.close();
+    let before = r.area.events();
+    let mut child = std::process::Command::new(std::env::current_exe()?)
+        .args([
+            "kill_child_entrypoint",
+            "--exact",
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env(KILL_CHILD_ENV, r.area.store())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()?;
+    let stdout = child.stdout.take().ok_or("the child has no stdout")?;
+    let (tx, rx) = std::sync::mpsc::channel();
+    let reader = std::thread::spawn(move || {
+        use std::io::BufRead as _;
+        for line in std::io::BufReader::new(stdout)
+            .lines()
+            .map_while(Result::ok)
+        {
+            if line.contains(KILL_MARKER) {
+                let _ = tx.send(());
+                return;
+            }
+        }
+    });
+    let budget = std::time::Duration::from_secs(30);
+    let reached = rx.recv_timeout(budget);
+    child.kill()?;
+    let status = child.wait()?;
+    reader.join().map_err(|_| "the reader thread panicked")?;
+    assert!(
+        reached.is_ok(),
+        "the child never reached the effect within {budget:?}"
+    );
+    assert!(
+        !status.success(),
+        "the child was killed, not finished: {status:?}"
+    );
+
+    assert_eq!(
+        r.area.events(),
+        before + 1,
+        "the intent was journaled before the kill"
+    );
+    let rows = r.records();
+    assert_eq!(rows.len(), 1, "the intent alone survives the kill");
+    assert_eq!(body(&rows[0])["intent"], "cleanup_performed");
+
+    let mut world = World::new().with_obligations(&["workspace"]);
+    r.pass(&mut world);
+    assert_eq!(
+        world.calls_of("clean").len(),
+        1,
+        "the effect is performed once"
+    );
+    let rows = r.records();
+    let intents = rows
+        .iter()
+        .filter(|row| body(row)["intent"] == "cleanup_performed")
+        .count();
+    assert_eq!(intents, 1, "the intent is not written twice: {rows:?}");
+    assert!(
+        rows.iter()
+            .any(|row| body(row)["readback"]["cleanup_readback"] == "complete"),
+        "the resumed pass journals its complete readback"
+    );
+    Ok(())
+}
+
+// ---- store lock and workspace removal: T07's flake and review N6 ------------------------------
+
+/// T07-AP-81 · a store lock held for a moment by another holder is waited out, not refused.
+/// `flock` belongs to the open file description, so a fork anywhere in the process duplicates
+/// the lock descriptor until the child execs; this battery failed 3 of 20 runs multi-threaded
+/// with `Locked` (0 of 20 single-threaded) until acquisition retried for `LOCK_SETTLE` (F167).
+#[test]
+fn a_momentarily_held_store_lock_is_waited_out() -> Result<(), Box<dyn std::error::Error>> {
+    let area = Area::new("lock-wait");
+    DirBuilder::new().mode(0o700).create(area.store())?;
+    drop(
+        Store::open(&area.store(), id(GEN), id(EPOCH), true, deadline())
+            .map_err(|error| format!("{error:?}"))?,
+    );
+    let holder = fs::File::open(area.store().join("store.lock"))?;
+    holder.lock()?;
+    let release = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(40));
+        drop(holder);
+    });
+    let opened = Store::open(&area.store(), id(GEN), id(EPOCH), false, deadline());
+    release.join().map_err(|_| "holder thread panicked")?;
+    assert!(opened.is_ok(), "{:?}", opened.err());
+    Ok(())
+}
+
+/// T07-AP-82 · a genuine second writer is still refused, within `LOCK_SETTLE` of trying and well
+/// before the caller's deadline: an operator's duplicate start must fail fast.
+#[test]
+fn a_store_lock_held_past_the_settle_window_refuses_well_before_the_deadline()
+-> Result<(), Box<dyn std::error::Error>> {
+    let area = Area::new("lock-refuse");
+    DirBuilder::new().mode(0o700).create(area.store())?;
+    let _first = Store::open(&area.store(), id(GEN), id(EPOCH), true, deadline())
+        .map_err(|error| format!("{error:?}"))?;
+    let started = Instant::now();
+    assert!(matches!(
+        Store::open(&area.store(), id(GEN), id(EPOCH), false, deadline()),
+        Err(StoreError::Locked)
+    ));
+    let waited = started.elapsed();
+    assert!(
+        waited >= LOCK_SETTLE && waited < Duration::from_secs(2),
+        "refused after {waited:?}; settle window {LOCK_SETTLE:?}, deadline 10 s"
+    );
+    Ok(())
+}
+
+/// T07-AP-83 · the workspace owner removes a nested workspace whole, descriptor-relative, and a
+/// symlink inside it is unlinked as a link: its target survives (review N6).
+#[test]
+fn the_workspace_owner_removes_a_tree_without_following_links()
+-> Result<(), Box<dyn std::error::Error>> {
+    let area = Area::new("remove-tree");
+    let outside = area.path.join("outside");
+    let root = area.path.join("workspace");
+    for dir in [&outside, &root, &root.join("a"), &root.join("a/b")] {
+        DirBuilder::new().mode(0o700).create(dir)?;
+    }
+    fs::write(outside.join("keep"), b"keep")?;
+    fs::write(root.join("a/b/deep"), b"x")?;
+    fs::write(root.join("top"), b"y")?;
+    std::os::unix::fs::symlink(&outside, root.join("a/link"))?;
+    remove_owned(&root, deadline()).map_err(|error| format!("{error:?}"))?;
+    assert!(
+        fs::symlink_metadata(&root).is_err(),
+        "the workspace is gone"
+    );
+    assert_eq!(fs::read(outside.join("keep"))?, b"keep");
+    Ok(())
+}
+
+/// T07-AP-84 · a final component that is a symlink is refused, and its target is untouched.
+#[test]
+fn the_workspace_owner_refuses_a_symlinked_workspace() -> Result<(), Box<dyn std::error::Error>> {
+    let area = Area::new("remove-alias");
+    let target = area.path.join("target");
+    DirBuilder::new().mode(0o700).create(&target)?;
+    fs::write(target.join("keep"), b"keep")?;
+    std::os::unix::fs::symlink(&target, area.path.join("alias"))?;
+    assert!(matches!(
+        remove_owned(&area.path.join("alias"), deadline()),
+        Err(WorkspaceError::Type)
+    ));
+    assert_eq!(fs::read(target.join("keep"))?, b"keep");
+    Ok(())
+}
+
+/// T07-AP-85 · a directory not private to its owner is refused as custody and left intact.
+#[test]
+fn the_workspace_owner_refuses_a_directory_that_is_not_0700()
+-> Result<(), Box<dyn std::error::Error>> {
+    let area = Area::new("remove-shared");
+    let root = area.path.join("shared");
+    DirBuilder::new().mode(0o700).create(&root)?;
+    fs::write(root.join("keep"), b"keep")?;
+    fs::set_permissions(&root, fs::Permissions::from_mode(0o755))?;
+    assert!(matches!(
+        remove_owned(&root, deadline()),
+        Err(WorkspaceError::Custody)
+    ));
+    assert_eq!(fs::read(root.join("keep"))?, b"keep");
+    fs::set_permissions(&root, fs::Permissions::from_mode(0o700))?;
+    Ok(())
 }

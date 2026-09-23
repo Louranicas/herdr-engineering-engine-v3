@@ -2349,3 +2349,65 @@ fn permits_execution_reads_the_carried_flags() {
         .permits_execution()
     );
 }
+/// T07-RC-59 · a still-writable workspace is never releasable, even after a complete cleanup
+/// readback on a terminal task. The settled path used to reach `WorkspaceReleasable` without
+/// reading the workspace at all, while the unsettled path refused the same workspace through
+/// `lease_refusal`; both now go through that one rule (T07 obligation 9).
+#[test]
+fn a_writable_workspace_is_not_releasable_after_cleanup() {
+    let decision = reconcile(
+        &ledger(),
+        &open(TaskState::Failed),
+        &settled(),
+        &Observations {
+            workspace: WorkspaceReadback::Writable { bytes: 4096 },
+            ..cleaned(ProcessCustody::Absent)
+        },
+    );
+    assert_eq!(
+        decision,
+        Decision {
+            rule: Rule::R09WorkspaceReuse,
+            reconciliation: Reconciliation::WorkspaceReuseRefused {
+                reason: ReuseRefusal::NotLeasedWritable { bytes: 4096 },
+                process: ProcessCustody::Absent,
+            },
+        }
+    );
+}
+/// T07-RC-60 · a settled attempt whose process could not be read is not released: "we could
+/// not look" is not evidence the holder is gone. Unobserved custody is the other case and is
+/// pinned beside it: a settled attempt whose observation was never a local process (RC-24) has no
+/// local holder to protect, so its verified cleanup is still releasable.
+#[test]
+fn unreadable_custody_does_not_release_a_settled_workspace_but_unobserved_does() {
+    let with = |custody: ProcessCustody| {
+        reconcile(
+            &ledger(),
+            &open(TaskState::Failed),
+            &settled(),
+            &Observations {
+                workspace: WorkspaceReadback::Released,
+                ..cleaned(custody)
+            },
+        )
+    };
+    let unreadable = ProcessCustody::Unreadable {
+        error: "EACCES".to_owned(),
+    };
+    assert_eq!(
+        with(unreadable.clone()),
+        unknown(
+            Rule::R07ProcessNotOurs,
+            Unknown::ProcessUnreadable {
+                error: "EACCES".to_owned()
+            },
+            unreadable,
+            false
+        )
+    );
+    assert_eq!(
+        with(ProcessCustody::Unobserved).rule,
+        Rule::R11CleanupReadback
+    );
+}

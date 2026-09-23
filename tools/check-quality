@@ -118,7 +118,7 @@ NATIVE_CLIENT_FIXTURE = "tests/fixtures/native/client.py"
 # reads only habitat_engine::recovery and src/recovery.rs (declared by src/lib.rs)
 # reads no store or contracts module, so its input pins are exactly its two
 # sources; the Store-owned src/store/recovery.rs stays pinned by T07_INPUTS.
-RECOVERY_TARGET_COUNTS = {"recovery": 58}
+RECOVERY_TARGET_COUNTS = {"recovery": 60}
 RECOVERY_INPUTS = ("src/recovery.rs", "tests/recovery.rs")
 # Reviewed T07 startup application target: 78 controls, no library-unit namespace.
 # tests/t07_startup.rs drives the startup pass, so its pins are the two sources
@@ -126,7 +126,7 @@ RECOVERY_INPUTS = ("src/recovery.rs", "tests/recovery.rs")
 # reads/writes. The pure policy src/recovery.rs stays pinned by RECOVERY_INPUTS and
 # the inventory reader src/store/recovery.rs by T07_INPUTS; both are read by this
 # battery too, and a file is pinned once by the battery that owns it.
-T07_STARTUP_TARGET_COUNTS = {"t07_startup": 86}
+T07_STARTUP_TARGET_COUNTS = {"t07_startup": 94}
 T07_STARTUP_INPUTS = ("src/app/startup.rs", "src/store/reconciliation.rs", "tests/t07_startup.rs")
 # Reviewed T08 contract battery: 23 controls, no library-unit namespace. The
 # inputs are what tests/t08_contract.rs reads (the offline contract client it
