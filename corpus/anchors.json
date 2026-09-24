@@ -36,7 +36,7 @@
   },
   "learnings": {
     "id": "HEE3-LEARNINGS-001",
-    "sha256": "c8bef62302cb8bc1573451c5bba4143fdc527088c9d00ec2f2b402d58d82d680",
+    "sha256": "0760e032d25052be9ad739b79d4f77e81eab2b55d0cd010516ad0b2869f77c00",
     "note": "Learnings/Index.md",
     "sources": 13,
     "lessons": 14
@@ -3690,7 +3690,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "c8bef62302cb8bc1573451c5bba4143fdc527088c9d00ec2f2b402d58d82d680",
+        "convention_sha256": "0760e032d25052be9ad739b79d4f77e81eab2b55d0cd010516ad0b2869f77c00",
         "lessons": [
           "LRN01",
           "LRN03",
@@ -6982,7 +6982,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "c8bef62302cb8bc1573451c5bba4143fdc527088c9d00ec2f2b402d58d82d680",
+        "convention_sha256": "0760e032d25052be9ad739b79d4f77e81eab2b55d0cd010516ad0b2869f77c00",
         "lessons": [
           "LRN01",
           "LRN04",
@@ -9896,7 +9896,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "c8bef62302cb8bc1573451c5bba4143fdc527088c9d00ec2f2b402d58d82d680",
+        "convention_sha256": "0760e032d25052be9ad739b79d4f77e81eab2b55d0cd010516ad0b2869f77c00",
         "lessons": [
           "LRN04",
           "LRN05",
@@ -11746,7 +11746,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "c8bef62302cb8bc1573451c5bba4143fdc527088c9d00ec2f2b402d58d82d680",
+        "convention_sha256": "0760e032d25052be9ad739b79d4f77e81eab2b55d0cd010516ad0b2869f77c00",
         "lessons": [
           "LRN05",
           "LRN08",
@@ -13387,7 +13387,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "c8bef62302cb8bc1573451c5bba4143fdc527088c9d00ec2f2b402d58d82d680",
+        "convention_sha256": "0760e032d25052be9ad739b79d4f77e81eab2b55d0cd010516ad0b2869f77c00",
         "lessons": [
           "LRN05",
           "LRN08",
@@ -15195,7 +15195,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "c8bef62302cb8bc1573451c5bba4143fdc527088c9d00ec2f2b402d58d82d680",
+        "convention_sha256": "0760e032d25052be9ad739b79d4f77e81eab2b55d0cd010516ad0b2869f77c00",
         "lessons": [
           "LRN08",
           "LRN09",
@@ -20039,7 +20039,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "c8bef62302cb8bc1573451c5bba4143fdc527088c9d00ec2f2b402d58d82d680",
+        "convention_sha256": "0760e032d25052be9ad739b79d4f77e81eab2b55d0cd010516ad0b2869f77c00",
         "lessons": [
           "LRN03",
           "LRN05",
@@ -25543,7 +25543,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "c8bef62302cb8bc1573451c5bba4143fdc527088c9d00ec2f2b402d58d82d680",
+        "convention_sha256": "0760e032d25052be9ad739b79d4f77e81eab2b55d0cd010516ad0b2869f77c00",
         "lessons": [
           "LRN01",
           "LRN02",
@@ -27069,7 +27069,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "c8bef62302cb8bc1573451c5bba4143fdc527088c9d00ec2f2b402d58d82d680",
+        "convention_sha256": "0760e032d25052be9ad739b79d4f77e81eab2b55d0cd010516ad0b2869f77c00",
         "lessons": [
           "LRN05",
           "LRN06",
@@ -28873,7 +28873,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "c8bef62302cb8bc1573451c5bba4143fdc527088c9d00ec2f2b402d58d82d680",
+        "convention_sha256": "0760e032d25052be9ad739b79d4f77e81eab2b55d0cd010516ad0b2869f77c00",
         "lessons": [
           "LRN07",
           "LRN08",
@@ -30465,7 +30465,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "c8bef62302cb8bc1573451c5bba4143fdc527088c9d00ec2f2b402d58d82d680",
+        "convention_sha256": "0760e032d25052be9ad739b79d4f77e81eab2b55d0cd010516ad0b2869f77c00",
         "lessons": [
           "LRN03",
           "LRN08",
@@ -32021,7 +32021,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "c8bef62302cb8bc1573451c5bba4143fdc527088c9d00ec2f2b402d58d82d680",
+        "convention_sha256": "0760e032d25052be9ad739b79d4f77e81eab2b55d0cd010516ad0b2869f77c00",
         "lessons": [
           "LRN01",
           "LRN03",
@@ -33751,7 +33751,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "c8bef62302cb8bc1573451c5bba4143fdc527088c9d00ec2f2b402d58d82d680",
+        "convention_sha256": "0760e032d25052be9ad739b79d4f77e81eab2b55d0cd010516ad0b2869f77c00",
         "lessons": [
           "LRN06",
           "LRN07",
@@ -35128,7 +35128,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "c8bef62302cb8bc1573451c5bba4143fdc527088c9d00ec2f2b402d58d82d680",
+        "convention_sha256": "0760e032d25052be9ad739b79d4f77e81eab2b55d0cd010516ad0b2869f77c00",
         "lessons": [
           "LRN01",
           "LRN08",
@@ -37130,7 +37130,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "c8bef62302cb8bc1573451c5bba4143fdc527088c9d00ec2f2b402d58d82d680",
+        "convention_sha256": "0760e032d25052be9ad739b79d4f77e81eab2b55d0cd010516ad0b2869f77c00",
         "lessons": [
           "LRN03",
           "LRN05",
@@ -39112,7 +39112,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "c8bef62302cb8bc1573451c5bba4143fdc527088c9d00ec2f2b402d58d82d680",
+        "convention_sha256": "0760e032d25052be9ad739b79d4f77e81eab2b55d0cd010516ad0b2869f77c00",
         "lessons": [
           "LRN03",
           "LRN05",
@@ -41830,7 +41830,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "c8bef62302cb8bc1573451c5bba4143fdc527088c9d00ec2f2b402d58d82d680",
+        "convention_sha256": "0760e032d25052be9ad739b79d4f77e81eab2b55d0cd010516ad0b2869f77c00",
         "lessons": [
           "LRN01",
           "LRN02",
@@ -43700,7 +43700,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "c8bef62302cb8bc1573451c5bba4143fdc527088c9d00ec2f2b402d58d82d680",
+        "convention_sha256": "0760e032d25052be9ad739b79d4f77e81eab2b55d0cd010516ad0b2869f77c00",
         "lessons": [
           "LRN01",
           "LRN02",
@@ -45098,7 +45098,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "c8bef62302cb8bc1573451c5bba4143fdc527088c9d00ec2f2b402d58d82d680",
+        "convention_sha256": "0760e032d25052be9ad739b79d4f77e81eab2b55d0cd010516ad0b2869f77c00",
         "lessons": [
           "LRN03",
           "LRN04",
@@ -46585,7 +46585,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "c8bef62302cb8bc1573451c5bba4143fdc527088c9d00ec2f2b402d58d82d680",
+        "convention_sha256": "0760e032d25052be9ad739b79d4f77e81eab2b55d0cd010516ad0b2869f77c00",
         "lessons": [
           "LRN03",
           "LRN04",
@@ -48077,7 +48077,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "c8bef62302cb8bc1573451c5bba4143fdc527088c9d00ec2f2b402d58d82d680",
+        "convention_sha256": "0760e032d25052be9ad739b79d4f77e81eab2b55d0cd010516ad0b2869f77c00",
         "lessons": [
           "LRN04",
           "LRN08",
@@ -49630,7 +49630,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "c8bef62302cb8bc1573451c5bba4143fdc527088c9d00ec2f2b402d58d82d680",
+        "convention_sha256": "0760e032d25052be9ad739b79d4f77e81eab2b55d0cd010516ad0b2869f77c00",
         "lessons": [
           "LRN01",
           "LRN02",
@@ -54656,8 +54656,8 @@
       "bytes": 6019
     },
     "tools/check-quality": {
-      "sha256": "7b5de941dbeebf70bdd8475d72b34f11bd8173c0bd556cbe2b2537eacd940911",
-      "bytes": 78225
+      "sha256": "9232742babf3d34a5fe4e0eb43bae2121dc48781c0faa1b75c7c2e088d977489",
+      "bytes": 78382
     },
     "tools/development_process.py": {
       "sha256": "e76e3a794193e5df7ee96fabf700113d718527745a0f9a9dba1e04fd5c7baaf3",
@@ -54668,7 +54668,7 @@
       "bytes": 10433
     },
     "tests/t25_quality.py": {
-      "sha256": "e49fda306653259eeab77606d3f9a51bbe759eed832df0463b509655d33a575f",
+      "sha256": "0e1bdec5b0742b00bf62188071ac81510efa42ba1e56ca64846aba08e52f9ce0",
       "bytes": 141476
     },
     "julia/Manifest.toml": {

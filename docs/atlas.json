@@ -199,7 +199,7 @@
   "public_interfaces": "../corpus/public-interfaces.json",
   "public_interfaces_sha256": "ddd56488c228140c6b1e239691d4b9a6c34fcd8edb3770a2ad9206354b42aabd",
   "learnings": "../corpus/learning-register.json",
-  "learnings_sha256": "c8bef62302cb8bc1573451c5bba4143fdc527088c9d00ec2f2b402d58d82d680",
+  "learnings_sha256": "0760e032d25052be9ad739b79d4f77e81eab2b55d0cd010516ad0b2869f77c00",
   "quick_start": "../QUICK_START.md",
   "completion_standard": "../corpus/completion-standard.json",
   "completion_standard_sha256": "b0f0ee8c52c2b93249f49e5048d274a18beb0ffdbd294b0731d486a09dbf31be",
