@@ -310,7 +310,7 @@ def main():
         if actual != text_out:
             raise SystemExit(
                 f"{ARTIFACT.name} differs from this generator by "
-                f"{sum(1 for a, b in zip(actual, text_out) if a != b) + abs(len(actual) - len(text_out))} "
+                f"{sum(1 for a, b in zip(actual, text_out, strict=False) if a != b) + abs(len(actual) - len(text_out))} "
                 "characters; regenerate it or fix the generator"
             )
         print(f"procedure schema: matches_generator=yes actions={len(actions)}")

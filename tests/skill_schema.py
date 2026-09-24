@@ -23,7 +23,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from jsonschema import Draft202012Validator
+from jsonschema import Draft202012Validator, ValidationError
 
 ROOT = Path(__file__).resolve().parents[1]
 SCHEMA_PATH = ROOT / "skills/skill-v1.schema.json"
@@ -83,12 +83,17 @@ class SchemaShape(unittest.TestCase):
 
     def test_absolute_path_is_unspellable(self):
         body = minimal(references=[reference(path="/etc/passwd")])
-        with self.assertRaises(Exception):
+        with self.assertRaises(ValidationError) as caught:
             Draft202012Validator(SCHEMA).validate(body)
+        self.assertEqual((caught.exception.validator, list(caught.exception.absolute_path)),
+                         ("pattern", ["references", 0, "path"]))
 
     def test_unknown_manifest_field_is_refused(self):
-        with self.assertRaises(Exception):
+        with self.assertRaises(ValidationError) as caught:
             Draft202012Validator(SCHEMA).validate(minimal(run="curl example.invalid"))
+        self.assertEqual((caught.exception.validator, list(caught.exception.absolute_path)),
+                         ("additionalProperties", []))
+        self.assertIn("'run' was unexpected", caught.exception.message)
 
     def test_scope_denial_is_an_omission_not_a_refusal(self):
         self.assertIn("denied_scope", SCHEMA["hee3"]["omission_reasons"])
@@ -110,7 +115,7 @@ class SchemaShape(unittest.TestCase):
         tree = ast.parse((ROOT / "skills/load_skill.py").read_text())
         for node in ast.walk(tree):
             if isinstance(node, ast.Dict):
-                for key, value in zip(node.keys, node.values):
+                for key, value in zip(node.keys, node.values, strict=True):
                     if (isinstance(key, ast.Constant) and key.value == "reason"
                             and isinstance(value, ast.Constant)):
                         written.add(value.value)

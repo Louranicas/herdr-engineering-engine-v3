@@ -25,7 +25,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from jsonschema import Draft202012Validator
+from jsonschema import Draft202012Validator, ValidationError
 
 ROOT = Path(__file__).resolve().parents[1]
 SCHEMA_PATH = ROOT / "workflows/procedure-v1.schema.json"
@@ -161,14 +161,19 @@ class SchemaShape(unittest.TestCase):
     def test_unapproved_action_name_is_unspellable(self):
         body = base()
         body["steps"][0]["action"] = "task.forge"
-        with self.assertRaises(Exception):
+        with self.assertRaises(ValidationError) as caught:
             Draft202012Validator(SCHEMA).validate(body)
+        self.assertEqual((caught.exception.validator, list(caught.exception.absolute_path)),
+                         ("enum", ["steps", 0, "action"]))
 
     def test_unknown_step_field_is_refused(self):
         body = base()
         body["steps"][0]["shell"] = "rm -rf /"
-        with self.assertRaises(Exception):
+        with self.assertRaises(ValidationError) as caught:
             Draft202012Validator(SCHEMA).validate(body)
+        self.assertEqual((caught.exception.validator, list(caught.exception.absolute_path)),
+                         ("additionalProperties", ["steps", 0]))
+        self.assertIn("'shell' was unexpected", caught.exception.message)
 
     def test_effect_unknown_is_not_a_retryable_reason_in_the_schema(self):
         retryable = SCHEMA["$defs"]["step"]["properties"]["retry"]["properties"]["retry_on"]["items"]["enum"]
@@ -673,7 +678,7 @@ class Dispatch(unittest.TestCase):
         body = submit_and_read_back()
         for reply in ([], {"kind": "result"}, {"kind": "error"}, {"kind": "other", "effect": "none"}):
             with self.subTest(reply=reply):
-                Refusals.refused(self, body, "malformed_reply", call=lambda: VP.observe(
+                Refusals.refused(self, body, "malformed_reply", call=lambda reply=reply: VP.observe(
                     body, record({}, "submit-and-read-back"), "submit", reply))
 
     def test_a_reply_for_a_step_the_procedure_lacks_is_refused(self):
@@ -758,7 +763,7 @@ class Reconcile(unittest.TestCase):
         for reply in ([], {"kind": "error"}, {"kind": "result"}):
             with self.subTest(reply=reply):
                 Refusals.refused(self, body, "malformed_reply",
-                                 call=lambda: VP.reconcile(body, after, "submit", reply))
+                                 call=lambda reply=reply: VP.reconcile(body, after, "submit", reply))
 
     def test_an_answered_step_is_not_marked_unanswered(self):
         body = submit_and_read_back()
