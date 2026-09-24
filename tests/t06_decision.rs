@@ -181,30 +181,35 @@ impl Fixture {
 }
 fn reason(decision: &Decision, kind: ReasonKind) {
     assert!(
-        decision.reasons.iter().any(|item| item.kind == kind),
+        decision.reasons().iter().any(|item| item.kind == kind),
         "missing {kind:?}: {:?}",
-        decision.reasons
+        decision.reasons()
     );
 }
 fn no_reason(decision: &Decision, kind: ReasonKind) {
     assert!(
-        decision.reasons.iter().all(|item| item.kind != kind),
+        decision.reasons().iter().all(|item| item.kind != kind),
         "unexpected {kind:?}: {:?}",
-        decision.reasons
+        decision.reasons()
     );
 }
 fn state(decision: &Decision, expected: VerdictV1State) {
-    assert_eq!(decision.state, expected, "reasons: {:?}", decision.reasons);
+    assert_eq!(
+        decision.state(),
+        expected,
+        "reasons: {:?}",
+        decision.reasons()
+    );
 }
 
 #[test]
 fn clean_decisive_result_may_be_captured_later_inside_cleanup_reserve() {
     let decision = Fixture::new().decision();
     state(&decision, VerdictV1State::PassCandidate);
-    assert!(decision.reasons.is_empty());
-    assert!(decision.detectors.is_empty());
+    assert!(decision.reasons().is_empty());
+    assert!(decision.detectors().is_empty());
     assert_eq!(
-        decision.counts,
+        decision.counts(),
         Counts {
             discovered: 1,
             selected: 1,
@@ -297,7 +302,7 @@ fn every_required_identity_kind_is_required_exactly_once() {
         state(&decision, VerdictV1State::Invalid);
         assert!(
             decision
-                .reasons
+                .reasons()
                 .iter()
                 .any(|item| item.kind == ReasonKind::MissingIdentity
                     && item.identity == Some(missing))
@@ -338,7 +343,7 @@ fn changed_and_unavailable_identities_name_the_exact_failed_subject() {
             state(&decision, VerdictV1State::Invalid);
             assert!(
                 decision
-                    .reasons
+                    .reasons()
                     .iter()
                     .any(|item| item.kind == kind && item.identity == Some(subject))
             );
@@ -365,7 +370,7 @@ fn empty_plan_is_invalid_instead_of_unmeasured_success() {
     let decision = fixture.decision();
     state(&decision, VerdictV1State::Invalid);
     reason(&decision, ReasonKind::EmptyPlan);
-    assert_eq!(decision.counts.discovered, 0);
+    assert_eq!(decision.counts().discovered, 0);
 }
 
 #[test]
@@ -380,9 +385,9 @@ fn valid_zero_selection_and_selected_but_no_mandatory_both_refuse() {
     reason(&decision, ReasonKind::EmptySelection);
     assert_eq!(
         (
-            decision.counts.discovered,
-            decision.counts.selected,
-            decision.counts.executed
+            decision.counts().discovered,
+            decision.counts().selected,
+            decision.counts().executed
         ),
         (1, 0, 0)
     );
@@ -439,7 +444,7 @@ fn a_passed_label_without_execution_does_not_satisfy_required_coverage() {
     let decision = fixture.decision();
     state(&decision, VerdictV1State::Invalid);
     reason(&decision, ReasonKind::RequiredNotExecuted);
-    assert_eq!(decision.counts.executed, 0);
+    assert_eq!(decision.counts().executed, 0);
 }
 
 #[test]
@@ -488,7 +493,7 @@ fn unselected_and_excluded_inventory_is_retained_without_blanket_failure() {
     let decision = fixture.decision();
     state(&decision, VerdictV1State::PassCandidate);
     assert_eq!(
-        decision.counts,
+        decision.counts(),
         Counts {
             discovered: 3,
             selected: 1,
@@ -536,9 +541,9 @@ fn an_actually_selected_optional_mismatch_still_contributes_fail() {
     reason(&decision, ReasonKind::CaseMismatch);
     assert_eq!(
         (
-            decision.counts.mandatory,
-            decision.counts.selected,
-            decision.counts.failed
+            decision.counts().mandatory,
+            decision.counts().selected,
+            decision.counts().failed
         ),
         (1, 2, 1)
     );
@@ -589,7 +594,7 @@ fn complete_disposition_counts_partition_all_rows_without_excluded_double_counti
     let decision = fixture.decision();
     state(&decision, VerdictV1State::Timeout);
     assert_eq!(
-        decision.counts,
+        decision.counts(),
         Counts {
             discovered: 9,
             selected: 8,
@@ -622,7 +627,7 @@ fn inventory_bound_is_inclusive_at_4096_and_refuses_4097_in_either_slice() {
     let decision = fixture.decision();
     state(&decision, VerdictV1State::PassCandidate);
     assert_eq!(
-        (decision.counts.discovered, decision.counts.executed),
+        (decision.counts().discovered, decision.counts().executed),
         (4096, 4096)
     );
     let mut plans = fixture.clone();
@@ -875,7 +880,7 @@ fn decisive_skip_invalid_rows_and_available_oracles_cannot_carry_incomplete_caus
         fixture.cases[0].outcome = outcome;
         let decision = fixture.decision();
         state(&decision, VerdictV1State::Invalid);
-        assert!(decision.reasons.iter().any(|reason| matches!(
+        assert!(decision.reasons().iter().any(|reason| matches!(
             reason.kind,
             ReasonKind::UnboundCause | ReasonKind::InvalidAccounting
         )));
@@ -1054,11 +1059,11 @@ fn reasons_follow_frozen_plan_order_and_detectors_are_deduplicated_in_declaratio
     let first = fixture.decision();
     let second = fixture.decision();
     state(&first, VerdictV1State::Invalid);
-    assert_eq!(first.reasons, second.reasons);
-    assert_eq!(first.detectors, second.detectors);
-    assert_eq!(first.counts, second.counts);
+    assert_eq!(first.reasons(), second.reasons());
+    assert_eq!(first.detectors(), second.detectors());
+    assert_eq!(first.counts(), second.counts());
     let indexes: Vec<_> = first
-        .reasons
+        .reasons()
         .iter()
         .filter_map(|reason| reason.case_index)
         .collect();
@@ -1066,20 +1071,20 @@ fn reasons_follow_frozen_plan_order_and_detectors_are_deduplicated_in_declaratio
     assert!(indexes.windows(2).all(|pair| pair[0] <= pair[1]));
     assert!(
         first
-            .reasons
+            .reasons()
             .iter()
             .any(|item| item.kind == ReasonKind::RequiredSkipped && item.case_index == Some(1))
     );
     assert!(
         first
-            .reasons
+            .reasons()
             .iter()
             .any(|item| item.kind == ReasonKind::RequiredIgnored && item.case_index == Some(2))
     );
-    assert!(first.detectors.windows(2).all(|pair| pair[0] < pair[1]));
+    assert!(first.detectors().windows(2).all(|pair| pair[0] < pair[1]));
     assert_eq!(
         first
-            .detectors
+            .detectors()
             .iter()
             .filter(|value| **value == Detector::Logs)
             .count(),

@@ -12,6 +12,8 @@ use std::collections::BTreeSet;
 
 pub const VECTOR_COUNT: usize = 335;
 pub const ORACLE_SHA256: &str = "9354a52b2539e562ec8c3b957dbe693d75411e29c88d19a446b7cc488862b427";
+/// The frozen oracle's own declared identity; the one home for this literal.
+pub const ORACLE_ID: &str = "ORACLE-U64-001/v1";
 const MAX_ORACLE: usize = 128 * 1024;
 const MAX_INPUT: usize = 1025;
 const MAX_PUBLIC: usize = 32 * 1024;
@@ -117,7 +119,7 @@ impl FrozenOracle {
             return Err(OracleError::Digest);
         }
         let raw: RawOracle = serde_json::from_slice(bytes).map_err(|_| OracleError::Malformed)?;
-        if raw.id != "ORACLE-U64-001/v1"
+        if raw.id != ORACLE_ID
             || !raw.case_count_is_not_module_credit
             || raw.cases.len() != VECTOR_COUNT
         {

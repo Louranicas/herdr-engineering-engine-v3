@@ -3,7 +3,7 @@ use crate::{support, u64_receipt};
 use habitat_engine::app::{evidence::Evidence, subjects, workload};
 use habitat_engine::check::{
     collector::{self, Publisher},
-    consistency::{CasePlan, Prepared},
+    consistency::{Prepared, U64Attempt, prepare_u64},
     graph::Graph,
 };
 use habitat_engine::contracts::receipt::{self as r, Validate};
@@ -235,69 +235,47 @@ fn attempt(
     deadline: Instant,
 ) -> Result<PreparedAttempt, Error> {
     let ids = &input.attempts[index];
-    let criteria = list(vec![name("u64-frozen-exact-output")?])?;
-    let identity = r::IdentityV1 {
+    let prepared = prepare_u64(U64Attempt {
+        schema_sha256: shared.schema.as_ref().sha256.clone(),
         run_id: ids.run.clone(),
         task_id: input.task.clone(),
         attempt_id: ids.attempt.clone(),
         generation: scalar(r::Generation::new((index + 1).to_string()))?,
-        module_id: name("check")?,
-        criterion_ids: criteria.clone(),
         profile_id: name("T06-u64-fixed-runtime-THDEV")?,
         parent_run: none("separate_attempt_same_task")?,
-    };
-    let subjects = r::SubjectsV1 {
-        seed_subject: roles.baseline.clone(),
-        result_subject: r::Maybe::present(if index == 0 {
-            roles.baseline.clone()
-        } else {
-            roles.repaired.clone()
-        }),
-        seed_to_result_patch: r::Maybe::present(if index == 0 {
-            roles.empty.clone()
-        } else {
-            roles.patch.clone()
-        }),
-        fixtures: roles.fixtures.clone(),
-        oracle: roles.oracle.clone(),
-        harness: roles.harness.clone(),
-        collector: roles.collector.clone(),
-        launcher: roles.launcher.clone(),
-        locks: shared.locks.clone(),
-        toolchain: shared.toolchain.clone(),
-        target_features_build_profile: shared.build.clone(),
-        standards: shared.standards.clone(),
-        isolation_profile: shared.isolation.clone(),
-    };
-    let invocation = r::InvocationV1 {
+        subjects: r::SubjectsV1 {
+            seed_subject: roles.baseline.clone(),
+            result_subject: r::Maybe::present(if index == 0 {
+                roles.baseline.clone()
+            } else {
+                roles.repaired.clone()
+            }),
+            seed_to_result_patch: r::Maybe::present(if index == 0 {
+                roles.empty.clone()
+            } else {
+                roles.patch.clone()
+            }),
+            fixtures: roles.fixtures.clone(),
+            oracle: roles.oracle.clone(),
+            harness: roles.harness.clone(),
+            collector: roles.collector.clone(),
+            launcher: roles.launcher.clone(),
+            locks: shared.locks.clone(),
+            toolchain: shared.toolchain.clone(),
+            target_features_build_profile: shared.build.clone(),
+            standards: shared.standards.clone(),
+            isolation_profile: shared.isolation.clone(),
+        },
         argv: ids.argv.clone(),
-        cwd_logical: name("work")?,
         environment: shared.environment.clone(),
         grants: shared.grants.clone(),
-        expected: input.reviewed.expectation.clone(),
-        oracle_id: name("ORACLE-U64-001/v1")?,
         limits: shared.limits.clone(),
         allowed_effects: shared.effects.clone(),
         cleanup_contract: shared.cleanup.clone(),
-    };
-    let prepared = Prepared {
-        schema_sha256: shared.schema.as_ref().sha256.clone(),
-        identity,
-        subjects,
-        invocation,
-        cases: vec![CasePlan {
-            case_id: name("WL-U64-PARSE-001-v1")?,
-            primary_module_id: name("check")?,
-            criterion_ids: criteria,
-            fixture_sha256: roles.fixtures.as_ref().sha256.clone(),
-            oracle_id: name("ORACLE-U64-001/v1")?,
-            expected: input.reviewed.expectation.clone(),
-            mandatory: true,
-            selected: true,
-            excluded: false,
-            reviewed_design: Some(input.reviewed.review.clone()),
-        }],
-    };
+        expectation: input.reviewed.expectation.clone(),
+        case_design_review: input.reviewed.review.clone(),
+    })
+    .map_err(|_| fail(ErrorKind::Binding))?;
     u64_receipt::prepare(
         e,
         u64_receipt::Preparation {

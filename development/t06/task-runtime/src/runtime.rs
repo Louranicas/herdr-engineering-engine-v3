@@ -930,7 +930,7 @@ impl<'a> TaskRuntime<'a> {
             .ok_or(Error::State)?;
         Ok((
             collected.receipt.reference.clone(),
-            collected.decision.state,
+            collected.decision.state(),
         ))
     }
 

@@ -2,14 +2,16 @@
 //! Consistency is necessary, but cannot authenticate candidate or collector custody.
 
 use super::graph::{Error as GraphError, Graph};
+use super::u64_oracle;
 use crate::contracts::receipt::{
     Address, ArtifactV1, ArtifactV1Availability, AvailabilityReceiptV1, AvailabilityV1State,
-    CampaignV1, CaseV1, CaseV1Outcome, CleanupContractV1, DiagnosticV1, ExpectationV1,
-    ExpectationV1ExpectedOracle, ExpectedProducerV1, ExpectedProducerV1Status, FindingV1,
-    FindingV1Disposition, IdentityV1, InvocationV1, LimitsV1, List, MutantV1, MutantV1Outcome,
-    Name, ObligationV1, ObligationV1State, OracleResultV1, OracleResultV1Result, ProducerV1,
-    ProducerV1Status, ReceiptRecord, ReceiptV1, Ref, ReviewReceiptV1, ReviewV1, Sha, SubjectFileV1,
-    SubjectV1, SubjectsV1, TypedRef, Validate, VerdictV1State, decode,
+    CampaignV1, CaseV1, CaseV1Outcome, CleanupContractV1, DiagnosticV1, EffectPageV1,
+    EnvironmentPageV1, ExpectationV1, ExpectationV1ExpectedOracle, ExpectedProducerV1,
+    ExpectedProducerV1Status, FindingV1, FindingV1Disposition, Generation, GrantPageV1, Id,
+    IdentityV1, InvocationV1, LimitsV1, List, Maybe, MutantV1, MutantV1Outcome, Name, ObligationV1,
+    ObligationV1State, OracleResultV1, OracleResultV1Result, ProducerV1, ProducerV1Status,
+    ReceiptRecord, ReceiptV1, Ref, ReviewReceiptV1, ReviewV1, Sha, SubjectFileV1, SubjectV1,
+    SubjectsV1, Text, TypedRef, Validate, VerdictV1State, decode,
 };
 use serde::de::DeserializeOwned;
 use std::collections::{BTreeMap, BTreeSet};
@@ -38,6 +40,91 @@ pub struct Prepared {
     pub subjects: SubjectsV1,
     pub invocation: InvocationV1,
     pub cases: Vec<CasePlan>,
+}
+
+/// The one frozen WL-U64 case and the criterion it credits.
+pub const U64_CASE_ID: &str = "WL-U64-PARSE-001-v1";
+pub const U64_CRITERION_ID: &str = "u64-frozen-exact-output";
+const U64_MODULE_ID: &str = "check";
+const U64_CWD: &str = "work";
+
+/// Typed, already published inputs for one WL-U64 attempt. Nothing here is a
+/// candidate claim: the trusted preparer published every referenced object.
+#[derive(Clone, Debug)]
+pub struct U64Attempt {
+    pub schema_sha256: Sha,
+    pub run_id: Id,
+    pub task_id: Id,
+    pub attempt_id: Id,
+    pub generation: Generation,
+    pub profile_id: Name,
+    pub parent_run: Maybe<Id>,
+    pub subjects: SubjectsV1,
+    pub argv: List<Text>,
+    pub environment: TypedRef<EnvironmentPageV1>,
+    pub grants: TypedRef<GrantPageV1>,
+    pub limits: TypedRef<LimitsV1>,
+    pub allowed_effects: TypedRef<EffectPageV1>,
+    pub cleanup_contract: TypedRef<CleanupContractV1>,
+    pub expectation: TypedRef<ExpectationV1>,
+    pub case_design_review: TypedRef<ReviewV1>,
+}
+
+/// Op1 for the one admitted workload: compose the frozen verification plan.
+/// The oracle is `u64_oracle`'s pinned identity, the fixture digest is the
+/// fixtures subject's, and one reviewed mandatory case carries the criterion.
+///
+/// # Errors
+/// `Binding` when the run, task and attempt identities are not pairwise
+/// distinct or the invocation has no argv.
+pub fn prepare_u64(attempt: U64Attempt) -> Result<Prepared, Error> {
+    let identities = [&attempt.run_id, &attempt.task_id, &attempt.attempt_id]
+        .map(Id::as_str)
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+    if identities.len() != 3 || attempt.argv.as_slice().is_empty() {
+        return Err(Error::Binding);
+    }
+    let name = |value: &str| Name::new(value).map_err(|_| Error::Encoding);
+    let criteria = List::new(vec![name(U64_CRITERION_ID)?]).map_err(|_| Error::Encoding)?;
+    let case = CasePlan {
+        case_id: name(U64_CASE_ID)?,
+        primary_module_id: name(U64_MODULE_ID)?,
+        criterion_ids: criteria.clone(),
+        fixture_sha256: attempt.subjects.fixtures.as_ref().sha256.clone(),
+        oracle_id: name(u64_oracle::ORACLE_ID)?,
+        expected: attempt.expectation.clone(),
+        mandatory: true,
+        selected: true,
+        excluded: false,
+        reviewed_design: Some(attempt.case_design_review),
+    };
+    Ok(Prepared {
+        schema_sha256: attempt.schema_sha256,
+        identity: IdentityV1 {
+            run_id: attempt.run_id,
+            task_id: attempt.task_id,
+            attempt_id: attempt.attempt_id,
+            generation: attempt.generation,
+            module_id: name(U64_MODULE_ID)?,
+            criterion_ids: criteria,
+            profile_id: attempt.profile_id,
+            parent_run: attempt.parent_run,
+        },
+        subjects: attempt.subjects,
+        invocation: InvocationV1 {
+            argv: attempt.argv,
+            cwd_logical: name(U64_CWD)?,
+            environment: attempt.environment,
+            grants: attempt.grants,
+            expected: attempt.expectation,
+            oracle_id: name(u64_oracle::ORACLE_ID)?,
+            limits: attempt.limits,
+            allowed_effects: attempt.allowed_effects,
+            cleanup_contract: attempt.cleanup_contract,
+        },
+        cases: vec![case],
+    })
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

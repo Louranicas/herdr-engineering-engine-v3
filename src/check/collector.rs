@@ -1,13 +1,13 @@
 //! Typed receipt assembly over trusted observations and an immutable object sink.
 //! Internal consistency is not observation authenticity, custody or admission.
 
-use super::{consistency, graph};
+use super::{consistency, decision, graph};
 use crate::contracts::receipt::{
     self, Address, ArtifactPageV1, ArtifactV1, ArtifactsV1, AvailabilityReceiptV1, AvailabilityV1,
     CampaignPageV1, CampaignV1, CasePageV1, CaseV1, CaseV1Outcome, CasesV1, DiagnosticPageV1,
     DiagnosticV1, DiagnosticsV1, Id, List, Maybe, MissingObjectPageV1, MissingObjectV1,
     MutantPageV1, MutantV1, MutantV1Outcome, MutationV1, Name, ObligationPageV1, ObligationV1,
-    ObservationsV1, ProducerV1, ReceiptRecord, ReceiptV1, ReceiptV1Protocol,
+    ObservationsV1, OracleResultV1, ProducerV1, ReceiptRecord, ReceiptV1, ReceiptV1Protocol,
     ReceiptV1Serialization, Ref, ResourcePageV1, ResourceV1, ReviewReceiptV1, Text, TypedRef, U64,
     VerdictV1,
 };
@@ -89,8 +89,16 @@ pub struct Observed {
     pub artifacts: Vec<ArtifactV1>,
     pub artifacts_finalized: bool,
     pub campaigns: Vec<CampaignV1>,
-    pub verdict: VerdictV1,
+    pub verdict: VerdictBinding,
     pub availability: AvailabilityV1,
+}
+/// The verdict bindings a collector observes. State and reasons are absent on
+/// purpose: [`Publisher::finalize`] takes them only from a [`decision::Decision`].
+#[derive(Clone, Debug)]
+pub struct VerdictBinding {
+    pub oracle_result: TypedRef<OracleResultV1>,
+    pub intended_detector: Name,
+    pub benign_pair: Maybe<Id>,
 }
 #[derive(Debug)]
 pub struct Finalized {
@@ -257,14 +265,21 @@ impl<'a, S: Sink> Publisher<'a, S> {
 
     /// Assemble exact plan bindings and recomputed inventories, then validate the
     /// complete temporary root graph before publishing those same encoded bytes.
+    /// The verdict state and reasons are `decided`'s, never the caller's.
     /// # Errors
     /// Refuses missing/duplicate observations, bounds, contradictory metadata,
     /// invalid evidence closure or sink failure. Staged objects remain retained.
     pub fn finalize(
         &mut self,
         prepared: &consistency::Prepared,
+        decided: &decision::Decision,
         observed: Observed,
     ) -> Result<Finalized, Error> {
+        let reasons = decided
+            .reasons()
+            .iter()
+            .map(|reason| Text::new(format!("{:?}", reason.kind)))
+            .collect::<Result<Vec<_>, _>>()?;
         let case_rows = bind_cases(prepared, &observed.cases)?;
         let case_pages = self.case_pages(&case_rows)?;
         let cases = {
@@ -294,7 +309,13 @@ impl<'a, S: Sink> Publisher<'a, S> {
             artifacts,
             mutation,
             review: Maybe::unavailable(Text::new("collection_not_reviewed")?),
-            verdict: observed.verdict,
+            verdict: VerdictV1 {
+                state: decided.state(),
+                oracle_result: observed.verdict.oracle_result,
+                intended_detector: observed.verdict.intended_detector,
+                benign_pair: observed.verdict.benign_pair,
+                reasons: List::new(reasons)?,
+            },
             availability: observed.availability,
         };
         let bytes = receipt::encode(&root)?;

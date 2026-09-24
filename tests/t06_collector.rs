@@ -331,11 +331,11 @@ impl Fixture {
 }
 
 use habitat_engine::check::collector::{
-    CaseObservation, Error as BuildError, Observed, Publisher, Sink, SinkError,
+    CaseObservation, Error as BuildError, Observed, Publisher, Sink, SinkError, VerdictBinding,
 };
 use habitat_engine::contracts::receipt::{
     Address, ArtifactV1, CampaignV1, CasePageV1, CaseV1, CaseV1Outcome, DiagnosticV1,
-    LanguageFlagsV1, Maybe, ReceiptV1, Text, VerdictV1State,
+    LanguageFlagsV1, Maybe, ReceiptV1, Text, VerdictV1, VerdictV1State,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -464,7 +464,14 @@ fn observed(f: &Fixture) -> Observed {
         artifacts: f.artifacts.iter().map(dto::<ArtifactV1>).collect(),
         artifacts_finalized: true,
         campaigns: f.campaigns.iter().map(dto::<CampaignV1>).collect(),
-        verdict: dto(&f.root["verdict"]),
+        verdict: {
+            let verdict: VerdictV1 = dto(&f.root["verdict"]);
+            VerdictBinding {
+                oracle_result: verdict.oracle_result,
+                intended_detector: verdict.intended_detector,
+                benign_pair: verdict.benign_pair,
+            }
+        },
         availability: dto(&f.root["availability"]),
     }
 }
@@ -586,7 +593,7 @@ fn successful_root_uses_exact_prepared_bindings_and_recomputed_counts() {
     let prepared = f.prepared;
     let mut sink = MemorySink::new(f.memory);
     let result = Publisher::new(&mut sink)
-        .finalize(&prepared, observations)
+        .finalize(&prepared, &pass(), observations)
         .unwrap();
     let root: ReceiptV1 = decode(&result.bytes).unwrap();
     assert_eq!(root.identity, prepared.identity);
@@ -634,7 +641,7 @@ fn duplicate_missing_and_unknown_case_observations_refuse_before_publication() {
         }
         let mut sink = MemorySink::new(f.memory);
         assert!(matches!(
-            Publisher::new(&mut sink).finalize(&f.prepared, o),
+            Publisher::new(&mut sink).finalize(&f.prepared, &pass(), o),
             Err(BuildError::CasePlan)
         ));
         assert!(sink.published.is_empty());
@@ -652,7 +659,11 @@ fn pass_cannot_hide_failed_mandatory_outcome_or_mismatched_producer() {
             o.cases[0].producer.exit_code = Maybe::present(1);
         }
         let mut sink = MemorySink::new(f.memory);
-        assert!(Publisher::new(&mut sink).finalize(&f.prepared, o).is_err());
+        assert!(
+            Publisher::new(&mut sink)
+                .finalize(&f.prepared, &pass(), o)
+                .is_err()
+        );
         assert!(
             sink.published
                 .iter()
@@ -670,9 +681,10 @@ fn nonpass_retains_nonempty_plan_with_zero_selected_and_executed() {
     o.cases[0].executed = false;
     o.cases[0].outcome = CaseV1Outcome::Unmeasured;
     o.cases[0].reason = Text::new("not dispatched").unwrap();
-    o.verdict.state = VerdictV1State::Unmeasured;
     let mut sink = MemorySink::new(f.memory);
-    let result = Publisher::new(&mut sink).finalize(&prepared, o).unwrap();
+    let result = Publisher::new(&mut sink)
+        .finalize(&prepared, &invalid(), o)
+        .unwrap();
     let root: ReceiptV1 = decode(&result.bytes).unwrap();
     assert_eq!(
         (
@@ -708,9 +720,10 @@ fn over_256_planned_rows_form_reverse_published_complete_pages() {
         c.reason = Text::new("page control only").unwrap();
         o.cases.push(c);
     }
-    o.verdict.state = VerdictV1State::Unmeasured;
     let mut sink = MemorySink::new(f.memory);
-    let result = Publisher::new(&mut sink).finalize(&prepared, o).unwrap();
+    let result = Publisher::new(&mut sink)
+        .finalize(&prepared, &invalid(), o)
+        .unwrap();
     let root: ReceiptV1 = decode(&result.bytes).unwrap();
     let graph = Graph::resolve(&sink, result.reference.as_ref()).unwrap();
     let rows = graph.rows(root.cases.inventory.as_ref()).unwrap();
@@ -738,9 +751,10 @@ fn excluded_row_counts_only_as_excluded() {
     o.cases[0].executed = false;
     o.cases[0].outcome = CaseV1Outcome::Unmeasured;
     o.cases[0].reason = Text::new("excluded by frozen plan").unwrap();
-    o.verdict.state = VerdictV1State::Unmeasured;
     let mut sink = MemorySink::new(f.memory);
-    let result = Publisher::new(&mut sink).finalize(&p, o).unwrap();
+    let result = Publisher::new(&mut sink)
+        .finalize(&p, &invalid(), o)
+        .unwrap();
     let root: ReceiptV1 = decode(&result.bytes).unwrap();
     assert_eq!((root.cases.excluded, root.cases.unmeasured), (1, 0));
 }
@@ -751,7 +765,7 @@ fn unreviewed_case_cannot_receive_primary_credit_or_mandatory_pass() {
     p.cases[0].reviewed_design = None;
     let o = observed(&f);
     let mut sink = MemorySink::new(f.memory);
-    assert!(Publisher::new(&mut sink).finalize(&p, o).is_err());
+    assert!(Publisher::new(&mut sink).finalize(&p, &pass(), o).is_err());
     assert!(
         sink.published
             .iter()
@@ -762,14 +776,15 @@ fn unreviewed_case_cannot_receive_primary_credit_or_mandatory_pass() {
 fn diagnostics_are_recomputed_and_nonpass_preserves_fault_counts() {
     let f = Fixture::new();
     let mut o = observed(&f);
-    o.verdict.state = VerdictV1State::Fail;
     o.diagnostic_baseline = false;
     o.diagnostics[0].baseline = false;
     o.diagnostics[0].warning_count = 2;
     o.diagnostics[0].error_count = 3;
     o.diagnostics[0].stdout_truncated = true;
     let mut sink = MemorySink::new(f.memory);
-    let result = Publisher::new(&mut sink).finalize(&f.prepared, o).unwrap();
+    let result = Publisher::new(&mut sink)
+        .finalize(&f.prepared, &fail(), o)
+        .unwrap();
     let root: ReceiptV1 = decode(&result.bytes).unwrap();
     assert_eq!(
         (root.diagnostics.warning_count, root.diagnostics.error_count),
@@ -784,7 +799,7 @@ fn diagnostic_baseline_disagreement_is_not_silently_rewritten() {
     o.diagnostics[0].baseline = !o.diagnostic_baseline;
     let mut sink = MemorySink::new(f.memory);
     assert!(matches!(
-        Publisher::new(&mut sink).finalize(&f.prepared, o),
+        Publisher::new(&mut sink).finalize(&f.prepared, &pass(), o),
         Err(BuildError::Consistency(_))
     ));
 }
@@ -794,7 +809,11 @@ fn required_truncated_artifact_blocks_pass_before_root_publication() {
     let mut o = observed(&f);
     o.artifacts[0].truncated = true;
     let mut sink = MemorySink::new(f.memory);
-    assert!(Publisher::new(&mut sink).finalize(&f.prepared, o).is_err());
+    assert!(
+        Publisher::new(&mut sink)
+            .finalize(&f.prepared, &pass(), o)
+            .is_err()
+    );
     assert!(
         sink.published
             .iter()
@@ -810,7 +829,7 @@ fn root_id_collision_is_refused_without_shadowing_existing_input() {
     let mut sink = MemorySink::new(f.memory);
     sink.collision_at = Some((5, collision.clone()));
     assert!(matches!(
-        Publisher::new(&mut sink).finalize(&f.prepared, o),
+        Publisher::new(&mut sink).finalize(&f.prepared, &pass(), o),
         Err(BuildError::Identity)
     ));
     assert_eq!(sink.memory.bytes[collision.as_str()], before);
@@ -824,7 +843,7 @@ fn final_root_sink_failure_returns_no_finalized_root_and_retains_staging() {
     sink.fault = Fault::RootPublish;
     let mut publisher = Publisher::new(&mut sink);
     assert!(matches!(
-        publisher.finalize(&f.prepared, o),
+        publisher.finalize(&f.prepared, &pass(), o),
         Err(BuildError::Sink(SinkError::Publication))
     ));
     assert_eq!(publisher.attempted_refs().len(), 5);
@@ -845,7 +864,9 @@ fn with_campaign(mode: u8) -> (MemorySink, Prepared, Observed) {
     let mut p = f.prepared.clone();
     let refs = f.refs.clone();
     let mut sink = MemorySink::new(f.memory);
-    let baseline = Publisher::new(&mut sink).finalize(&p, baseline_o).unwrap();
+    let baseline = Publisher::new(&mut sink)
+        .finalize(&p, &pass(), baseline_o)
+        .unwrap();
     p.identity.run_id = Id::new("29000000-0000-4000-8000-000000000001").unwrap();
     let diff = sink.memory.raw(b"retained synthetic diff");
     let mut review: Value =
@@ -902,7 +923,7 @@ fn with_campaign(mode: u8) -> (MemorySink, Prepared, Observed) {
 #[test]
 fn mutation_dispositions_recompute_separate_counts_without_case_credit() {
     let (mut sink, p, o) = with_campaign(0);
-    let result = Publisher::new(&mut sink).finalize(&p, o).unwrap();
+    let result = Publisher::new(&mut sink).finalize(&p, &pass(), o).unwrap();
     let root: ReceiptV1 = decode(&result.bytes).unwrap();
     let m = root.mutation;
     assert_eq!((m.campaign_count, m.distinct_mutants), (1, 7));
@@ -930,7 +951,7 @@ fn mutation_planned_count_and_campaign_identity_mismatches_refuse_final_root() {
             .filter(|r| r.schema_id.as_str() == ReceiptV1::SCHEMA_ID)
             .count();
         assert!(matches!(
-            Publisher::new(&mut sink).finalize(&p, o),
+            Publisher::new(&mut sink).finalize(&p, &pass(), o),
             Err(BuildError::Consistency(_))
         ));
         assert_eq!(
@@ -946,7 +967,6 @@ fn mutation_planned_count_and_campaign_identity_mismatches_refuse_final_root() {
 fn diagnostic_counter_overflow_is_refused_without_wrapping() {
     let f = Fixture::new();
     let mut o = observed(&f);
-    o.verdict.state = VerdictV1State::Fail;
     o.diagnostics[0].warning_count = u32::MAX;
     let mut second = o.diagnostics[0].clone();
     second.tool_id = Name::new("second-tool").unwrap();
@@ -954,7 +974,7 @@ fn diagnostic_counter_overflow_is_refused_without_wrapping() {
     o.diagnostics.push(second);
     let mut sink = MemorySink::new(f.memory);
     assert!(matches!(
-        Publisher::new(&mut sink).finalize(&f.prepared, o),
+        Publisher::new(&mut sink).finalize(&f.prepared, &fail(), o),
         Err(BuildError::Bound)
     ));
 }
@@ -966,7 +986,7 @@ fn missing_prepared_subject_prevents_root_publication_after_staging() {
     memory.bytes.remove(f.refs["seed"].artifact_id.as_str());
     let mut sink = MemorySink::new(memory);
     assert!(matches!(
-        Publisher::new(&mut sink).finalize(&f.prepared, o),
+        Publisher::new(&mut sink).finalize(&f.prepared, &pass(), o),
         Err(BuildError::Graph(GraphError::Missing))
     ));
     assert!(
@@ -985,4 +1005,318 @@ fn attempted_object_budget_has_an_exact_benign_boundary() {
     assert_eq!(publisher.attempted_refs().len(), 4096);
     assert!(matches!(publisher.record(&flags()), Err(BuildError::Bound)));
     assert_eq!(publisher.attempted_refs().len(), 4096);
+}
+
+use habitat_engine::check::decision::{
+    self, CaseObservation as DecidedCase, CasePlan as DecidedPlan, CheckerFact, CleanupFacts,
+    Decision, Design, DiagnosticPolicy, DiagnosticState, Diagnostics, EvidenceState, Identity,
+    IdentityFact, IdentityState, IncompleteCause, Input, LogState, OracleFact, ProcessFact,
+    ProcessState, Selection, Settlement, Streams, Termination, Timing,
+};
+use habitat_engine::contracts::receipt::ExpectedProducerV1;
+
+const DECIDED_IDENTITIES: [Identity; 11] = [
+    Identity::Seed,
+    Identity::Result,
+    Identity::Fixtures,
+    Identity::Oracle,
+    Identity::Harness,
+    Identity::Collector,
+    Identity::Launcher,
+    Identity::Locks,
+    Identity::Toolchain,
+    Identity::Profile,
+    Identity::Standards,
+];
+/// A real `decide` result over one reviewed required case. `seed` is the Seed
+/// identity's freshness; `oracle` the independent oracle fact.
+fn decided(
+    seed: IdentityState,
+    oracle: OracleFact,
+) -> Result<Decision, Box<dyn std::error::Error>> {
+    let expected: ExpectedProducerV1 = serde_json::from_value(
+        json!({"status":"exited","exit_code":{"value":0,"unavailable_reason":null},"signal":{"value":null,"unavailable_reason":"ordinary exit"}}),
+    )?;
+    let identities: Vec<IdentityFact> = DECIDED_IDENTITIES
+        .map(|subject| IdentityFact {
+            subject,
+            state: if subject == Identity::Seed {
+                seed
+            } else {
+                IdentityState::Matched
+            },
+        })
+        .to_vec();
+    let plans = [DecidedPlan {
+        case_id: Name::new(CASE)?,
+        selection: Selection::Required,
+        expected_producer: expected.clone(),
+        design: Design::Reviewed,
+    }];
+    let cases = [DecidedCase {
+        case_id: Name::new(CASE)?,
+        executed: true,
+        outcome: CaseV1Outcome::Passed,
+        incomplete_cause: IncompleteCause::Unexplained,
+        producer: ProcessState::Exited(0),
+    }];
+    let producer = ProcessFact {
+        expected,
+        actual: ProcessState::Exited(0),
+        termination: Termination::Ordinary,
+    };
+    Ok(decision::decide(&Input {
+        identities: &identities,
+        plans: &plans,
+        cases: &cases,
+        producer: &producer,
+        checker: &CheckerFact::InProcessComplete,
+        oracle,
+        oracle_unavailable_cause: IncompleteCause::Unexplained,
+        logs: Streams {
+            stdout: LogState::Complete,
+            stderr: LogState::Complete,
+        },
+        diagnostics: Diagnostics {
+            policy: DiagnosticPolicy::CleanBaseline,
+            state: DiagnosticState::Complete {
+                warnings: 0,
+                errors: 0,
+            },
+        },
+        cleanup: CleanupFacts {
+            descendants: Settlement::Settled,
+            resources: Settlement::Settled,
+            obligations: Settlement::Settled,
+        },
+        evidence: EvidenceState::FinalizedComplete,
+        timing: Timing {
+            work_deadline_ms: 100,
+            cleanup_deadline_ms: 200,
+            observed_ms: 120,
+            decisive_ms: Some(99),
+            timeout_intent_ms: None,
+            cancellation_intent_ms: None,
+        },
+    }))
+}
+// Collector fixtures below follow this file's unwrap convention; the decision
+// itself is always a real `decide` result, never a hand-set state.
+fn pass() -> Decision {
+    decided(IdentityState::Matched, OracleFact::Satisfied).unwrap()
+}
+fn invalid() -> Decision {
+    decided(IdentityState::Changed, OracleFact::Satisfied).unwrap()
+}
+fn fail() -> Decision {
+    decided(IdentityState::Matched, OracleFact::Mismatch).unwrap()
+}
+fn published(decision: &Decision) -> Result<ReceiptV1, Box<dyn std::error::Error>> {
+    let f = Fixture::new();
+    let o = observed(&f);
+    let mut sink = MemorySink::new(f.memory);
+    let result = Publisher::new(&mut sink)
+        .finalize(&f.prepared, decision, o)
+        .map_err(|e| format!("{e:?}"))?;
+    Ok(decode(&result.bytes)?)
+}
+#[test]
+fn a_caller_pass_claim_cannot_outlive_a_changed_identity() -> Result<(), Box<dyn std::error::Error>>
+{
+    let decision = decided(IdentityState::Changed, OracleFact::Satisfied)?;
+    assert_eq!(
+        decision.state(),
+        VerdictV1State::Invalid,
+        "fixture premise: a changed seed identity is Invalid"
+    );
+    let root = published(&decision)?;
+    assert_eq!(
+        root.verdict.state,
+        decision.state(),
+        "the published verdict must be decide's, not the caller's"
+    );
+    let reasons: Vec<&str> = root
+        .verdict
+        .reasons
+        .as_slice()
+        .iter()
+        .map(Text::as_str)
+        .collect();
+    assert_eq!(reasons, ["ChangedIdentity"]);
+    Ok(())
+}
+#[test]
+fn every_published_verdict_state_and_reason_list_is_the_decisions()
+-> Result<(), Box<dyn std::error::Error>> {
+    for (decision, state, reasons) in [
+        (pass(), VerdictV1State::PassCandidate, vec![]),
+        (fail(), VerdictV1State::Fail, vec!["OracleMismatch"]),
+        (
+            decided(IdentityState::Unavailable, OracleFact::Mismatch)?,
+            VerdictV1State::Invalid,
+            vec!["UnavailableIdentity", "OracleMismatch"],
+        ),
+    ] {
+        assert_eq!(decision.state(), state, "fixture premise");
+        let root = published(&decision)?;
+        assert_eq!(root.verdict.state, state);
+        let published: Vec<&str> = root
+            .verdict
+            .reasons
+            .as_slice()
+            .iter()
+            .map(Text::as_str)
+            .collect();
+        assert_eq!(published, reasons);
+    }
+    Ok(())
+}
+
+use habitat_engine::check::consistency::{
+    Error as PlanError, U64_CASE_ID, U64_CRITERION_ID, U64Attempt, prepare_u64,
+};
+use habitat_engine::check::u64_oracle;
+use habitat_engine::contracts::receipt::{Generation, IdentityV1, InvocationV1};
+
+/// The workload manifest was frozen with the task, independently of the plan code.
+const U64_MANIFEST: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/evaluation/tasks/WL-U64-PARSE-001/v1/manifest.json"
+));
+fn u64_attempt(
+    f: &Fixture,
+    generation: &str,
+    ids: [&str; 3],
+) -> Result<U64Attempt, Box<dyn std::error::Error>> {
+    let p = &f.prepared;
+    let review = p.cases[0]
+        .reviewed_design
+        .clone()
+        .ok_or("fixture premise: reviewed design")?;
+    Ok(U64Attempt {
+        schema_sha256: p.schema_sha256.clone(),
+        run_id: Id::new(ids[0])?,
+        task_id: Id::new(ids[1])?,
+        attempt_id: Id::new(ids[2])?,
+        generation: Generation::new(generation)?,
+        profile_id: Name::new(format!("profile-{generation}"))?,
+        parent_run: Maybe::unavailable(Text::new(format!("parent-{generation}"))?),
+        subjects: {
+            // A fixtures digest no other subject shares, and a different one per
+            // attempt, so the case can only get it from the fixtures subject.
+            let mut subjects = p.subjects.clone();
+            let mut fixtures = value(&subjects.fixtures);
+            fixtures["sha256"] = json!(format!("sha256:{}", generation.repeat(64)));
+            subjects.fixtures = serde_json::from_value(fixtures)?;
+            subjects
+        },
+        argv: List::new(vec![Text::new(format!("argv-{generation}"))?])?,
+        environment: p.invocation.environment.clone(),
+        grants: p.invocation.grants.clone(),
+        limits: p.invocation.limits.clone(),
+        allowed_effects: p.invocation.allowed_effects.clone(),
+        cleanup_contract: p.invocation.cleanup_contract.clone(),
+        expectation: p.invocation.expected.clone(),
+        case_design_review: review,
+    })
+}
+const IDS_A: [&str; 3] = [
+    "31000000-0000-4000-8000-000000000001",
+    "31000000-0000-4000-8000-000000000002",
+    "31000000-0000-4000-8000-000000000003",
+];
+const IDS_B: [&str; 3] = [
+    "32000000-0000-4000-8000-00000000000a",
+    "32000000-0000-4000-8000-00000000000b",
+    "32000000-0000-4000-8000-00000000000c",
+];
+#[test]
+fn u64_plan_binds_the_workload_manifest_and_every_typed_input()
+-> Result<(), Box<dyn std::error::Error>> {
+    let manifest: Value = serde_json::from_str(U64_MANIFEST)?;
+    let workload = manifest["workload_id"]
+        .as_str()
+        .ok_or("manifest workload")?;
+    let oracle = manifest["oracle_id"].as_str().ok_or("manifest oracle")?;
+    assert_eq!(u64_oracle::ORACLE_ID, oracle);
+    assert_eq!(U64_CASE_ID, workload.replace('/', "-"));
+    let f = Fixture::new();
+    // Two attempts differing in every caller-supplied scalar: no field can be
+    // frozen to one fixture's value and still pass both.
+    for (generation, ids) in [("1", IDS_A), ("2", IDS_B)] {
+        let input = u64_attempt(&f, generation, ids)?;
+        let plan = prepare_u64(input.clone()).map_err(|e| format!("{e:?}"))?;
+        let criteria = List::new(vec![Name::new(U64_CRITERION_ID)?])?;
+        assert_eq!(
+            plan.identity,
+            IdentityV1 {
+                run_id: input.run_id.clone(),
+                task_id: input.task_id.clone(),
+                attempt_id: input.attempt_id.clone(),
+                generation: input.generation.clone(),
+                module_id: Name::new("check")?,
+                criterion_ids: criteria.clone(),
+                profile_id: input.profile_id.clone(),
+                parent_run: input.parent_run.clone(),
+            }
+        );
+        assert_eq!(plan.schema_sha256, input.schema_sha256);
+        assert_eq!(plan.subjects, input.subjects);
+        assert_eq!(
+            plan.invocation,
+            InvocationV1 {
+                argv: input.argv.clone(),
+                cwd_logical: Name::new("work")?,
+                environment: input.environment.clone(),
+                grants: input.grants.clone(),
+                expected: input.expectation.clone(),
+                oracle_id: Name::new(oracle)?,
+                limits: input.limits.clone(),
+                allowed_effects: input.allowed_effects.clone(),
+                cleanup_contract: input.cleanup_contract.clone(),
+            }
+        );
+        let [case] = plan.cases.as_slice() else {
+            return Err("exactly one frozen case".into());
+        };
+        assert_eq!(
+            (
+                case.case_id.as_str(),
+                case.primary_module_id.as_str(),
+                case.oracle_id.as_str(),
+                &case.criterion_ids,
+                &case.fixture_sha256,
+                &case.expected,
+                (case.mandatory, case.selected, case.excluded),
+                case.reviewed_design.as_ref(),
+            ),
+            (
+                workload.replace('/', "-").as_str(),
+                "check",
+                oracle,
+                &criteria,
+                &input.subjects.fixtures.as_ref().sha256,
+                &input.expectation,
+                (true, true, false),
+                Some(&input.case_design_review),
+            )
+        );
+    }
+    Ok(())
+}
+#[test]
+fn u64_plan_refuses_a_shared_identity_or_an_empty_argv() -> Result<(), Box<dyn std::error::Error>> {
+    let f = Fixture::new();
+    let [run, task, attempt] = IDS_A;
+    for ids in [[run, run, attempt], [run, task, run], [run, task, task]] {
+        assert!(matches!(
+            prepare_u64(u64_attempt(&f, "1", ids)?),
+            Err(PlanError::Binding)
+        ));
+    }
+    let mut empty = u64_attempt(&f, "1", IDS_A)?;
+    empty.argv = List::new(vec![])?;
+    assert!(matches!(prepare_u64(empty), Err(PlanError::Binding)));
+    assert!(prepare_u64(u64_attempt(&f, "1", IDS_A)?).is_ok());
+    Ok(())
 }

@@ -110,7 +110,7 @@ fn execution(execution: &Execution, origin: Instant) -> Value {
         })).collect::<Vec<_>>(),
         "verification_recorded":execution.verification_recorded,
         "receipt":execution.receipt.as_ref().map(|receipt|json!({
-            "reference":receipt.receipt.reference,"state":receipt.decision.state,
+            "reference":receipt.receipt.reference,"state":receipt.decision.state(),
             "decision_inputs":receipt.decision_inputs,"oracle_observation":receipt.oracle_observation})),
         "collected_evidence":execution.collected_evidence.as_ref().map(|collected|json!({
             "registered":collected.registered,"pending":collected.pending,

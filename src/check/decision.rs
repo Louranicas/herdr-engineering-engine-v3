@@ -289,13 +289,34 @@ pub struct Reason {
     pub case_index: Option<usize>,
     pub identity: Option<Identity>,
 }
+/// Only [`decide`] constructs a decision: its fields are private, so a verdict
+/// that did not come from the frozen facts is unrepresentable, and a receipt
+/// publisher taking a `Decision` cannot be handed a caller's desired verdict.
 #[derive(Clone, Debug)]
 pub struct Decision {
-    pub state: VerdictV1State,
+    state: VerdictV1State,
+    counts: Counts,
+    reasons: Vec<Reason>,
+    detectors: Vec<Detector>,
+}
+impl Decision {
+    #[must_use]
+    pub const fn state(&self) -> VerdictV1State {
+        self.state
+    }
     /// Diagnostic summary only when input accounting was invalid; never a receipt inventory.
-    pub counts: Counts,
-    pub reasons: Vec<Reason>,
-    pub detectors: Vec<Detector>,
+    #[must_use]
+    pub const fn counts(&self) -> Counts {
+        self.counts
+    }
+    #[must_use]
+    pub fn reasons(&self) -> &[Reason] {
+        &self.reasons
+    }
+    #[must_use]
+    pub fn detectors(&self) -> &[Detector] {
+        &self.detectors
+    }
 }
 #[derive(Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
 enum Severity {

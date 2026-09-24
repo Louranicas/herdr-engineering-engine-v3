@@ -589,7 +589,7 @@ fn proofs(
     )?;
     let decision_inputs = json_raw(
         evidence,
-        &json!({"identity_readback":readbacks,"candidate_bound_observed":candidate_bound,"bounded_namespace_resource_profile_observed":bounded_profile,"recipe":frozen.recipe,"recipe_reference":frozen.recipe_ref,"producer":producer,"checker":format!("{checker:?}"),"oracle":format!("{oracle_fact:?}"),"cause":format!("{cause:?}"),"clock":format!("{timing:?}"),"selected_deadline_phase":if timing.timeout_intent_ms.is_some(){"candidate timeout"}else{"coordinator verification"},"cleanup":format!("{cleanup_facts:?}"),"cleanup_evidence":cleanup.evidence,"diagnostics":{"strict_empty_baseline_measured":measured.clean,"stdout_complete":measured.stdout,"stderr_complete":measured.stderr},"derived_state":decision.state,"reasons":format!("{:?}",decision.reasons),"detectors":format!("{:?}",decision.detectors)}),
+        &json!({"identity_readback":readbacks,"candidate_bound_observed":candidate_bound,"bounded_namespace_resource_profile_observed":bounded_profile,"recipe":frozen.recipe,"recipe_reference":frozen.recipe_ref,"producer":producer,"checker":format!("{checker:?}"),"oracle":format!("{oracle_fact:?}"),"cause":format!("{cause:?}"),"clock":format!("{timing:?}"),"selected_deadline_phase":if timing.timeout_intent_ms.is_some(){"candidate timeout"}else{"coordinator verification"},"cleanup":format!("{cleanup_facts:?}"),"cleanup_evidence":cleanup.evidence,"diagnostics":{"strict_empty_baseline_measured":measured.clean,"stdout_complete":measured.stdout,"stderr_complete":measured.stderr},"derived_state":decision.state(),"reasons":format!("{:?}",decision.reasons()),"detectors":format!("{:?}",decision.detectors())}),
     )?;
     let oracle_result = record(
         evidence,
@@ -781,18 +781,10 @@ fn assemble(
         artifacts: measured.artifacts,
         artifacts_finalized: true,
         campaigns: Vec::new(),
-        verdict: r::VerdictV1 {
-            state: decision.state,
+        verdict: c::VerdictBinding {
             oracle_result,
             intended_detector: frozen.expectation.intended_detector.clone(),
             benign_pair: none("single_workload_case")?,
-            reasons: list(
-                decision
-                    .reasons
-                    .iter()
-                    .map(|r| text(format!("{:?}", r.kind)))
-                    .collect::<Result<Vec<_>, _>>()?,
-            )?,
         },
         availability: r::AvailabilityV1 {
             observed_unix_ms: number(clock.end_unix_ms)?,
@@ -804,7 +796,7 @@ fn assemble(
     budget(deadline)?;
     let mut publisher = c::Publisher::new(evidence);
     let receipt = publisher
-        .finalize(&frozen.prepared, observed)
+        .finalize(&frozen.prepared, &decision, observed)
         .map_err(|e| Error {
             kind: ErrorKind::Publication(e),
             attempted_refs: publisher.attempted_refs().to_vec(),
