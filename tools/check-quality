@@ -834,7 +834,7 @@ def rust_test_expectations(root):
         if has_t21(root):
             counts.extend(T21_TARGET_COUNTS.values())
     return {"has_t02": has_t02, "has_t03": has_t03, "has_t04": store_present, "has_t05": roster_present,
-            "test_counts": counts, "unit_test_counts": unit_counts, "doctest_count": 2 if has_t02 else 1}
+            "test_counts": counts, "unit_test_counts": unit_counts, "doctest_count": (2 if has_t02 else 1) + (1 if has_t21(root) else 0)}
 
 
 def require_rust_test_summaries(stdout, expectations, label):
