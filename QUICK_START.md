@@ -28,6 +28,8 @@ For defensive security review use gpt-daybreak-blue-latest: type `/model` in the
 
 The pointer starts with actual authority, Prime/Fedora orientation, this quick start, current core/graph checks and the selected module scout. Read original task states from the current PLAN and their retained closure records; foundation milestone completion does not admit a module. T25/T26 precede T02. Re-evaluate actual task evidence and ownership before continuing. Reading a launch example does not start engine implementation.
 
+**Known unknowns:** [What cannot yet be verified, each with its reason](file:///var/home/Louranicas/.claude/known-unknowns.md) — read it before trusting a green result; it links back to this quick start.
+
 ## Visual guide to corpus ownership, completion and verification
 
 [Corpus architecture and update schematics](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Schematics%2FCorpus%2FIndex) · [Open clickable drawings](file:///var/home/herdr-engineering-engine-v3/docs/corpus-schematics.html)

@@ -54656,8 +54656,8 @@
       "bytes": 6019
     },
     "tools/check-quality": {
-      "sha256": "0cdabd01c665cb60addc73a2ed2235f25e3b648ed21468a2df0e7b090b3e14ca",
-      "bytes": 74668
+      "sha256": "36fc355e3d4768e9716cf30ce1f8431e07f102d9214be62e0359e49686c7f31c",
+      "bytes": 75083
     },
     "tools/development_process.py": {
       "sha256": "e76e3a794193e5df7ee96fabf700113d718527745a0f9a9dba1e04fd5c7baaf3",
@@ -54668,8 +54668,8 @@
       "bytes": 10433
     },
     "tests/t25_quality.py": {
-      "sha256": "865dc14726e87d9ebe9ccbddc601482921bec9b5cc6a666731716f1ee654f54e",
-      "bytes": 137244
+      "sha256": "bef05fb3b98687ee22ff9ea1c77a3f127d68e9ccb52f4c8a7728518104fb4aa9",
+      "bytes": 137348
     },
     "julia/Manifest.toml": {
       "sha256": "097d5028df4e1667a970a8297d41eedb908e0319a0b4154c7ec12548140a9f79",
@@ -55756,8 +55756,8 @@
       "bytes": 9861
     },
     "src/app/mod.rs": {
-      "sha256": "85806536fa8d694455497cdfe620b378a1663d97bd5a9909978a3ea12d38ac7b",
-      "bytes": 281
+      "sha256": "a6d16637b33945acf8ed66632f632c4a67c820804ab2a1ac8393ee653d8cb3d6",
+      "bytes": 317
     },
     "src/app/receipt_import.rs": {
       "sha256": "393bd6b147ebe968ffe29532665c1e542972d9f1ea9708699cc6ef962ba0735d",
@@ -55824,8 +55824,8 @@
       "bytes": 26345
     },
     "src/main.rs": {
-      "sha256": "a2e2a3fa21386402b619b0cfb9b34d92e9e15efdbb0ce57a5d719374b0bd2701",
-      "bytes": 30946
+      "sha256": "372528d4f7adcff595c628cc329d858b23fba2568fac0ae736b518a798982bcc",
+      "bytes": 32283
     },
     "src/store/staging.rs": {
       "sha256": "cfcdd5ba8e2074a3a6dae74e480b98bd409c6f8a5db2530991e11255d293997f",
@@ -56028,8 +56028,8 @@
       "bytes": 43396
     },
     "tests/t28_actions.rs": {
-      "sha256": "957b8507fe13b5e9f82be858a05d5cdea2fe2f3f902590ab7b558652cb55d34c",
-      "bytes": 44563
+      "sha256": "e45fa148560ac34257166bab75098d40d3eeca9898b42b24b69030115c65e964",
+      "bytes": 44804
     },
     "tests/t16_herdr.rs": {
       "sha256": "ef25e42123533b23baf56222f884eda85a43329aea043e53ef87d728add8d5d7",
