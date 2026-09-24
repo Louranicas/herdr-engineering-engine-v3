@@ -134,6 +134,16 @@ class Registration(unittest.TestCase):
         self.assertIn("get-task", detail)
         self.assertIn("9", detail)
 
+    def test_a_tool_below_the_pinned_action_version(self):
+        # The pin is equality, not a ceiling: a version under the catalogue's is as unknown as
+        # one over it. `_shape_problem` checks type only, so 0 reaches this check.
+        tools = package()["tools"]
+        tools[1]["action_version"] = 0
+        detail = self.refused("unknown_action_version",
+                              lambda: PI.register(package(tools=tools), BRIDGES))
+        self.assertIn("get-task", detail)
+        self.assertIn("version 0", detail)
+
     def test_the_catalogue_pins_every_action_version_it_admits(self):
         # Independent source: the control-v1 catalogue's own Request_<action> definitions,
         # read here rather than through the generator's table.
@@ -342,6 +352,14 @@ class Lifecycle(unittest.TestCase):
         self.calls.render("c1", "get-task", 3, b"{}")
         self.refused("terminal_call", lambda: self.calls.fail("c1", "get-task", 3, "internal"))
         self.assertEqual(self.calls.settled["c1"]["state"], "rendered")
+
+    def test_a_confirmed_cancel_wins_a_race_against_a_late_failure(self):
+        self.calls.opened("c1", "get-task")
+        self.calls.cancel("c1", "get-task", 3)
+        self.assertIn("cancelled", self.refused(
+            "terminal_call", lambda: self.calls.fail("c1", "get-task", 3, "internal")))
+        self.assertEqual(self.calls.settled["c1"]["state"], "cancelled")
+        self.assertNotIn("error_code", self.calls.settled["c1"])
 
     def test_a_cancellation_request_is_acknowledged_but_not_final(self):
         self.calls.opened("c1", "get-task")
