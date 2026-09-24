@@ -2,8 +2,20 @@
 """Author the RC03 native control schema; this is not an engine validator.
 
 Source: docs/contract-decisions.md, RC03 sections 2, 4 and 6. Run without
-arguments to write the adjacent artifact, or --check to compare exact bytes.
+arguments to write the adjacent artifacts, or --check to compare exact bytes.
 Only Python's standard library is needed. No transport or effects are started.
+
+Per-action schema digests (decision D-4, RC03 section 4 compatibility tuple).
+Beside the bundle this writes one standalone schema per action and kind --
+control-v1.request.<action>.schema.json and control-v1.result.<action>.schema.json,
+each the bundle's Request_<id> or Result_<id> definition at the root plus the
+closure of every $defs entry it references -- and one shared error schema,
+control-v1.error.schema.json (ControlErrorV1 and its closure): the error
+taxonomy is one ErrorCodeV1, not per action. Every file is serialized like the
+bundle (ASCII-escaped UTF-8, indent 2, sorted keys, one terminal LF). A
+tools.inspect digest is "sha256:" + SHA-256 of that exact published file:
+request_schema_sha256 names the action's request file, result_schema_sha256 its
+result file, and error_schema_sha256 the shared error file for every action.
 """
 
 import argparse
@@ -524,23 +536,84 @@ def make_schema():
     }
 
 
+def serialize(schema):
+    return (json.dumps(schema, ensure_ascii=True, indent=2, sort_keys=True) + "\n").encode("utf-8")
+
+
 def artifact_bytes():
-    return (json.dumps(make_schema(), ensure_ascii=True, indent=2, sort_keys=True) + "\n").encode("utf-8")
+    return serialize(make_schema())
+
+
+REFERENCE = "#/$defs/"
+
+
+def references(value):
+    """Every $defs name a schema fragment references, in no particular order."""
+    if isinstance(value, dict):
+        for key, member in value.items():
+            if key == "$ref" and isinstance(member, str) and member.startswith(REFERENCE):
+                yield member[len(REFERENCE):]
+            else:
+                yield from references(member)
+    elif isinstance(value, list):
+        for member in value:
+            yield from references(member)
+
+
+def standalone(bundle, root, identity, title):
+    """The definition `root` as a self-contained schema: it, plus every $defs entry it reaches."""
+    definitions = bundle["$defs"]
+    reached, pending = set(), [root]
+    while pending:
+        name = pending.pop()
+        if name in reached:
+            continue
+        reached.add(name)
+        pending.extend(references(definitions[name]))
+    reached.discard(root)
+    schema = dict(definitions[root])
+    for key in ("$schema", "$id", "title", "$defs"):
+        if key in schema:
+            raise ValueError("Definition " + root + " already carries " + key)
+    schema.update({
+        "$schema": bundle["$schema"], "$id": identity, "title": title,
+        "$defs": {name: definitions[name] for name in sorted(reached)},
+    })
+    return schema
+
+
+def published():
+    """Every artifact this generator owns, as {file name: exact bytes}."""
+    bundle = make_schema()
+    artifacts = {"control-v1.schema.json": serialize(bundle)}
+    for action in ACTIONS:
+        for kind, prefix in (("request", "Request"), ("result", "Result")):
+            artifacts[f"control-v1.{kind}.{action}.schema.json"] = serialize(standalone(
+                bundle, action_name(prefix, action), f"urn:hee3:control:1:{kind}:{action}",
+                f"HEE3-Control/1 {action} v1 {kind} schema",
+            ))
+    artifacts["control-v1.error.schema.json"] = serialize(standalone(
+        bundle, "ControlErrorV1", "urn:hee3:control:1:error", "HEE3-Control/1 error schema",
+    ))
+    return artifacts
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--check", action="store_true", help="compare adjacent artifact without writing")
+    parser.add_argument("--check", action="store_true", help="compare adjacent artifacts without writing")
     arguments = parser.parse_args()
-    target = Path(__file__).with_name("control-v1.schema.json")
-    generated = artifact_bytes()
+    directory = Path(__file__).parent
+    artifacts = published()
     if arguments.check:
-        if not target.is_file() or target.read_bytes() != generated:
-            parser.exit(1, "control-v1.schema.json differs from its authoring generator\n")
-        print("PASS deterministic control schema bytes")
+        differing = [name for name, generated in artifacts.items()
+                     if not (directory / name).is_file() or (directory / name).read_bytes() != generated]
+        if differing:
+            parser.exit(1, "differs from its authoring generator: " + ", ".join(differing) + "\n")
+        print(f"PASS deterministic control schema bytes files={len(artifacts)}")
     else:
-        target.write_bytes(generated)
-        print(f"Wrote {target.name}: {len(generated)} bytes")
+        for name, generated in artifacts.items():
+            (directory / name).write_bytes(generated)
+        print(f"Wrote {len(artifacts)} files")
 
 
 if __name__ == "__main__":

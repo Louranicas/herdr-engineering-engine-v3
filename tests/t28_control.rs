@@ -10,7 +10,9 @@
 use habitat_engine::actions::control::{
     self, CURSOR_LIFETIME_MS, Grants, MAX_PAGE_LIMIT, NoGrants, Reply, filter_sha256,
 };
-use habitat_engine::actions::{Caller, Catalogue, Effect, Owner, PreconditionRule};
+use habitat_engine::actions::{
+    Caller, Catalogue, ERROR_SCHEMA_SHA256, Effect, Owner, PreconditionRule,
+};
 use habitat_engine::contracts::control::{
     ErrorCode, Fault, FrameFault, FrameReader, MAX_FRAME_BYTES, ReadError, Received, ResourceKind,
     Retry, admit_object, read_result_frame, receive, request_sha256,
@@ -164,6 +166,34 @@ fn listing(limit: u64, query: Option<&str>, cursor: &Value) -> Vec<u8> {
     .unwrap_or_default()
 }
 
+/// How a served reply departs from what the oracle decided for its case, if it does.
+fn served_disagreement(case: &Value, parsed: &Value) -> Result<Option<String>, Box<dyn Error>> {
+    let body = &parsed["body"];
+    if case["action"] == json!("tools.inspect") {
+        // The oracle decides every field it can from the world: the digests by hashing the
+        // published files, the readback from the bundle, the bounds from RC03.
+        let wanted = case["inspection"].as_object().ok_or("inspection")?;
+        let differing: Vec<&String> = wanted
+            .iter()
+            .filter(|(key, value)| body[key.as_str()] != **value)
+            .map(|(key, _)| key)
+            .collect();
+        return Ok((wanted.len() != 8 || !differing.is_empty())
+            .then(|| format!("inspection {differing:?} {body}")));
+    }
+    let ids: Vec<&Value> = body["page"]["items"]
+        .as_array()
+        .ok_or("items")?
+        .iter()
+        .map(|item| &item["id"])
+        .collect();
+    let wanted: Vec<&Value> = case["ids"].as_array().ok_or("ids")?.iter().collect();
+    Ok(
+        (ids != wanted || body["page"]["next_cursor"] != case["next_cursor"])
+            .then(|| format!("page {}", body["page"])),
+    )
+}
+
 #[test]
 fn the_receiver_agrees_with_the_independent_oracle_on_every_case() -> Outcome {
     let generated = oracle("cases", None)?;
@@ -199,17 +229,10 @@ fn the_receiver_agrees_with_the_independent_oracle_on_every_case() -> Outcome {
         if parsed["request_sha256"] != case["request_sha256"] {
             disagreements.push(format!("{name}: digest {}", parsed["request_sha256"]));
         }
-        if expected == "served" {
-            let ids: Vec<&Value> = parsed["body"]["page"]["items"]
-                .as_array()
-                .ok_or("items")?
-                .iter()
-                .map(|item| &item["id"])
-                .collect();
-            let wanted: Vec<&Value> = case["ids"].as_array().ok_or("ids")?.iter().collect();
-            if ids != wanted || parsed["body"]["page"]["next_cursor"] != case["next_cursor"] {
-                disagreements.push(format!("{name}: page {}", parsed["body"]["page"]));
-            }
+        if expected == "served"
+            && let Some(fault) = served_disagreement(case, &parsed)?
+        {
+            disagreements.push(format!("{name}: {fault}"));
         }
         replies.push(json!({
             "name": name,
@@ -265,6 +288,272 @@ fn the_receiver_agrees_with_the_independent_oracle_on_every_case() -> Outcome {
             )
         );
     }
+    Ok(())
+}
+
+/// The oracle's `digests`: SHA-256 of each published schema file, by Python's `hashlib`.
+fn published_digests() -> Result<Value, Box<dyn Error>> {
+    let digests = oracle("digests", None)?;
+    assert_eq!(
+        digests["faults"],
+        json!([]),
+        "a published file is not its bundle definition plus exactly its closure"
+    );
+    Ok(digests)
+}
+
+fn inspect_request(action: &str, version: u64) -> Vec<u8> {
+    serde_json::to_vec(&json!({
+        "protocol": "hee3.control", "version": 1, "kind": "request",
+        "request_id": "123e4567-e89b-42d3-a456-00000000000c",
+        "action": "tools.inspect", "action_version": 1, "idempotency_key": null,
+        "deadline_unix_ms": (NOW + 1_000).to_string(),
+        "authority": {"grant_id": "123e4567-e89b-42d3-a456-00000000000b",
+                      "scope_sha256": format!("sha256:{}", "2".repeat(64))},
+        "precondition": null,
+        "body": {"action": action, "version": version},
+    }))
+    .unwrap_or_default()
+}
+
+#[test]
+fn the_schema_generator_reproduces_every_published_file() -> Outcome {
+    let output = Command::new("python3")
+        .args([
+            "-W",
+            "error",
+            "schemas/actions/generate_control_schema.py",
+            "--check",
+        ])
+        .current_dir(root())
+        .env_remove("FORCE_COLOR")
+        .output()?;
+    assert!(
+        output.status.success(),
+        "generator --check failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    // The bundle, a request and a result file per action, and the one shared error file.
+    assert_eq!(
+        String::from_utf8(output.stdout)?,
+        "PASS deterministic control schema bytes files=44\n"
+    );
+    // The world, not the generator's list of it: every control-v1 file in the directory is one
+    // this catalogue names, so a stale file for a renamed action cannot sit there unchecked.
+    let mut expected: Vec<String> = Catalogue::all()
+        .iter()
+        .flat_map(|action| {
+            ["request", "result"].map(|kind| format!("control-v1.{kind}.{}.schema.json", action.id))
+        })
+        .collect();
+    expected.extend(["control-v1.schema.json", "control-v1.error.schema.json"].map(String::from));
+    expected.sort();
+    let mut present = Vec::new();
+    for entry in std::fs::read_dir(root().join("schemas/actions"))? {
+        let name = entry?.file_name().into_string().map_err(|_| "file name")?;
+        if name.starts_with("control-v1") {
+            present.push(name);
+        }
+    }
+    present.sort();
+    assert_eq!(present, expected);
+    Ok(())
+}
+
+/// A private directory removed on drop.
+struct Scratch(PathBuf);
+
+impl Scratch {
+    fn new() -> Result<Self, Box<dyn Error>> {
+        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let path = std::env::temp_dir().join(format!(
+            "hee3-t28-schema-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        std::fs::create_dir(&path)?;
+        Ok(Self(path))
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+fn control_files(directory: &std::path::Path) -> Result<BTreeMap<String, Vec<u8>>, Box<dyn Error>> {
+    let mut files = BTreeMap::new();
+    for entry in std::fs::read_dir(directory)? {
+        let entry = entry?;
+        let name = entry.file_name().into_string().map_err(|_| "file name")?;
+        if name.starts_with("control-v1") {
+            files.insert(name, std::fs::read(entry.path())?);
+        }
+    }
+    Ok(files)
+}
+
+#[test]
+fn a_regenerated_copy_is_the_published_bytes_and_its_check_names_a_tampered_file() -> Outcome {
+    // Regenerate from a copy of the generator, so this compares bytes with code other than the
+    // --check under test; then prove that check refuses by naming the one file that differs.
+    let scratch = Scratch::new()?;
+    let generator = scratch.0.join("generate_control_schema.py");
+    std::fs::copy(
+        root().join("schemas/actions/generate_control_schema.py"),
+        &generator,
+    )?;
+    let run = |check: bool| {
+        let mut command = Command::new("python3");
+        command.args(["-W", "error"]).arg(&generator);
+        if check {
+            command.arg("--check");
+        }
+        command.env_remove("FORCE_COLOR").output()
+    };
+    let wrote = run(false)?;
+    assert!(wrote.status.success(), "{wrote:?}");
+    let regenerated = control_files(&scratch.0)?;
+    assert_eq!(regenerated.len(), 44);
+    assert!(
+        regenerated == control_files(&root().join("schemas/actions"))?,
+        "published files differ from a fresh generation"
+    );
+    let tampered = scratch.0.join("control-v1.result.health.schema.json");
+    let mut bytes = std::fs::read(&tampered)?;
+    bytes.insert(0, b' ');
+    std::fs::write(&tampered, bytes)?;
+    let checked = run(true)?;
+    assert_eq!(checked.status.code(), Some(1));
+    assert_eq!(
+        String::from_utf8(checked.stderr)?,
+        "differs from its authoring generator: control-v1.result.health.schema.json\n"
+    );
+    Ok(())
+}
+
+#[test]
+fn every_catalogue_digest_is_the_sha256_of_its_published_schema_file() -> Outcome {
+    let digests = published_digests()?;
+    assert_eq!(digests["error"], json!(ERROR_SCHEMA_SHA256));
+    let mut compiled = serde_json::Map::new();
+    for action in Catalogue::all() {
+        compiled.insert(
+            action.id.to_owned(),
+            json!({
+                "request": action.request_schema_sha256,
+                "result": action.result_schema_sha256,
+                "readback_action": action.readback_action,
+            }),
+        );
+    }
+    assert_eq!(Value::Object(compiled), digests["actions"]);
+    Ok(())
+}
+
+#[test]
+fn tools_inspect_renders_two_differing_actions_whole() -> Outcome {
+    // Two inspections differing in every field an action can vary: identity, purpose, effect,
+    // both digests and the readback route. `version`, `error_schema_sha256` and the two bounds
+    // are one value for every action (RC03 §4; decision D-4), so no second fixture can move them.
+    let digests = published_digests()?;
+    let grants = Recording::answering(Some(everything()));
+    for (action, purpose, effect, readback) in [
+        (
+            "service.action",
+            "Start, stop, restart or reload a managed habitat service",
+            "lifecycle",
+            "service.inspect",
+        ),
+        (
+            "task.cancel",
+            "Record an intent to cancel a task at an expected generation",
+            "cancel",
+            "task.get",
+        ),
+    ] {
+        let reply = reply(&inspect_request(action, 1), &grants)?;
+        assert_eq!(reply["kind"], json!("result"), "{reply}");
+        assert_eq!(
+            reply["body"],
+            json!({
+                "action": action,
+                "version": 1,
+                "purpose": purpose,
+                "effect": effect,
+                "request_schema_sha256": digests["actions"][action]["request"],
+                "result_schema_sha256": digests["actions"][action]["result"],
+                "error_schema_sha256": digests["error"],
+                "max_request_bytes": 1_048_576,
+                "max_deadline_ms": 60_000,
+                "readback_action": readback,
+            }),
+            "{action}"
+        );
+        assert_eq!(
+            (&reply["effect"], &reply["readback"], &reply["replayed"]),
+            (&json!("none"), &Value::Null, &json!(false)),
+            "an inspection is a read"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn a_hidden_action_inspects_exactly_as_an_undeclared_one() -> Outcome {
+    // tools.inspect itself is visible; the task owner's actions are not.
+    let grants = Recording::answering(Some(
+        Caller::new().seeing(Owner::Actions).granted(Effect::Read),
+    ));
+    let refusal = |action: &str, version: u64| -> Result<Value, Box<dyn Error>> {
+        let mut error = reply(&inspect_request(action, version), &grants)?;
+        let object = error.as_object_mut().ok_or("error object")?;
+        // The digest names the request bytes, which differ in the body by construction.
+        object.remove("request_sha256").ok_or("request_sha256")?;
+        Ok(error)
+    };
+    let undeclared = refusal("task.nope", 1)?;
+    assert_eq!(
+        undeclared,
+        json!({
+            "protocol": "hee3.control", "version": 1, "kind": "error",
+            "request_id": "123e4567-e89b-42d3-a456-00000000000c",
+            "code": "unknown_action", "effect": "none", "retry": "never", "readback": null,
+            "message": "no such action is visible",
+            "details": {"field": "/body/action", "constraint": null, "current_generation": null},
+        })
+    );
+    assert_eq!(
+        refusal("task.get", 1)?,
+        undeclared,
+        "hidden reads as absent"
+    );
+    // Visibility is decided before the version, or version 2 would confirm the action exists.
+    assert_eq!(
+        refusal("task.get", 2)?,
+        undeclared,
+        "hidden at another version"
+    );
+    let unversioned = refusal("tools.list", 2)?;
+    assert_eq!(
+        (
+            &unversioned["code"],
+            &unversioned["details"]["field"],
+            &unversioned["retry"]
+        ),
+        (
+            &json!("unsupported_action_version"),
+            &json!("/body/version"),
+            &json!("never")
+        ),
+        "{unversioned}"
+    );
+    assert_eq!(
+        reply(&inspect_request("tools.list", 1), &grants)?["body"]["action"],
+        json!("tools.list"),
+        "a visible action at its version is served"
+    );
     Ok(())
 }
 

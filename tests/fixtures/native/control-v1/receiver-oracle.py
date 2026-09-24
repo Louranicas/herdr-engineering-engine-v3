@@ -10,6 +10,9 @@ one implementation agreeing with itself.
 
     receiver-oracle.py cases       print the cases as one JSON document
     receiver-oracle.py validate    read [{name, action, reply}] on stdin; validate every reply
+    receiver-oracle.py digests     print each published per-action schema file's SHA-256, and
+                                   whether each file is its bundle definition plus exactly the
+                                   closure it references (decision D-4)
 
 Categories: close (no reply may be written) · refused (invalid_argument and the protocol,
 version and action codes) · deadline · resync · unavailable · served.
@@ -26,7 +29,8 @@ from pathlib import Path
 from jsonschema import Draft202012Validator
 
 ROOT = Path(__file__).resolve().parents[4]
-SCHEMA = json.loads((ROOT / "schemas/actions/control-v1.schema.json").read_text(encoding="utf-8"))
+SCHEMAS = ROOT / "schemas/actions"
+SCHEMA = json.loads((SCHEMAS / "control-v1.schema.json").read_text(encoding="utf-8"))
 FIXTURES = json.loads((Path(__file__).parent / "actions.json").read_text(encoding="utf-8"))
 RECEIVE_UNIX_MS = 1_769_999_995_000
 MAX_FRAME = 1_048_576
@@ -66,6 +70,84 @@ def compact(value):
 
 def filter_sha256(query):
     return "sha256:" + hashlib.sha256(compact({"query": query})).hexdigest()
+
+
+# ---- tools.inspect: what the published files and the bundle say -------------------------
+
+def schema_file(kind, action=None):
+    return f"control-v1.{kind}.schema.json" if action is None else f"control-v1.{kind}.{action}.schema.json"
+
+
+def file_sha256(name):
+    return "sha256:" + hashlib.sha256((SCHEMAS / name).read_bytes()).hexdigest()
+
+
+def pinned_readback(action):
+    """The readback action the bundle's Result_<action> pins, or None for the generic selector."""
+    result = SCHEMA["$defs"]["Result_" + action.replace(".", "_")]
+    for alternative in result["properties"]["readback"]["oneOf"]:
+        for part in alternative.get("allOf", []):
+            pinned = part.get("properties", {}).get("action", {}).get("const")
+            if pinned is not None:
+                return pinned
+    return None
+
+
+def inspection(action):
+    return {"action": action, "version": 1,
+            "request_schema_sha256": file_sha256(schema_file("request", action)),
+            "result_schema_sha256": file_sha256(schema_file("result", action)),
+            "error_schema_sha256": file_sha256(schema_file("error")),
+            "max_request_bytes": MAX_FRAME, "max_deadline_ms": 60_000,
+            "readback_action": pinned_readback(action)}
+
+
+def refs(value):
+    if isinstance(value, dict):
+        for key, member in value.items():
+            if key == "$ref":
+                yield member
+            else:
+                yield from refs(member)
+    elif isinstance(value, list):
+        for member in value:
+            yield from refs(member)
+
+
+def standalone_faults(name, definition):
+    """How a published file departs from `definition` plus exactly the closure it references."""
+    published = json.loads((SCHEMAS / name).read_text(encoding="utf-8"))
+    faults = []
+    own = published.pop("$defs", {})
+    for key in ("$schema", "$id", "title"):
+        published.pop(key, None)
+    if published != SCHEMA["$defs"][definition]:
+        faults.append(f"{name}: root is not the bundle's {definition}")
+    wanted, frontier = set(), [definition]
+    while frontier:
+        for target in refs(SCHEMA["$defs"][frontier.pop()]):
+            referenced = target.removeprefix("#/$defs/")
+            if referenced not in wanted and referenced != definition:
+                wanted.add(referenced)
+                frontier.append(referenced)
+    if set(own) != wanted:
+        faults.append(f"{name}: $defs {sorted(set(own) ^ wanted)} differ from the closure")
+    faults += [f"{name}: {key} differs from the bundle" for key in sorted(set(own) & wanted)
+               if own[key] != SCHEMA["$defs"][key]]
+    return faults
+
+
+def digests():
+    faults = standalone_faults(schema_file("error"), "ControlErrorV1")
+    actions = {}
+    for action in ACTIONS:
+        stem = action.replace(".", "_")
+        faults += standalone_faults(schema_file("request", action), "Request_" + stem)
+        faults += standalone_faults(schema_file("result", action), "Result_" + stem)
+        actions[action] = {"request": file_sha256(schema_file("request", action)),
+                           "result": file_sha256(schema_file("result", action)),
+                           "readback_action": pinned_readback(action)}
+    return {"error": file_sha256(schema_file("error")), "actions": actions, "faults": faults}
 
 
 # ---- the frame rules, decided by Python's parser plus explicit hooks ----------------------
@@ -155,7 +237,7 @@ def expect(payload):
     verdict = {"request_sha256": "sha256:" + hashlib.sha256(payload).hexdigest()}
     if not REQUEST.is_valid(request):
         action = request.get("action")
-        unserved = action in ACTIONS and action != "tools.list"
+        unserved = action in ACTIONS and action not in ("tools.list", "tools.inspect")
         if not (unserved and envelope_validator(action).is_valid(request)):
             return {**verdict, "expect": "refused"}
     deadline = int(request["deadline_unix_ms"])
@@ -163,6 +245,8 @@ def expect(payload):
         return {**verdict, "expect": "deadline"}
     if deadline - RECEIVE_UNIX_MS > 60_000:
         return {**verdict, "expect": "refused"}
+    if request["action"] == "tools.inspect":
+        return {**verdict, "expect": "served", "inspection": inspection(request["body"]["action"])}
     if request["action"] != "tools.list":
         return {**verdict, "expect": "unavailable"}
     body = request["body"]
@@ -319,6 +403,23 @@ def cases():
         request["body"]["page"]["limit"] = 3
         add(f"cursor/{name}", compact(request), "tools.list")
 
+    # The tools.inspect body: every action inspected, then each way the body can be wrong.
+    inspect_base = by_action["tools.inspect"]
+    for target in ACTIONS:
+        add(f"inspect/{target}", compact(mutated(inspect_base, ["body", "action"], target)),
+            "tools.inspect")
+    for name, path, value in [
+        ("action-unknown", ["body", "action"], "tools.nope"),
+        ("action-number", ["body", "action"], 7),
+        ("action-missing", ["body", "action"], DELETE),
+        ("version-2", ["body", "version"], 2),
+        ("version-0", ["body", "version"], 0),
+        ("version-string", ["body", "version"], "1"),
+        ("version-missing", ["body", "version"], DELETE),
+        ("body-extra", ["body", "extra"], 1),
+    ]:
+        add(f"inspect/{name}", compact(mutated(inspect_base, path, value)), "tools.inspect")
+
     # Frame rules on a request that is otherwise served.
     good = compact(listing_base)
     text = good.decode("utf-8")
@@ -387,6 +488,9 @@ def main(argv):
     if argv[1:] == ["cases"]:
         generated = cases()
         json.dump({"receive_unix_ms": RECEIVE_UNIX_MS, "cases": generated}, sys.stdout)
+        return 0
+    if argv[1:] == ["digests"]:
+        json.dump(digests(), sys.stdout)
         return 0
     if argv[1:] == ["validate"]:
         json.dump(validate(json.load(sys.stdin)), sys.stdout)

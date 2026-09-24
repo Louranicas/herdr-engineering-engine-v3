@@ -522,7 +522,21 @@ pub struct Action {
     pub purpose: &'static str,
     /// What the control envelope's `precondition` must be for this action.
     pub precondition: PreconditionRule,
+    /// The read action a caller retries through after a lost reply (`tools.inspect`'s
+    /// `readback_action`, RC03 §4). `None` for an action that changes nothing: repeating it is
+    /// its own readback.
+    pub readback_action: Option<&'static str>,
+    /// `"sha256:"` + SHA-256 of `schemas/actions/control-v1.request.<id>.schema.json`, the
+    /// published request schema this build speaks (decision D-4).
+    pub request_schema_sha256: &'static str,
+    /// `"sha256:"` + SHA-256 of `schemas/actions/control-v1.result.<id>.schema.json`.
+    pub result_schema_sha256: &'static str,
 }
+
+/// `"sha256:"` + SHA-256 of `schemas/actions/control-v1.error.schema.json`: the error taxonomy is
+/// one `ErrorCodeV1`, so every action advertises this one error schema (decision D-4).
+pub const ERROR_SCHEMA_SHA256: &str =
+    "sha256:0d46d196a2be2479046ca0b90c19bb52fe29c8260ecacd78d4d33b835cbb3546";
 
 /// What an action requires of a request's generation precondition (RC03 §4): mutations of
 /// existing state name the exact generation they expect; creation and pure reads name none.
@@ -563,6 +577,9 @@ pub const CATALOGUE: [Action; DECLARED_ACTIONS] = [
         capability: "visible actions only",
         purpose: "List the actions visible to the caller",
         precondition: PreconditionRule::Forbidden,
+        readback_action: None,
+        request_schema_sha256: "sha256:f0537769c5346efac67919032467f571d12d806e3f032b9988c1aab56584e429",
+        result_schema_sha256: "sha256:ffb6ea17be9236327e5e54e011f6569b82f3c05fea3066c9478e157c3f532222",
     },
     Action {
         id: "tools.inspect",
@@ -574,6 +591,9 @@ pub const CATALOGUE: [Action; DECLARED_ACTIONS] = [
         capability: "visible action only",
         purpose: "Describe one action's contract: schemas, bounds and readback route",
         precondition: PreconditionRule::Forbidden,
+        readback_action: None,
+        request_schema_sha256: "sha256:747e4fa363921f00677191975d2f703e8ef0d0d1edb80042dbceee8d5a0a414f",
+        result_schema_sha256: "sha256:5fb15e4700821d05e95c40c40e47530f555df6bc674b853536124468ad5c91f0",
     },
     Action {
         id: "task.preview",
@@ -585,6 +605,9 @@ pub const CATALOGUE: [Action; DECLARED_ACTIONS] = [
         capability: "task preview within caller scope",
         purpose: "Preview which recipes could run a task specification, without admitting it",
         precondition: PreconditionRule::Optional(ResourceKind::Task),
+        readback_action: None,
+        request_schema_sha256: "sha256:c65e23f5c495c1ccf221cb84c4be21a2315bdd588b2e10f4d66e465638b20f6f",
+        result_schema_sha256: "sha256:367dab9249d48aedfefb6ff5079ebd74c063c53b14b2470eca8ea0cc407bd6cc",
     },
     Action {
         id: "task.submit",
@@ -596,6 +619,9 @@ pub const CATALOGUE: [Action; DECLARED_ACTIONS] = [
         capability: "root submission or bounded child allocation",
         purpose: "Admit a task durably under an idempotency key",
         precondition: PreconditionRule::Forbidden,
+        readback_action: Some("task.get"),
+        request_schema_sha256: "sha256:98762063e5ad38ad3b802539ba9e900dcc0aab30e8e317dd8481b0385a5dc608",
+        result_schema_sha256: "sha256:85051a2d3b8c2d4d1e02ea108e235ea43aa28c8d4ab68d5d6064f373f2ff8015",
     },
     Action {
         id: "task.get",
@@ -607,6 +633,9 @@ pub const CATALOGUE: [Action; DECLARED_ACTIONS] = [
         capability: "task visibility for actual principal",
         purpose: "Read one task's state, attempts, cleanup and delivery",
         precondition: PreconditionRule::Optional(ResourceKind::Task),
+        readback_action: None,
+        request_schema_sha256: "sha256:479d17b95fa5205dc6e2031285fe205a2c6c0e1ebbdacf38688a342857d946b0",
+        result_schema_sha256: "sha256:ff5c0282738275c3b8a5a0da495841e4e077438c623685100299512711b703c0",
     },
     Action {
         id: "task.list",
@@ -618,6 +647,9 @@ pub const CATALOGUE: [Action; DECLARED_ACTIONS] = [
         capability: "scoped visible tasks",
         purpose: "List visible tasks by state, class or parent",
         precondition: PreconditionRule::Optional(ResourceKind::Task),
+        readback_action: None,
+        request_schema_sha256: "sha256:fe16f565e6022da8517d5eefba5d87163a60216d7a0152d9fbccf503ef03760d",
+        result_schema_sha256: "sha256:9863b126ba45f8743eee61f3998dd8b8af4f0f64fb02304a1150fe9a32764dee",
     },
     Action {
         id: "task.cancel",
@@ -629,6 +661,9 @@ pub const CATALOGUE: [Action; DECLARED_ACTIONS] = [
         capability: "cancellation grant for target",
         purpose: "Record an intent to cancel a task at an expected generation",
         precondition: PreconditionRule::Required(ResourceKind::Task),
+        readback_action: Some("task.get"),
+        request_schema_sha256: "sha256:9cfef14a6308f689de53d6b1f738acc8250f13194b106e1579c2d574dfbd7eb8",
+        result_schema_sha256: "sha256:cdffc3499bb7248bd941ccce60a664b320df7a2a4a4d88efb4cd5a82362a1b61",
     },
     Action {
         id: "task.resolve",
@@ -640,6 +675,9 @@ pub const CATALOGUE: [Action; DECLARED_ACTIONS] = [
         capability: "operator only",
         purpose: "Record an operator disposition for a task's unresolved obligation",
         precondition: PreconditionRule::Required(ResourceKind::Task),
+        readback_action: Some("task.get"),
+        request_schema_sha256: "sha256:d12e57c2efdbd28bfcca5f3a147eea2ffa5321c8be6ef164a5f4b12afd02b0d3",
+        result_schema_sha256: "sha256:6b43e3396444f883b78340301ce595257f068640fe98476255e005d4b4dbb6c8",
     },
     Action {
         id: "thread.get",
@@ -651,6 +689,9 @@ pub const CATALOGUE: [Action; DECLARED_ACTIONS] = [
         capability: "thread/task visibility",
         purpose: "Read one specialist thread with its obligations, children and artifacts",
         precondition: PreconditionRule::Optional(ResourceKind::Thread),
+        readback_action: None,
+        request_schema_sha256: "sha256:56d73769d930cb737aa57fcface97dd72ca68756dfaa63e3be5abda0ac344a67",
+        result_schema_sha256: "sha256:34befcc0050539bd142a9f77b95900df2edcee2fe5e944eb2418030948dd7da9",
     },
     Action {
         id: "thread.list",
@@ -662,6 +703,9 @@ pub const CATALOGUE: [Action; DECLARED_ACTIONS] = [
         capability: "thread/task visibility",
         purpose: "List visible specialist threads",
         precondition: PreconditionRule::Optional(ResourceKind::Thread),
+        readback_action: None,
+        request_schema_sha256: "sha256:f6e0f31f58a4787d994b7c87788ec66066303c9f10a4597526f009949a96f339",
+        result_schema_sha256: "sha256:4f754eb2c4c7413e9964b9aec4b89d41cb1d77408e94a3d942fae28d32806cc4",
     },
     Action {
         id: "roster.list",
@@ -673,6 +717,9 @@ pub const CATALOGUE: [Action; DECLARED_ACTIONS] = [
         capability: "visible profile/instance/service records",
         purpose: "List agent, model and service roster records",
         precondition: PreconditionRule::Optional(ResourceKind::Roster),
+        readback_action: None,
+        request_schema_sha256: "sha256:1dd78a6c70266d98405baae6ea2a84be29a30063203946ac3c89b6ab30a24b9a",
+        result_schema_sha256: "sha256:579d35ddd8405222124a076c117c7bdb40f68d095eaf32ab3cedaf3f6d06ca6d",
     },
     Action {
         id: "roster.inspect",
@@ -684,6 +731,9 @@ pub const CATALOGUE: [Action; DECLARED_ACTIONS] = [
         capability: "visible record",
         purpose: "Read one roster record and its last operation",
         precondition: PreconditionRule::Optional(ResourceKind::Roster),
+        readback_action: None,
+        request_schema_sha256: "sha256:5969edc8281ed3fb8715b9e7237295faeaece69a117bd0a327a3613bdd7ea49b",
+        result_schema_sha256: "sha256:1319dd8084bb928e3269441acc6cbf4a6a1defb1a431cc818e2c04556acffd3d",
     },
     Action {
         id: "roster.update",
@@ -695,6 +745,9 @@ pub const CATALOGUE: [Action; DECLARED_ACTIONS] = [
         capability: "operator only",
         purpose: "Create or update a roster record",
         precondition: PreconditionRule::Optional(ResourceKind::Roster),
+        readback_action: Some("roster.inspect"),
+        request_schema_sha256: "sha256:cb1777a93c3f413f8d995a30a588375d4c28647016c78df9ae3f9508e0b4e77c",
+        result_schema_sha256: "sha256:3dbf7b75ca90ec49505c4124d30082f48297384a0a0a5e654fec754430d47c57",
     },
     Action {
         id: "roster.disable",
@@ -706,6 +759,9 @@ pub const CATALOGUE: [Action; DECLARED_ACTIONS] = [
         capability: "operator only",
         purpose: "Disable a roster record and decide what happens to its active attempts",
         precondition: PreconditionRule::Required(ResourceKind::Roster),
+        readback_action: Some("roster.inspect"),
+        request_schema_sha256: "sha256:811a12ea1acbe845f1578bf7b1e4860efe9825b630335c8a315381127a198769",
+        result_schema_sha256: "sha256:597347bfcb0516eb14f5c22e8df857aa4db69f16e4f2a94a9f155aa265dfbbe8",
     },
     Action {
         id: "service.inspect",
@@ -717,6 +773,9 @@ pub const CATALOGUE: [Action; DECLARED_ACTIONS] = [
         capability: "visible registered service",
         purpose: "Read a habitat service's cached health and lifecycle operation",
         precondition: PreconditionRule::Optional(ResourceKind::Service),
+        readback_action: None,
+        request_schema_sha256: "sha256:524b73c2c4a5399dd4d14599916bcf11091c6ffc5904a7cd7b9c00377d542ecb",
+        result_schema_sha256: "sha256:1ff83e1817fd70600aa63e943d9b3549c1dcee5ec345a534cc2c363198e9ca74",
     },
     Action {
         id: "service.probe",
@@ -728,6 +787,9 @@ pub const CATALOGUE: [Action; DECLARED_ACTIONS] = [
         capability: "specific approved probe capability",
         purpose: "Run one bounded, declared probe of a habitat service",
         precondition: PreconditionRule::Optional(ResourceKind::Service),
+        readback_action: Some("service.inspect"),
+        request_schema_sha256: "sha256:de83ad931b9eac167f758bb26e71c13b08263cdc79bf408c87e78dcdf1c4d27e",
+        result_schema_sha256: "sha256:c1d74427a807ed2da4b2fc989c714eb354175f5669123d50aa8677b0e63acde1",
     },
     Action {
         id: "service.action",
@@ -739,6 +801,9 @@ pub const CATALOGUE: [Action; DECLARED_ACTIONS] = [
         capability: "specific service/action grant",
         purpose: "Start, stop, restart or reload a managed habitat service",
         precondition: PreconditionRule::Required(ResourceKind::Service),
+        readback_action: Some("service.inspect"),
+        request_schema_sha256: "sha256:972d0bf2e23ecdc2dec278e25bf8f3a704ff187401aa95883f9c54e9d3d071c9",
+        result_schema_sha256: "sha256:3d06564f42ba877b416f9210e616a007b3b305260bfdb9a16b759785c983d297",
     },
     Action {
         id: "analysis.request",
@@ -750,6 +815,9 @@ pub const CATALOGUE: [Action; DECLARED_ACTIONS] = [
         capability: "analysis grant + resource allocation",
         purpose: "Request bounded descriptive analysis of an evidence dataset",
         precondition: PreconditionRule::Optional(ResourceKind::Analysis),
+        readback_action: Some("analysis.get"),
+        request_schema_sha256: "sha256:e80d12dc1457075a281e284327c232af48cc97c195b294469f671ef4af61b2bc",
+        result_schema_sha256: "sha256:f3170d9dcd60d0acd2c6787b455c3a4fe87d51a57d318308d08272d0fa0563b8",
     },
     Action {
         id: "analysis.get",
@@ -761,6 +829,9 @@ pub const CATALOGUE: [Action; DECLARED_ACTIONS] = [
         capability: "analysis/task visibility",
         purpose: "Read one analysis request's state and report",
         precondition: PreconditionRule::Optional(ResourceKind::Analysis),
+        readback_action: None,
+        request_schema_sha256: "sha256:494dbff0f2f8913e1d3985400c51e58820338d4639efb9269b95e5cf7e570a4f",
+        result_schema_sha256: "sha256:40f397cef91a8adc22a6f9ac5d9e0d5cd4e20dc53cbf458f102ab6ef28de5e04",
     },
     Action {
         id: "events.subscribe",
@@ -772,6 +843,9 @@ pub const CATALOGUE: [Action; DECLARED_ACTIONS] = [
         capability: "filtered event visibility",
         purpose: "Subscribe to committed engine events from a durable cursor",
         precondition: PreconditionRule::Forbidden,
+        readback_action: None,
+        request_schema_sha256: "sha256:4842b316ad1cf36856051af2fb21ceda8892c7012f9242e0ed9437641f9b8c3a",
+        result_schema_sha256: "sha256:9018082be1052de0ef4ee5ee2fe66be4ceb2135c7d45dfd5af02f15ce1756480",
     },
     Action {
         id: "health",
@@ -783,6 +857,9 @@ pub const CATALOGUE: [Action; DECLARED_ACTIONS] = [
         capability: "trusted operator health",
         purpose: "Report engine readiness, recovery, database and socket state",
         precondition: PreconditionRule::Forbidden,
+        readback_action: None,
+        request_schema_sha256: "sha256:1ad1a65c29aff28b115dfdfaf7e013268e25bf529354e5e72709d6a3d888a1ee",
+        result_schema_sha256: "sha256:73db3dd9a4be9166ea6e79357d7ef4cc08e27453d5b1b37932e39073dad217b3",
     },
 ];
 
@@ -984,12 +1061,23 @@ impl Catalogue {
     ///
     /// [`Refusal::UnknownAction`], [`Refusal::UnknownVersion`].
     pub fn inspect(caller: &Caller, id: &str, version: &str) -> Result<Action, Refusal> {
-        let action = CATALOGUE
-            .into_iter()
-            .find(|action| action.id == id)
-            .filter(|action| caller.sees(action.owner))
-            .ok_or(Refusal::UnknownAction)?;
+        let action = seen(caller, id)?;
         if action.version != version {
+            return Err(Refusal::UnknownVersion);
+        }
+        Ok(action)
+    }
+
+    /// Inspect one visible action at the version the control wire names (`action_version`, an
+    /// integer) — the lookup `tools.inspect` serves. Visibility is decided first, exactly as in
+    /// [`Self::inspect`], so a hidden action at any version reads as undeclared.
+    ///
+    /// # Errors
+    ///
+    /// [`Refusal::UnknownAction`], [`Refusal::UnknownVersion`].
+    pub fn inspect_wire(caller: &Caller, id: &str, version: u64) -> Result<Action, Refusal> {
+        let action = seen(caller, id)?;
+        if action.wire_version().map(u64::from) != Some(version) {
             return Err(Refusal::UnknownVersion);
         }
         Ok(action)
@@ -1023,6 +1111,15 @@ impl Catalogue {
             .find(|action| action.id == id)
             .ok_or(Refusal::UnknownAction)
     }
+}
+
+/// The action `id`, when `caller` may see it; a hidden action is reported as undeclared.
+fn seen(caller: &Caller, id: &str) -> Result<Action, Refusal> {
+    CATALOGUE
+        .into_iter()
+        .find(|action| action.id == id)
+        .filter(|action| caller.sees(action.owner))
+        .ok_or(Refusal::UnknownAction)
 }
 
 /// The actions `caller` may see whose identity contains `query`, in catalogue order.

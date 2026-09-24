@@ -319,6 +319,68 @@ fn a_visible_action_inspects_to_its_whole_entry() -> Outcome {
     Ok(())
 }
 
+/// The readback column against the plan spine's `retry_readback` sentences, which the catalogue
+/// cannot see: an action that changes nothing is its own readback, and one that changes state
+/// reads back through a read action -- the one its sentence names, when it names one. Only
+/// `service.probe`'s sentence names none; the published result schema pins that row, and
+/// `t28_control` compares the whole column with it.
+#[test]
+fn every_readback_action_is_the_read_its_spine_sentence_names() -> Outcome {
+    let spine: BTreeMap<String, Value> = declared()?
+        .into_iter()
+        .map(|entry| Ok::<_, Box<dyn Error>>((field(&entry, "id")?.to_owned(), entry)))
+        .collect::<Result<_, _>>()?;
+    let mut routed = Vec::new();
+    for action in CATALOGUE {
+        let sentence = field(
+            spine.get(action.id).ok_or("undeclared action")?,
+            "retry_readback",
+        )?;
+        let named: Vec<&str> = CATALOGUE
+            .iter()
+            .map(|other| other.id)
+            .filter(|&other| other != action.id && sentence.contains(other))
+            .collect();
+        match action.readback_action {
+            None => assert!(
+                !action.effect.mutates(),
+                "{} changes state and names no readback",
+                action.id
+            ),
+            Some(readback) => {
+                assert!(action.effect.mutates(), "{} is its own readback", action.id);
+                assert_eq!(
+                    Catalogue::find(readback)?.effect,
+                    Effect::Read,
+                    "{} reads back through {readback}",
+                    action.id
+                );
+                assert!(
+                    named.is_empty() || named == [readback],
+                    "{}: spine names {named:?}, catalogue {readback}",
+                    action.id
+                );
+                routed.push((action.id, readback, named.len()));
+            }
+        }
+    }
+    // Pinned off the identity (F129): eight state-changing actions, seven named by the spine.
+    assert_eq!(
+        routed,
+        [
+            ("task.submit", "task.get", 1),
+            ("task.cancel", "task.get", 1),
+            ("task.resolve", "task.get", 1),
+            ("roster.update", "roster.inspect", 1),
+            ("roster.disable", "roster.inspect", 1),
+            ("service.probe", "service.inspect", 0),
+            ("service.action", "service.inspect", 1),
+            ("analysis.request", "analysis.get", 1),
+        ]
+    );
+    Ok(())
+}
+
 /// T28-AC-15 · an unknown version of a visible action is refused distinctly from an unknown
 /// action, because the caller can act on the difference.
 #[test]

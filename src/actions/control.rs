@@ -11,14 +11,18 @@
 //! authenticated the peer does. [`serve`] cannot read one from the request because it has no
 //! argument that could carry it there.
 //!
-//! **Served, and not.** `tools.list` is served: the catalogue is in this process. Every other
+//! **Served, and not.** `tools.list` and `tools.inspect` are served: the catalogue and its
+//! published schema digests are in this process. Every other
 //! action is refused `unavailable` with a named reason until its owner is composed behind this
 //! receiver, so an unbuilt action is a legible refusal rather than a silent success.
 
-use super::{Action, CATALOGUE_REVISION, Caller, Catalogue, MAX_PAGE, PreconditionRule, Refusal};
+use super::{
+    Action, CATALOGUE_REVISION, Caller, Catalogue, ERROR_SCHEMA_SHA256, MAX_PAGE, PreconditionRule,
+    Refusal,
+};
 use crate::contracts::control::{
-    self as wire, Envelope, ErrorCode, Fault, FrameFault, Health, Outcome, Received, Retry,
-    result_frame,
+    self as wire, Envelope, ErrorCode, Fault, FrameFault, Health, MAX_DEADLINE_AHEAD_MS,
+    MAX_FRAME_BYTES, Outcome, Received, Retry, result_frame,
 };
 use crate::contracts::{Sha256Digest, parse_u64_decimal};
 use crate::store::Principal;
@@ -292,12 +296,7 @@ fn dispatch(action: Action, caller: &Caller, context: &Context<'_>) -> Result<Ou
                 context.now_unix_ms,
             )
         }
-        "tools.inspect" => Err(Fault::of(
-            ErrorCode::Unavailable,
-            Retry::AfterCondition,
-            "per-action schema digests await their publication convention",
-        )
-        .because("RC03 schema: tuple digests bind published artifact bytes")),
+        "tools.inspect" => tools_inspect(caller, body).map(Outcome::read),
         "health" if !body.is_empty() => Err(Fault::invalid("/body", "an empty object")),
         "health" => context
             .composed
@@ -389,6 +388,46 @@ fn tools_list(
             "next_cursor": next_cursor,
             "snapshot_revision": revision,
         },
+    }))
+}
+
+/// `tools.inspect`: one visible action's compatibility tuple (RC03 §4), its bounds and its
+/// readback route. The digests name the published schema files (decision D-4).
+fn tools_inspect(caller: &Caller, body: &Map<String, Value>) -> Result<Value, Fault> {
+    if body.len() != 2 {
+        return Err(Fault::invalid("/body", "exactly action and version"));
+    }
+    let id = body
+        .get("action")
+        .and_then(Value::as_str)
+        .ok_or(Fault::invalid("/body/action", "ActionId"))?;
+    let version = body
+        .get("version")
+        .and_then(Value::as_u64)
+        .ok_or(Fault::invalid("/body/version", "integer"))?;
+    let action = Catalogue::inspect_wire(caller, id, version).map_err(|refusal| match refusal {
+        // Hidden and undeclared are one answer: the refusal must not confirm what is unseen.
+        Refusal::UnknownAction => unknown_action().at("/body/action"),
+        Refusal::UnknownVersion => Fault::of(
+            ErrorCode::UnsupportedActionVersion,
+            Retry::Never,
+            "this receiver serves action version 1 only",
+        )
+        .at("/body/version"),
+        Refusal::UngrantedEffect | Refusal::PageTooWide | Refusal::PageOutOfRange => internal(),
+    })?;
+    let version = action.wire_version().ok_or_else(internal)?;
+    Ok(json!({
+        "action": action.id,
+        "version": version,
+        "purpose": action.purpose,
+        "effect": action.effect.wire_class(),
+        "request_schema_sha256": action.request_schema_sha256,
+        "result_schema_sha256": action.result_schema_sha256,
+        "error_schema_sha256": ERROR_SCHEMA_SHA256,
+        "max_request_bytes": MAX_FRAME_BYTES,
+        "max_deadline_ms": MAX_DEADLINE_AHEAD_MS,
+        "readback_action": action.readback_action,
     }))
 }
 
