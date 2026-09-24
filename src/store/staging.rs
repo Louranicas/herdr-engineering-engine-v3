@@ -1,7 +1,7 @@
 //! Exclusive artifact staging for a collector process, using the Store's exact
 //! immutable publication primitive. This opens no database or task ledger.
 
-use super::{Object, Result, Store, artifact, check_point, remaining};
+use super::{Object, Result, Store, artifact, remaining};
 use crate::contracts::UuidV4;
 use std::fs::File;
 use std::path::Path;
@@ -12,8 +12,7 @@ pub struct ArtifactStaging {
     _root: artifact::Directory,
     objects: artifact::Directory,
     _lock: File,
-    #[cfg(test)]
-    fault: Option<super::CutPoint>,
+    fault: super::Fault,
 }
 
 impl ArtifactStaging {
@@ -32,8 +31,7 @@ impl ArtifactStaging {
             _root: root,
             objects,
             _lock: lock,
-            #[cfg(test)]
-            fault: None,
+            fault: super::NO_FAULT,
         })
     }
 
@@ -45,23 +43,14 @@ impl ArtifactStaging {
             // A duplicate shares the held open-file-description lock. Dropping
             // this descriptor never explicitly unlocks the Store's descriptor.
             _lock: store.lock.try_clone()?,
-            #[cfg(test)]
             fault: store.fault(),
         };
         remaining(deadline)?;
         Ok(staging)
     }
 
-    #[cfg_attr(not(test), allow(clippy::unused_self))]
-    fn fault(&self) -> Option<super::CutPoint> {
-        #[cfg(test)]
-        {
-            self.fault
-        }
-        #[cfg(not(test))]
-        {
-            None
-        }
+    fn fault(&self) -> super::Fault {
+        self.fault
     }
 
     /// Publish exact bytes with the same fsync/no-replace/readback rules as Store.
@@ -72,7 +61,7 @@ impl ArtifactStaging {
     pub fn publish(&self, bytes: &[u8], id: UuidV4<'_>, deadline: Instant) -> Result<Object> {
         remaining(deadline)?;
         let object = artifact::publish(&self.objects, bytes, id, |point| {
-            check_point(self.fault(), point)?;
+            cut_point!(self.fault(), point);
             remaining(deadline).map(|_| ())
         })?;
         remaining(deadline)?;

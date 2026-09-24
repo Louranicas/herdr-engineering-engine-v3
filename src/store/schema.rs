@@ -1,6 +1,6 @@
 //! Exact runtime, schema and migration readback. No optimistic compatibility.
 
-use super::{CutPoint, Error, Result, check_point, digest};
+use super::{CutPoint, Error, Result, digest};
 use rusqlite::{Connection, TransactionBehavior, params};
 use std::time::{Duration, Instant};
 
@@ -118,7 +118,7 @@ pub(super) fn initialize(
     created: bool,
     generation: &str,
     epoch: &str,
-    fault: Option<CutPoint>,
+    fault: super::Fault,
     deadline: Instant,
 ) -> Result<()> {
     protect(connection, deadline)?;
@@ -135,7 +135,7 @@ pub(super) fn initialize(
     safe_settings(connection)?;
     let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     tx.execute_batch(SQL)?;
-    check_point(fault, CutPoint::MigrationWrite)?;
+    cut_point!(fault, CutPoint::MigrationWrite);
     tx.execute(
         "INSERT INTO migration_history VALUES(1,?,0,NULL,?)",
         params![identity(SQL)?, PACKAGE],

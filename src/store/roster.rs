@@ -1,8 +1,8 @@
 //! Roster persistence in the existing ledger and transaction owner.
 
 use super::{
-    CutPoint, Error, Object, Principal, Result, Store, check_point, digest, next, number,
-    read_number, remaining, schema,
+    CutPoint, Error, Object, Principal, Result, Store, digest, next, number, read_number,
+    remaining, schema,
 };
 use crate::contracts::roster::{
     self as dto, MAX_HISTORY, MAX_INPUT, MAX_RECORDS, Observation, ObservationInput,
@@ -68,13 +68,8 @@ impl ReceiverClock {
         })
     }
 
-    #[cfg_attr(
-        not(test),
-        allow(
-            clippy::unused_self,
-            reason = "Only test builds inject exact UUID collisions; production always uses nonblocking getrandom."
-        )
-    )]
+    /// Test builds may script exact UUID collisions; production uses `random_id` via `fresh_id!`.
+    #[cfg(test)]
     fn id(&mut self, deadline: Instant) -> Result<String> {
         #[cfg(test)]
         if let Some(id) = self.test_ids.pop_front() {
@@ -84,7 +79,7 @@ impl ReceiverClock {
     }
 }
 
-fn random_id(deadline: Instant) -> Result<String> {
+pub(super) fn random_id(deadline: Instant) -> Result<String> {
     let mut bytes = [0_u8; 16];
     let mut offset = 0;
     while offset < bytes.len() {
@@ -305,7 +300,7 @@ fn apply_update(
     update: &Update,
     ids: &(String, String),
     epoch: &str,
-    fault: Option<CutPoint>,
+    fault: super::Fault,
 ) -> Result<Outcome> {
     if let Some(outcome) = prior(
         tx,
@@ -351,7 +346,7 @@ fn apply_update(
             observation_cutoff_unix_ms: None,
         }
     };
-    check_point(fault, CutPoint::RosterWrite)?;
+    cut_point!(fault, CutPoint::RosterWrite);
     let sequence = roster_event(
         tx,
         &ids.1,
@@ -413,14 +408,19 @@ impl Store {
         if updates.is_empty() {
             return Ok(Vec::new());
         }
-        let temp = self.clock.id(deadline)?;
+        let temp = fresh_id!(self.clock, deadline)?;
         let object = self.publish(
             source.bytes(),
             UuidV4::parse(&temp).map_err(|_| Error::Runtime)?,
             deadline,
         )?;
         let ids = (0..updates.len())
-            .map(|_| Ok((self.clock.id(deadline)?, self.clock.id(deadline)?)))
+            .map(|_| {
+                Ok((
+                    fresh_id!(self.clock, deadline)?,
+                    fresh_id!(self.clock, deadline)?,
+                ))
+            })
             .collect::<Result<Vec<_>>>()?;
         let epoch = self.epoch.clone();
         let fault = self.fault();
@@ -602,7 +602,7 @@ impl Store {
         }
         operator(principal)?;
         input.validate().map_err(invalid)?;
-        let id = self.clock.id(deadline)?;
+        let id = fresh_id!(self.clock, deadline)?;
         let now = self.clock.sample()?;
         let fault = self.fault();
         self.transaction(deadline,|tx| {
@@ -627,7 +627,7 @@ impl Store {
             if input.instance_id.is_none() {
                 tx.execute("UPDATE roster_records SET observation_id=? WHERE id=?",params![id,input.record_id])?;
             }
-            check_point(fault,CutPoint::RosterObservation)?;
+            cut_point!(fault,CutPoint::RosterObservation);
             Ok(observation)
         })
     }

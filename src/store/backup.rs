@@ -1,8 +1,8 @@
 //! Quiesced store snapshots. Packaging/service/effect restore policy remains T18.
 
 use super::{
-    CutPoint, Directory, Error, Object, Result, Store, check_point, digest, digest_text,
-    read_number, remaining, schema,
+    CutPoint, Directory, Error, Object, Result, Store, digest, digest_text, read_number, remaining,
+    schema,
 };
 use crate::contracts::Sha256Digest;
 use rusqlite::{
@@ -210,12 +210,13 @@ impl Store {
             let staging =
                 crate::contracts::UuidV4::parse(&self.epoch).map_err(|_| Error::Corrupt)?;
             let published = super::artifact::publish(&object_root, &bytes, staging, |point| {
-                check_point(self.fault(), point)
+                cut_point!(self.fault(), point);
+                Ok(())
             })?;
             if &published != object {
                 return Err(Error::Corrupt);
             }
-            check_point(self.fault(), CutPoint::BackupObject)?;
+            cut_point!(self.fault(), CutPoint::BackupObject);
         }
         Ok(objects)
     }
@@ -249,7 +250,7 @@ impl Store {
             // SQLite specifies OK after a checked Done with no retained step error.
             // Record that distinction and require fallible close/reopen/readback below.
         }
-        check_point(self.fault(), CutPoint::BackupCopied)?;
+        cut_point!(self.fault(), CutPoint::BackupCopied);
         let journal: String = copy.query_row("PRAGMA journal_mode=DELETE", [], |row| row.get(0))?;
         if journal != "delete" {
             return Err(Error::Corrupt);
@@ -350,11 +351,7 @@ impl Store {
     }
 }
 
-fn publish_report(
-    dest: &Directory,
-    report: &BackupReport,
-    fault: Option<CutPoint>,
-) -> Result<String> {
+fn publish_report(dest: &Directory, report: &BackupReport, fault: super::Fault) -> Result<String> {
     let bytes = serde_json::to_vec(report)?;
     if bytes.len() > 1_048_576 {
         return Err(Error::Bound);
@@ -363,7 +360,7 @@ fn publish_report(
     manifest.write_all(&bytes)?;
     manifest.sync_all()?;
     drop(manifest);
-    check_point(fault, CutPoint::BackupManifest)?;
+    cut_point!(fault, CutPoint::BackupManifest);
     rustix::fs::renameat_with(
         &dest.file,
         ".manifest-stage",

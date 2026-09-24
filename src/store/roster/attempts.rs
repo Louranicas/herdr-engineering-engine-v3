@@ -2,8 +2,8 @@
 
 use super::{
     BTreeSet, Connection, CutPoint, Error, Generation, Instant, Operation, Principal, ReceiptTime,
-    Result, Store, Transaction, UuidV4, capacity, check_point, digest, dto, invalid, next,
-    operator, prior, random_id, record, retain_operation, retain_revision, roster_event, schema,
+    Result, Store, Transaction, UuidV4, capacity, digest, dto, invalid, next, operator, prior,
+    random_id, record, retain_operation, retain_revision, roster_event, schema,
 };
 use crate::contracts::roster::{
     ActiveAttemptPolicy, CancellationCause, Disable, Instance, InstanceState, Kind, MAX_HISTORY,
@@ -211,7 +211,7 @@ impl Store {
         deadline: Instant,
     ) -> Result<RosterAttempt> {
         validate_start(&input)?;
-        let id = self.clock.id(deadline)?;
+        let id = fresh_id!(self.clock, deadline)?;
         let clock = self.clock.clone();
         let fault = self.fault();
         self.transaction(deadline,|tx| {
@@ -230,7 +230,7 @@ impl Store {
                 tx.execute("INSERT INTO roster_pins VALUES(?,?,?,?)",params![attempt.id,pin.record.head.record_id,pin.record.head.record_version,serde_json::to_vec(pin)?])?;
             }
             retain_instance(tx,&instance,input.event.as_str())?;
-            check_point(fault,CutPoint::RosterPin)?;
+            cut_point!(fault,CutPoint::RosterPin);
             Ok(RosterAttempt { attempt,instance,pins })
         })
     }
@@ -285,7 +285,7 @@ impl Store {
         deadline: Instant,
     ) -> Result<Instance> {
         operator(principal)?;
-        let event_id = self.clock.id(deadline)?;
+        let event_id = fresh_id!(self.clock, deadline)?;
         self.transaction(deadline, |tx| {
             let mut current = instance(tx, principal, id.as_str())?;
             if current.revision != expected.to_string() {
@@ -367,13 +367,13 @@ impl Store {
             return Err(Error::Bound);
         }
         std::str::from_utf8(request_bytes).map_err(|_| Error::Invalid)?;
-        let temp = self.clock.id(deadline)?;
+        let temp = fresh_id!(self.clock, deadline)?;
         let object = self.publish(
             request_bytes,
             UuidV4::parse(&temp).map_err(|_| Error::Runtime)?,
             deadline,
         )?;
-        let event_id = self.clock.id(deadline)?;
+        let event_id = fresh_id!(self.clock, deadline)?;
         let epoch = self.epoch.clone();
         let request_digest = digest(request_bytes);
         let fault = self.fault();
@@ -415,7 +415,7 @@ impl Store {
             } else {
                 Vec::new()
             };
-            check_point(fault, CutPoint::RosterWrite)?;
+            cut_point!(fault, CutPoint::RosterWrite);
             let outcome = Outcome {
                 head: current,
                 event_id,
