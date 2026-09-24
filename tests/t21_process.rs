@@ -313,6 +313,29 @@ fn descendant_in_owned_group_prevents_false_clean_success() {
         r.outcome,
         Err(Failure::Interrupted(Interruption::ResidualGroup))
     ));
+    // NUM-01 ordering: a bound refusal under exit 2 is typed only once the group
+    // settled. The real entrypoint writes its refusal, leaves a descendant, exits 2.
+    let a = Area::new();
+    let lingering = "run(`/usr/bin/sleep 30`; wait=false); exit(2)";
+    let p = a.profile(Some(
+        &entrypoint(&[(RECEIVED, FUTURE), ("exit(2)", lingering)]).unwrap(),
+    ));
+    let d = dataset();
+    let r = run(&p, &d);
+    settled(&r);
+    let observed = r.process.as_ref().unwrap();
+    assert_eq!(observed.exit_code, Some(2), "leader exit");
+    assert!(observed.stderr.bytes.is_empty(), "stderr");
+    assert_eq!(
+        d.refusal(&observed.stdout.bytes),
+        Ok(JuliaCode::Stale),
+        "stdout holds a refusal bound to this request"
+    );
+    assert_eq!(
+        r.outcome.as_ref().err(),
+        Some(&Failure::Interrupted(Interruption::ResidualGroup)),
+        "refusal with a residual group"
+    );
 }
 
 // The original negative control deliberately creates an orphan. Reuse the

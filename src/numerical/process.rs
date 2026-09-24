@@ -361,3 +361,94 @@ impl From<std::io::Error> for Failure {
         Self::Io(error.raw_os_error())
     }
 }
+
+#[cfg(test)]
+mod classify_order_tests {
+    use super::{Dataset, Failure, Interruption, ProcessReport, classify};
+    use crate::numerical::JuliaCode;
+    use crate::worker::process::{SignalFacts, Stream};
+    use std::sync::atomic::AtomicBool;
+    use std::time::{Duration, Instant};
+
+    type Checked = Result<(), Box<dyn std::error::Error>>;
+    type Unsettle = fn(&mut ProcessReport);
+    // Inside J01's own [cutoff, expires] window, so the fixture decodes unchanged.
+    const NOW_MS: u64 = 1_769_999_995_000;
+
+    fn stream(bytes: &[u8]) -> Stream {
+        Stream {
+            bytes: bytes.to_vec(),
+            observed_bytes: u64::try_from(bytes.len()).unwrap_or(u64::MAX),
+            eof: true,
+            truncated: false,
+            failed: false,
+        }
+    }
+    /// A leader that wrote a refusal bound to `dataset` and exited 2, fully settled.
+    fn refusing(dataset: &Dataset) -> ProcessReport {
+        let body = format!(
+            r#"{{"protocol":"hee3.analysis","version":1,"kind":"error","request_sha256":"{}","binding":null,"code":"stale","diagnostic":"analysis refusal"}}"#,
+            dataset.digest()
+        );
+        ProcessReport {
+            started_at: Instant::now(),
+            leader_pid: 4242,
+            exit_code: Some(2),
+            signal: None,
+            interruption: None,
+            interruption_observed_at: None,
+            stdout: stream(body.as_bytes()),
+            stderr: stream(b""),
+            elapsed: Duration::from_millis(7),
+            signals: SignalFacts::default(),
+            leader_reaped: true,
+            process_group_settled: true,
+            observer_ready: true,
+            pending: None,
+        }
+    }
+
+    /// NUM-01: a refusal is typed only after the interruption and settlement gates.
+    /// The settled case is asserted first so each negative differs from a typed
+    /// refusal in exactly one fact. The `pending` disjunct is not exercised: a
+    /// `PendingChild` is constructible only by the worker owner.
+    #[test]
+    fn refusal_is_typed_only_after_interruption_and_settlement() -> Checked {
+        let dataset = Dataset::decode(include_bytes!("../../tests/fixtures/t21/J01.json"), NOW_MS)
+            .map_err(|invalid| format!("J01 fixture: {invalid:?}"))?;
+        let never = AtomicBool::new(false);
+        assert_eq!(
+            classify(&dataset, &refusing(&dataset), &never).err(),
+            Some(Failure::Refused(JuliaCode::Stale)),
+            "settled refusal"
+        );
+        let unsettled: [(&str, Unsettle); 8] = [
+            ("leader not reaped", |r| r.leader_reaped = false),
+            ("group not settled", |r| r.process_group_settled = false),
+            ("stdout not at eof", |r| r.stdout.eof = false),
+            ("stderr not at eof", |r| r.stderr.eof = false),
+            ("stdout failed", |r| r.stdout.failed = true),
+            ("stderr failed", |r| r.stderr.failed = true),
+            ("stdout truncated", |r| r.stdout.truncated = true),
+            ("stderr truncated", |r| r.stderr.truncated = true),
+        ];
+        for (fact, unsettle) in unsettled {
+            let mut observed = refusing(&dataset);
+            unsettle(&mut observed);
+            assert_eq!(
+                classify(&dataset, &observed, &never).err(),
+                Some(Failure::Unsettled),
+                "{fact}"
+            );
+        }
+        let mut observed = refusing(&dataset);
+        observed.interruption = Some(Interruption::ResidualGroup);
+        observed.process_group_settled = false;
+        assert_eq!(
+            classify(&dataset, &observed, &never).err(),
+            Some(Failure::Interrupted(Interruption::ResidualGroup)),
+            "interrupted and unsettled"
+        );
+        Ok(())
+    }
+}
