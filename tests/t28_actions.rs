@@ -32,6 +32,10 @@ mod socket;
 #[path = "t28_coordinator.rs"]
 mod coordinator;
 
+/// The task owner: `task.submit` and `task.get` over a real ledger.
+#[path = "t28_tasks.rs"]
+mod tasks;
+
 type Outcome = Result<(), Box<dyn Error>>;
 
 /// The plan spine's own action list — the independent source these cases compare against.

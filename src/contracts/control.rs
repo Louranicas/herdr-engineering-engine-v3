@@ -532,7 +532,7 @@ impl Retry {
 }
 
 /// A correlated refusal. Every text is static, so none can echo the request.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Fault {
     /// The error code.
     pub code: ErrorCode,
@@ -544,6 +544,8 @@ pub struct Fault {
     pub constraint: Option<&'static str>,
     /// A diagnostic; never program logic.
     pub message: &'static str,
+    /// Set only for `effect_unknown`: the read that settles what happened (RC03 §4).
+    pub readback: Option<Value>,
 }
 
 impl Fault {
@@ -556,6 +558,7 @@ impl Fault {
             field: Some(field),
             constraint: Some(constraint),
             message: "request does not satisfy HEE3-Control/1",
+            readback: None,
         }
     }
 
@@ -568,6 +571,21 @@ impl Fault {
             field: None,
             constraint: None,
             message,
+            readback: None,
+        }
+    }
+
+    /// `effect_unknown`: the durable boundary may or may not have committed. RC03 §4: always
+    /// `effect: unknown`, `retry: after_readback`, and the concrete read that settles it.
+    #[must_use]
+    pub fn effect_unknown(readback: Value) -> Self {
+        Self {
+            code: ErrorCode::EffectUnknown,
+            retry: Retry::AfterReadback,
+            field: None,
+            constraint: None,
+            message: "the commit may or may not have happened; read back before any retry",
+            readback: Some(readback),
         }
     }
 
@@ -595,9 +613,9 @@ impl Fault {
             "request_id": request_id,
             "request_sha256": request_sha256,
             "code": self.code.name(),
-            "effect": "none",
+            "effect": if self.readback.is_some() { "unknown" } else { "none" },
             "retry": self.retry.name(),
-            "readback": null,
+            "readback": self.readback,
             "message": self.message,
             "details": {
                 "field": self.field,
@@ -608,22 +626,70 @@ impl Fault {
     }
 }
 
-/// A `ControlResultV1` for an action that committed nothing, LF-terminated.
+/// What an action did to durable state. `pending` is not representable here: it requires an
+/// operation identity and a readback route that no composed action yet produces (RC03 §4).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ResultEffect {
+    /// Nothing durable changed.
+    None,
+    /// The action's durable boundary committed.
+    Committed,
+}
+
+/// A result's envelope facts beyond its body.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Outcome {
+    /// What the action did to durable state.
+    pub effect: ResultEffect,
+    /// Whether this is the stored result of an exact replay rather than a new execution.
+    pub replayed: bool,
+    /// The resource generation the result observed.
+    pub observed_generation: Option<String>,
+    /// The read that finds this result again after a lost reply (a `ReadbackSelectorV1`).
+    pub readback: Option<Value>,
+    /// The action's result body.
+    pub body: Value,
+}
+
+impl Outcome {
+    /// A read: nothing committed, nothing to read back.
+    #[must_use]
+    pub fn read(body: Value) -> Self {
+        Self {
+            effect: ResultEffect::None,
+            replayed: false,
+            observed_generation: None,
+            readback: None,
+            body,
+        }
+    }
+}
+
+/// A `ControlResultV1`, LF-terminated.
 #[must_use]
-pub fn read_result_frame(request_id: &str, request_sha256: &str, body: &Value) -> Vec<u8> {
+pub fn result_frame(request_id: &str, request_sha256: &str, outcome: &Outcome) -> Vec<u8> {
     record(&json!({
         "protocol": PROTOCOL,
         "version": PROTOCOL_VERSION,
         "kind": "result",
         "request_id": request_id,
         "request_sha256": request_sha256,
-        "replayed": false,
-        "effect": "none",
+        "replayed": outcome.replayed,
+        "effect": match outcome.effect {
+            ResultEffect::None => "none",
+            ResultEffect::Committed => "committed",
+        },
         "operation_id": null,
-        "observed_generation": null,
-        "readback": null,
-        "body": body,
+        "observed_generation": outcome.observed_generation,
+        "readback": outcome.readback,
+        "body": outcome.body,
     }))
+}
+
+/// A `ControlResultV1` for an action that committed nothing, LF-terminated.
+#[must_use]
+pub fn read_result_frame(request_id: &str, request_sha256: &str, body: &Value) -> Vec<u8> {
+    result_frame(request_id, request_sha256, &Outcome::read(body.clone()))
 }
 
 fn record(value: &Value) -> Vec<u8> {

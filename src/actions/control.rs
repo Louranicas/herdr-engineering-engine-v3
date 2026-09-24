@@ -17,11 +17,12 @@
 
 use super::{Action, CATALOGUE_REVISION, Caller, Catalogue, MAX_PAGE, PreconditionRule, Refusal};
 use crate::contracts::control::{
-    self as wire, Envelope, ErrorCode, Fault, FrameFault, Health, Received, Retry,
-    read_result_frame,
+    self as wire, Envelope, ErrorCode, Fault, FrameFault, Health, Outcome, Received, Retry,
+    result_frame,
 };
 use crate::contracts::{Sha256Digest, parse_u64_decimal};
 use crate::store::Principal;
+use crate::task::control::{self as task_body, Selector, Spec};
 use serde_json::{Map, Value, json};
 
 /// How long a `tools.list` continuation cursor stays valid after it is issued.
@@ -65,14 +66,64 @@ pub enum Reply {
     Frame(Vec<u8>),
 }
 
-/// What the coordinator has composed behind the receiver: the grant store, and the health it
-/// observed at start when it has one. An action whose state is absent is refused `unavailable`.
+/// One admitted `task.submit`, as the task owner receives it.
+#[derive(Clone, Copy, Debug)]
+pub struct TaskRequest<'a> {
+    /// The transport's principal.
+    pub principal: &'a Principal,
+    /// The admission's idempotency key (the envelope requires one for this action).
+    pub idempotency_key: &'a str,
+    /// The request's exact bytes: the durable replay digest names these (RC03 §6).
+    pub payload: &'a [u8],
+    /// The request deadline, already inside the admitted window.
+    pub deadline_unix_ms: u64,
+    /// Receiver wall time at receipt.
+    pub now_unix_ms: u64,
+}
+
+/// The task owner behind the receiver: admission and readback through the ledger.
+pub trait Tasks {
+    /// Admit `spec` durably, or return the stored result of an exact replay.
+    ///
+    /// # Errors
+    ///
+    /// A typed refusal: `conflict` for a reused key with other bytes, `unavailable` when the
+    /// ledger cannot be written.
+    fn submit(&self, request: &TaskRequest<'_>, spec: &Spec) -> Result<Outcome, Fault>;
+
+    /// Read one visible task.
+    ///
+    /// # Errors
+    ///
+    /// `not_found` for a task this principal cannot see; `resource_exhausted` past the read bound.
+    fn get(
+        &self,
+        principal: &Principal,
+        selector: &Selector,
+        deadline_unix_ms: u64,
+        now_unix_ms: u64,
+    ) -> Result<Outcome, Fault>;
+}
+
+/// What the coordinator has composed behind the receiver: the grant store, the health it observed
+/// at start, and the task owner. An action whose owner is absent is refused `unavailable`.
 #[derive(Clone, Copy)]
 pub struct Composed<'a> {
     /// The grant store.
     pub grants: &'a dyn Grants,
     /// The coordinator's health observation, when composed.
     pub health: Option<&'a Health>,
+    /// The task owner, when a writable ledger is composed.
+    pub tasks: Option<&'a dyn Tasks>,
+}
+
+/// Everything one dispatch may read.
+struct Context<'a> {
+    envelope: &'a Envelope,
+    payload: &'a [u8],
+    principal: &'a Principal,
+    now_unix_ms: u64,
+    composed: Composed<'a>,
 }
 
 /// Serve one frame payload (without its LF) for `principal`, at receiver wall time `now_unix_ms`,
@@ -91,6 +142,7 @@ pub fn serve(
         Composed {
             grants,
             health: None,
+            tasks: None,
         },
     )
 }
@@ -113,17 +165,17 @@ pub fn serve_composed(
         } => return Reply::Frame(fault.frame(&request_id, &request_sha256)),
         Received::Admitted(envelope) => envelope,
     };
-    let outcome = admit(&envelope, now_unix_ms, principal, grants).and_then(|(action, caller)| {
-        dispatch(
-            action,
-            &caller,
-            &envelope.body,
-            now_unix_ms,
-            composed.health,
-        )
-    });
+    let context = Context {
+        envelope: &envelope,
+        payload,
+        principal,
+        now_unix_ms,
+        composed,
+    };
+    let outcome = admit(&envelope, now_unix_ms, principal, grants)
+        .and_then(|(action, caller)| dispatch(action, &caller, &context));
     Reply::Frame(match outcome {
-        Ok(body) => read_result_frame(&envelope.request_id, &envelope.request_sha256, &body),
+        Ok(outcome) => result_frame(&envelope.request_id, &envelope.request_sha256, &outcome),
         Err(fault) => fault.frame(&envelope.request_id, &envelope.request_sha256),
     })
 }
@@ -199,15 +251,47 @@ fn admit(
     Ok((dispatch.action(), caller))
 }
 
-fn dispatch(
-    action: Action,
-    caller: &Caller,
-    body: &Map<String, Value>,
-    now_unix_ms: u64,
-    health: Option<&Health>,
-) -> Result<Value, Fault> {
+fn dispatch(action: Action, caller: &Caller, context: &Context<'_>) -> Result<Outcome, Fault> {
+    let body = &context.envelope.body;
+    let owner_absent = || {
+        Fault::of(
+            ErrorCode::Unavailable,
+            Retry::AfterCondition,
+            "this action's owner is not composed behind this receiver",
+        )
+        .because("owner not composed")
+    };
     match action.id {
-        "tools.list" => tools_list(caller, body, now_unix_ms),
+        "tools.list" => tools_list(caller, body, context.now_unix_ms).map(Outcome::read),
+        "task.submit" => {
+            let spec = task_body::submission(body)?;
+            let tasks = context.composed.tasks.ok_or_else(owner_absent)?;
+            let key = context
+                .envelope
+                .idempotency_key
+                .as_deref()
+                .ok_or_else(internal)?;
+            tasks.submit(
+                &TaskRequest {
+                    principal: context.principal,
+                    idempotency_key: key,
+                    payload: context.payload,
+                    deadline_unix_ms: context.envelope.deadline_unix_ms,
+                    now_unix_ms: context.now_unix_ms,
+                },
+                &spec,
+            )
+        }
+        "task.get" => {
+            let selector = task_body::get(body)?;
+            let tasks = context.composed.tasks.ok_or_else(owner_absent)?;
+            tasks.get(
+                context.principal,
+                &selector,
+                context.envelope.deadline_unix_ms,
+                context.now_unix_ms,
+            )
+        }
         "tools.inspect" => Err(Fault::of(
             ErrorCode::Unavailable,
             Retry::AfterCondition,
@@ -215,20 +299,19 @@ fn dispatch(
         )
         .because("RC03 schema: tuple digests bind published artifact bytes")),
         "health" if !body.is_empty() => Err(Fault::invalid("/body", "an empty object")),
-        "health" => health.map(Health::body).ok_or(
-            Fault::of(
-                ErrorCode::Unavailable,
-                Retry::AfterCondition,
-                "health needs the coordinator's recovery, database and socket state",
-            )
-            .because("coordinator state is not composed behind this receiver"),
-        ),
-        _ => Err(Fault::of(
-            ErrorCode::Unavailable,
-            Retry::AfterCondition,
-            "this action's owner is not composed behind this receiver",
-        )
-        .because("owner not composed")),
+        "health" => context
+            .composed
+            .health
+            .map(|health| Outcome::read(health.body()))
+            .ok_or(
+                Fault::of(
+                    ErrorCode::Unavailable,
+                    Retry::AfterCondition,
+                    "health needs the coordinator's recovery, database and socket state",
+                )
+                .because("coordinator state is not composed behind this receiver"),
+            ),
+        _ => Err(owner_absent()),
     }
 }
 

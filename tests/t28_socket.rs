@@ -252,6 +252,7 @@ fn a_connection_is_answered_in_order_and_closed_at_its_first_unanswerable_frame(
         Composed {
             grants: &Open,
             health: None,
+            tasks: None,
         },
         &|| NOW,
     )?;
@@ -286,7 +287,8 @@ fn a_connection_is_answered_in_order_and_closed_at_its_first_unanswerable_frame(
             &operator()?,
             Composed {
                 grants: &Open,
-                health: None
+                health: None,
+                tasks: None
             },
             &|| NOW
         )?,

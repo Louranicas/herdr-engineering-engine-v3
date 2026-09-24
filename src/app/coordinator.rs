@@ -244,3 +244,24 @@ pub fn observe_at_start(
 pub fn state_root(home: &Path) -> PathBuf {
     home.join(STATE_DIRECTORY)
 }
+
+/// Open the active generation's ledger writable for the task owner, after startup reconciled it.
+///
+/// # Errors
+///
+/// A line naming why no writable ledger could be composed; the caller serves task actions as
+/// `unavailable` and says so.
+pub fn compose_tasks(
+    state_root: &Path,
+    deadline: Instant,
+) -> Result<crate::app::tasks::StoreTasks, String> {
+    let selected = active(state_root)
+        .map_err(|unselected| format!("no active generation ({unselected:?})"))?;
+    let generation = UuidV4::parse(&selected.generation)
+        .map_err(|_| "the manifest generation changed".to_owned())?;
+    let epoch =
+        UuidV4::parse(&selected.epoch).map_err(|_| "the manifest epoch changed".to_owned())?;
+    let store = crate::store::Store::open(state_root, generation, epoch, false, deadline)
+        .map_err(|error| format!("the ledger did not open writable: {error:?}"))?;
+    Ok(crate::app::tasks::StoreTasks::new(store, selected.epoch))
+}

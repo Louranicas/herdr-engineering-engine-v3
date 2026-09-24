@@ -539,4 +539,5 @@ impl LoopGuard {
     }
 }
 
+pub mod control;
 pub mod driver;

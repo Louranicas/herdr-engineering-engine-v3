@@ -297,11 +297,30 @@ fn serve() -> ExitCode {
         std::time::Instant::now() + std::time::Duration::from_secs(30),
     );
     eprintln!("habitat-engine: {line}");
+    // The task owner is composed only over a ledger startup left writable and reconciled.
+    let tasks = if health.database == habitat_engine::contracts::control::Database::Ready {
+        match coordinator::compose_tasks(
+            &coordinator::state_root(&home),
+            std::time::Instant::now() + std::time::Duration::from_secs(30),
+        ) {
+            Ok(tasks) => Some(tasks),
+            Err(why) => {
+                eprintln!("habitat-engine: task actions unavailable: {why}");
+                None
+            }
+        }
+    } else {
+        eprintln!("habitat-engine: task actions unavailable: the ledger is not ready");
+        None
+    };
     eprintln!("habitat-engine: serving {}", socket.display());
     let mut report = |line: &str| eprintln!("habitat-engine: {line}");
     let composed = Composed {
         grants: store.as_ref(),
         health: Some(&health),
+        tasks: tasks
+            .as_ref()
+            .map(|tasks| tasks as &dyn habitat_engine::actions::control::Tasks),
     };
     match control_socket::run(&listener, composed, &now_unix_ms, &mut report) {
         Ok(()) => ExitCode::SUCCESS,
