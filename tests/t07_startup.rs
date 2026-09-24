@@ -173,6 +173,11 @@ impl World {
         self.workspaces.insert(ATTEMPT.into(), readback);
         self
     }
+    /// One named attempt's workspace readback (the many-task B03b ledgers).
+    fn with_workspace_for(mut self, attempt: &str, readback: WorkspaceReadback) -> Self {
+        self.workspaces.insert(attempt.to_owned(), readback);
+        self
+    }
     fn with_acknowledgement(mut self, acknowledgement: Acknowledgement) -> Self {
         self.acknowledgements
             .insert(ATTEMPT.into(), acknowledgement);
@@ -4258,4 +4263,148 @@ fn an_unconfirmed_cleanup_does_not_block_readiness() {
             "boot {boot}"
         );
     }
+}
+
+/// `n` accepted tasks, each after one settled attempt and a passed verification, using identity
+/// roles offset by `base` so they never collide with `fail_tasks`'.
+fn accept_tasks(r: &mut Rig, n: u32, base: u16) {
+    let evidence = r.evidence.clone();
+    for index in 0..n {
+        let role = |offset: u16| nth(base + offset, index);
+        let (task, attempt) = (role(2), role(4));
+        let store = r.store();
+        store
+            .submit(
+                Submission {
+                    principal: &principal(),
+                    key: id(&role(1)),
+                    task: id(&task),
+                    event: id(&role(3)),
+                    request_bytes: b"startup reconciliation fixture",
+                    criteria: Sha256Digest::parse(DIGEST).unwrap(),
+                    allocation: Allocation {
+                        limit_ms: 1_200_000,
+                        work_ms: 900_000,
+                        verify_ms: 300_000,
+                    },
+                },
+                deadline(),
+            )
+            .unwrap();
+        store
+            .begin_attempt(
+                id(&task),
+                generation("1"),
+                id(&attempt),
+                id(&role(5)),
+                deadline(),
+            )
+            .unwrap();
+        let revision = |store: &mut Store| {
+            store
+                .get(&principal(), id(&task), deadline())
+                .unwrap()
+                .generation
+        };
+        let expected = |revision: &str| Expected {
+            task: id(&task),
+            task_generation: generation(revision),
+            attempt: id(&attempt),
+            attempt_generation: generation("1"),
+        };
+        let now = revision(store);
+        store
+            .settle_attempt(
+                &expected(&now),
+                Settlement {
+                    effect: Effect::None,
+                    used_ms: Some(10),
+                    cleanup_settled: true,
+                    ready_to_verify: true,
+                },
+                id(&role(6)),
+                deadline(),
+            )
+            .unwrap();
+        let now = revision(store);
+        store
+            .record_verification(
+                &expected(&now),
+                &habitat_engine::store::Verification {
+                    verdict: VerificationVerdict::Passed,
+                    subject: Sha256Digest::parse(DIGEST).unwrap(),
+                    evidence: evidence.clone(),
+                    used_ms: Some(20),
+                    cleanup_settled: true,
+                },
+                id(&role(7)),
+                deadline(),
+            )
+            .unwrap();
+        let now = revision(store);
+        let publication = store
+            .prepare_verified_acceptance(
+                &expected(&now),
+                id(&role(8)),
+                Sha256Digest::parse(DIGEST).unwrap(),
+                &evidence,
+                std::slice::from_ref(&evidence),
+                deadline(),
+            )
+            .unwrap();
+        store.accept(&publication, 0, deadline()).unwrap();
+    }
+}
+
+/// B03b pin (integrator ruling): a standing decision whose workspace is retained does not starve
+/// the cleanup tail. `CLEANUP_BATCH + 1` accepted tasks keep their workspaces (startup never
+/// deletes an accepted task's workspace: it may be retained evidence) and are closed as "workspace
+/// retained" by the engine's own no-holder readback; one stopped task created after them, whose
+/// workspace is cleanable, is reached and cleaned within bounded boots.
+#[test]
+fn retained_standing_workspaces_do_not_starve_a_cleanable_one() {
+    let mut r = Rig::admitted();
+    let standing = u32::try_from(startup::CLEANUP_BATCH).unwrap() + 1;
+    accept_tasks(&mut r, standing, 0x28e0);
+    fail_tasks(&mut r, 1);
+    let cleanable = nth(0x28b4, 0);
+    let retained = WorkspaceReadback::Writable { bytes: 4096 };
+    let mut world = (0..standing).fold(World::new(), |world, index| {
+        let attempt = nth(0x28e4, index);
+        world
+            .with_obligations_for(&attempt, &["workspace"])
+            .with_workspace_for(&attempt, retained)
+    });
+    world = world.with_obligations_for(&cleanable, &["workspace"]);
+    let budget = 3;
+    for boot in 0..budget {
+        let pass = r.pass(&mut world);
+        assert!(
+            pass.attempts.is_empty(),
+            "boot {boot}: the tail is not effect-bearing"
+        );
+        if pass.cleanup.is_empty() && pass.cleanup_backlog == 0 {
+            break;
+        }
+        assert!(
+            boot + 1 < budget,
+            "boot {boot}: the tail did not drain within {budget} boots: cleanup={} backlog={}",
+            pass.cleanup.len(),
+            pass.cleanup_backlog
+        );
+    }
+    let cleaned: Vec<&str> = world
+        .calls
+        .iter()
+        .filter_map(|call| match call {
+            Call::Clean { subject, .. } => Some(subject.attempt.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        cleaned,
+        vec![cleanable.as_str()],
+        "the cleanable workspace behind the retained ones was cleaned, once; no accepted task's \
+         retained workspace was deleted"
+    );
 }

@@ -713,56 +713,114 @@ fn task_view_refuses_a_poisoned_store_and_hides_another_principals_task() {
 /// One closure case: what it is, the record written (if any), and whether it closes.
 type ClosureCase = (&'static str, Option<(RecordKind, String)>, bool);
 
-/// B03b: whether a terminal task's settled attempt is closed is decided in ONE place, from the
-/// engine's own readback in a startup record, never from a worker's cleanup claim. Each record
-/// kind and each liveness classification is pinned: only a positively non-live holder with a
-/// complete cleanup readback closes an attempt, and unknown liveness never does.
-#[test]
-fn an_attempt_is_closed_only_by_the_engines_own_complete_readback() {
-    let decided = |cleanup: &str, custody: &str| {
+/// The closure cases, hand-shaped after the engine's writer (`app::startup`); the real-writer
+/// check is `t07_startup`, whose pins close attempts only through records the pass itself wrote.
+fn closure_cases() -> [ClosureCase; 13] {
+    let decided = |decision: &str, cleanup: &str, workspace: &str, custody: &str| {
         format!(
-            r#"{{"kind":"hee3-reconciliation-decided/1","attempt":"{ATTEMPT}","task":"{TASK}","handed":{{"cleanup":{{"cleanup_readback":"{cleanup}"}},"process":{{"custody":"{custody}"}}}}}}"#
+            r#"{{"kind":"hee3-reconciliation-decided/1","attempt":"{ATTEMPT}","task":"{TASK}","decision":{{"decision":"{decision}"}},"handed":{{"cleanup":{{"cleanup_readback":"{cleanup}"}},"workspace":{{"workspace":"{workspace}"}},"process":{{"custody":"{custody}"}}}}}}"#
         )
     };
-    let readback = format!(
-        r#"{{"kind":"hee3-reconciliation-readback/1","attempt":"{ATTEMPT}","effect":"cleanup","readback":{{"cleanup_readback":"complete"}}}}"#
-    );
-    let cases: [ClosureCase; 7] = [
+    let clean =
+        |cleanup: &str, custody: &str| decided("cleanup_candidate", cleanup, "writable", custody);
+    let standing = |decision: &str, workspace: &str, custody: &str| {
+        decided(decision, "partial", workspace, custody)
+    };
+    [
         ("no record", None, false),
         (
             "decided, complete, absent",
-            Some((RecordKind::Decided, decided("complete", "absent"))),
+            Some((RecordKind::Decided, clean("complete", "absent"))),
             true,
         ),
         (
             "decided, complete, pid reused",
-            Some((RecordKind::Decided, decided("complete", "pid_reused"))),
+            Some((RecordKind::Decided, clean("complete", "pid_reused"))),
             true,
         ),
         (
             "decided, complete, unobserved",
-            Some((RecordKind::Decided, decided("complete", "unobserved"))),
+            Some((RecordKind::Decided, clean("complete", "unobserved"))),
             true,
         ),
         (
             "decided, partial",
-            Some((RecordKind::Decided, decided("partial", "absent"))),
+            Some((RecordKind::Decided, clean("partial", "absent"))),
             false,
         ),
         (
             "decided, complete, live",
-            Some((
-                RecordKind::Decided,
-                decided("complete", "live_same_identity"),
-            )),
+            Some((RecordKind::Decided, clean("complete", "live_same_identity"))),
             false,
         ),
         (
             "decided, complete, unreadable",
-            Some((RecordKind::Decided, decided("complete", "unreadable"))),
+            Some((RecordKind::Decided, clean("complete", "unreadable"))),
             false,
         ),
-    ];
+        (
+            "acceptance stands, workspace retained, absent",
+            Some((
+                RecordKind::Decided,
+                standing("acceptance_stands", "writable", "absent"),
+            )),
+            true,
+        ),
+        (
+            "cancellation stands, workspace retained, unobserved",
+            Some((
+                RecordKind::Decided,
+                standing("cancellation_stands", "writable", "unobserved"),
+            )),
+            true,
+        ),
+        (
+            "not a standing decision, workspace retained",
+            Some((
+                RecordKind::Decided,
+                standing("cleanup_candidate", "writable", "absent"),
+            )),
+            false,
+        ),
+        (
+            "acceptance stands, workspace released, obligations remain",
+            Some((
+                RecordKind::Decided,
+                standing("acceptance_stands", "released", "absent"),
+            )),
+            false,
+        ),
+        (
+            "acceptance stands, workspace not read",
+            Some((
+                RecordKind::Decided,
+                standing("acceptance_stands", "not_read", "pid_reused"),
+            )),
+            false,
+        ),
+        (
+            "acceptance stands, workspace retained, live",
+            Some((
+                RecordKind::Decided,
+                standing("acceptance_stands", "writable", "live_same_identity"),
+            )),
+            false,
+        ),
+    ]
+}
+
+/// B03b: whether a terminal task's settled attempt is closed is decided in ONE place, from the
+/// engine's own readback in a startup record, never from a worker's cleanup claim. Each record
+/// kind and each liveness classification is pinned: only a positively non-live holder with a
+/// complete cleanup readback closes an attempt, and unknown liveness never does. The one other
+/// closure, "workspace retained", is pinned conjunct by conjunct: a STANDING decision, a workspace
+/// read back still writable, and the same non-live custody -- each case below drops exactly one.
+#[test]
+fn an_attempt_is_closed_only_by_the_engines_own_complete_readback() {
+    let readback = format!(
+        r#"{{"kind":"hee3-reconciliation-readback/1","attempt":"{ATTEMPT}","effect":"cleanup","readback":{{"cleanup_readback":"complete"}}}}"#
+    );
+    let cases = closure_cases();
     for (case, record, closed) in cases {
         let area = Area::new();
         let mut store = area.open();

@@ -167,7 +167,7 @@ RECOVERY_INPUTS = ("src/recovery.rs", "tests/recovery.rs")
 # reads/writes. The pure policy src/recovery.rs stays pinned by RECOVERY_INPUTS and
 # the inventory reader src/store/recovery.rs by T07_INPUTS; both are read by this
 # battery too, and a file is pinned once by the battery that owns it.
-T07_STARTUP_TARGET_COUNTS = {"t07_startup": 106}
+T07_STARTUP_TARGET_COUNTS = {"t07_startup": 107}
 T07_STARTUP_INPUTS = ("src/app/startup.rs", "src/store/reconciliation.rs", "tests/t07_startup.rs")
 # Reviewed T08 contract battery: 23 controls, no library-unit namespace. The
 # inputs are what tests/t08_contract.rs reads (the offline contract client it
