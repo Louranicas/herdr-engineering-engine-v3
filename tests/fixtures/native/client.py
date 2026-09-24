@@ -1,6 +1,7 @@
 #!/usr/bin/python3
 """Offline finite HTTP-client stand-in. Never opens a network connection."""
 import json
+import os
 from pathlib import Path
 import sys
 import time
@@ -18,6 +19,14 @@ if operation=='generate':
     request=json.loads(raw)
     assert request=={'model':s['model'],'prompt':'Return exactly seven.','stream':False,'raw':True,'truncate':False,'shift':False,'keep_alive':60,'options':{'num_ctx':512,'num_predict':64}}
     (root/'generation-started').write_text('actual fake process reached generation')
+    if 'descendant' in s:
+        # A forked child inherits the writable stdout/stderr pipes and the client's group.
+        child=os.fork()
+        if child==0:
+            if s['descendant']=='survive':time.sleep(30)
+            os._exit(0)
+        (root/'descendant.pid').write_text(str(child))
+        if s['descendant']=='exit':os.waitpid(child,0)
     if s.get('pause'):time.sleep(10)
     if s.get('exit'):sys.exit(s['exit'])
     if s.get('stderr'):sys.stderr.write('fixture diagnostic')

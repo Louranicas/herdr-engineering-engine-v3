@@ -551,3 +551,136 @@ fn cancellation_during_generation_is_unsupported_and_unknown_not_settled() {
     assert!(run.contract.terminal().is_none());
     settled(&run);
 }
+/// WK-04 custody: while a control's client forks a descendant, this test process is the
+/// descendant's subreaper, so an orphan is reaped here by pid rather than adopted by the
+/// quality supervisor (whose `descendants_detected` would otherwise refuse the battery).
+struct Subreaper;
+impl Subreaper {
+    fn claim() -> Result<Self, Box<dyn std::error::Error>> {
+        use rustix::process::{child_subreaper, getpid, set_child_subreaper};
+        set_child_subreaper(Some(getpid()))?;
+        // A successful prctl is not a changed state: read it back.
+        let guard = Self;
+        if child_subreaper()?.is_none() {
+            return Err("PR_SET_CHILD_SUBREAPER did not take effect".into());
+        }
+        Ok(guard)
+    }
+}
+impl Drop for Subreaper {
+    fn drop(&mut self) {
+        let _ = rustix::process::set_child_subreaper(None);
+    }
+}
+fn descendant(root: &Path) -> Result<rustix::process::Pid, Box<dyn std::error::Error>> {
+    let raw: i32 = fs::read_to_string(root.join("descendant.pid"))?
+        .trim()
+        .parse()?;
+    rustix::process::Pid::from_raw(raw).ok_or_else(|| "descendant pid is not positive".into())
+}
+/// Reap an adopted descendant by pid within a hang-guard budget; returns its wait status.
+fn reap(
+    pid: rustix::process::Pid,
+) -> Result<rustix::process::WaitStatus, Box<dyn std::error::Error>> {
+    use rustix::process::{WaitOptions, waitpid};
+    let budget = Duration::from_secs(15);
+    let start = Instant::now();
+    loop {
+        if let Some((_, status)) = waitpid(Some(pid), WaitOptions::NOHANG)? {
+            return Ok(status);
+        }
+        if start.elapsed() >= budget {
+            return Err(format!(
+                "descendant {} not reaped within {:?} (elapsed {:?})",
+                pid.as_raw_nonzero(),
+                budget,
+                start.elapsed()
+            )
+            .into());
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+#[test]
+fn surviving_writable_descendant_refuses_a_valid_frame_and_stays_unknown()
+-> Result<(), Box<dyn std::error::Error>> {
+    use habitat_engine::worker::process::Interruption;
+    let _custody = Subreaper::claim()?;
+    let mut r = Rig::new();
+    r.scenario["descendant"] = json!("survive");
+    let run = r.run();
+    // Reap before any assertion so a red control cannot leak an orphan to the supervisor.
+    let status = reap(descendant(&r.root)?)?;
+    assert!(
+        status.signaled(),
+        "the descendant must be ended by the owner's group cleanup, not exit on its own: {status:?}"
+    );
+    assert_eq!(run.error, Some(Error::Process));
+    assert_eq!(run.provider, ProviderState::Unknown);
+    assert_eq!(run.contract.phase(), Phase::Unknown);
+    assert!(run.contract.terminal().is_none());
+    assert!(run.contract.candidate().is_none());
+    assert_eq!(
+        run.exchanges.len(),
+        4,
+        "no identity readback after the refusal"
+    );
+    let generate = &run.exchanges[3];
+    assert_eq!(generate.operation, "generate");
+    let report = generate.result.as_ref().map_err(|e| format!("{e:?}"))?;
+    // The intended diagnostic: the residual group, not the leader's own exit or its frame.
+    assert_eq!(report.interruption, Some(Interruption::ResidualGroup));
+    assert_eq!(report.exit_code, Some(0));
+    assert!(report.stderr.bytes.is_empty() && !report.stdout.truncated);
+    let frame: Value = serde_json::from_slice(&report.stdout.bytes)?;
+    assert_eq!(
+        frame, r.scenario["generated"],
+        "the leader's complete, valid frame is retained raw but never accepted"
+    );
+    settled(&run);
+    Ok(())
+}
+#[test]
+fn descendant_exiting_before_leader_keeps_completion_and_provenance()
+-> Result<(), Box<dyn std::error::Error>> {
+    let _custody = Subreaper::claim()?;
+    let mut r = Rig::new();
+    r.scenario["descendant"] = json!("exit");
+    let run = r.run();
+    // The benign control must actually have forked, or it proves nothing about the fault one.
+    let pid = descendant(&r.root)?;
+    assert!(
+        matches!(
+            rustix::process::waitpid(Some(pid), rustix::process::WaitOptions::NOHANG),
+            Err(rustix::io::Errno::CHILD)
+        ),
+        "the leader reaps its own descendant; nothing is orphaned to this process"
+    );
+    assert_eq!(run.error, None);
+    assert_eq!(run.provider, ProviderState::ObservedComplete);
+    assert_eq!(run.contract.terminal(), Some(Terminal::Completed));
+    assert_eq!(run.exchanges.len(), 7);
+    let report = run.exchanges[3]
+        .result
+        .as_ref()
+        .map_err(|e| format!("{e:?}"))?;
+    assert_eq!(report.interruption, None);
+    settled(&run);
+    let candidate = run.contract.candidate().ok_or("candidate absent")?;
+    assert_eq!(candidate.text, "seven");
+    assert_eq!(
+        candidate
+            .identity
+            .as_ref()
+            .and_then(|i| i.provider_model.as_deref()),
+        Some("llama3.2:3b")
+    );
+    assert_eq!(
+        candidate
+            .identity
+            .as_ref()
+            .and_then(|i| i.provider_revision.as_deref()),
+        Some(r.profile.manifest.sha256.as_str())
+    );
+    Ok(())
+}
