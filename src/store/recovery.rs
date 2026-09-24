@@ -1,8 +1,10 @@
 //! Bounded readback of durable task obligations, without reconciliation authority.
 
 use super::{
-    Error, Result, Store, TaskHead, read_number, read_optional_number, remaining, schema, task_row,
+    Error, Principal, Result, Store, TaskHead, read_number, read_optional_number, remaining,
+    schema, task_row, visible_head,
 };
+use crate::contracts::rc01::MAX_ATTEMPTS;
 use crate::contracts::{
     Generation, Sha256Digest, UuidV4,
     roster::{Instance, Pin},
@@ -256,6 +258,131 @@ fn flag(row: &Row<'_>, index: usize) -> Result<bool> {
     }
 }
 
+/// One attempt row, validated. The one reader of `attempts`, for the inventory and a task's view.
+fn attempt_row(row: &Row<'_>) -> Result<DurableAttempt> {
+    let r = DurableAttempt {
+        id: row.get(0)?,
+        task: row.get(1)?,
+        generation: row.get(2)?,
+        state: row.get(3)?,
+        effect: row.get(4)?,
+        cleanup: row.get(5)?,
+        used_ms: read_optional_number(row, 6)?,
+    };
+    uuid(&r.id)?;
+    uuid(&r.task)?;
+    revision(&r.generation)?;
+    one_of(&r.state, &["queued", "running", "settled", "unknown"])?;
+    one_of(&r.effect, &["none", "committed", "pending", "unknown"])?;
+    one_of(&r.cleanup, &["none", "pending", "settled", "unknown"])?;
+    if r.state == "settled"
+        && (!matches!(r.effect.as_str(), "none" | "committed")
+            || r.cleanup != "settled"
+            || r.used_ms.is_none())
+    {
+        return Err(Error::Corrupt);
+    }
+    Ok(r)
+}
+
+/// One task as its principal may read it (B03): its head, its attempts and how many of its
+/// delivery obligations are still owed, from one read snapshot, with the ledger's read point.
+/// Scoped by `task_id`, so a ledger's size never decides whether one task can be read.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TaskView {
+    pub head: TaskHead,
+    pub attempts: Vec<DurableAttempt>,
+    pub pending_deliveries: usize,
+    /// The ledger's event high-water when the view was read: the same read point the recovery
+    /// inventory reports, not the sequence at which this task last changed.
+    pub event_high_water: u64,
+}
+
+impl Store {
+    /// Read one task, scoped to `task` and visible to `principal` only.
+    ///
+    /// Refuses a poisoned store, as the recovery inventory does (the B03 unification; the
+    /// admission-recovery readback `get_by_key` keeps its pinned exception). A task holding more
+    /// attempts than `MAX_ATTEMPTS` is refused as `TaskViewBound` with both numbers.
+    /// # Errors
+    /// `UncertainCommit` when poisoned; `NotFound` for a task this principal cannot see;
+    /// `TaskViewBound`; read and rollback failures, a rollback failure poisoning the store.
+    pub fn task_view(
+        &mut self,
+        principal: &Principal,
+        task: UuidV4<'_>,
+        deadline: Instant,
+    ) -> Result<TaskView> {
+        if self.poisoned {
+            return Err(Error::UncertainCommit);
+        }
+        schema::bound(&self.connection, deadline)?;
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Deferred)?;
+        let result = read_view(&tx, principal, task, deadline);
+        match (result, super::roll_back(tx)) {
+            (result, Ok(())) => result,
+            (Err(original), Err(failure)) => {
+                self.poisoned = true;
+                Err(Error::Rollback {
+                    original: Box::new(original),
+                    failure,
+                })
+            }
+            (Ok(_), Err(failure)) => {
+                self.poisoned = true;
+                Err(Error::Sqlite(failure))
+            }
+        }
+    }
+}
+
+fn read_view(
+    db: &Connection,
+    principal: &Principal,
+    task: UuidV4<'_>,
+    deadline: Instant,
+) -> Result<TaskView> {
+    let head = visible_head(db, principal, task)?;
+    let attempts_found = db.query_row(
+        "SELECT count(*) FROM attempts WHERE task_id=?",
+        [task.as_str()],
+        |row| read_number(row, 0),
+    )?;
+    let limit = u64::from(MAX_ATTEMPTS);
+    if attempts_found > limit {
+        return Err(Error::TaskViewBound {
+            attempts: attempts_found,
+            limit,
+        });
+    }
+    remaining(deadline)?;
+    let mut attempts = Vec::new();
+    let mut statement = db.prepare(
+        "SELECT id,task_id,generation,state,effect,cleanup,used_ms FROM attempts WHERE task_id=? ORDER BY id",
+    )?;
+    let mut rows = statement.query([task.as_str()])?;
+    while let Some(row) = rows.next()? {
+        attempts.push(attempt_row(row)?);
+    }
+    let pending = db.query_row(
+        "SELECT count(*) FROM outbox o JOIN events e ON e.id=o.event_id WHERE e.task_id=? AND o.delivered=0",
+        [task.as_str()],
+        |row| read_number(row, 0),
+    )?;
+    let event_high_water =
+        db.query_row("SELECT coalesce(max(sequence),0) FROM events", [], |row| {
+            read_number(row, 0)
+        })?;
+    Ok(TaskView {
+        head,
+        attempts,
+        pending_deliveries: usize::try_from(pending).map_err(|_| Error::Bound)?,
+        event_high_water,
+    })
+}
+
 fn collect(
     db: &Connection,
     epoch: &str,
@@ -287,13 +414,7 @@ fn collect(
         if limit_ms==0 || head.spent_ms.checked_add(head.reserved_work_ms).and_then(|n|n.checked_add(head.reserved_verify_ms)).is_none_or(|n|n>limit_ms) { return Err(Error::Corrupt); }
         Ok(DurableTask{head,principal_uid,principal_role,limit_ms})
     })?;
-    let attempts=budget.read(db,"SELECT id,task_id,generation,state,effect,cleanup,used_ms FROM attempts ORDER BY task_id,id LIMIT ?",|row| {
-        let r=DurableAttempt{id:row.get(0)?,task:row.get(1)?,generation:row.get(2)?,state:row.get(3)?,effect:row.get(4)?,cleanup:row.get(5)?,used_ms:read_optional_number(row,6)?};
-        uuid(&r.id)?;uuid(&r.task)?;revision(&r.generation)?;
-        one_of(&r.state,&["queued","running","settled","unknown"])?;one_of(&r.effect,&["none","committed","pending","unknown"])?;one_of(&r.cleanup,&["none","pending","settled","unknown"])?;
-        if r.state=="settled" && (!matches!(r.effect.as_str(),"none"|"committed") || r.cleanup!="settled" || r.used_ms.is_none()) { return Err(Error::Corrupt); }
-        Ok(r)
-    })?;
+    let attempts=budget.read(db,"SELECT id,task_id,generation,state,effect,cleanup,used_ms FROM attempts ORDER BY task_id,id LIMIT ?",attempt_row)?;
     let verifications=budget.read(db,"SELECT attempt_id,event_id,subject_digest,evidence_digest,verdict,used_ms,cleanup_settled FROM verifications ORDER BY attempt_id LIMIT ?",|row| {
         let r=DurableVerification{attempt:row.get(0)?,event:row.get(1)?,subject:row.get(2)?,evidence:row.get(3)?,verdict:row.get(4)?,used_ms:read_optional_number(row,5)?,cleanup_settled:flag(row,6)?};
         uuid(&r.attempt)?;uuid(&r.event)?;digest(&r.subject)?;digest(&r.evidence)?;one_of(&r.verdict,&["passed","failed","invalid","error","timeout","cancelled"])?;Ok(r)

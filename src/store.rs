@@ -367,6 +367,12 @@ pub enum Error {
     Deadline,
     Locked,
     Custody,
+    /// A task holds more attempts than the ledger's own attempt bound, so no view of it is
+    /// complete: refused with both numbers rather than truncated to the bound (B03).
+    TaskViewBound {
+        attempts: u64,
+        limit: u64,
+    },
     /// A writable open could not take the ledger's write lock: SQLite opened the ledger, or its
     /// WAL index, read-only whatever the flags asked for (see `require_write_lock`).
     NotWritable,
@@ -893,8 +899,7 @@ impl Store {
         deadline: Instant,
     ) -> Result<TaskHead> {
         schema::bound(&self.connection, deadline)?;
-        self.connection.query_row("SELECT id,generation,state,cancellation,accepted_event,criteria_digest,spent_ms,reserved_work_ms,reserved_verify_ms FROM tasks WHERE id=? AND principal_uid=? AND principal_role=?",
-            params![id.as_str(),principal.uid(),principal.role()], task_row).optional()?.ok_or(Error::NotFound)
+        visible_head(&self.connection, principal, id)
     }
 
     /// Reserve a unique attempt before dispatch. Previous uncertain attempts block reuse.
@@ -1303,6 +1308,16 @@ fn task_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TaskHead> {
         reserved_verify_ms: read_number(row, 8)?,
     })
 }
+/// The one door by which a principal sees a task head: `Store::get` and `Store::task_view` both
+/// read through it, so the two cannot disagree about visibility.
+fn visible_head(
+    connection: &Connection,
+    principal: &Principal,
+    id: UuidV4<'_>,
+) -> Result<TaskHead> {
+    connection.query_row("SELECT id,generation,state,cancellation,accepted_event,criteria_digest,spent_ms,reserved_work_ms,reserved_verify_ms FROM tasks WHERE id=? AND principal_uid=? AND principal_role=?",
+        params![id.as_str(),principal.uid(),principal.role()], task_row).optional()?.ok_or(Error::NotFound)
+}
 fn head(connection: &Connection, id: &str) -> Result<TaskHead> {
     connection.query_row("SELECT id,generation,state,cancellation,accepted_event,criteria_digest,spent_ms,reserved_work_ms,reserved_verify_ms FROM tasks WHERE id=?",[id],task_row).optional()?.ok_or(Error::NotFound)
 }
@@ -1432,7 +1447,7 @@ mod staging_tests;
 
 pub use recovery::{
     DurableAcceptance, DurableAttempt, DurableStop, DurableTask, DurableVerification,
-    PendingDelivery, RecoveryInventory, RecoveryLimits,
+    PendingDelivery, RecoveryInventory, RecoveryLimits, TaskView,
 };
 
 pub use reconciliation::{

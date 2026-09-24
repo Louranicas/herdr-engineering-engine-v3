@@ -490,6 +490,54 @@ fn a_submission_reads_back_by_key_and_identity_to_its_principal_only() -> Outcom
     Ok(())
 }
 
+/// task-G09 / APP-08: `task.get` reads one task, not the ledger. With more unrelated tasks than
+/// the whole-ledger recovery inventory will read (its 1,024-row bound), one task still reads back.
+#[test]
+fn a_task_reads_back_in_a_ledger_past_the_inventory_bound() -> Outcome {
+    let scratch = Scratch::new()?;
+    let tasks = ledger(&scratch)?;
+    let operator = Principal::new(1000, "operator").map_err(|error| format!("{error:?}"))?;
+    for index in 0..1_025_u32 {
+        let key = format!("28d10000-0000-4000-8000-{index:012x}");
+        let admitted = serve(
+            &tasks,
+            &operator,
+            &request("task.submit", 7, Some(&key), &json!({"spec": spec()})),
+        )?;
+        assert_eq!(
+            admitted["effect"],
+            json!("committed"),
+            "{index}: {admitted}"
+        );
+    }
+    let target = serve(
+        &tasks,
+        &operator,
+        &request("task.submit", 8, Some(KEY), &json!({"spec": spec()})),
+    )?;
+    let task = target["body"]["task"]["task_id"].clone();
+    let read = serve(
+        &tasks,
+        &operator,
+        &request(
+            "task.get",
+            9,
+            None,
+            &json!({"selector": {"task_id": task}, "evidence": "none"}),
+        ),
+    )?;
+    assert_eq!(
+        (
+            &read["kind"],
+            &read["body"]["task"]["task_id"],
+            &read["body"]["attempts"]
+        ),
+        (&json!("result"), &task, &json!([])),
+        "{read}"
+    );
+    Ok(())
+}
+
 #[test]
 fn without_a_composed_ledger_task_actions_are_unavailable() -> Result<(), Box<dyn Error>> {
     let operator = Principal::new(1000, "operator").map_err(|error| format!("{error:?}"))?;

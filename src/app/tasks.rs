@@ -12,13 +12,14 @@
 //!   read and the write see the same ledger.
 //! * **A lost commit is `effect_unknown`, never `internal`.** An uncertain commit carries the exact
 //!   readback RC03 §6 prescribes: `task.get` by the submit's own idempotency key.
-//! * **`task.get` reads one bounded snapshot.** The head comes through the store's principal-scoped
-//!   door; attempts and undelivered obligations come from the same recovery inventory T07's startup
-//!   reads, bounded by [`START_LIMITS`]. Past the bound the read is refused `resource_exhausted`;
-//!   nothing is silently truncated. The ledger's state vocabularies are the wire's, value for value.
+//! * **`task.get` reads one task.** `Store::task_view` returns the head (through the store's
+//!   principal-scoped door), that task's attempts and its undelivered obligations from one read
+//!   snapshot, scoped by `task_id` (B03): the ledger's size never decides whether a task can be
+//!   read. A task holding more attempts than the ledger's own bound is refused
+//!   `resource_exhausted`; nothing is silently truncated. The ledger's state vocabularies are the
+//!   wire's, value for value.
 
 use crate::actions::control::{TaskRequest, Tasks};
-use crate::app::coordinator::START_LIMITS;
 use crate::app::evidence::fresh_id;
 use crate::contracts::control::{ErrorCode, Fault, Outcome, ResultEffect, Retry, request_sha256};
 use crate::contracts::{Sha256Digest, UuidV4};
@@ -117,6 +118,11 @@ fn store_fault(error: &StoreError) -> Fault {
             ErrorCode::ResourceExhausted,
             Retry::Never,
             "the ledger read exceeds its bound; use a narrower readback",
+        ),
+        StoreError::TaskViewBound { .. } => Fault::of(
+            ErrorCode::ResourceExhausted,
+            Retry::Never,
+            "the task holds more attempts than the ledger's attempt bound",
         ),
         StoreError::Locked | StoreError::InspectionOnly | StoreError::RecoveryRequired => {
             unavailable("the ledger is not open for this operation")
@@ -228,32 +234,31 @@ impl Tasks for StoreTasks {
             .store
             .lock()
             .map_err(|_| unavailable("the ledger's owner panicked"))?;
-        let head = match selector {
-            Selector::Task(id) => {
-                store.get(principal, UuidV4::parse(id).map_err(|_| internal())?, until)
+        // A submit key names a task through the admission record; the view then reads that task.
+        let id = match selector {
+            Selector::Task(id) => id.clone(),
+            Selector::SubmitKey(key) => {
+                store
+                    .get_by_key(
+                        principal,
+                        UuidV4::parse(key).map_err(|_| internal())?,
+                        until,
+                    )
+                    .map_err(|error| store_fault(&error))?
+                    .id
             }
-            Selector::SubmitKey(key) => store.get_by_key(
+        };
+        let view = store
+            .task_view(
                 principal,
-                UuidV4::parse(key).map_err(|_| internal())?,
+                UuidV4::parse(&id).map_err(|_| internal())?,
                 until,
-            ),
-        }
-        .map_err(|error| store_fault(&error))?;
-        let epoch = UuidV4::parse(&self.epoch).map_err(|_| internal())?;
-        let inventory = store
-            .recovery_inventory(epoch, START_LIMITS, until)
+            )
             .map_err(|error| store_fault(&error))?;
         drop(store);
-        let attempts: Vec<_> = inventory
-            .attempts
-            .iter()
-            .filter(|attempt| attempt.task == head.id)
-            .collect();
-        let deliveries = inventory
-            .pending_delivery
-            .iter()
-            .filter(|delivery| delivery.task.as_deref() == Some(head.id.as_str()))
-            .count();
+        let head = &view.head;
+        let attempts: Vec<_> = view.attempts.iter().collect();
+        let deliveries = view.pending_deliveries;
         let current = attempts
             .iter()
             .find(|attempt| matches!(attempt.state.as_str(), "queued" | "running"))
@@ -278,7 +283,7 @@ impl Tasks for StoreTasks {
             observed_generation: Some(head.generation.clone()),
             readback: None,
             body: json!({
-                "task": head_record(&head, current, obligations)?,
+                "task": head_record(head, current, obligations)?,
                 "criteria_sha256": head.criteria,
                 "attempts": attempts.iter().map(|attempt| json!({
                     "attempt_id": attempt.id,
@@ -289,7 +294,7 @@ impl Tasks for StoreTasks {
                 "cleanup": cleanup,
                 "delivery": delivery,
                 "evidence": [],
-                "cursor": self.cursor(inventory.event_high_water, &head.id, now_unix_ms),
+                "cursor": self.cursor(view.event_high_water, &head.id, now_unix_ms),
             }),
         })
     }

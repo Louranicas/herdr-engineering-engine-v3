@@ -567,6 +567,149 @@ fn failed_commit_is_uncertain_and_poisons_later_writes() {
     assert_eq!(count(&area, "tasks"), 0, "the hook rolled the commit back");
 }
 
+/// B03: a task's view reads that task alone. Another task's attempt is not in it, and the read
+/// point is the ledger's event high-water, the same point the recovery inventory reports.
+#[test]
+fn task_view_reads_one_task_and_the_ledger_read_point() {
+    let area = Area::new();
+    let mut store = area.open();
+    running(&mut store);
+    let owner = principal();
+    let mut other = submission(&owner);
+    other.key = uuid("00000000-0000-4000-8000-0000000000e1");
+    other.task = uuid(OTHER);
+    other.event = uuid("00000000-0000-4000-8000-0000000000e2");
+    other.request_bytes = b"another request";
+    store.submit(other, deadline()).unwrap();
+    store
+        .begin_attempt(
+            uuid(OTHER),
+            revision(1),
+            uuid("00000000-0000-4000-8000-0000000000e3"),
+            uuid("00000000-0000-4000-8000-0000000000e4"),
+            deadline(),
+        )
+        .unwrap();
+    let view = store.task_view(&owner, uuid(TASK), deadline()).unwrap();
+    assert_eq!(view.head, head_of(&store));
+    assert_eq!(
+        view.attempts
+            .iter()
+            .map(|attempt| (attempt.id.as_str(), attempt.task.as_str()))
+            .collect::<Vec<_>>(),
+        [(ATTEMPT, TASK)]
+    );
+    assert_eq!(view.pending_deliveries, 0);
+    let inventory = store
+        .recovery_inventory(
+            uuid(EPOCH),
+            crate::app::coordinator::START_LIMITS,
+            deadline(),
+        )
+        .unwrap();
+    assert_eq!(view.event_high_water, inventory.event_high_water);
+    assert_eq!(
+        view.event_high_water, 4,
+        "two admissions and two attempt starts"
+    );
+}
+
+/// B03: the view counts this task's delivery obligations that are still owed, and no others:
+/// delivered rows leave the count; the count is read from the ledger, never assumed.
+#[test]
+fn task_view_counts_only_undelivered_obligations_of_its_task() {
+    let area = Area::new();
+    let mut store = area.open();
+    accepted(&mut store);
+    let owed: i64 = area
+        .inspect()
+        .query_row(
+            "SELECT count(*) FROM outbox o JOIN events e ON e.id=o.event_id WHERE e.task_id=?",
+            [TASK],
+            |row| row.get(0),
+        )
+        .unwrap();
+    // Measured: the fixture's acceptance owes this task one delivery.
+    assert_eq!(owed, 1);
+    let view = store
+        .task_view(&principal(), uuid(TASK), deadline())
+        .unwrap();
+    assert_eq!(view.pending_deliveries, usize::try_from(owed).unwrap());
+    drop(store);
+    // One delivered: the view's count falls by exactly one.
+    area.edit_closed(
+        "UPDATE outbox SET delivered=1 WHERE rowid=(SELECT min(o.rowid) FROM outbox o JOIN events e ON e.id=o.event_id);",
+    );
+    let mut store = area.reopen();
+    let view = store
+        .task_view(&principal(), uuid(TASK), deadline())
+        .unwrap();
+    assert_eq!(view.pending_deliveries, usize::try_from(owed - 1).unwrap());
+}
+
+/// B03: a task holding more attempts than the ledger's own attempt bound is not a task the view
+/// can describe; it is refused by name with both numbers, never truncated to the bound.
+#[test]
+fn task_view_refuses_more_attempts_than_the_bound_with_both_numbers() {
+    let area = Area::new();
+    let mut store = area.open();
+    admit(&mut store);
+    drop(store);
+    area.edit_closed(&format!(
+        "INSERT INTO attempts VALUES \
+         ('00000000-0000-4000-8000-0000000000f1','{TASK}','1','settled','none','settled',0),\
+         ('00000000-0000-4000-8000-0000000000f2','{TASK}','2','settled','none','settled',0),\
+         ('00000000-0000-4000-8000-0000000000f3','{TASK}','3','settled','none','settled',0),\
+         ('00000000-0000-4000-8000-0000000000f4','{TASK}','4','settled','none','settled',0);"
+    ));
+    let mut store = area.reopen();
+    let refused = store.task_view(&principal(), uuid(TASK), deadline());
+    assert!(
+        matches!(
+            refused,
+            Err(Error::TaskViewBound {
+                attempts: 4,
+                limit: 3
+            })
+        ),
+        "{refused:?}"
+    );
+}
+
+/// B03 (the unification ruled 2026-09-25): the view refuses a poisoned store, as the recovery
+/// inventory does; `get_by_key` keeps its pinned exception for the admission-recovery readback.
+#[test]
+fn task_view_refuses_a_poisoned_store_and_hides_another_principals_task() {
+    let area = Area::new();
+    let mut store = area.open();
+    admit(&mut store);
+    let stranger = Principal::new(1001, "operator").unwrap();
+    assert!(matches!(
+        store.task_view(&stranger, uuid(TASK), deadline()),
+        Err(Error::NotFound)
+    ));
+    store.fault = Some(CutPoint::AfterCommit);
+    let owner = principal();
+    let mut other = submission(&owner);
+    other.key = uuid("00000000-0000-4000-8000-0000000000e1");
+    other.task = uuid(OTHER);
+    other.event = uuid("00000000-0000-4000-8000-0000000000e2");
+    other.request_bytes = b"another request";
+    assert!(matches!(
+        store.submit(other, deadline()),
+        Err(Error::UncertainCommit)
+    ));
+    assert!(matches!(
+        store.task_view(&owner, uuid(TASK), deadline()),
+        Err(Error::UncertainCommit)
+    ));
+    assert_eq!(
+        store.get_by_key(&owner, uuid(KEY), deadline()).unwrap().id,
+        TASK,
+        "the pinned admission-recovery exception"
+    );
+}
+
 /// A transaction SQLite already rolled back (autocommit restored) needs no second rollback; an
 /// open one is rolled back for real.
 #[test]
