@@ -152,6 +152,16 @@ Executed through the engine by `socket::a_lost_reply_is_reconciled_by_key_and_th
 whose losses are the consumer's (a reply discarded after the engine answered; a request
 recorded but never sent), not a cut socket.
 
+## Version switching (WF-16)
+
+Publishing v2 does not move a run already under way. A record is bound to the version it was
+written under, so the active v1 run resumes on v1 and v2 refuses v1's record as
+`stale_procedure_version` — at `resume()`, `join()` and `reconcile_argv()` alike. Because the
+version is part of every step key, a v2 step derives a different key from its v1 namesake: a v2
+dispatch can neither replay nor collide with an effect v1 admitted, and a readback answering a
+v2 key cannot settle a v1 step (`identity_mismatch`). Pinned by `VersionSwitch` in
+`tests/procedure_schema.py`; a plant that drops the version from the key turns it red.
+
 ## Scope
 
 Describes procedures, and builds the request that would start a step and reads the reply the

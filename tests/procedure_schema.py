@@ -773,6 +773,39 @@ class Reconcile(unittest.TestCase):
         self.assertIn("ghost is not a step", detail)
 
 
+class VersionSwitch(unittest.TestCase):
+    """WF-16: v2 published while a v1 run is active. The v1 run resumes on v1; v2 cannot resume
+    v1's record; and v2's steps derive other keys, so v2 never replays or collides with an
+    effect v1 admitted."""
+
+    def test_an_active_v1_run_resumes_on_v1_after_v2_is_published(self):
+        v1 = submit_and_read_back()
+        v2 = copy.deepcopy(v1)
+        v2["procedure_version"] = 2
+        running = VP.observe(v1, record({}, "submit-and-read-back"), "submit",
+                             submitted(VP.step_key(v1, "submit", None)))
+        self.assertEqual(VP.resume(v1, running), ["verify"])
+        # The v1 read step reads back v1's admission, by v1's key.
+        self.assertIn(VP.step_key(v1, "submit", None), VP.dispatch(v1, running, "verify", HELD)[1])
+        detail = Refusals.refused(self, v2, "stale_procedure_version", committed=running)
+        self.assertIn("committed under version 1; the procedure is version 2", detail)
+        for step_id in ("submit", "verify"):
+            with self.subTest(step=step_id):
+                self.assertNotEqual(VP.step_key(v1, step_id, None), VP.step_key(v2, step_id, None))
+
+    def test_a_v2_readback_does_not_settle_a_v1_step(self):
+        v1 = submit_and_read_back()
+        v2 = copy.deepcopy(v1)
+        v2["procedure_version"] = 2
+        lost = VP.unanswered(v1, record({}, "submit-and-read-back"), "submit")
+        v2_answer = submitted(VP.step_key(v2, "submit", None))
+        detail = Refusals.refused(self, v1, "identity_mismatch", call=lambda: VP.observe(
+            v1, record({}, "submit-and-read-back"), "submit", v2_answer))
+        self.assertIn("answers key", detail)
+        Refusals.refused(self, v2, "stale_procedure_version",
+                         call=lambda: VP.reconcile_argv(v2, lost, "submit"))
+
+
 class SiteCoverage(unittest.TestCase):
     def test_every_refusal_site_has_a_case(self):
         # The denominator comes from the validator's syntax tree; the numerator is what the
@@ -833,7 +866,7 @@ if __name__ == "__main__":
     suite = unittest.TestSuite(
         loader.loadTestsFromTestCase(cls)
         for cls in (SchemaShape, Refusals, ResumeAndJoin, CommandLine, Dispatch, Reconcile,
-                    SiteCoverage)
+                    VersionSwitch, SiteCoverage)
     )
     result = unittest.TextTestRunner(verbosity=1).run(suite)
     print(f"procedure tests: run={result.testsRun} failures={len(result.failures)} "
