@@ -48,8 +48,12 @@ def wrapper_environment(**overrides):
     are here -- values that grant nothing -- and `Envelope` replaces or blanks them where
     authority is the subject. Five call sites once built this by hand; the authority reached
     one of them.
+
+    HOME is pinned to a value unlike its own spelling: the expansion cases assert that `${HOME}`
+    arrives literally, and under a caller with HOME unset (the repo gate) an expanding wrapper
+    would leave it unchanged too, so those cases would pin nothing there.
     """
-    environment = dict(os.environ, HEE3_CATALOGUE=str(CATALOGUE), LC_ALL="C",
+    environment = dict(os.environ, HEE3_CATALOGUE=str(CATALOGUE), LC_ALL="C", HOME="/hee3-test-home",
                        HEE3_GRANT_ID=TEST_GRANT, HEE3_SCOPE_SHA256=TEST_SCOPE)
     environment.pop("HEE3_PRODUCER", None)
     environment.pop("HEE3_TIMEOUT_MS", None)
