@@ -368,6 +368,12 @@ def dispatch(procedure, committed, step_id, held, spec=None, parent=None):
     refuse("undispatchable_action", f"{step_id}: {action!r} has no dispatch arm")
 
 
+def _require_step(procedure, step_id):
+    """One door for "is this a step of this procedure", for every function handed a step id."""
+    if step_id not in {s["step_id"] for s in procedure["steps"]}:
+        refuse("identity_mismatch", f"{step_id} is not a step of {procedure['procedure_id']!r}")
+
+
 def observe(procedure, committed, step_id, reply, parent=None):
     """A new committed record with `step_id`'s state read from the engine's `reply` (WF-11).
 
@@ -377,8 +383,7 @@ def observe(procedure, committed, step_id, reply, parent=None):
     given is not changed.
     """
     steps = dict(_committed_steps(procedure, committed, set(validate(procedure))))
-    if step_id not in {s["step_id"] for s in procedure["steps"]}:
-        refuse("identity_mismatch", f"{step_id} is not a step of {procedure['procedure_id']!r}")
+    _require_step(procedure, step_id)
     if step_id in steps:
         refuse("not_ready", f"{step_id} is already committed as {steps[step_id]!r}")
     if not isinstance(reply, dict) or reply.get("kind") not in ("result", "error"):
@@ -400,6 +405,71 @@ def observe(procedure, committed, step_id, reply, parent=None):
         steps[step_id] = "effect_unknown"
     else:
         steps[step_id] = "failed"
+    return {"procedure_id": procedure["procedure_id"],
+            "procedure_version": procedure["procedure_version"], "steps": steps}
+
+
+def _unknown_step(procedure, committed, step_id):
+    """The committed steps, once `step_id` is shown to be a step of this procedure left
+    `effect_unknown`: the only state a reconciliation may replace."""
+    steps = dict(_committed_steps(procedure, committed, set(validate(procedure))))
+    _require_step(procedure, step_id)
+    if steps.get(step_id) != "effect_unknown":
+        refuse("not_ready", f"{step_id} is {steps.get(step_id)!r}, not effect_unknown")
+    return steps
+
+
+def unanswered(procedure, committed, step_id):
+    """A new record in which `step_id`, sent and never answered, is `effect_unknown` (WF-14).
+
+    A request whose reply was lost may have had its effect; the record says exactly that, so
+    `resume()` will not send it again until `reconcile()` settles it.
+    """
+    steps = dict(_committed_steps(procedure, committed, set(validate(procedure))))
+    _require_step(procedure, step_id)
+    if step_id in steps:
+        refuse("not_ready", f"{step_id} is already committed as {steps[step_id]!r}")
+    steps[step_id] = "effect_unknown"
+    return {"procedure_id": procedure["procedure_id"],
+            "procedure_version": procedure["procedure_version"], "steps": steps}
+
+
+def reconcile_argv(procedure, committed, step_id, parent=None):
+    """The readback that settles an `effect_unknown` step: `task.get` by the step's own derived
+    key, a value the caller held before it sent anything (RC03 section 6)."""
+    _unknown_step(procedure, committed, step_id)
+    action = {s["step_id"]: s for s in procedure["steps"]}[step_id]["action"]
+    if action != "task.submit":
+        refuse("undispatchable_action", f"{step_id}: no readback settles {action!r}")
+    selector = {"source_action": "task.submit",
+                "idempotency_key": step_key(procedure, step_id, parent)}
+    return ["task.get", "selector:=" + _compact(selector), "evidence=none"]
+
+
+def reconcile(procedure, committed, step_id, reply):
+    """A new record with `step_id` settled by the engine's answer to `reconcile_argv()` (WF-14).
+
+    Judged on that answer alone, never on elapsed time. The admission found: `done`. The key
+    not found: the step is removed, so `resume()` offers it again and a re-dispatch sends the
+    same derived key -- the ledger holds every key it admitted for the life of its generation
+    (v1 never removes an `operations` row), so its `not_found` means the request never landed
+    there. Anything else answers nothing, and the step stays `effect_unknown`. The caller keeps
+    the reply that licensed the change; this module returns only the record. A readback served
+    by a different ledger generation (after a restore) could answer `not_found` for a key the
+    earlier generation held; nothing in the reply names the generation that answered, so that
+    residual is the caller's to rule out.
+    """
+    steps = _unknown_step(procedure, committed, step_id)
+    if not isinstance(reply, dict) or reply.get("kind") not in ("result", "error"):
+        refuse("malformed_reply", f"{step_id}: the readback is not a control result or error")
+    if reply["kind"] == "result":
+        if not isinstance(reply.get("body"), dict):
+            refuse("malformed_reply", f"{step_id}: a readback result carries no body")
+        steps[step_id] = "done"
+    elif not isinstance(reply.get("code"), str):
+        refuse("malformed_reply", f"{step_id}: a readback error carries no code")
+    elif reply["code"] == "not_found":
+        del steps[step_id]
     return {"procedure_id": procedure["procedure_id"],
             "procedure_version": procedure["procedure_version"], "steps": steps}
 

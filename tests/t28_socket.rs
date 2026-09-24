@@ -1132,6 +1132,7 @@ fn compose(
     skill: &Path,
     procedure: &Path,
     held: &str,
+    injected: &[&str],
 ) -> Result<Output, Box<dyn Error>> {
     let mut spec = super::tasks::spec();
     spec["intent"] = json!("keep spaces, 'single', \"double\", $(touch x); and `ticks` as data");
@@ -1143,6 +1144,7 @@ fn compose(
         .arg(procedure)
         .arg(held)
         .arg(spec.to_string())
+        .args(injected)
         .env("XDG_RUNTIME_DIR", &world.run)
         .env("HEE3_PRODUCER", env!("CARGO_BIN_EXE_habitat-engine"))
         .env("HEE3_GRANT_ID", GRANT)
@@ -1163,7 +1165,7 @@ fn a_skill_bounded_procedure_runs_through_the_engine_and_closes_its_join() -> Ou
     let procedure = scratch.0.join("procedure.json");
     procedure_file(&procedure, false)?;
 
-    let composed = compose(&world, &skill, &procedure, "task.submit,task.get")?;
+    let composed = compose(&world, &skill, &procedure, "task.submit,task.get", &[])?;
     let document: Value = reply_of(&composed)?;
     let submit_key = step_key("submit-and-read-back", 1, "submit")?;
     let task = document["task_ids"]["submit"].clone();
@@ -1179,12 +1181,116 @@ fn a_skill_bounded_procedure_runs_through_the_engine_and_closes_its_join() -> Ou
                        "steps": {"submit": "done", "verify": "done"}},
             "verified": true, "disposition": "completion_candidate", "reasons": [],
             "keys": {"submit": submit_key, "verify": step_key("submit-and-read-back", 1, "verify")?},
+            "calls": [["submit", "task.submit"], ["verify", "task.get"]], "licences": {},
             "task_ids": {"submit": task, "verify": task},
         })
     );
     // The ledger, read back under this test's own derivation of the key.
     let found = get_through(&world.run, &world.scope, &key_selector(&submit_key))?;
     assert_eq!(found["body"]["task"]["task_id"], task);
+    Ok(())
+}
+
+/// WF-14, through the engine: a step whose reply never reached the composition is settled by a
+/// readback under its own key before anything moves on, and the effect is requested once.
+///
+/// The honest limit: the loss is the consumer's, not the wire's. `--lose` sends the request and,
+/// after the engine has committed and answered, DISCARDS the reply; `--unsent` records the step
+/// as sent without sending it. Both leave the composition exactly where a lost reply or a lost
+/// request would, which is what reconciliation has to decide between, but no socket is cut.
+#[test]
+fn a_lost_reply_is_reconciled_by_key_and_the_effect_is_requested_once() -> Outcome {
+    let world = World::granting(&["task"], &["read", "durable admission"])?;
+    commission(&world.home)?;
+    let _engine = Engine::start(&world.run, &world.home)?;
+    let scratch = Scratch::new()?;
+    let skill = scratch.private("skill")?;
+    skill_package(&skill)?;
+    let procedure = scratch.0.join("procedure.json");
+    procedure_file(&procedure, false)?;
+    let submit_key = step_key("submit-and-read-back", 1, "submit")?;
+    let stamps = [
+        "/request_id",
+        "/request_sha256",
+        "/body/cursor/issued_unix_ms",
+        "/body/cursor/expires_unix_ms",
+    ];
+
+    // The reply is lost after the commit: the readback finds the admission, and it settles.
+    let lost = reply_of(&compose(
+        &world,
+        &skill,
+        &procedure,
+        "task.submit,task.get",
+        &["--lose", "submit"],
+    )?)?;
+    let task = lost["task_ids"]["submit"].clone();
+    assert_eq!(
+        (
+            &lost["record"]["steps"],
+            &lost["disposition"],
+            &lost["calls"]
+        ),
+        (
+            &json!({"submit": "done", "verify": "done"}),
+            &json!("completion_candidate"),
+            &json!([
+                ["submit", "task.submit"],
+                ["submit", "task.get"],
+                ["verify", "task.get"]
+            ])
+        ),
+        "{lost}"
+    );
+    // The reply that licensed `done`, whole but for what the receiver stamps: the ledger's own
+    // answer to the key the composition held before it sent anything.
+    let licence = &lost["licences"]["submit"];
+    let found = get_through(&world.run, &world.scope, &key_selector(&submit_key))?;
+    assert_eq!(
+        without(licence.clone(), &stamps)?,
+        without(found.clone(), &stamps)?
+    );
+    assert_eq!(
+        (&licence["kind"], &licence["body"]["task"]["task_id"]),
+        (&json!("result"), &task)
+    );
+
+    // The request is lost before it lands: the readback finds nothing, which releases the step
+    // to run again under the same key; `calls` shows the submit sent once. A fresh ledger, so the
+    // first run's admission under this same key cannot answer.
+    let fresh = World::granting(&["task"], &["read", "durable admission"])?;
+    commission(&fresh.home)?;
+    let _second = Engine::start(&fresh.run, &fresh.home)?;
+    let unsent = reply_of(&compose(
+        &fresh,
+        &skill,
+        &procedure,
+        "task.submit,task.get",
+        &["--unsent", "submit"],
+    )?)?;
+    assert_eq!(
+        (
+            &unsent["record"]["steps"],
+            &unsent["disposition"],
+            &unsent["calls"]
+        ),
+        (
+            &json!({"submit": "done", "verify": "done"}),
+            &json!("completion_candidate"),
+            &json!([
+                ["submit", "task.get"],
+                ["submit", "task.submit"],
+                ["verify", "task.get"]
+            ])
+        ),
+        "{unsent}"
+    );
+    let released = &unsent["licences"]["submit"];
+    assert_eq!(
+        (&released["kind"], &released["code"], &released["effect"]),
+        (&json!("error"), &json!("not_found"), &json!("none")),
+        "{released}"
+    );
     Ok(())
 }
 
@@ -1219,7 +1325,7 @@ fn a_composition_outside_its_skills_actions_is_refused_before_any_request() -> O
                    "detail": "probe: 'health' is not among the actions the caller holds"}),
         ),
     ] {
-        let composed = compose(&world, &skill, procedure, held)?;
+        let composed = compose(&world, &skill, procedure, held, &[])?;
         assert_eq!(composed.status.code(), Some(1), "{case}");
         assert_eq!(
             serde_json::from_slice::<Value>(&composed.stdout)?,

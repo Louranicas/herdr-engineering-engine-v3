@@ -696,6 +696,83 @@ class Dispatch(unittest.TestCase):
         self.assertEqual(given, record({}, "submit-and-read-back"))
 
 
+class Reconcile(unittest.TestCase):
+    """WF-14: a reply lost after its effect is `effect_unknown`; a readback by the step's own key
+    settles it, and only a settled step lets the procedure move on."""
+
+    def lost(self):
+        body = submit_and_read_back()
+        return body, VP.unanswered(body, record({}, "submit-and-read-back"), "submit")
+
+    def test_a_request_with_no_reply_is_effect_unknown_and_resume_stops(self):
+        body, after = self.lost()
+        self.assertEqual(after, record({"submit": "effect_unknown"}, "submit-and-read-back"))
+        Refusals.refused(self, body, "unreconciled_effect", committed=after)
+
+    def test_the_readback_that_settles_it_is_by_the_steps_own_key(self):
+        body, after = self.lost()
+        selector = {"idempotency_key": VP.step_key(body, "submit", None),
+                    "source_action": "task.submit"}
+        self.assertEqual(VP.reconcile_argv(body, after, "submit"),
+                         ["task.get", "selector:=" + json.dumps(selector, sort_keys=True,
+                                                                separators=(",", ":")),
+                          "evidence=none"])
+
+    def test_a_found_admission_settles_the_step_done(self):
+        body, after = self.lost()
+        found = {"kind": "result", "effect": "none",
+                 "body": {"task": {"task_id": "28f00000-0000-4000-8000-000000000001"}}}
+        settled = VP.reconcile(body, after, "submit", found)
+        self.assertEqual(settled, record({"submit": "done"}, "submit-and-read-back"))
+        self.assertEqual(VP.resume(body, settled), ["verify"])
+
+    def test_an_absent_admission_releases_the_step_to_run_again_under_the_same_key(self):
+        body, after = self.lost()
+        absent = {"kind": "error", "code": "not_found", "effect": "none", "readback": None}
+        released = VP.reconcile(body, after, "submit", absent)
+        self.assertEqual(released, record({}, "submit-and-read-back"))
+        self.assertEqual(VP.resume(body, released), ["submit"])
+
+    def test_a_readback_that_cannot_answer_leaves_the_step_unknown(self):
+        body, after = self.lost()
+        busy = {"kind": "error", "code": "unavailable", "effect": "none", "readback": None}
+        self.assertEqual(VP.reconcile(body, after, "submit", busy), after)
+
+    def test_only_an_unknown_step_is_reconciled(self):
+        body = submit_and_read_back()
+        done = record({"submit": "done"}, "submit-and-read-back")
+        for call in (lambda: VP.reconcile_argv(body, done, "submit"),
+                     lambda: VP.reconcile(body, done, "submit", {"kind": "result", "body": {}})):
+            detail = Refusals.refused(self, body, "not_ready", call=call)
+            self.assertIn("is 'done', not effect_unknown", detail)
+
+    def test_only_a_submit_step_has_a_readback_to_settle_it(self):
+        body = procedure([step("probe", action="health")])
+        unknown = record({"probe": "effect_unknown"})
+        detail = Refusals.refused(self, body, "undispatchable_action",
+                                  call=lambda: VP.reconcile_argv(body, unknown, "probe"))
+        self.assertIn("no readback settles 'health'", detail)
+
+    def test_a_readback_that_is_not_a_control_record_is_refused(self):
+        body, after = self.lost()
+        for reply in ([], {"kind": "error"}, {"kind": "result"}):
+            with self.subTest(reply=reply):
+                Refusals.refused(self, body, "malformed_reply",
+                                 call=lambda: VP.reconcile(body, after, "submit", reply))
+
+    def test_an_answered_step_is_not_marked_unanswered(self):
+        body = submit_and_read_back()
+        detail = Refusals.refused(self, body, "not_ready", call=lambda: VP.unanswered(
+            body, record({"submit": "done"}, "submit-and-read-back"), "submit"))
+        self.assertIn("already committed", detail)
+
+    def test_an_unknown_step_name_is_refused(self):
+        body = submit_and_read_back()
+        detail = Refusals.refused(self, body, "identity_mismatch", call=lambda: VP.unanswered(
+            body, record({}, "submit-and-read-back"), "ghost"))
+        self.assertIn("ghost is not a step", detail)
+
+
 class SiteCoverage(unittest.TestCase):
     def test_every_refusal_site_has_a_case(self):
         # The denominator comes from the validator's syntax tree; the numerator is what the
@@ -755,7 +832,8 @@ if __name__ == "__main__":
     loader.sortTestMethodsUsing = None
     suite = unittest.TestSuite(
         loader.loadTestsFromTestCase(cls)
-        for cls in (SchemaShape, Refusals, ResumeAndJoin, CommandLine, Dispatch, SiteCoverage)
+        for cls in (SchemaShape, Refusals, ResumeAndJoin, CommandLine, Dispatch, Reconcile,
+                    SiteCoverage)
     )
     result = unittest.TextTestRunner(verbosity=1).run(suite)
     print(f"procedure tests: run={result.testsRun} failures={len(result.failures)} "

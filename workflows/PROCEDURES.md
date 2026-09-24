@@ -96,7 +96,10 @@ It read `sites=16 killed=16 survived=0` until the shape, version-binding and cri
 refusals landed; it then read `sites=22 killed=22 survived=0`. WF-11's `dispatch()` and
 `observe()` (2026-09-25) added eleven sites; the first sweep over them read
 `sites=33 killed=32 survived=1` -- `observe()` given a step the procedure lacks had no case --
-and it now reads `sites=33 killed=33 survived=0`.
+and it then read `sites=33 killed=33 survived=0`. WF-14's `unanswered()` and `reconcile()`
+first read `sites=41 killed=40 survived=1`: the "is this a step of this procedure" check had
+been written three times, so neutering one let another rule answer under a different name.
+It is now one helper, and the sweep reads `sites=39 killed=39 survived=0`.
 
 The sweep counts any failing run as a kill. The rules added with those refusals were also
 planted by hand, each counted killed only when its NAMED test failed (21 of 21). That harness
@@ -132,6 +135,22 @@ from the engine's reply: a result is `done`, `effect_unknown` stays `effect_unkn
 another step's key is `identity_mismatch`; anything that is not a control record is
 `malformed_reply`. The loop that alternates the two belongs to the caller — the executed T29
 composition is `tests/fixtures/t29/compose.py`, run against the engine by `tests/t28_socket.rs`.
+
+## Reconciliation (WF-14)
+
+A request whose reply never arrived may have had its effect. `unanswered(procedure, committed,
+step_id)` records exactly that — `effect_unknown` — and `resume()` then refuses to go on.
+`reconcile_argv()` is the readback that settles it: `task.get` by the step's own derived key, a
+value the caller held before it sent anything. `reconcile(procedure, committed, step_id,
+reply)` is judged on that answer alone, never on elapsed time: the admission found is `done`;
+`not_found` removes the step, so `resume()` offers it again and a re-dispatch sends the same key
+(v1's ledger never removes an admitted key, so `not_found` means the request never landed in
+that generation); any other answer leaves the step `effect_unknown`. The caller keeps the reply
+that licensed the change. Stated residual: nothing in a readback names the ledger generation
+that answered it, so a `not_found` from a restored generation is the caller's to rule out.
+Executed through the engine by `socket::a_lost_reply_is_reconciled_by_key_and_the_effect_is_requested_once`,
+whose losses are the consumer's (a reply discarded after the engine answered; a request
+recorded but never sent), not a cut socket.
 
 ## Scope
 
