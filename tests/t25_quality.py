@@ -52,9 +52,16 @@ class QualityIntegrationControls(unittest.TestCase):
     def test_gate_build_parallelism_is_the_operator_decision_and_has_one_owner(self):
         # Operator decision 2026-09-24: 8 (the host's physical cores), raised from 2.
         self.assertEqual(quality.BUILD_JOBS, "8")
+        # check-quality and check-store-mutations are always gate subjects; check-pi-mutations is
+        # copied only with its battery, so it is checked wherever it is present.
+        examined = []
         for tool in ("tools/check-quality", "tools/check-store-mutations", "tools/check-pi-mutations"):
+            if tool == "tools/check-pi-mutations" and not (ROOT / tool).is_file():
+                continue
             text = (ROOT / tool).read_text()
             self.assertNotIn('"CARGO_BUILD_JOBS": "', text, tool + " restates the build parallelism")
+            examined.append(tool)
+        self.assertGreaterEqual(len(examined), 2, examined)
 
     def test_reviewed_engineering_clock_preserves_other_custody_bounds(self):
         # Independent declared policy for the expanded full regression, not an
