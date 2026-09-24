@@ -11,7 +11,7 @@ use habitat_engine::worker::process::Interruption;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::fs::{self, DirBuilder};
-use std::os::unix::fs::{DirBuilderExt, MetadataExt};
+use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
@@ -553,4 +553,38 @@ fn invalid_import_cannot_replace_actual_return_authority() {
             .is_err()
     );
     assert_eq!(published(&mut f, &mut r), Health::Useful);
+}
+/// The working directory is caller-chosen, so the I/O shell's handing of its
+/// facts to the path policy is reachable by argument: a group-readable
+/// directory and a symlink to an owner-only one both refuse before launch.
+#[test]
+fn unsafe_working_directory_never_launches() -> Result<(), Box<dyn std::error::Error>> {
+    let mut f = Fixture::new(Class::OneShot);
+    let base = recipe(&mut f, "/usr/bin/printf", &["useful\n"]);
+    let shared = f.root.path.join("group-readable");
+    DirBuilder::new().mode(0o750).create(&shared)?;
+    fs::set_permissions(&shared, fs::Permissions::from_mode(0o750))?;
+    let owner_only = f.root.path.join("owner-only");
+    DirBuilder::new().mode(0o700).create(&owner_only)?;
+    let linked = f.root.path.join("linked");
+    std::os::unix::fs::symlink(&owner_only, &linked)?;
+    for directory in [shared, linked] {
+        let r = execute(
+            &f,
+            &LocalRecipe {
+                directory: directory.clone(),
+                ..base.clone()
+            },
+            &AtomicBool::new(false),
+            60,
+        );
+        assert!(r.process.is_none(), "{} launched", directory.display());
+        assert!(
+            matches!(r.error, Some(LocalProbeError::Recipe)),
+            "{}: {:?}",
+            directory.display(),
+            r.error
+        );
+    }
+    Ok(())
 }

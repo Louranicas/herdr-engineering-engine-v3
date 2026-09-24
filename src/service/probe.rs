@@ -224,9 +224,15 @@ fn same_admission(left: &RosterHeadV1, right: &RosterHeadV1) -> bool {
         && left.disabled == right.disabled
 }
 fn body_digest(raw: &[u8]) -> String {
+    sha256_text(&Sha256::digest(raw))
+}
+/// The module's one `sha256:` + lowercase-hex rendering of a finished SHA-256
+/// digest. `local_probe` renders executable digests through it, so the
+/// published-vector test below pins both call sites.
+pub(super) fn sha256_text(digest: &[u8]) -> String {
     let mut value = String::from("sha256:");
     let hex = b"0123456789abcdef";
-    for byte in Sha256::digest(raw) {
+    for &byte in digest {
         value.push(char::from(hex[usize::from(byte >> 4)]));
         value.push(char::from(hex[usize::from(byte & 15)]));
     }

@@ -304,3 +304,8 @@
 # [Why I Stopped Trusting Green](obsidian://open?vault=my-diary.vault&file=Reflections%2FWhy%20I%20Stopped%20Trusting%20Green)
 # [Working in Sandboxes on Kinoite](obsidian://open?vault=my-diary.vault&file=Reflections%2FWorking%20in%20Sandboxes%20on%20Kinoite)
 # HEE3-ANCHORS-END
+
+# Explicit changes only; reading this file performs no import or startup.
+kind = "hee3-roster-changes"
+version = 1
+updates = []

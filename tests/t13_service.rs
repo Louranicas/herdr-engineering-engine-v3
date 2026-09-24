@@ -832,3 +832,26 @@ fn wrong_roster_kind_refuses_service_inspection() {
         Err(Error::WrongKind)
     ));
 }
+/// The three shipped roster inputs follow one admitted-revision rule
+/// (docs/modules/roster.md, `config/services.toml` row): each must decode as an
+/// explicit change manifest, and reading one imports nothing.
+#[test]
+fn shipped_roster_configs_are_empty_change_manifests() -> Result<(), Box<dyn std::error::Error>> {
+    for (name, input) in [
+        ("config/models.toml", include_str!("../config/models.toml")),
+        ("config/agents.toml", include_str!("../config/agents.toml")),
+        (
+            "config/services.toml",
+            include_str!("../config/services.toml"),
+        ),
+    ] {
+        let updates = habitat_engine::roster::parse_changes(input.as_bytes())
+            .map_err(|error| format!("{name}: {error}"))?;
+        assert!(
+            updates.is_empty(),
+            "{name}: {} shipped updates",
+            updates.len()
+        );
+    }
+    Ok(())
+}
