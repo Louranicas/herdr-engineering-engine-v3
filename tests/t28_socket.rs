@@ -119,9 +119,10 @@ fn the_runtime_root_must_be_named_absolute_and_private() -> Outcome {
 fn a_live_engine_refuses_the_bind_and_a_stale_socket_is_cleared() -> Outcome {
     let scratch = Scratch::new()?;
     let root = scratch.private("run")?;
-    let socket = control_socket::prepare(&root)?;
+    let prepared = control_socket::prepare(&root)?;
+    let socket = prepared.socket().to_owned();
     assert_eq!(socket, root.join(RUNTIME_DIRECTORY).join(SOCKET_NAME));
-    let listener = control_socket::bind(&socket)?;
+    let listener = control_socket::bind(&prepared)?;
     assert_eq!(
         fs::symlink_metadata(&socket)?.permissions().mode() & 0o777,
         0o600
@@ -131,6 +132,7 @@ fn a_live_engine_refuses_the_bind_and_a_stale_socket_is_cleared() -> Outcome {
         Err(SocketError::Live)
     ));
     drop(listener);
+    drop(prepared);
     assert!(
         fs::symlink_metadata(&socket).is_ok(),
         "a dropped listener leaves its path"
@@ -149,7 +151,8 @@ fn a_live_engine_refuses_the_bind_and_a_stale_socket_is_cleared() -> Outcome {
             other => break other?,
         }
     };
-    assert_eq!(prepared, socket);
+    assert_eq!(prepared.socket(), socket);
+    drop(prepared);
     assert!(
         fs::symlink_metadata(&socket).is_err(),
         "the stale socket was removed"
@@ -157,7 +160,7 @@ fn a_live_engine_refuses_the_bind_and_a_stale_socket_is_cleared() -> Outcome {
     // Something that is not a socket at that path is never removed.
     fs::write(&socket, b"not a socket")?;
     assert!(matches!(
-        control_socket::prepare(&root),
+        prepare_settled(&root),
         Err(SocketError::Custody("control socket path"))
     ));
     assert_eq!(fs::read(&socket)?, b"not a socket");
@@ -753,5 +756,230 @@ fn the_engine_serves_the_health_its_start_left() -> Outcome {
             &json!("owned")
         )
     );
+    Ok(())
+}
+
+/// `prepare` once no process still holds a copy of a dropped custody. A sibling case forking at
+/// the instant this process held the lock keeps a duplicate of its descriptor until the child's
+/// exec closes it (CLOEXEC), and `prepare` says Live meanwhile, which is the safe direction. So
+/// retry on Live alone, with a budget.
+fn prepare_settled(root: &Path) -> Result<control_socket::Prepared, SocketError> {
+    let started = Instant::now();
+    let budget = Duration::from_secs(5);
+    loop {
+        match control_socket::prepare(root) {
+            Err(SocketError::Live) if started.elapsed() < budget => {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            other => return other,
+        }
+    }
+}
+
+/// Prepare and bind as `serve` does, keeping custody with the listener.
+fn start_at(
+    root: &Path,
+) -> Result<(control_socket::Prepared, std::os::unix::net::UnixListener), SocketError> {
+    control_socket::prepare(root)
+        .and_then(|prepared| control_socket::bind(&prepared).map(|listener| (prepared, listener)))
+}
+
+/// A socket file nothing listens on and nothing ever listened on: bound, never `listen`ed, closed.
+/// A forked sibling that inherits the descriptor cannot make it accept.
+fn stale_socket(path: &Path) -> Outcome {
+    let fd = rustix::net::socket_with(
+        rustix::net::AddressFamily::UNIX,
+        rustix::net::SocketType::STREAM,
+        rustix::net::SocketFlags::CLOEXEC,
+        None,
+    )?;
+    rustix::net::bind(&fd, &rustix::net::SocketAddrUnix::new(path)?)?;
+    Ok(())
+}
+
+#[test]
+fn custody_is_held_from_prepare_so_a_second_start_is_refused_before_any_bind() -> Outcome {
+    let scratch = Scratch::new()?;
+    let root = scratch.private("run")?;
+    let first = control_socket::prepare(&root)?;
+    let socket = root.join(RUNTIME_DIRECTORY).join(SOCKET_NAME);
+    assert!(
+        fs::symlink_metadata(&socket).is_err(),
+        "nothing is bound yet"
+    );
+    // A stale socket appears while the first start has not bound: the second start must not
+    // judge it, let alone unlink it.
+    stale_socket(&socket)?;
+    assert!(matches!(
+        control_socket::prepare(&root),
+        Err(SocketError::Live)
+    ));
+    assert!(
+        fs::symlink_metadata(&socket).is_ok(),
+        "the refused start unlinked nothing"
+    );
+    drop(first);
+    // Custody ends with the prepared value: the next start clears the stale socket.
+    let again = prepare_settled(&root)?;
+    assert!(
+        fs::symlink_metadata(&socket).is_err(),
+        "the stale socket was removed"
+    );
+    drop(again);
+    // The lock is custody only when it is this user's private regular file, reached directly.
+    let lock = root.join(RUNTIME_DIRECTORY).join(control_socket::LOCK_NAME);
+    assert_eq!(
+        fs::symlink_metadata(&lock)?.permissions().mode() & 0o777,
+        0o600
+    );
+    fs::set_permissions(&lock, fs::Permissions::from_mode(0o644))?;
+    assert!(matches!(
+        control_socket::prepare(&root),
+        Err(SocketError::Custody("control lock"))
+    ));
+    fs::remove_file(&lock)?;
+    let elsewhere = scratch.0.join("elsewhere.lock");
+    fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&elsewhere)?;
+    symlink(&elsewhere, &lock)?;
+    assert!(matches!(
+        control_socket::prepare(&root),
+        Err(SocketError::Custody("control lock"))
+    ));
+    // A private FIFO opens read-write and takes a lock; it is still not the lock file.
+    fs::remove_file(&lock)?;
+    rustix::fs::mknodat(
+        rustix::fs::CWD,
+        &lock,
+        rustix::fs::FileType::Fifo,
+        rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
+        0,
+    )?;
+    assert!(matches!(
+        control_socket::prepare(&root),
+        Err(SocketError::Custody("control lock"))
+    ));
+    Ok(())
+}
+
+#[test]
+fn racing_starts_over_a_stale_socket_leave_exactly_one_live_engine() -> Outcome {
+    const ROUNDS: usize = 16;
+    const ATTEMPTS: usize = 64;
+    let scratch = Scratch::new()?;
+    let root = scratch.private("run")?;
+    let socket = root.join(RUNTIME_DIRECTORY).join(SOCKET_NAME);
+    let mut won = 0;
+    for attempt in 0..ATTEMPTS {
+        if won == ROUNDS {
+            break;
+        }
+        drop(prepare_settled(&root)?);
+        stale_socket(&socket)?;
+        let barrier = std::sync::Barrier::new(2);
+        let (a, b) = std::thread::scope(|scope| {
+            let race = || {
+                barrier.wait();
+                start_at(&root)
+            };
+            let a = scope.spawn(race);
+            let b = scope.spawn(race);
+            (a.join(), b.join())
+        });
+        let (a, b) = (
+            a.map_err(|_| "a racer panicked")?,
+            b.map_err(|_| "a racer panicked")?,
+        );
+        match (a, b) {
+            (Ok(winner), Err(loser)) | (Err(loser), Ok(winner)) => {
+                assert!(
+                    matches!(loser, SocketError::Live),
+                    "attempt {attempt}: {loser:?}"
+                );
+                // The winner's socket is still the one at the path: it accepts.
+                UnixStream::connect(&socket)?;
+                drop(winner);
+                won += 1;
+            }
+            (Ok(_), Ok(_)) => return Err(format!("attempt {attempt}: both starts bound").into()),
+            (Err(a), Err(b)) => {
+                // A forked sibling still held a copy of the last custody: both refused, which is
+                // the safe direction, and neither may have unlinked anything.
+                assert!(
+                    matches!((&a, &b), (SocketError::Live, SocketError::Live)),
+                    "attempt {attempt}: {a:?} / {b:?}"
+                );
+                assert!(
+                    fs::symlink_metadata(&socket).is_ok(),
+                    "attempt {attempt}: a refused start unlinked the stale socket"
+                );
+            }
+        }
+        fs::remove_file(&socket)?;
+    }
+    assert_eq!(
+        won, ROUNDS,
+        "only {won} of {ROUNDS} rounds had a winner in {ATTEMPTS} attempts"
+    );
+    Ok(())
+}
+
+#[test]
+fn a_start_that_cannot_write_is_not_yet_bound() -> Outcome {
+    // `serve` announces its reconciliation on standard error before it binds. Give it a
+    // standard error that is already full: it blocks at its first line, and until then no socket
+    // may exist (IPC01: bind after ready).
+    let world = World::seeing(&["app"])?;
+    let (drain, writer) = std::io::pipe()?;
+    let flags = rustix::fs::fcntl_getfl(&writer)?;
+    rustix::fs::fcntl_setfl(&writer, flags | rustix::fs::OFlags::NONBLOCK)?;
+    let mut filled = 0_usize;
+    for chunk in [4096_usize, 1] {
+        // A pipe holds at most 1 MiB (fs.pipe-max-size's default): 1 << 20 writes is the budget.
+        let mut attempts = 0_usize;
+        loop {
+            assert!(
+                attempts < 1 << 20,
+                "the pipe never filled after {attempts} writes"
+            );
+            attempts += 1;
+            match (&writer).write(&vec![b'x'; chunk]) {
+                Ok(written) => filled += written,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
+                Err(error) => return Err(error.into()),
+            }
+        }
+    }
+    rustix::fs::fcntl_setfl(&writer, flags)?;
+    let child = Command::new(env!("CARGO_BIN_EXE_habitat-engine"))
+        .arg("serve")
+        .env("XDG_RUNTIME_DIR", &world.run)
+        .env("HOME", &world.home)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(writer)
+        .spawn()?;
+    let engine = Engine { child };
+    let wchan = PathBuf::from(format!("/proc/{}/wchan", engine.child.id()));
+    let started = Instant::now();
+    let budget = Duration::from_secs(20);
+    // Wait on the kernel's account of where the engine sleeps, with a budget.
+    while !fs::read_to_string(&wchan)?.contains("pipe_write") {
+        assert!(
+            started.elapsed() < budget,
+            "the engine never blocked on its full standard error within {budget:?}"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let socket = world.run.join(RUNTIME_DIRECTORY).join(SOCKET_NAME);
+    assert!(
+        fs::symlink_metadata(&socket).is_err(),
+        "the socket was bound before the engine finished starting (pipe held {filled} bytes)"
+    );
+    drop(engine);
+    drop(drain);
     Ok(())
 }

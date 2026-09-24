@@ -254,19 +254,21 @@ fn socket_path() -> Result<PathBuf, control_socket::Error> {
     Ok(root.join(RUNTIME_DIRECTORY).join(SOCKET_NAME))
 }
 
-/// `habitat-engine serve`: bind IPC01 and serve it until killed. A stale socket left by a killed
-/// engine is cleared at the next start; a live one refuses the start.
+/// `habitat-engine serve`: take single-instance custody of IPC01, reconcile the active
+/// generation, compose the task owner over the ledger startup left open, and only then bind and
+/// serve until killed (IPC01: acquire custody before recovery; bind after ready). A stale socket
+/// left by a killed engine is cleared at the next start; a live or starting one refuses the start.
 fn serve() -> ExitCode {
-    let bound = control_socket::runtime_root(std::env::var_os("XDG_RUNTIME_DIR").as_deref())
-        .and_then(|root| control_socket::prepare(&root))
-        .and_then(|socket| control_socket::bind(&socket).map(|listener| (socket, listener)));
-    let (socket, listener) = match bound {
-        Ok(bound) => bound,
-        Err(error) => {
-            eprintln!("habitat-engine: control socket refused: {error:?}");
-            return ExitCode::from(EXIT_CONTRACT);
-        }
-    };
+    let prepared =
+        match control_socket::runtime_root(std::env::var_os("XDG_RUNTIME_DIR").as_deref())
+            .and_then(|root| control_socket::prepare(&root))
+        {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                eprintln!("habitat-engine: control socket refused: {error:?}");
+                return ExitCode::from(EXIT_CONTRACT);
+            }
+        };
     let Some(home) = std::env::var_os("HOME")
         .map(PathBuf::from)
         .filter(|home| home.is_absolute())
@@ -289,31 +291,38 @@ fn serve() -> ExitCode {
             return ExitCode::from(EXIT_CONTRACT);
         }
     };
-    // Reconcile the active generation once, before the first connection is accepted: health is
-    // what startup left, observed at a named instant (D-C3 step 2).
-    let (health, line) = coordinator::observe_at_start(
-        &coordinator::state_root(&home),
+    // Reconcile the active generation once, before the socket exists: health is what startup
+    // left, observed at a named instant (D-C3 step 2). The manifest is read once; the generation
+    // served is the one reconciled, over the ledger startup opened.
+    let state_root = coordinator::state_root(&home);
+    let manifest = coordinator::read_manifest(&state_root);
+    let started = coordinator::observe_at_start(
+        &state_root,
+        &manifest,
         now_unix_ms(),
         std::time::Instant::now() + std::time::Duration::from_secs(30),
     );
-    eprintln!("habitat-engine: {line}");
-    // The task owner is composed only over a ledger startup left writable and reconciled.
-    let tasks = if health.database == habitat_engine::contracts::control::Database::Ready {
-        match coordinator::compose_tasks(
-            &coordinator::state_root(&home),
-            std::time::Instant::now() + std::time::Duration::from_secs(30),
-        ) {
-            Ok(tasks) => Some(tasks),
-            Err(why) => {
-                eprintln!("habitat-engine: task actions unavailable: {why}");
-                None
-            }
+    eprintln!("habitat-engine: {}", started.line);
+    let health = started.health;
+    let tasks = match started.reconciled.map(coordinator::compose_tasks) {
+        Some(Ok(tasks)) => Some(tasks),
+        Some(Err(why)) => {
+            eprintln!("habitat-engine: task actions unavailable: {why}");
+            None
         }
-    } else {
-        eprintln!("habitat-engine: task actions unavailable: the ledger is not ready");
-        None
+        None => {
+            eprintln!("habitat-engine: task actions unavailable: no generation was reconciled");
+            None
+        }
     };
-    eprintln!("habitat-engine: serving {}", socket.display());
+    let listener = match control_socket::bind(&prepared) {
+        Ok(listener) => listener,
+        Err(error) => {
+            eprintln!("habitat-engine: control socket refused: {error:?}");
+            return ExitCode::from(EXIT_CONTRACT);
+        }
+    };
+    eprintln!("habitat-engine: serving {}", prepared.socket().display());
     let mut report = |line: &str| eprintln!("habitat-engine: {line}");
     let composed = Composed {
         grants: store.as_ref(),

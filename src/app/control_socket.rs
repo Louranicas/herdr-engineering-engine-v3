@@ -9,8 +9,12 @@
 //! * **Custody is checked, never assumed.** The runtime root and the engine's directory must be
 //!   this user's and mode 0700, opened without following a link; the socket's 0600 mode is read
 //!   back after it is set (a successful chmod is not a changed state).
-//! * **A live engine is never displaced.** An existing socket that accepts a connection belongs to
-//!   a running engine and refuses the bind; one that refuses connection is stale and is removed.
+//! * **A live engine is never displaced.** Single-instance custody is an exclusive `flock` on
+//!   [`LOCK_NAME`] in the engine's directory, taken before the socket path is judged and held by the
+//!   [`Prepared`] value for as long as the engine runs; a held lock refuses the start. Only under
+//!   that custody is an existing socket judged: one that accepts belongs to a running engine and
+//!   refuses the bind, one that refuses connection is stale and is removed. The lock is a byte and
+//!   identity mechanism: it is tried once and never waited on.
 //! * **The principal is the peer.** Each accepted connection's uid comes from `SO_PEERCRED`. Only
 //!   the operator — the uid this engine runs as — is served, under the configured local role
 //!   [`OPERATOR_ROLE`]; any other peer is closed before a byte is read.
@@ -32,6 +36,8 @@ use std::time::Duration;
 pub const RUNTIME_DIRECTORY: &str = "habitat-engine";
 /// The socket's name in that directory.
 pub const SOCKET_NAME: &str = "control.sock";
+/// The single-instance lock's name in that directory.
+pub const LOCK_NAME: &str = "control.lock";
 /// The configured local role the operator is served under.
 pub const OPERATOR_ROLE: &str = "operator";
 /// How long a connection may sit without sending a byte.
@@ -46,7 +52,7 @@ pub enum Error {
     NoRuntimeDirectory,
     /// A path failed its custody check; the name says which.
     Custody(&'static str),
-    /// Another engine is serving this socket.
+    /// Another engine holds the endpoint: it serves the socket, or is starting under custody.
     Live,
     /// The operating system refused.
     Io(io::Error),
@@ -57,7 +63,7 @@ impl std::fmt::Display for Error {
         match self {
             Self::NoRuntimeDirectory => f.write_str("XDG_RUNTIME_DIR is unset, empty or relative"),
             Self::Custody(what) => write!(f, "{what} is not this user's private path"),
-            Self::Live => f.write_str("another engine is serving the control socket"),
+            Self::Live => f.write_str("another engine holds the control socket"),
             Self::Io(error) => write!(f, "{error}"),
         }
     }
@@ -109,14 +115,56 @@ fn private_directory(path: &Path, name: &'static str) -> Result<(), Error> {
     Ok(())
 }
 
-/// Prepare `<root>/habitat-engine/` and return the socket path within it, clearing a stale
-/// socket and refusing a live one.
+/// The endpoint prepared under single-instance custody. Custody lasts as long as this value: drop
+/// it and another engine may start.
+#[derive(Debug)]
+pub struct Prepared {
+    socket: PathBuf,
+    _custody: File,
+}
+
+impl Prepared {
+    /// The socket path [`bind`] will bind.
+    #[must_use]
+    pub fn socket(&self) -> &Path {
+        &self.socket
+    }
+}
+
+/// Take single-instance custody of `directory`: an exclusive lock on its [`LOCK_NAME`], a 0600
+/// regular file of this user's, opened without following a link.
+fn custody(directory: &Path) -> Result<File, Error> {
+    let lock = match rustix::fs::open(
+        directory.join(LOCK_NAME),
+        OFlags::RDWR | OFlags::CREATE | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::RUSR | Mode::WUSR,
+    ) {
+        Ok(lock) => File::from(lock),
+        Err(rustix::io::Errno::LOOP) => return Err(Error::Custody("control lock")),
+        Err(error) => return Err(error.into()),
+    };
+    let meta = lock.metadata()?;
+    if !meta.is_file()
+        || meta.uid() != rustix::process::geteuid().as_raw()
+        || meta.mode() & 0o777 != 0o600
+    {
+        return Err(Error::Custody("control lock"));
+    }
+    match rustix::fs::flock(&lock, rustix::fs::FlockOperation::NonBlockingLockExclusive) {
+        Ok(()) => Ok(lock),
+        Err(rustix::io::Errno::WOULDBLOCK) => Err(Error::Live),
+        Err(error) => Err(error.into()),
+    }
+}
+
+/// Prepare `<root>/habitat-engine/` under single-instance custody and return the socket path
+/// within it, clearing a stale socket and refusing a live one.
 ///
 /// # Errors
 ///
-/// [`Error::Custody`] for a directory or socket path that is not this user's private one;
-/// [`Error::Live`] when an engine already serves the socket; [`Error::Io`] otherwise.
-pub fn prepare(root: &Path) -> Result<PathBuf, Error> {
+/// [`Error::Custody`] for a directory, lock or socket path that is not this user's private one;
+/// [`Error::Live`] when another engine holds custody or serves the socket; [`Error::Io`] otherwise.
+pub fn prepare(root: &Path) -> Result<Prepared, Error> {
     private_directory(root, "runtime root")?;
     let directory = root.join(RUNTIME_DIRECTORY);
     match DirBuilder::new().mode(0o700).create(&directory) {
@@ -125,6 +173,7 @@ pub fn prepare(root: &Path) -> Result<PathBuf, Error> {
         Err(error) => return Err(error.into()),
     }
     private_directory(&directory, "engine runtime directory")?;
+    let held = custody(&directory)?;
     let socket = directory.join(SOCKET_NAME);
     match fs::symlink_metadata(&socket) {
         Err(error) if error.kind() == io::ErrorKind::NotFound => {}
@@ -142,15 +191,20 @@ pub fn prepare(root: &Path) -> Result<PathBuf, Error> {
             }
         }
     }
-    Ok(socket)
+    Ok(Prepared {
+        socket,
+        _custody: held,
+    })
 }
 
-/// Bind the prepared socket path and read its 0600 mode back.
+/// Bind the prepared socket path and read its 0600 mode back. Binding needs the custody
+/// [`prepare`] took; the caller keeps `prepared` for as long as it serves.
 ///
 /// # Errors
 ///
 /// [`Error::Custody`] when the mode did not take; [`Error::Io`] when the bind fails.
-pub fn bind(socket: &Path) -> Result<UnixListener, Error> {
+pub fn bind(prepared: &Prepared) -> Result<UnixListener, Error> {
+    let socket = prepared.socket();
     let listener = UnixListener::bind(socket)?;
     fs::set_permissions(socket, fs::Permissions::from_mode(0o600))?;
     if fs::symlink_metadata(socket)?.mode() & 0o777 != 0o600 {

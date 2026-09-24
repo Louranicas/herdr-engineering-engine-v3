@@ -819,6 +819,18 @@ pub fn confirm_unchanged<T: PartialEq>(inspected: &T, reread: &T) -> Result<(), 
 /// Store refusals, an unparseable ledger row, or a ledger that changed between
 /// the inspection read and the action read.
 pub fn run(startup: &Startup<'_>, physical: &mut dyn Physical) -> Result<Pass, Error> {
+    run_and_hold(startup, physical).map(|(pass, _)| pass)
+}
+
+/// [`run`], handing back the ledger the pass opened writable (`None` when it was
+/// inspection-only), so the owner that serves the generation holds the same store and its
+/// writer lock from reconciliation on, rather than re-acquiring either (IPC01).
+/// # Errors
+/// As [`run`].
+pub fn run_and_hold(
+    startup: &Startup<'_>,
+    physical: &mut dyn Physical,
+) -> Result<(Pass, Option<Store>), Error> {
     let inspected = {
         let mut store = Store::open_inspection(
             startup.root,
@@ -901,7 +913,7 @@ pub fn run(startup: &Startup<'_>, physical: &mut dyn Physical) -> Result<Pass, E
             decision,
         });
     }
-    Ok(pass)
+    Ok((pass, writable))
 }
 
 fn facts_error(attempt: &str, field: &'static str) -> Error {

@@ -24,7 +24,7 @@ type Outcome = Result<(), Box<dyn Error>>;
 static NEXT: AtomicUsize = AtomicUsize::new(0);
 const GENERATION: &str = "28d00000-0000-4000-8000-000000000001";
 const EPOCH: &str = "28d00000-0000-4000-8000-000000000002";
-const KEY: &str = "28d00000-0000-4000-8000-0000000000aa";
+pub(super) const KEY: &str = "28d00000-0000-4000-8000-0000000000aa";
 const NOW: u64 = 1_790_000_000_000;
 
 /// `sha256:` hex of a digest, computed here from `sha2` directly, not through the engine.
@@ -58,7 +58,7 @@ impl Drop for Scratch {
     }
 }
 
-fn spec() -> Value {
+pub(super) fn spec() -> Value {
     json!({
         "task_class": "rust-library-change/1",
         "intent": "Add a strict decimal parser.",
@@ -273,7 +273,7 @@ fn ledger(scratch: &Scratch) -> Result<StoreTasks, Box<dyn Error>> {
     Ok(StoreTasks::new(store, EPOCH.to_owned()))
 }
 
-fn request(action: &str, request: u8, key: Option<&str>, body: &Value) -> Vec<u8> {
+pub(super) fn request(action: &str, request: u8, key: Option<&str>, body: &Value) -> Vec<u8> {
     serde_json::to_vec(&json!({
         "protocol": "hee3.control", "version": 1, "kind": "request",
         "request_id": format!("28d00000-0000-4000-8000-0000000001{request:02x}"),
@@ -285,7 +285,7 @@ fn request(action: &str, request: u8, key: Option<&str>, body: &Value) -> Vec<u8
     .unwrap_or_default()
 }
 
-fn serve(
+pub(super) fn serve(
     tasks: &StoreTasks,
     principal: &Principal,
     payload: &[u8],

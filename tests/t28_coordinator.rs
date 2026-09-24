@@ -7,11 +7,11 @@ use habitat_engine::app::coordinator::{
 };
 use habitat_engine::app::startup::{Cursor, CursorEntry, LedgerAccess, Pass};
 use habitat_engine::contracts::UuidV4;
-use habitat_engine::contracts::control::{Database, Recovery, Socket};
+use habitat_engine::contracts::control::{Database, Health, Recovery, Socket};
 use habitat_engine::recovery::{
     CursorRefusal, Decision, Mode, ProcessCustody, Reconciliation, Rule, Unknown,
 };
-use habitat_engine::store::Store;
+use habitat_engine::store::{Error as StoreError, Principal, Store};
 use serde_json::json;
 use std::error::Error;
 use std::fs::{self, DirBuilder};
@@ -81,33 +81,43 @@ fn commissioned(scratch: &Scratch) -> Result<PathBuf, Box<dyn Error>> {
     Ok(root)
 }
 
+/// What the manifest under `root` selects, as owned text for comparison.
+fn select(root: &Path) -> Result<(String, String), Unselected> {
+    let manifest = coordinator::read_manifest(root)?;
+    let active = manifest.active()?;
+    Ok((
+        active.generation.as_str().to_owned(),
+        active.epoch.as_str().to_owned(),
+    ))
+}
+
+/// The health and line a start under `root` leaves, reading its manifest as `serve` does.
+fn observe(root: &Path, deadline: Instant) -> (Health, String) {
+    let manifest = coordinator::read_manifest(root);
+    let started = coordinator::observe_at_start(root, &manifest, CHECKED, deadline);
+    (started.health, started.line)
+}
+
 #[test]
 fn a_generation_is_selected_only_from_the_operators_private_manifest() -> Outcome {
     let scratch = Scratch::new()?;
-    assert_eq!(
-        coordinator::active(&scratch.0.join("absent")),
-        Err(Unselected::Absent)
-    );
+    assert_eq!(select(&scratch.0.join("absent")), Err(Unselected::Absent));
     let root = scratch.0.join("root");
     DirBuilder::new().mode(0o700).create(&root)?;
-    assert_eq!(coordinator::active(&root), Err(Unselected::Absent));
+    assert_eq!(select(&root), Err(Unselected::Absent));
     manifest(&root, &selecting(GENERATION, EPOCH), 0o600)?;
-    let selected = coordinator::active(&root).map_err(|error| format!("{error:?}"))?;
-    assert_eq!(
-        (selected.generation.as_str(), selected.epoch.as_str()),
-        (GENERATION, EPOCH)
-    );
+    assert_eq!(select(&root), Ok((GENERATION.to_owned(), EPOCH.to_owned())));
     fs::set_permissions(
         root.join(ACTIVE_MANIFEST),
         fs::Permissions::from_mode(0o644),
     )?;
-    assert_eq!(coordinator::active(&root), Err(Unselected::Custody));
+    assert_eq!(select(&root), Err(Unselected::Custody));
     fs::set_permissions(
         root.join(ACTIVE_MANIFEST),
         fs::Permissions::from_mode(0o600),
     )?;
     fs::set_permissions(&root, fs::Permissions::from_mode(0o755))?;
-    assert_eq!(coordinator::active(&root), Err(Unselected::Custody));
+    assert_eq!(select(&root), Err(Unselected::Custody));
     fs::set_permissions(&root, fs::Permissions::from_mode(0o700))?;
     for (case, body) in [
         (
@@ -122,11 +132,7 @@ fn a_generation_is_selected_only_from_the_operators_private_manifest() -> Outcom
     ] {
         fs::remove_file(root.join(ACTIVE_MANIFEST))?;
         manifest(&root, &body, 0o600)?;
-        assert_eq!(
-            coordinator::active(&root),
-            Err(Unselected::Malformed),
-            "{case}"
-        );
+        assert_eq!(select(&root), Err(Unselected::Malformed), "{case}");
     }
     // A manifest reached through a link is not the operator's manifest.
     let elsewhere = scratch.0.join("elsewhere");
@@ -134,7 +140,7 @@ fn a_generation_is_selected_only_from_the_operators_private_manifest() -> Outcom
     manifest(&elsewhere, &selecting(GENERATION, EPOCH), 0o600)?;
     fs::remove_file(root.join(ACTIVE_MANIFEST))?;
     symlink(elsewhere.join(ACTIVE_MANIFEST), root.join(ACTIVE_MANIFEST))?;
-    assert_eq!(coordinator::active(&root), Err(Unselected::Custody));
+    assert_eq!(select(&root), Err(Unselected::Custody));
     Ok(())
 }
 
@@ -142,7 +148,7 @@ fn a_generation_is_selected_only_from_the_operators_private_manifest() -> Outcom
 fn health_is_blocked_until_a_generation_is_commissioned_and_ready_after() -> Outcome {
     let scratch = Scratch::new()?;
     let deadline = Instant::now() + Duration::from_secs(10);
-    let (health, why) = coordinator::observe_at_start(&scratch.0.join("absent"), CHECKED, deadline);
+    let (health, why) = observe(&scratch.0.join("absent"), deadline);
     assert_eq!(
         (
             health.recovery,
@@ -159,7 +165,7 @@ fn health_is_blocked_until_a_generation_is_commissioned_and_ready_after() -> Out
     );
     assert!(why.contains("Absent"), "{why}");
     let root = commissioned(&scratch)?;
-    let (health, line) = coordinator::observe_at_start(&root, CHECKED, deadline);
+    let (health, line) = observe(&root, deadline);
     assert_eq!(
         (health.recovery, health.database, health.ready()),
         (Recovery::Complete, Database::Ready, true),
@@ -176,7 +182,7 @@ fn health_is_blocked_until_a_generation_is_commissioned_and_ready_after() -> Out
         &selecting(GENERATION, "28c00000-0000-4000-8000-0000000000ee"),
         0o600,
     )?;
-    let (health, why) = coordinator::observe_at_start(&root, CHECKED, deadline);
+    let (health, why) = observe(&root, deadline);
     assert_eq!(
         (health.recovery, health.database),
         (Recovery::Blocked, Database::Unavailable),
@@ -279,4 +285,114 @@ fn each_reconciliation_is_classified_and_the_pass_reports_what_it_left() {
                "recovery": "blocked", "database": "unavailable", "socket": "owned",
                "checked_unix_ms": "1790000123456"})
     );
+}
+
+const OTHER_GENERATION: &str = "28c00000-0000-4000-8000-000000000003";
+const OTHER_EPOCH: &str = "28c00000-0000-4000-8000-000000000004";
+
+/// Create a second, empty ledger generation beside the commissioned one.
+fn ledger_at(root: &Path, generation: &str, epoch: &str) -> Outcome {
+    drop(
+        Store::open(
+            root,
+            UuidV4::parse(generation)?,
+            UuidV4::parse(epoch)?,
+            true,
+            Instant::now() + Duration::from_secs(10),
+        )
+        .map_err(|error| format!("{error:?}"))?,
+    );
+    Ok(())
+}
+
+/// How many tasks one generation's ledger holds, read through the store's inspection door.
+fn tasks_in(root: &Path, generation: &str, epoch: &str) -> Result<usize, Box<dyn Error>> {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut store = Store::open_inspection(
+        root,
+        UuidV4::parse(generation)?,
+        UuidV4::parse(epoch)?,
+        deadline,
+    )
+    .map_err(|error| format!("{error:?}"))?;
+    let inventory = store
+        .recovery_inventory(UuidV4::parse(epoch)?, coordinator::START_LIMITS, deadline)
+        .map_err(|error| format!("{error:?}"))?;
+    Ok(inventory.tasks.len())
+}
+
+fn replace_manifest(root: &Path, generation: &str, epoch: &str) -> Outcome {
+    fs::remove_file(root.join(ACTIVE_MANIFEST))?;
+    manifest(root, &selecting(generation, epoch), 0o600)
+}
+
+#[test]
+fn a_manifest_swapped_after_reconciliation_cannot_change_the_generation_served() -> Outcome {
+    let scratch = Scratch::new()?;
+    let root = commissioned(&scratch)?;
+    ledger_at(&root, OTHER_GENERATION, OTHER_EPOCH)?;
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let manifest = coordinator::read_manifest(&root);
+    let started = coordinator::observe_at_start(&root, &manifest, CHECKED, deadline);
+    assert!(started.health.ready(), "{}", started.line);
+    // After reconciliation the manifest names another commissioned generation.
+    replace_manifest(&root, OTHER_GENERATION, OTHER_EPOCH)?;
+    let reconciled = started.reconciled.ok_or("nothing was reconciled")?;
+    assert_eq!(
+        (
+            reconciled.active.generation.as_str(),
+            reconciled.active.epoch.as_str(),
+            reconciled.pass.generation.as_str()
+        ),
+        (GENERATION, EPOCH, GENERATION)
+    );
+    let tasks = coordinator::compose_tasks(reconciled)?;
+    let operator = Principal::new(1000, "operator").map_err(|error| format!("{error:?}"))?;
+    let submit = super::tasks::request(
+        "task.submit",
+        1,
+        Some(super::tasks::KEY),
+        &json!({"spec": super::tasks::spec()}),
+    );
+    let reply = super::tasks::serve(&tasks, &operator, &submit)?;
+    assert_eq!(
+        reply["body"]["engine_cursor"]["epoch"],
+        json!(EPOCH),
+        "{reply}"
+    );
+    drop(tasks);
+    assert_eq!(
+        (
+            tasks_in(&root, GENERATION, EPOCH)?,
+            tasks_in(&root, OTHER_GENERATION, OTHER_EPOCH)?
+        ),
+        (1, 0),
+        "the admission landed in the reconciled generation and only there"
+    );
+    Ok(())
+}
+
+#[test]
+fn the_writer_lock_is_held_from_reconciliation_to_the_task_owner() -> Outcome {
+    let scratch = Scratch::new()?;
+    let root = commissioned(&scratch)?;
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let manifest = coordinator::read_manifest(&root);
+    let started = coordinator::observe_at_start(&root, &manifest, CHECKED, deadline);
+    assert!(started.reconciled.is_some(), "{}", started.line);
+    // Between reconciliation and composing the task owner, no one else can open the ledger writable.
+    let second = Store::open(
+        &root,
+        UuidV4::parse(GENERATION)?,
+        UuidV4::parse(EPOCH)?,
+        false,
+        deadline,
+    );
+    assert!(
+        matches!(second, Err(StoreError::Locked)),
+        "{:?}",
+        second.map(drop)
+    );
+    drop(started);
+    Ok(())
 }
