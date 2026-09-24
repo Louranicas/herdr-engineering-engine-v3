@@ -751,6 +751,32 @@ pub struct Pass {
     pub cleanup_backlog: usize,
 }
 
+/// What a pass did, as counts: the values the startup line reports (B03c).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Counts {
+    /// Effect-bearing open attempts reconciled.
+    pub attempts: usize,
+    /// Journal rows inserted.
+    pub writes: u64,
+    /// This boot's cleanup batch.
+    pub cleanup: usize,
+    /// Terminal attempts left for later boots.
+    pub cleanup_backlog: usize,
+}
+
+impl Pass {
+    /// The pass's counts, read once from the pass itself.
+    #[must_use]
+    pub fn counts(&self) -> Counts {
+        Counts {
+            attempts: self.attempts.len(),
+            writes: self.writes,
+            cleanup: self.cleanup.len(),
+            cleanup_backlog: self.cleanup_backlog,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub enum Error {
     Store(store::Error),

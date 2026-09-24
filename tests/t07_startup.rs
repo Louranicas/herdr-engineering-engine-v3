@@ -3992,14 +3992,23 @@ fn a_cleanup_backlog_drains_over_boots_without_blocking_readiness() {
             pass.attempts.is_empty(),
             "boot {boot}: the tail is not effect-bearing"
         );
-        seen.push((pass.cleanup.len(), pass.cleanup_backlog));
+        // B03c: the counts the startup line prints are read through `Pass::counts`, so each is
+        // pinned here against a boot whose values are known and differ from one another.
+        let counts = pass.counts();
+        assert_eq!(counts.writes, pass.writes, "boot {boot}");
+        assert_eq!(
+            pass.writes > 0,
+            boot < 2,
+            "boot {boot}: a batch records its decisions"
+        );
+        seen.push((counts.attempts, counts.cleanup, counts.cleanup_backlog));
     }
     assert_eq!(
         seen,
         [
-            (startup::CLEANUP_BATCH, 40 - startup::CLEANUP_BATCH),
-            (40 - startup::CLEANUP_BATCH, 0),
-            (0, 0)
+            (0, startup::CLEANUP_BATCH, 40 - startup::CLEANUP_BATCH),
+            (0, 40 - startup::CLEANUP_BATCH, 0),
+            (0, 0, 0)
         ]
     );
 }

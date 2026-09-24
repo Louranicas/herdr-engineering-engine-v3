@@ -12,7 +12,7 @@
 //! new kind of decision cannot reach an operator unclassified: it will not compile until someone
 //! decides whether it leaves work outstanding.
 
-use crate::app::startup::{self, Host, LedgerAccess, Pass};
+use crate::app::startup::{self, Counts, Host, LedgerAccess, Pass};
 use crate::contracts::UuidV4;
 use crate::contracts::control::{Database, Health, Recovery, Socket};
 use crate::recovery::{Mode, Reconciliation};
@@ -202,6 +202,24 @@ pub fn health_of(started: Result<&Pass, &str>, checked_unix_ms: u64) -> Health {
     }
 }
 
+/// The line a completed start prints: the generation, what the pass did (the cleanup tail
+/// included, so a backlog is never silent — B03c) and the health it left.
+#[must_use]
+pub fn startup_line(generation: &str, counts: Counts, health: &Health) -> String {
+    let Counts {
+        attempts,
+        writes,
+        cleanup,
+        cleanup_backlog,
+    } = counts;
+    format!(
+        "generation {generation} reconciled: attempts={attempts} writes={writes} cleanup={cleanup} \
+         cleanup_backlog={cleanup_backlog} recovery={} database={}",
+        health.recovery.name(),
+        health.database.name()
+    )
+}
+
 /// A generation startup reconciled: the [`Active`] it was selected by, the pass, and the ledger
 /// the pass left open writable. Only [`observe_at_start`] makes one, so the three cannot disagree.
 #[derive(Debug)]
@@ -263,14 +281,7 @@ pub fn observe_at_start<'m>(
     match startup::run_and_hold(&startup, &mut host) {
         Ok((pass, store)) => {
             let health = health_of(Ok(&pass), checked_unix_ms);
-            let line = format!(
-                "generation {} reconciled: attempts={} writes={} recovery={} database={}",
-                pass.generation,
-                pass.attempts.len(),
-                pass.writes,
-                health.recovery.name(),
-                health.database.name()
-            );
+            let line = startup_line(&pass.generation, pass.counts(), &health);
             Started {
                 health,
                 line,

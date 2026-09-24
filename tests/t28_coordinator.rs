@@ -4,8 +4,9 @@
 //! Every state root here is a scratch directory; nothing touches `$HOME/.local/state`.
 use habitat_engine::app::coordinator::{
     self, ACTIVE_MANIFEST, ACTIVE_SCHEMA, Unselected, health_of, leaves_work_outstanding,
+    startup_line,
 };
-use habitat_engine::app::startup::{Cursor, CursorEntry, LedgerAccess, Pass};
+use habitat_engine::app::startup::{Counts, Cursor, CursorEntry, LedgerAccess, Pass};
 use habitat_engine::contracts::UuidV4;
 use habitat_engine::contracts::control::{Database, Health, Recovery, Socket};
 use habitat_engine::recovery::{
@@ -207,6 +208,16 @@ fn health_is_blocked_until_a_generation_is_commissioned_and_ready_after() -> Out
         health.checked_unix_ms, CHECKED,
         "the observation instant passes through"
     );
+    // B03c: the startup line names the cleanup tail, so a backlog is never silent at the one line
+    // an operator sees at start. Here every count is its identity element; the two-fixture case
+    // below pins each field off the origin (F129).
+    assert_eq!(
+        line,
+        format!(
+            "generation {GENERATION} reconciled: attempts=0 writes=0 cleanup=0 cleanup_backlog=0 \
+             recovery=complete database=ready"
+        )
+    );
     // The selected epoch must be the ledger's own: a manifest naming another refuses startup.
     fs::remove_file(root.join(ACTIVE_MANIFEST))?;
     manifest(
@@ -318,6 +329,46 @@ fn each_reconciliation_is_classified_and_the_pass_reports_what_it_left() {
         json!({"protocol_version": 1, "engine_version": env!("CARGO_PKG_VERSION"), "ready": false,
                "recovery": "blocked", "database": "unavailable", "socket": "owned",
                "checked_unix_ms": "1790000123456"})
+    );
+}
+
+/// B03c: the startup line, whole, over two fixtures that differ in every field -- a renderer
+/// that ignored any field, swapped two, or hard-coded one example fails one of them (F124).
+#[test]
+fn the_startup_line_names_every_count_and_the_health_it_left() {
+    let health = |recovery, database| Health {
+        recovery,
+        database,
+        socket: Socket::Owned,
+        checked_unix_ms: CHECKED,
+    };
+    assert_eq!(
+        startup_line(
+            GENERATION,
+            Counts {
+                attempts: 3,
+                writes: 7,
+                cleanup: 32,
+                cleanup_backlog: 8,
+            },
+            &health(Recovery::Pending, Database::Ready),
+        ),
+        "generation 28c00000-0000-4000-8000-000000000001 reconciled: attempts=3 writes=7 cleanup=32 \
+         cleanup_backlog=8 recovery=pending database=ready"
+    );
+    assert_eq!(
+        startup_line(
+            OTHER_GENERATION,
+            Counts {
+                attempts: 11,
+                writes: 2,
+                cleanup: 5,
+                cleanup_backlog: 1_025,
+            },
+            &health(Recovery::Blocked, Database::Degraded),
+        ),
+        "generation 28c00000-0000-4000-8000-000000000003 reconciled: attempts=11 writes=2 cleanup=5 \
+         cleanup_backlog=1025 recovery=blocked database=degraded"
     );
 }
 
