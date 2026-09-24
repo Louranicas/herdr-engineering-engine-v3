@@ -929,10 +929,39 @@ fn racing_starts_over_a_stale_socket_leave_exactly_one_live_engine() -> Outcome 
 
 #[test]
 fn a_start_that_cannot_write_is_not_yet_bound() -> Outcome {
-    // `serve` announces its reconciliation on standard error before it binds. Give it a
-    // standard error that is already full: it blocks at its first line, and until then no socket
-    // may exist (IPC01: bind after ready).
-    let world = World::seeing(&["app"])?;
+    // `serve` writes its first line to standard error at a known point. Give it a standard error
+    // that is already full: it blocks there, and the case reads the engine's state at that point.
+    // With grants, the first line is the reconciliation's: the engine has reconciled, holds
+    // custody (IPC01: custody before recovery) and has not bound (IPC01: bind after ready).
+    // Without grants, the first line says so before the manifest is read: custody is already held.
+    for grants in [true, false] {
+        let world = World::seeing(&["app"])?;
+        if !grants {
+            fs::remove_dir_all(
+                world
+                    .home
+                    .join(".config/herdr-engineering-engine-v3/grants"),
+            )?;
+        }
+        let (engine, filled) = blocked_on_stderr(&world)?;
+        assert!(
+            matches!(control_socket::prepare(&world.run), Err(SocketError::Live)),
+            "grants={grants}: the engine blocked at its first line without custody"
+        );
+        let socket = world.run.join(RUNTIME_DIRECTORY).join(SOCKET_NAME);
+        assert!(
+            fs::symlink_metadata(&socket).is_err(),
+            "grants={grants}: the socket was bound before the engine finished starting \
+             (pipe held {filled} bytes)"
+        );
+        drop(engine);
+    }
+    Ok(())
+}
+
+/// Start `serve` in `world` with a full standard error and return once the kernel says it sleeps
+/// writing to it, with the bytes the pipe held.
+fn blocked_on_stderr(world: &World) -> Result<(Blocked, usize), Box<dyn Error>> {
     let (drain, writer) = std::io::pipe()?;
     let flags = rustix::fs::fcntl_getfl(&writer)?;
     rustix::fs::fcntl_setfl(&writer, flags | rustix::fs::OFlags::NONBLOCK)?;
@@ -962,8 +991,11 @@ fn a_start_that_cannot_write_is_not_yet_bound() -> Outcome {
         .stdout(Stdio::null())
         .stderr(writer)
         .spawn()?;
-    let engine = Engine { child };
-    let wchan = PathBuf::from(format!("/proc/{}/wchan", engine.child.id()));
+    let blocked = Blocked {
+        engine: Engine { child },
+        _drain: drain,
+    };
+    let wchan = PathBuf::from(format!("/proc/{}/wchan", blocked.engine.child.id()));
     let started = Instant::now();
     let budget = Duration::from_secs(20);
     // Wait on the kernel's account of where the engine sleeps, with a budget.
@@ -974,12 +1006,12 @@ fn a_start_that_cannot_write_is_not_yet_bound() -> Outcome {
         );
         std::thread::sleep(Duration::from_millis(10));
     }
-    let socket = world.run.join(RUNTIME_DIRECTORY).join(SOCKET_NAME);
-    assert!(
-        fs::symlink_metadata(&socket).is_err(),
-        "the socket was bound before the engine finished starting (pipe held {filled} bytes)"
-    );
-    drop(engine);
-    drop(drain);
-    Ok(())
+    Ok((blocked, filled))
+}
+
+/// An engine blocked on its standard error; the engine is killed before the pipe's read end
+/// closes (fields drop in declaration order).
+struct Blocked {
+    engine: Engine,
+    _drain: std::io::PipeReader,
 }

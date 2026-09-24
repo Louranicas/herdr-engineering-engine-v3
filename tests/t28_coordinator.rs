@@ -134,6 +134,38 @@ fn a_generation_is_selected_only_from_the_operators_private_manifest() -> Outcom
         manifest(&root, &body, 0o600)?;
         assert_eq!(select(&root), Err(Unselected::Malformed), "{case}");
     }
+    // The manifest's strings are read as they are spelled: an escape that decodes to canonical
+    // text is still not canonical text, in any member.
+    let escaped = GENERATION.replacen('-', "\\u002d", 1);
+    for (case, text) in [
+        (
+            "escaped generation",
+            format!(r#"{{"schema":"{ACTIVE_SCHEMA}","generation":"{escaped}","epoch":"{EPOCH}"}}"#),
+        ),
+        (
+            "escaped schema",
+            format!(
+                r#"{{"schema":"{}","generation":"{GENERATION}","epoch":"{EPOCH}"}}"#,
+                ACTIVE_SCHEMA.replacen('/', r"\/", 1)
+            ),
+        ),
+    ] {
+        fs::remove_file(root.join(ACTIVE_MANIFEST))?;
+        fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(root.join(ACTIVE_MANIFEST))?
+            .write_all(text.as_bytes())?;
+        assert!(text.contains('\\'), "{case}: {text} carries an escape");
+        let decoded: serde_json::Value = serde_json::from_str(&text)?;
+        assert_eq!(
+            decoded,
+            selecting(GENERATION, EPOCH),
+            "{case}: the escape decodes to the canonical record"
+        );
+        assert_eq!(select(&root), Err(Unselected::Malformed), "{case}");
+    }
     // A manifest reached through a link is not the operator's manifest.
     let elsewhere = scratch.0.join("elsewhere");
     DirBuilder::new().mode(0o700).create(&elsewhere)?;
