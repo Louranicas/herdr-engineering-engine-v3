@@ -688,6 +688,22 @@ fn reply_of(output: &Output) -> Result<Value, Box<dyn Error>> {
     Ok(serde_json::from_slice(&output.stdout)?)
 }
 
+/// The producer's exit code for a reply the engine sent as a typed error record (BASH-G1).
+const EXIT_REFUSED: i32 = 7;
+
+/// One engine error record from a door's output: exit [`EXIT_REFUSED`], the record on stdout.
+fn error_of(output: &Output) -> Result<Value, Box<dyn Error>> {
+    assert_eq!(
+        output.status.code(),
+        Some(EXIT_REFUSED),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let record: Value = serde_json::from_slice(&output.stdout)?;
+    assert_eq!(record["kind"], json!("error"), "{record}");
+    Ok(record)
+}
+
 /// `reply` with the values at `pointers` set to null; every pointer must name a value, so a mask
 /// can never pass because what it masks is missing.
 fn without(mut reply: Value, pointers: &[&str]) -> Result<Value, Box<dyn Error>> {
@@ -821,7 +837,7 @@ fn the_engine_admits_and_reads_back_a_task_through_the_wrapper() -> Outcome {
 
     // Calling the wrapper again builds a new request (its own request_id and deadline), and a
     // replay is byte-exact (RC03 §3): the key conflicts, and nothing new is admitted.
-    let retried = reply_of(&wrapper(
+    let retried = error_of(&wrapper(
         run,
         scope,
         &strs(&submitting(KEY, "Add a strict decimal parser.")),
@@ -916,7 +932,7 @@ fn an_admission_survives_a_kill_after_commit_and_its_exact_bytes_replay() -> Out
         scope,
         &strs(&submitting(KEY, "Add a strict decimal parser!")),
     )?;
-    let conflict = reply_of(&producer(run, "task.submit", &changed, Stdio::piped())?)?;
+    let conflict = error_of(&producer(run, "task.submit", &changed, Stdio::piped())?)?;
     assert_eq!(
         (&conflict["code"], &conflict["details"]["field"]),
         (&json!("conflict"), &json!("/idempotency_key")),
@@ -924,6 +940,150 @@ fn an_admission_survives_a_kill_after_commit_and_its_exact_bytes_replay() -> Out
     );
     let still = get_through(run, scope, &json!({"task_id": task}))?;
     assert_eq!(still["body"]["task"], first["body"]["task"]);
+    Ok(())
+}
+
+#[test]
+fn an_engine_error_reply_is_its_own_exit_code_and_is_named() -> Outcome {
+    let world = World::new()?;
+    let (run, scope) = (&world.run, &world.scope);
+    let _engine = Engine::start(run, &world.home)?;
+    let argv = [
+        "tools.list",
+        "query:=null",
+        r#"page:={"limit":1,"cursor":null}"#,
+    ];
+    // Benign mirror: a result record exits 0.
+    let served = producer(
+        run,
+        "tools.list",
+        &built(run, scope, &argv)?,
+        Stdio::piped(),
+    )?;
+    assert_eq!(reply_of(&served)?["kind"], json!("result"));
+    // The same request under a substituted scope: the engine answers with an error record. The
+    // record is printed unchanged, the exit code alone says it was a refusal, and stderr names it.
+    let substituted = request_sha256(b"{}");
+    let refused = producer(
+        run,
+        "tools.list",
+        &built(run, &substituted, &argv)?,
+        Stdio::piped(),
+    )?;
+    let record = error_of(&refused)?;
+    assert_eq!(record["code"], json!("forbidden"));
+    assert_eq!(
+        String::from_utf8_lossy(&refused.stderr),
+        "habitat-engine: the engine refused the request: forbidden\n"
+    );
+    // Through the wrapper the producer's code passes unchanged.
+    let wrapped = wrapper(run, &substituted, &argv)?;
+    assert_eq!(error_of(&wrapped)?["code"], json!("forbidden"));
+    Ok(())
+}
+
+/// Run a `hee3 chain` spec through the wrapper against the engine in `run`.
+fn chain(run: &Path, scope: &str, steps: &Value) -> Result<Output, Box<dyn Error>> {
+    let scratch = Scratch::new()?;
+    let spec = scratch.0.join("chain.json");
+    fs::write(
+        &spec,
+        serde_json::to_vec(
+            &json!({"protocol": "hee3.chain", "version": 1, "timeout_ms": 20000, "steps": steps}),
+        )?,
+    )?;
+    wrapper(run, scope, &["chain", spec.to_str().ok_or("path")?])
+}
+
+/// BASH-G3: T29 composition (a) as a `hee3 chain` through the real engine. The spec's intent
+/// carries spaces, quotes, `$(...)` and `;` as data; the submit's task id travels by JSON pointer
+/// into the read-back; and a refusing step stops the chain with its own status.
+#[test]
+fn a_chain_submits_and_reads_back_through_the_engine_and_stops_at_a_refusal() -> Outcome {
+    const KEY: &str = "28c00000-0000-4000-8000-0000000000c1";
+    let world = World::granting(&["task"], &["read", "durable admission"])?;
+    let (run, scope) = (&world.run, &world.scope);
+    commission(&world.home)?;
+    let _engine = Engine::start(run, &world.home)?;
+    let mut spec = super::tasks::spec();
+    spec["intent"] = json!("keep  spaces; 'single' \"double\" $(touch pwned) and ; as data");
+    let submit = json!({"id": "submit", "action": "task.submit",
+                        "arguments": {"@idempotency_key": KEY, "spec": spec},
+                        "output": "json", "provides": ["/body/task/task_id"]});
+    let chained = chain(
+        run,
+        scope,
+        &json!([submit, {"id": "get", "action": "task.get",
+                         "arguments": {"evidence": "none"}, "output": "json",
+                         "inputs": {"/selector/task_id": {"step": "submit",
+                                                          "field": "/body/task/task_id"}}}]),
+    )?;
+    let records: Vec<Value> = chained
+        .stdout
+        .split(|&b| b == b'\n')
+        .filter(|line| !line.is_empty())
+        .map(serde_json::from_slice)
+        .collect::<Result<_, _>>()?;
+    assert_eq!(chained.status.code(), Some(0), "{records:?}");
+    let task = records[0]["result"]["body"]["task"]["task_id"].clone();
+    UuidV4::parse(task.as_str().ok_or("task id")?)?;
+    let ordered: Vec<(&Value, &Value, &Value)> = records
+        .iter()
+        .map(|record| (&record["kind"], &record["step"], &record["outcome"]))
+        .collect();
+    assert_eq!(
+        ordered,
+        [
+            (&json!("step"), &json!("submit"), &json!("ok")),
+            (&json!("step"), &json!("get"), &json!("ok")),
+            (&json!("summary"), &Value::Null, &json!("ok")),
+        ]
+    );
+    assert_eq!(records[1]["result"]["body"]["task"]["task_id"], task);
+    // The spec's `$(touch pwned)` was data end to end: nothing ran it, here or in the wrapper.
+    assert!(!Path::new(env!("CARGO_MANIFEST_DIR")).join("pwned").exists());
+    assert!(!Path::new("pwned").exists());
+    assert_eq!(
+        get_through(run, scope, &key_selector(KEY))?["body"]["task"]["task_id"],
+        task
+    );
+
+    // The same key with other bytes: the engine refuses, the step fails with the producer's own
+    // status (7, passed through), and the step after it never runs.
+    let mut changed = spec.clone();
+    changed["intent"] = json!("a different intent under the same key");
+    let refused = chain(
+        run,
+        scope,
+        &json!([{"id": "again", "action": "task.submit",
+                 "arguments": {"@idempotency_key": KEY, "spec": changed}, "output": "json"},
+                {"id": "never", "action": "task.get",
+                 "arguments": {"selector": {"task_id": task}, "evidence": "none"}}]),
+    )?;
+    let summary: Value = serde_json::from_slice(
+        refused
+            .stdout
+            .split(|&b| b == b'\n')
+            .rfind(|line| !line.is_empty())
+            .ok_or("no summary")?,
+    )?;
+    assert_eq!(
+        (
+            refused.status.code(),
+            &summary["outcome"],
+            &summary["status"],
+            &summary["failed_step"],
+            &summary["not_run"]
+        ),
+        (
+            Some(EXIT_REFUSED),
+            &json!("failed"),
+            &json!(EXIT_REFUSED),
+            &json!("again"),
+            &json!(["never"])
+        ),
+        "{summary}"
+    );
     Ok(())
 }
 
@@ -979,7 +1139,7 @@ fn without_a_grant_directory_the_engine_serves_and_refuses_every_request() -> Ou
             r#"page:={"limit":1,"cursor":null}"#,
         ],
     ] {
-        let refused = reply_of(&wrapper(run, scope, &argv)?)?;
+        let refused = error_of(&wrapper(run, scope, &argv)?)?;
         assert_eq!(
             (
                 &refused["code"],
@@ -1018,7 +1178,7 @@ fn an_unwritable_ledger_leaves_task_actions_unavailable() -> Outcome {
     let log = world.home.join("engine.log");
     let _engine = Engine::start_logged(run, &world.home, &log)?;
     let health = reply_of(&wrapper(run, scope, &["health"])?)?;
-    let refused = reply_of(&wrapper(
+    let refused = error_of(&wrapper(
         run,
         scope,
         &strs(&submitting(
@@ -1334,11 +1494,15 @@ fn a_composition_outside_its_skills_actions_is_refused_before_any_request() -> O
         );
     }
     // Nothing reached the ledger.
-    let absent = get_through(
+    let absent = error_of(&wrapper(
         &world.run,
         &world.scope,
-        &key_selector(&step_key("submit-and-read-back", 1, "submit")?),
-    )?;
+        &strs(&getting(&key_selector(&step_key(
+            "submit-and-read-back",
+            1,
+            "submit",
+        )?))),
+    )?)?;
     assert_eq!(absent["code"], json!("not_found"), "{absent}");
     Ok(())
 }

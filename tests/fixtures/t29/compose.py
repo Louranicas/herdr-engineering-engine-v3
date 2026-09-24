@@ -33,6 +33,8 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
+# The producer's exit code for an engine error record (src/main.rs EXIT_REFUSED).
+EXIT_REFUSED = 7
 
 
 def module(name, relative):
@@ -49,7 +51,9 @@ PROCEDURES = module("hee3_validate_procedure", "workflows/validate_procedure.py"
 def wrapper(argv):
     ran = subprocess.run(["bash", str(ROOT / "integrations/bash/hee3"), *argv],
                          capture_output=True, text=True, check=False, timeout=120)
-    if ran.returncode != 0:
+    # 0: a result record. 7: the engine answered with a typed error record (BASH-G1), which the
+    # composition reads like any other answer. Anything else is the door failing, not an answer.
+    if ran.returncode not in (0, EXIT_REFUSED):
         raise SystemExit(f"{argv[0]}: wrapper exit {ran.returncode}: {ran.stderr.strip()}")
     return json.loads(ran.stdout)
 

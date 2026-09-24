@@ -212,6 +212,9 @@ const EXIT_NO_ENGINE: u8 = 3;
 const EXIT_BOUNDS: u8 = 4;
 const EXIT_TIMEOUT: u8 = 5;
 const EXIT_CONTRACT: u8 = 6;
+/// The engine answered with a typed error record (BASH-G1). The record is printed unchanged; the
+/// code alone tells a refusal from a result, so no caller has to parse stdout to know which.
+const EXIT_REFUSED: u8 = 7;
 
 /// Where the reviewed grant records live, under the operator's configuration root (RC02).
 const GRANTS_DIRECTORY: &str = ".config/herdr-engineering-engine-v3/grants";
@@ -390,10 +393,26 @@ fn request(action: &str) -> ExitCode {
     }
     match FrameReader::new(&stream).next_frame() {
         Ok(Some(mut record)) => {
+            let refusal = serde_json::from_slice::<serde_json::Value>(&record)
+                .ok()
+                .filter(|reply| {
+                    reply.get("kind").and_then(serde_json::Value::as_str) == Some("error")
+                })
+                .map(|reply| {
+                    reply
+                        .get("code")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("without a code")
+                        .to_owned()
+                });
             record.push(b'\n');
             if let Err(error) = io::stdout().write_all(&record) {
                 eprintln!("habitat-engine: the reply could not be written: {error}");
                 return ExitCode::from(EXIT_CONTRACT);
+            }
+            if let Some(code) = refusal {
+                eprintln!("habitat-engine: the engine refused the request: {code}");
+                return ExitCode::from(EXIT_REFUSED);
             }
             ExitCode::SUCCESS
         }

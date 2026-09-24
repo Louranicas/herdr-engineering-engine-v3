@@ -20,8 +20,9 @@
 #
 # Exit codes: 0 producer succeeded; 2 usage; 3 missing producer or catalogue, or a
 # dependency/version mismatch; 4 bounds; 5 chain timeout;
-# 6 chain output contract; 128+n cancelled by signal n; otherwise the producer's own code,
-# passed through unchanged. A code alone cannot tell a producer's 5 from a chain timeout --
+# 6 chain output contract; 7 the engine answered with a typed error record, printed unchanged
+# (the producer's own EXIT_REFUSED, passed through, so success and refusal differ by code alone);
+# 128+n cancelled by signal n; otherwise the producer's own code, passed through unchanged. A code alone cannot tell a producer's 5 from a chain timeout --
 # the chain's final `summary` record on stdout is the decisive verdict, and names which.
 set -euo pipefail
 

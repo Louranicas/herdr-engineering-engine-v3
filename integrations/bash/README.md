@@ -199,7 +199,7 @@ than waited on forever. A signal outranks what the step did after it: a step tha
 | Outcome | Exit | Meaning |
 |---|---|---|
 | `ok` | 0 | every step succeeded and met its declared output |
-| `failed` | the step's own status | a producer failed; its code is passed through unchanged |
+| `failed` | the step's own status | a producer failed; its code is passed through unchanged — `7` when the engine answered with a typed error record (the record is the step's `stdout`) |
 | `timeout` | 5 | a step or the chain outran its budget (`limit` says which) |
 | `contract` | 6 | a step succeeded but did not produce what it declared |
 | `cancelled` | 128+n | the chain received signal n |
