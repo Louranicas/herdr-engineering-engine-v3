@@ -199,7 +199,6 @@
       "context_budget",
       "denied_scope",
       "stale_reference",
-      "traversal_budget",
       "reference_too_large"
     ],
     "refusals": [
@@ -212,7 +211,9 @@
       "retired_skill",
       "version_mismatch",
       "duplicate_reference",
-      "authority_widening"
+      "authority_widening",
+      "malformed_manifest",
+      "conflicting_dependency"
     ],
     "bounds": {
       "max_references": 32,

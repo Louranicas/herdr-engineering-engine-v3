@@ -11,10 +11,12 @@ Two rules are structural rather than advisory:
 * **A skill cannot widen authority.** `load()` takes the actions the caller ALREADY holds and
   refuses a manifest naming one outside that set. There is no branch that adds an action, so
   "a loaded skill granted itself a capability" is not a state this module can reach.
-* **A reference that is not carried is named.** Scope denial, a budget cutoff, a stale hash
-  and a traversal bound all produce an OMISSION carrying the reference id and the reason.
-  A packet is never quietly short, because a short packet that looks complete is the failure
-  that this module's whole bounding exists to make visible.
+* **A reference that is not carried is named.** Scope denial, a budget cutoff, a stale or
+  absent body and an oversize body all produce an OMISSION carrying the reference id and the
+  reason. A packet is never quietly short, because a short packet that looks complete is the
+  failure that this module's whole bounding exists to make visible. A traversal bound is not
+  an omission: a reference deeper than the bound, or one whose declared depth disagrees with
+  its path, refuses the whole manifest as `traversal_budget`.
 
 Nothing here executes instruction text, grants an action, accepts a task or changes a task's
 criteria. Text is not execution approval.
@@ -23,6 +25,8 @@ criteria. Text is not execution approval.
 import ast
 import hashlib
 import json
+import os
+import stat
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -76,21 +80,27 @@ def safe_path(reference_id, path):
     return segments
 
 
-def discover(manifest, held_actions, available_skills):
-    """Whether this manifest is loadable here, refusing by symbol when it is not.
+def require_fields(record, required, where):
+    """Refuse a record lacking a field the schema requires, before anything indexes it."""
+    missing = [field for field in required if field not in record]
+    if missing:
+        refuse("malformed_manifest", f"{where} lacks required field(s) {missing}")
 
-    `held_actions` is what the caller already holds; `available_skills` maps skill_id to the
-    set of versions present. Returns the manifest's compatibility summary.
+
+def structure(manifest):
+    """The checks that need only the manifest: shape, bounds, paths, pins and depth.
+
+    `discover()` runs these and then the checks that need the caller's world; `revise()` and
+    `read_package()` run these alone. One function, so there is one door per rule.
     """
     if manifest.get("schema") != "hee3.skills.skill.v1":
         refuse("version_mismatch", f"schema is {manifest.get('schema')!r}")
-    if manifest["lifecycle"] == "retired":
-        refuse("retired_skill",
-               f"{manifest['skill_id']} version {manifest['skill_version']} is retired")
+    declared = schema()
+    require_fields(manifest, declared["required"], "manifest")
 
     # The admitted names come from this schema's own enum, which the generator took from
     # the action catalogue. Reading the catalogue again here would be a second door.
-    admitted = set(schema()["properties"]["requires_actions"]["items"]["enum"])
+    admitted = set(declared["properties"]["requires_actions"]["items"]["enum"])
     required = manifest.get("requires_actions", [])
     if len(required) > bounds()["max_actions"]:
         refuse("incompatible_action",
@@ -98,17 +108,66 @@ def discover(manifest, held_actions, available_skills):
     for action in required:
         if action not in admitted:
             refuse("unknown_action", f"{action!r} is not in the action catalogue")
-        if action not in held_actions:
-            # The refusal, never a grant: this is the only place a skill's action claim meets
-            # the caller's authority, and it can only narrow.
-            refuse("authority_widening",
-                   f"{manifest['skill_id']} requires {action!r}, which the caller does not hold")
 
     dependencies = manifest.get("requires_skills", [])
     if len(dependencies) > bounds()["max_dependencies"]:
         refuse("missing_dependency",
                f"{len(dependencies)} dependencies against a limit of "
                f"{bounds()['max_dependencies']}")
+    pins = {}
+    for index, dependency in enumerate(dependencies):
+        require_fields(dependency, declared["$defs"]["dependency"]["required"],
+                       f"dependency {index}")
+        pins.setdefault(dependency["skill_id"], []).append(dependency["skill_version"])
+    for skill_id, versions in sorted(pins.items()):
+        if len(versions) > 1:
+            # Schema `uniqueItems` compares whole objects, so {a, 1} and {a, 2} both pass it.
+            # Two pins for one skill cannot both be the one this skill was reviewed against.
+            refuse("conflicting_dependency",
+                   f"{skill_id} is pinned {len(versions)} times, at versions {sorted(versions)}")
+
+    references = manifest.get("references", [])
+    if len(references) > bounds()["max_references"]:
+        refuse("traversal_budget",
+               f"{len(references)} references against a limit of {bounds()['max_references']}")
+    seen = set()
+    for index, reference in enumerate(references):
+        require_fields(reference, declared["$defs"]["reference"]["required"],
+                       f"reference {index}")
+        identity = reference["reference_id"]
+        if identity in seen:
+            refuse("duplicate_reference", f"{identity} appears twice")
+        seen.add(identity)
+        # The depth is the PATH's. A declared `depth` is a claim the manifest makes about
+        # itself, so it may only agree: were it allowed to override, the bound would be set
+        # by the thing it bounds.
+        depth = len(safe_path(identity, reference["path"])) - 1
+        if depth > bounds()["max_depth"]:
+            refuse("traversal_budget",
+                   f"{identity}: depth {depth} against a limit of {bounds()['max_depth']}")
+        if reference.get("depth", depth) != depth:
+            refuse("traversal_budget",
+                   f"{identity}: declares depth {reference['depth']} but its path is "
+                   f"{depth} deep")
+    return required, dependencies
+
+
+def discover(manifest, held_actions, available_skills):
+    """Whether this manifest is loadable here, refusing by symbol when it is not.
+
+    `held_actions` is what the caller already holds; `available_skills` maps skill_id to the
+    set of versions present. Returns the manifest's compatibility summary.
+    """
+    required, dependencies = structure(manifest)
+    if manifest["lifecycle"] == "retired":
+        refuse("retired_skill",
+               f"{manifest['skill_id']} version {manifest['skill_version']} is retired")
+    for action in required:
+        if action not in held_actions:
+            # The refusal, never a grant: this is the only place a skill's action claim meets
+            # the caller's authority, and it can only narrow.
+            refuse("authority_widening",
+                   f"{manifest['skill_id']} requires {action!r}, which the caller does not hold")
     for dependency in dependencies:
         if not dependency.get("required", True):
             continue
@@ -118,18 +177,6 @@ def discover(manifest, held_actions, available_skills):
                    f"{dependency['skill_id']} version {dependency['skill_version']} is "
                    "required and not present")
 
-    seen = set()
-    for reference in manifest.get("references", []):
-        identity = reference["reference_id"]
-        if identity in seen:
-            refuse("duplicate_reference", f"{identity} appears twice")
-        seen.add(identity)
-        segments = safe_path(identity, reference["path"])
-        depth = reference.get("depth", len(segments) - 1)
-        if depth > bounds()["max_depth"]:
-            refuse("traversal_budget",
-                   f"{identity}: depth {depth} against a limit of {bounds()['max_depth']}")
-
     return {
         "skill_id": manifest["skill_id"],
         "skill_version": manifest["skill_version"],
@@ -137,7 +184,41 @@ def discover(manifest, held_actions, available_skills):
         "deprecated": manifest["lifecycle"] == "deprecated",
         "requires_actions": sorted(required),
         "reference_count": len(manifest.get("references", [])),
+        "requires_skills": sorted(
+            ({"skill_id": d["skill_id"], "skill_version": d["skill_version"],
+              "required": d.get("required", True)} for d in dependencies),
+            key=lambda pin: pin["skill_id"]),
     }
+
+
+def read_package(root, manifest):
+    """Acquire each reference's bytes from under `root`, returning the map `load()` takes.
+
+    The bounds hold at the point of acquisition: a path whose resolution leaves `root` --
+    through a symlinked file or directory -- is refused as `unsafe_path` before it is opened,
+    and no body is read past `max_reference_bytes + 1`, so an oversize file costs one byte
+    over the bound and reaches `load()` as `reference_too_large`. A reference that is absent,
+    or is not a regular file, is left out of the map, which `load()` names as
+    `stale_reference`. A FIFO is opened non-blocking and never read.
+    """
+    structure(manifest)
+    base = Path(root).resolve()
+    ceiling = bounds()["max_reference_bytes"] + 1
+    contents = {}
+    for reference in manifest.get("references", []):
+        identity = reference["reference_id"]
+        resolved = (base / reference["path"]).resolve()
+        if not resolved.is_relative_to(base):
+            refuse("unsafe_path",
+                   f"{identity}: {reference['path']!r} resolves outside the package root")
+        try:
+            descriptor = os.open(resolved, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        except OSError:
+            continue
+        with os.fdopen(descriptor, "rb") as handle:
+            if stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+                contents[identity] = handle.read(ceiling)
+    return contents
 
 
 def load(manifest, held_actions, available_skills, scopes, contents, budget_bytes):
@@ -177,8 +258,11 @@ def load(manifest, held_actions, available_skills, scopes, contents, budget_byte
             omissions.append({"reference_id": identity, "reason": "context_budget"})
             continue
         used += len(body)
+        # Source provenance: what was carried, as it hashes now, and whether that hash is one
+        # a reviewer recorded. Unhashed content is carried and says it is unverified.
         carried.append({"reference_id": identity, "path": reference["path"],
-                        "bytes": len(body)})
+                        "bytes": len(body), "sha256": hashlib.sha256(body).hexdigest(),
+                        "verified": expected is not None})
 
     return {
         "schema": "hee3.skills.packet.v1",
@@ -188,6 +272,8 @@ def load(manifest, held_actions, available_skills, scopes, contents, budget_byte
         # The packet repeats what the CALLER holds, not what the skill asked for. A reader
         # of a packet can never mistake it for a grant, because no wider set appears in it.
         "actions_in_effect": sorted(set(held_actions) & set(summary["requires_actions"])),
+        # Relationship provenance: the exact pins this skill was loaded against.
+        "requires_skills": summary["requires_skills"],
         "entry_bytes": len(entry),
         "references": carried,
         "omissions": omissions,
@@ -201,8 +287,12 @@ def load(manifest, held_actions, available_skills, scopes, contents, budget_byte
 def revise(previous, proposed):
     """Record a revision, refusing one that is not a forward, immutable step.
 
-    Returns the drift record a consumer needs: what changed, and which pins are affected.
+    Both manifests pass the structural checks first, so a revision record is never written
+    over a manifest that could not load. Returns the drift record a consumer needs: what
+    changed, including dependency pins, and which pins are affected.
     """
+    structure(previous)
+    structure(proposed)
     if proposed["skill_id"] != previous["skill_id"]:
         refuse("version_mismatch",
                f"{proposed['skill_id']!r} is not a revision of {previous['skill_id']!r}")
@@ -227,6 +317,19 @@ def revise(previous, proposed):
                                 - set(previous.get("requires_actions", []))),
         "actions_removed": sorted(set(previous.get("requires_actions", []))
                                   - set(proposed.get("requires_actions", []))),
+        # `structure()` refused a skill pinned twice, so skill_id keys each side exactly.
+        **pin_drift(previous.get("requires_skills", []), proposed.get("requires_skills", [])),
         "affected_consumers": "Every consumer pinning "
                               f"{previous['skill_id']} v{previous['skill_version']}",
+    }
+
+
+def pin_drift(before, after):
+    """Which dependency pins a revision added, removed, or changed in version or requirement."""
+    old = {d["skill_id"]: (d["skill_version"], d.get("required", True)) for d in before}
+    new = {d["skill_id"]: (d["skill_version"], d.get("required", True)) for d in after}
+    return {
+        "dependencies_added": sorted(set(new) - set(old)),
+        "dependencies_removed": sorted(set(old) - set(new)),
+        "dependencies_changed": sorted(k for k in set(old) & set(new) if old[k] != new[k]),
     }

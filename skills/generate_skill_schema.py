@@ -34,9 +34,10 @@ MAX_IDENTIFIER = 128
 MAX_TEXT = 8192
 
 LIFECYCLE = ("draft", "published", "deprecated", "retired")
+# `traversal_budget` is deliberately ABSENT: a reference deeper than the bound refuses the
+# manifest, because the path is the manifest's own statement and not the caller's circumstance.
 OMISSION_REASONS = (
-    "context_budget", "denied_scope", "stale_reference", "traversal_budget",
-    "reference_too_large",
+    "context_budget", "denied_scope", "stale_reference", "reference_too_large",
 )
 # `denied_scope` and `stale_reference` are deliberately ABSENT: they are omission reasons,
 # not refusals. A reference the caller may not see, or whose bytes no longer match what was
@@ -45,7 +46,8 @@ OMISSION_REASONS = (
 REFUSALS = (
     "unsafe_path", "missing_dependency", "incompatible_action", "unknown_action",
     "traversal_budget", "context_budget", "retired_skill", "version_mismatch",
-    "duplicate_reference", "authority_widening",
+    "duplicate_reference", "authority_widening", "malformed_manifest",
+    "conflicting_dependency",
 )
 
 
