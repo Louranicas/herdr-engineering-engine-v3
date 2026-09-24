@@ -1,6 +1,6 @@
 {
  "scope": "known answers computed by oracle/route_oracle.py, an independent Python implementation of config/routes.toml over tests/fixtures/route/fixture.json",
- "fixture_sha256": "ff85e3a67966d2d1f7fe4142e6f41a728f934974d09efe5acbba94dbd4cd0ec4",
+ "fixture_sha256": "cba71db975d7e2548f699d181dafa52badf64c53becedbc7a409d872b2070d4a",
  "staleness_bound_ms": 30000,
  "answers": [
   {
@@ -44,6 +44,10 @@
      ],
      [
       "r-10",
+      "R02"
+     ],
+     [
+      "r-13",
       "R02"
      ]
     ],
@@ -104,6 +108,10 @@
      [
       "r-12",
       "R06"
+     ],
+     [
+      "r-13",
+      "R02"
      ]
     ],
     "gaps": []
@@ -167,6 +175,10 @@
      [
       "r-12",
       "R06"
+     ],
+     [
+      "r-13",
+      "R02"
      ]
     ],
     "gaps": []
@@ -211,6 +223,11 @@
       "r-10",
       "R11",
       "missing_cost"
+     ],
+     [
+      "r-13",
+      "R03",
+      "missing_context_limit"
      ]
     ]
    }
@@ -273,6 +290,10 @@
      [
       "r-11",
       "R08"
+     ],
+     [
+      "r-13",
+      "R02"
      ]
     ],
     "gaps": []
@@ -336,6 +357,10 @@
      [
       "r-12",
       "R07"
+     ],
+     [
+      "r-13",
+      "R02"
      ]
     ],
     "gaps": []
@@ -376,6 +401,10 @@
      ],
      [
       "r-10",
+      "R02"
+     ],
+     [
+      "r-13",
       "R02"
      ]
     ],
@@ -440,6 +469,10 @@
      [
       "r-11",
       "R02"
+     ],
+     [
+      "r-13",
+      "R02"
      ]
     ],
     "gaps": []
@@ -503,6 +536,10 @@
      [
       "r-11",
       "R03"
+     ],
+     [
+      "r-13",
+      "R02"
      ]
     ],
     "gaps": []
@@ -573,6 +610,10 @@
      [
       "r-12",
       "R07"
+     ],
+     [
+      "r-13",
+      "R02"
      ]
     ],
     "gaps": []
@@ -630,6 +671,10 @@
      [
       "r-11",
       "R08"
+     ],
+     [
+      "r-13",
+      "R02"
      ]
     ],
     "gaps": []
@@ -690,9 +735,90 @@
      [
       "r-11",
       "R03"
+     ],
+     [
+      "r-13",
+      "R02"
      ]
     ],
     "gaps": []
+   }
+  },
+  {
+   "task": "T13-vision",
+   "answer": {
+    "route": "refused",
+    "recipe": null,
+    "reason": [
+     "baseline_excluded",
+     "R02",
+     [
+      "insufficient_evidence"
+     ]
+    ],
+    "decided_by": "R01",
+    "order": [],
+    "exclusions": [
+     [
+      "09000000-0000-4000-8000-00000000000b",
+      "R02"
+     ],
+     [
+      "r-01",
+      "R02"
+     ],
+     [
+      "r-02",
+      "R02"
+     ],
+     [
+      "r-03",
+      "R02"
+     ],
+     [
+      "r-04",
+      "R02"
+     ],
+     [
+      "r-05",
+      "R02"
+     ],
+     [
+      "r-06",
+      "R02"
+     ],
+     [
+      "r-07",
+      "R02"
+     ],
+     [
+      "r-08",
+      "R02"
+     ],
+     [
+      "r-09",
+      "R02"
+     ],
+     [
+      "r-10",
+      "R02"
+     ],
+     [
+      "r-11",
+      "R02"
+     ],
+     [
+      "r-12",
+      "R02"
+     ]
+    ],
+    "gaps": [
+     [
+      "r-13",
+      "R03",
+      "missing_context_limit"
+     ]
+    ]
    }
   }
  ]

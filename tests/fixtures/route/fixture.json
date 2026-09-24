@@ -13,7 +13,8 @@
     {"id": "r-09", "revision": "9", "capabilities": ["final_output"], "context_limit_tokens": 32768, "locality": "local", "availability": {"kind": "observed", "availability": "unknown", "age_ms": 100}, "cost_microunits": 100, "quality_basis_points": 9000, "latency_ms": 500},
     {"id": "r-10", "revision": "10", "capabilities": ["final_output"], "context_limit_tokens": 32768, "locality": "local", "availability": {"kind": "observed", "availability": "available", "age_ms": 29999}, "cost_microunits": null, "quality_basis_points": 9000, "latency_ms": 500},
     {"id": "r-11", "revision": "11", "capabilities": ["final_output", "identity", "usage"], "context_limit_tokens": 32768, "locality": "local", "availability": {"kind": "observed", "availability": "available", "age_ms": 1000}, "cost_microunits": 100, "quality_basis_points": 8999, "latency_ms": 499},
-    {"id": "r-12", "revision": "12", "capabilities": ["final_output", "identity", "usage", "cancel"], "context_limit_tokens": 131072, "locality": "local", "availability": {"kind": "observed", "availability": "available", "age_ms": 1000}, "cost_microunits": 100, "quality_basis_points": 9001, "latency_ms": 501}
+    {"id": "r-12", "revision": "12", "capabilities": ["final_output", "identity", "usage", "cancel"], "context_limit_tokens": 131072, "locality": "local", "availability": {"kind": "observed", "availability": "available", "age_ms": 1000}, "cost_microunits": 100, "quality_basis_points": 9001, "latency_ms": 501},
+    {"id": "r-13", "revision": "13", "capabilities": ["final_output", "vision"], "context_limit_tokens": null, "locality": "local", "availability": {"kind": "observed", "availability": "available", "age_ms": 1000}, "cost_microunits": 1, "quality_basis_points": 9900, "latency_ms": 10}
   ],
   "tasks": [
     {"id": "T1-plain", "required_capabilities": ["final_output", "identity", "usage"], "context_tokens": 8192, "privacy": "local_only", "cost_ceiling_microunits": null, "deadline_ms": null, "quality_floor_basis_points": null},
@@ -27,6 +28,7 @@
     {"id": "T9-context-40000", "required_capabilities": ["final_output", "identity", "usage"], "context_tokens": 40000, "privacy": "local_only", "cost_ceiling_microunits": null, "deadline_ms": null, "quality_floor_basis_points": null},
     {"id": "T10-three-bounds", "required_capabilities": ["final_output", "identity", "usage"], "context_tokens": 8192, "privacy": "local_only", "cost_ceiling_microunits": 100, "deadline_ms": 500, "quality_floor_basis_points": 9000},
     {"id": "T11-ceiling-and-floor", "required_capabilities": ["final_output", "identity", "usage"], "context_tokens": 8192, "privacy": "local_only", "cost_ceiling_microunits": 100, "deadline_ms": null, "quality_floor_basis_points": 9000},
-    {"id": "T12-remote-context-65536", "required_capabilities": ["final_output", "identity", "usage"], "context_tokens": 65536, "privacy": "remote_allowed", "cost_ceiling_microunits": null, "deadline_ms": null, "quality_floor_basis_points": null}
+    {"id": "T12-remote-context-65536", "required_capabilities": ["final_output", "identity", "usage"], "context_tokens": 65536, "privacy": "remote_allowed", "cost_ceiling_microunits": null, "deadline_ms": null, "quality_floor_basis_points": null},
+    {"id": "T13-vision", "required_capabilities": ["final_output", "vision"], "context_tokens": 1024, "privacy": "local_only", "cost_ceiling_microunits": null, "deadline_ms": null, "quality_floor_basis_points": null}
   ]
 }

@@ -25,6 +25,16 @@ const DELTA: &str = "09000000-0000-4000-8000-0000000000d4";
 const CAPS: &[&str] = &["final_output", "identity", "usage"];
 const FINAL_ONLY: &[&str] = &["final_output"];
 const BOUND_MS: u64 = 30_000;
+/// The reviewed policy's revision, computed outside this code from the canonical rendering:
+/// `printf 'hee3-route-policy\nschema_version=1\nfilters=required_capabilities,context_limit,`
+/// `privacy_class,availability,cost_ceiling,deadline,quality_floor\nranking=cost,quality,latency`
+/// `\ntie=baseline\nstaleness_bound_ms=30000\nbaseline=09000000-0000-4000-8000-00000000000b\n'`
+/// `| sha256sum` (coreutils 9, 2026-09-24).
+const REVIEWED_REVISION: &str =
+    "sha256:1bbf286ff0085a0824be6b4e1b88a24096cf7387306e72111c89e0272bf94358";
+/// The same rendering with the first two filters swapped, by the same independent command.
+const SWAPPED_FILTERS_REVISION: &str =
+    "sha256:4884a34fddd749823ced5cb413d2b05b6d533c56d67cbe822295250fe061b75c";
 const FILTER_RULES: [Rule; 7] = [
     Rule::R02RequiredCapabilities,
     Rule::R03ContextLimit,
@@ -49,7 +59,7 @@ fn baseline() -> Recipe<'static> {
         id: BASELINE_ID,
         revision: BASELINE_REVISION,
         capabilities: CAPS,
-        context_limit_tokens: 32_768,
+        context_limit_tokens: Some(32_768),
         locality: Locality::Local,
         availability: fresh(),
         cost_microunits: Some(0),
@@ -62,7 +72,7 @@ fn recipe(id: &'static str) -> Recipe<'static> {
         id,
         revision: "7",
         capabilities: CAPS,
-        context_limit_tokens: 32_768,
+        context_limit_tokens: Some(32_768),
         locality: Locality::Local,
         availability: fresh(),
         cost_microunits: Some(100),
@@ -82,6 +92,9 @@ fn task() -> Task<'static> {
 }
 fn policy() -> Result<Policy, ConfigError> {
     Policy::load(CONFIG, &baseline())
+}
+fn revision() -> Result<String, ConfigError> {
+    Ok(policy()?.revision().to_owned())
 }
 fn declaration() -> Declaration {
     Declaration {
@@ -613,10 +626,10 @@ fn missing_capability_excludes_naming_the_first_missing() -> Outcome {
 #[test]
 fn context_limit_boundary_is_inclusive() -> Outcome {
     let mut exact = recipe(ALPHA);
-    exact.context_limit_tokens = 8_192;
+    exact.context_limit_tokens = Some(8_192);
     assert_eq!(chosen(&decide(&[exact])?), Some((ALPHA, "7")));
     let mut short = recipe(BETA);
-    short.context_limit_tokens = 8_191;
+    short.context_limit_tokens = Some(8_191);
     let decision = decide(&[short])?;
     assert_eq!(
         excluded_by(&decision, BETA),
@@ -629,6 +642,99 @@ fn context_limit_boundary_is_inclusive() -> Outcome {
             }
         ))
     );
+    Ok(())
+}
+
+/// T09-RT-62 · R03 with no known context limit. The RC03 roster definition declares no limit, so
+/// the router must not invent one: the recipe is a gap at R03 naming the missing figure — never
+/// eligible, never excluded with a made-up number — and that one gap routes to the baseline by R09
+/// despite an eligible challenger, identically in every candidate order. A baseline with no known
+/// limit still permits a strict choice, and is refused by R01 carrying the gap when a fallback
+/// needs it. Route qualification gap route-G4 (docs/modules/route.md: "Missing measurements stay
+/// unknown").
+#[test]
+fn unknown_context_limit_is_a_gap_at_r03_never_an_invented_number() -> Outcome {
+    let mut unknown = recipe(BETA);
+    unknown.context_limit_tokens = None;
+    let missing = Gap::MissingFigure {
+        figure: Figure::ContextLimit,
+    };
+    let mut remote = recipe(GAMMA);
+    remote.locality = Locality::Hybrid;
+    let mut worse = recipe(DELTA);
+    worse.cost_microunits = Some(200);
+    let decision = permutation_invariant(&[recipe(ALPHA), unknown, remote, worse])?;
+    assert_eq!(
+        decision,
+        Route::Baseline {
+            recipe: BASELINE_ID,
+            revision: BASELINE_REVISION,
+            reason: Fallback::InsufficientEvidence {
+                gaps: vec![EvidenceGap {
+                    recipe: BETA,
+                    rule: Rule::R03ContextLimit,
+                    evidence: missing,
+                }]
+            },
+            explanation: Explanation {
+                policy_revision: revision()?,
+                steps: vec![
+                    guarded(),
+                    Step::Eligible {
+                        recipe: ALPHA,
+                        passed: FILTER_RULES.to_vec()
+                    },
+                    Step::Gap {
+                        recipe: BETA,
+                        passed: vec![Rule::R02RequiredCapabilities],
+                        rule: Rule::R03ContextLimit,
+                        evidence: missing
+                    },
+                    Step::Excluded {
+                        recipe: GAMMA,
+                        passed: FILTER_RULES[..2].to_vec(),
+                        rule: Rule::R04PrivacyClass,
+                        why: Exclusion::PrivacyViolated {
+                            locality: Locality::Hybrid
+                        }
+                    },
+                    Step::Eligible {
+                        recipe: DELTA,
+                        passed: FILTER_RULES.to_vec()
+                    },
+                    Step::Decided {
+                        rule: Rule::R09InsufficientEvidence
+                    },
+                ]
+            }
+        }
+    );
+    let mut unbounded = baseline();
+    unbounded.context_limit_tokens = None;
+    let policy = Policy::load(CONFIG, &unbounded)?;
+    let strict = route(&policy, &task(), &[recipe(ALPHA)], &unbounded)?;
+    assert_eq!(chosen(&strict), Some((ALPHA, "7")));
+    assert_eq!(
+        strict.explanation().steps.first(),
+        Some(&Step::Gap {
+            recipe: BASELINE_ID,
+            passed: vec![Rule::R02RequiredCapabilities],
+            rule: Rule::R03ContextLimit,
+            evidence: missing
+        })
+    );
+    let refused = route(&policy, &task(), &[], &unbounded)?;
+    assert_eq!(
+        refusal(&refused),
+        Some((
+            Refusal::BaselineEvidence {
+                rule: Rule::R03ContextLimit,
+                evidence: missing
+            },
+            &Fallback::NoEligibleCandidate
+        ))
+    );
+    assert_eq!(refused.dispatches(), None);
     Ok(())
 }
 
@@ -1101,7 +1207,7 @@ fn all_excluded_routes_to_the_baseline_with_every_exclusion_named() -> Outcome {
     let mut remote = recipe(ALPHA);
     remote.locality = Locality::Remote;
     let mut small = recipe(BETA);
-    small.context_limit_tokens = 1;
+    small.context_limit_tokens = Some(1);
     let decision = decide(&[small, remote])?;
     assert_eq!(
         fallback(&decision),
@@ -1136,6 +1242,7 @@ fn empty_candidate_list_routes_to_the_baseline() -> Outcome {
             revision: BASELINE_REVISION,
             reason: Fallback::NoEligibleCandidate,
             explanation: Explanation {
+                policy_revision: revision()?,
                 steps: vec![
                     guarded(),
                     Step::Decided {
@@ -1273,9 +1380,15 @@ fn every_permutation_yields_the_identical_route() -> Outcome {
     worse.cost_microunits = Some(200);
     let mut near = recipe(BETA);
     near.latency_ms = Some(499);
-    let set = [recipe(ALPHA), near, remote, worse];
-    let reference = decide(&set)?;
+    let reference = permutation_invariant(&[recipe(ALPHA), near, remote, worse])?;
     assert_eq!(chosen(&reference), Some((BETA, "7")));
+    Ok(())
+}
+
+/// Decide over every ordering of four candidates, require each to equal the first decision
+/// (explanation included) and return it. The permutation count is asserted, not assumed.
+fn permutation_invariant(set: &[Recipe<'static>; 4]) -> Result<Route<'static>, Box<dyn Error>> {
+    let reference = decide(set)?;
     let mut permutations = 0;
     for a in 0..4 {
         for b in (0..4).filter(|&b| b != a) {
@@ -1287,8 +1400,8 @@ fn every_permutation_yields_the_identical_route() -> Outcome {
             }
         }
     }
-    assert_eq!(permutations, 24);
-    Ok(())
+    assert_eq!(permutations, 24, "four candidates have 24 orderings");
+    Ok(reference)
 }
 
 /// T09-RT-46 · a chosen route carries the chosen recipe's revision and a baseline route the
@@ -1320,7 +1433,7 @@ fn routes_carry_the_dispatched_revision() -> Outcome {
 #[test]
 fn whole_explanation_of_a_chosen_route() -> Outcome {
     let mut small = recipe(GAMMA);
-    small.context_limit_tokens = 4_096;
+    small.context_limit_tokens = Some(4_096);
     let mut dear = recipe(BETA);
     dear.cost_microunits = Some(150);
     let decision = decide(&[dear, small, recipe(ALPHA)])?;
@@ -1330,6 +1443,7 @@ fn whole_explanation_of_a_chosen_route() -> Outcome {
             recipe: ALPHA,
             revision: "7",
             explanation: Explanation {
+                policy_revision: revision()?,
                 steps: vec![
                     guarded(),
                     Step::Eligible {
@@ -1417,6 +1531,7 @@ fn whole_explanation_of_a_baseline_route() -> Outcome {
                 }]
             },
             explanation: Explanation {
+                policy_revision: revision()?,
                 steps: vec![
                     guarded(),
                     Step::Gap {
@@ -1514,7 +1629,7 @@ fn serialized_decision_is_a_stable_document() -> Outcome {
         "route": "chosen",
         "recipe": ALPHA,
         "revision": "7",
-        "explanation": {"steps": [
+        "explanation": {"policy_revision": REVIEWED_REVISION, "steps": [
             {"step": "guarded", "recipe": BASELINE_ID, "passed": filters},
             {"step": "eligible", "recipe": ALPHA, "passed": filters},
             {"step": "excluded", "recipe": BETA,
@@ -1527,6 +1642,73 @@ fn serialized_decision_is_a_stable_document() -> Outcome {
         ]}
     });
     assert_eq!(serde_json::to_value(&decision)?, expected);
+    Ok(())
+}
+
+/// T09-RT-63 · the admitted policy revision (route-G5; docs/modules/route.md: Op 1 takes the
+/// "admitted policy revision" and "require deterministic replay inputs"). The reviewed policy's
+/// revision and the swapped-filter policy's are pinned to digests computed outside this code; the
+/// text door and the values door agree; every value a declaration can vary enters the revision, so
+/// five policies differing in one value each have five revisions; and every decision names the
+/// revision it was decided under — two policies whose steps are identical for these inputs yield
+/// serialized decisions that differ in that one field and nowhere else.
+#[test]
+fn every_decision_names_the_admitted_policy_revision() -> Outcome {
+    let reviewed = policy()?;
+    assert_eq!(reviewed.revision(), REVIEWED_REVISION);
+    assert_eq!(declared(|_| {})?.revision(), REVIEWED_REVISION);
+    let swapped = declared(|d| d.filters.swap(0, 1))?;
+    assert_eq!(swapped.revision(), SWAPPED_FILTERS_REVISION);
+    let reranked = declared(|d| d.ranking.swap(1, 2))?;
+    let tighter = declared(|d| d.staleness_bound_ms = BOUND_MS - 1)?;
+    let mut other = recipe(ALPHA);
+    other.revision = BASELINE_REVISION;
+    let mut rebased = declaration();
+    rebased.baseline = ALPHA.to_owned();
+    let rebased = Policy::declare(rebased, &other)?;
+    let revisions: BTreeSet<&str> = [&reviewed, &swapped, &reranked, &tighter, &rebased]
+        .iter()
+        .map(|policy| policy.revision())
+        .collect();
+    assert_eq!(
+        revisions.len(),
+        5,
+        "one revision per distinct policy: {revisions:?}"
+    );
+    for revision in &revisions {
+        let hex = revision.strip_prefix("sha256:").ok_or("sha256: prefix")?;
+        assert!(
+            hex.len() == 64
+                && hex
+                    .bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)),
+            "revision {revision} is not sha256: and 64 lowercase hex digits"
+        );
+    }
+    let candidates = [recipe(ALPHA), recipe(BETA)];
+    let under_reviewed =
+        serde_json::to_value(route(&reviewed, &task(), &candidates, &baseline())?)?;
+    let under_tighter = serde_json::to_value(route(&tighter, &task(), &candidates, &baseline())?)?;
+    assert_eq!(
+        under_reviewed["explanation"]["policy_revision"],
+        REVIEWED_REVISION
+    );
+    assert_eq!(
+        under_tighter["explanation"]["policy_revision"],
+        tighter.revision()
+    );
+    assert_ne!(under_reviewed, under_tighter);
+    let mut replayed = under_reviewed.clone();
+    replayed["explanation"]["policy_revision"] = json!(tighter.revision());
+    assert_eq!(
+        replayed, under_tighter,
+        "the revision is the only difference"
+    );
+    let under_swapped = route(&swapped, &task(), &candidates, &baseline())?;
+    assert_eq!(
+        under_swapped.explanation().policy_revision,
+        SWAPPED_FILTERS_REVISION
+    );
     Ok(())
 }
 
@@ -1618,7 +1800,7 @@ fn a_failed_guard_does_not_deny_a_strict_choice() -> Outcome {
     let mut task = task();
     task.context_tokens = 40_000;
     let mut roomy = recipe(ALPHA);
-    roomy.context_limit_tokens = 65_536;
+    roomy.context_limit_tokens = Some(65_536);
     let decision = decide_task(&task, &[roomy])?;
     assert_eq!(
         decision,
@@ -1626,6 +1808,7 @@ fn a_failed_guard_does_not_deny_a_strict_choice() -> Outcome {
             recipe: ALPHA,
             revision: "7",
             explanation: Explanation {
+                policy_revision: revision()?,
                 steps: vec![
                     Step::Excluded {
                         recipe: BASELINE_ID,
@@ -1661,7 +1844,7 @@ fn a_failed_guard_refuses_when_a_fallback_is_required() -> Outcome {
     let mut task = task();
     task.context_tokens = 40_000;
     let mut roomy = recipe(ALPHA);
-    roomy.context_limit_tokens = 65_536;
+    roomy.context_limit_tokens = Some(65_536);
     roomy.availability = Observation::Unobserved;
     let decision = decide_task(&task, &[roomy])?;
     let gaps = vec![EvidenceGap {
@@ -1681,6 +1864,7 @@ fn a_failed_guard_refuses_when_a_fallback_is_required() -> Outcome {
                 }
             },
             explanation: Explanation {
+                policy_revision: revision()?,
                 steps: vec![
                     Step::Excluded {
                         recipe: BASELINE_ID,
@@ -1796,10 +1980,12 @@ fn policy_source_names_no_effectful_item() {
 
 /// Everything `src/route.rs` may name: its declared build dependency (`contracts`), the derive it
 /// serialises with, the pure `std` modules it uses, the TOML value types `Policy::load` parses a
-/// `&str` into, and associated items of the primitive integers. Nothing here performs I/O.
+/// `&str` into, the pure SHA-256 function that digests a policy's canonical rendering into its
+/// revision (route-G5), and associated items of the primitive integers. Nothing here performs I/O.
 const ROUTE_MAY_REFERENCE: &[&str] = &[
     "crate::contracts::roster",
     "serde::Serialize",
+    "sha2",
     "std::cmp",
     "std::collections",
     "std::fmt",
@@ -2004,7 +2190,7 @@ fn known_answer_table_matches_the_independent_oracle() -> Outcome {
         let decision = route(&policy, &task, &candidates, &baseline())?;
         answers.push(json!({"task": entry["id"], "answer": project(&decision)}));
     }
-    assert_eq!(tasks.len(), 12, "the fixture declares twelve tasks");
+    assert_eq!(tasks.len(), 13, "the fixture declares thirteen tasks");
     assert_eq!(Value::Array(answers), expected["answers"]);
     Ok(())
 }
@@ -2037,19 +2223,42 @@ type Rendering = (&'static str, String, &'static str);
 /// The variant names an enum declares, taken from the module source rather than from a list
 /// written here: an include list cannot see an omission, so the denominator comes from the
 /// artefact that decides. `src/route.rs` is read at compile time; no test reads a file at run time.
+/// The body is read with the T09-RT-55 lexer (comments and literals removed) and a variant is an
+/// identifier at brace depth zero after the opening brace or a comma, so a struct variant's
+/// fields, a tuple variant's types, an attribute and a generic header are never counted.
 fn declared_variants(name: &str) -> Result<Vec<String>, Box<dyn Error>> {
     let source = include_str!("../src/route.rs");
-    let header = format!("pub enum {name} {{\n");
-    let start = source.find(&header).ok_or("enum declaration")? + header.len();
-    let body = &source[start..];
-    let end = body.find("\n}\n").ok_or("enum terminator")?;
-    Ok(body[..end]
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty() && !line.starts_with("//"))
-        .filter_map(|line| line.split([' ', ',', '{', '(']).next())
-        .map(str::to_owned)
-        .collect())
+    let header = format!("pub enum {name}");
+    let start = source
+        .match_indices(&header)
+        .map(|(at, _)| at + header.len())
+        .find(|&after| source[after..].starts_with([' ', '<']))
+        .ok_or("enum declaration")?;
+    let open = start + source[start..].find('{').ok_or("enum body")? + 1;
+    let body = strip_comments_and_literals(&source[open..]);
+    let mut variants = Vec::new();
+    let mut depth = 0usize;
+    let mut expecting = true;
+    let mut ident = String::new();
+    for ch in body.chars() {
+        if ch.is_ascii_alphanumeric() || ch == '_' {
+            ident.push(ch);
+            continue;
+        }
+        if !ident.is_empty() && depth == 0 && expecting {
+            variants.push(std::mem::take(&mut ident));
+            expecting = false;
+        }
+        ident.clear();
+        match ch {
+            '{' | '(' | '[' => depth += 1,
+            '}' if depth == 0 => return Ok(variants),
+            '}' | ')' | ']' => depth = depth.checked_sub(1).ok_or("unbalanced enum body")?,
+            ',' => expecting = true,
+            _ => {}
+        }
+    }
+    Err("enum body is not closed".into())
 }
 
 fn invalid_renderings_a() -> Vec<Rendering> {
@@ -2540,7 +2749,7 @@ fn fixture_recipe<'a>(row: &'a Value, caps: &'a [&'a str]) -> Result<Recipe<'a>,
         id: row["id"].as_str().ok_or("id")?,
         revision: row["revision"].as_str().ok_or("revision")?,
         capabilities: caps,
-        context_limit_tokens: row["context_limit_tokens"].as_u64().ok_or("limit")?,
+        context_limit_tokens: row.get("context_limit_tokens").ok_or("limit")?.as_u64(),
         locality: match row["locality"].as_str() {
             Some("local") => Locality::Local,
             Some("remote") => Locality::Remote,
@@ -2635,5 +2844,290 @@ fn gap_name(gap: Gap) -> &'static str {
         Gap::MissingFigure {
             figure: Figure::Latency,
         } => "missing_latency",
+        Gap::MissingFigure {
+            figure: Figure::ContextLimit,
+        } => "missing_context_limit",
     }
+}
+
+// ------------------------------------------------------------- decision-enum census
+
+/// One named census case: the decision it produced and the whole serialized form it must equal.
+type CensusCase = (&'static str, Route<'static>, Value);
+
+/// Serialized names the census reads for each decision enum; each comes from the enum's own
+/// `serde` tag, so a variant is counted only where a decision actually carried it.
+const CENSUS_ENUMS: [&str; 5] = ["Exclusion", "Gap", "Step", "Fallback", "Refusal"];
+
+/// Every failure mode of a hard filter, each excluding one candidate, under a task whose three
+/// bounds the baseline meets exactly: seven exclusions and no eligible candidate (R10).
+fn census_exclusions() -> Result<CensusCase, Box<dyn Error>> {
+    let task = Task {
+        required_capabilities: FINAL_ONLY,
+        context_tokens: 8_192,
+        privacy: PrivacyClass::LocalOnly,
+        cost_ceiling_microunits: Some(100),
+        deadline_ms: Some(1_000),
+        quality_floor_basis_points: Some(5_000),
+    };
+    let mut e1 = recipe("e-1");
+    e1.capabilities = &["identity"];
+    let mut e2 = recipe("e-2");
+    e2.context_limit_tokens = Some(8_191);
+    let mut e3 = recipe("e-3");
+    e3.locality = Locality::Remote;
+    let mut e4 = recipe("e-4");
+    e4.availability = observed(Availability::Unavailable, 7);
+    let mut e5 = recipe("e-5");
+    e5.cost_microunits = Some(101);
+    let mut e6 = recipe("e-6");
+    e6.latency_ms = Some(1_001);
+    let mut e7 = recipe("e-7");
+    e7.quality_basis_points = Some(4_999);
+    let decision = decide_task(&task, &[e7, e6, e5, e4, e3, e2, e1])?;
+    let expected = json!({
+        "route": "baseline", "recipe": BASELINE_ID, "revision": BASELINE_REVISION,
+        "reason": {"reason": "no_eligible_candidate"},
+        "explanation": {"policy_revision": REVIEWED_REVISION, "steps": [
+            {"step": "guarded", "recipe": BASELINE_ID, "passed": census_rules(7)},
+            {"step": "excluded", "recipe": "e-1", "passed": census_rules(0), "rule": "R02RequiredCapabilities",
+             "why": {"why": "missing_capability", "capability": "final_output"}},
+            {"step": "excluded", "recipe": "e-2", "passed": census_rules(1), "rule": "R03ContextLimit",
+             "why": {"why": "context_exceeded", "limit_tokens": 8191, "required_tokens": 8192}},
+            {"step": "excluded", "recipe": "e-3", "passed": census_rules(2), "rule": "R04PrivacyClass",
+             "why": {"why": "privacy_violated", "locality": "remote"}},
+            {"step": "excluded", "recipe": "e-4", "passed": census_rules(3), "rule": "R05Availability",
+             "why": {"why": "unavailable", "age_ms": 7}},
+            {"step": "excluded", "recipe": "e-5", "passed": census_rules(4), "rule": "R06CostCeiling",
+             "why": {"why": "cost_above_ceiling", "cost_microunits": 101, "ceiling_microunits": 100}},
+            {"step": "excluded", "recipe": "e-6", "passed": census_rules(5), "rule": "R07Deadline",
+             "why": {"why": "latency_above_deadline", "latency_ms": 1001, "deadline_ms": 1000}},
+            {"step": "excluded", "recipe": "e-7", "passed": census_rules(6), "rule": "R08QualityFloor",
+             "why": {"why": "quality_below_floor", "quality_basis_points": 4999, "floor_basis_points": 5000}},
+            {"step": "decided", "rule": "R10NoEligibleCandidate"}
+        ]}
+    });
+    Ok((
+        "seven exclusions, no eligible candidate",
+        decision,
+        expected,
+    ))
+}
+
+/// Every kind of evidence gap beside one eligible candidate: the gaps route to the baseline by
+/// R09 and no ranking is reported.
+fn census_gaps() -> Result<CensusCase, Box<dyn Error>> {
+    let mut g1 = recipe("g-1");
+    g1.availability = Observation::Unobserved;
+    let mut g2 = recipe("g-2");
+    g2.availability = observed(Availability::Unknown, 5);
+    let mut g3 = recipe("g-3");
+    g3.availability = observed(Availability::Available, BOUND_MS);
+    let mut g4 = recipe("g-4");
+    g4.context_limit_tokens = None;
+    let decision = decide(&[recipe("g-5"), g4, g3, g2, g1])?;
+    let gap = |recipe: &str, rule: &str, evidence: Value| json!({"recipe": recipe, "rule": rule, "evidence": evidence});
+    let gaps = [
+        gap("g-1", "R05Availability", json!({"evidence": "unobserved"})),
+        gap(
+            "g-2",
+            "R05Availability",
+            json!({"evidence": "availability_unknown", "age_ms": 5}),
+        ),
+        gap(
+            "g-3",
+            "R05Availability",
+            json!({"evidence": "stale_availability", "age_ms": 30000, "bound_ms": 30000}),
+        ),
+        gap(
+            "g-4",
+            "R03ContextLimit",
+            json!({"evidence": "missing_figure", "figure": "context_limit"}),
+        ),
+    ];
+    let passed = [3, 3, 3, 1];
+    let mut steps =
+        vec![json!({"step": "guarded", "recipe": BASELINE_ID, "passed": census_rules(7)})];
+    for (entry, count) in gaps.iter().zip(passed) {
+        let mut step = entry.clone();
+        step["step"] = json!("gap");
+        step["passed"] = census_rules(count);
+        steps.push(step);
+    }
+    steps.push(json!({"step": "eligible", "recipe": "g-5", "passed": census_rules(7)}));
+    steps.push(json!({"step": "decided", "rule": "R09InsufficientEvidence"}));
+    let expected = json!({
+        "route": "baseline", "recipe": BASELINE_ID, "revision": BASELINE_REVISION,
+        "reason": {"reason": "insufficient_evidence", "gaps": gaps},
+        "explanation": {"policy_revision": REVIEWED_REVISION, "steps": steps}
+    });
+    Ok(("four gaps beside an eligible candidate", decision, expected))
+}
+
+/// Two candidates equal on every key: ranked, then a tie routed to the baseline by R12.
+fn census_tie() -> Result<CensusCase, Box<dyn Error>> {
+    let decision = decide(&[recipe("t-2"), recipe("t-1")])?;
+    let row = |id: &str| json!({"recipe": id, "cost_microunits": 100, "quality_basis_points": 9000, "latency_ms": 500});
+    let expected = json!({
+        "route": "baseline", "recipe": BASELINE_ID, "revision": BASELINE_REVISION,
+        "reason": {"reason": "tie", "between": ["t-1", "t-2"]},
+        "explanation": {"policy_revision": REVIEWED_REVISION, "steps": [
+            {"step": "guarded", "recipe": BASELINE_ID, "passed": census_rules(7)},
+            {"step": "eligible", "recipe": "t-1", "passed": census_rules(7)},
+            {"step": "eligible", "recipe": "t-2", "passed": census_rules(7)},
+            {"step": "ranked", "rule": "R11Ranking", "order": [row("t-1"), row("t-2")]},
+            {"step": "decided", "rule": "R12Tie"}
+        ]}
+    });
+    Ok(("an exact tie", decision, expected))
+}
+
+/// A baseline lacking a capability the task requires, with nothing else to route to: the
+/// required fallback is refused by R01 carrying the R02 exclusion.
+fn census_refused_excluded() -> Result<CensusCase, Box<dyn Error>> {
+    let mut task = task();
+    task.required_capabilities = &["final_output", "vision"];
+    let decision = decide_task(&task, &[])?;
+    let why = json!({"why": "missing_capability", "capability": "vision"});
+    let expected = json!({
+        "route": "refused",
+        "fallback": {"reason": "no_eligible_candidate"},
+        "reason": {"reason": "baseline_excluded", "rule": "R02RequiredCapabilities", "why": why},
+        "explanation": {"policy_revision": REVIEWED_REVISION, "steps": [
+            {"step": "excluded", "recipe": BASELINE_ID, "passed": census_rules(0),
+             "rule": "R02RequiredCapabilities", "why": why},
+            {"step": "decided", "rule": "R10NoEligibleCandidate"},
+            {"step": "decided", "rule": "R01BaselineGuard"}
+        ]}
+    });
+    Ok(("a baseline excluded when needed", decision, expected))
+}
+
+/// A baseline whose availability observation is stale, with nothing else to route to: the
+/// required fallback is refused by R01 carrying the R05 gap.
+fn census_refused_evidence() -> Result<CensusCase, Box<dyn Error>> {
+    let mut stale = baseline();
+    stale.availability = observed(Availability::Available, 40_000);
+    let decision = route(&Policy::load(CONFIG, &stale)?, &task(), &[], &stale)?;
+    let evidence = json!({"evidence": "stale_availability", "age_ms": 40000, "bound_ms": 30000});
+    let expected = json!({
+        "route": "refused",
+        "fallback": {"reason": "no_eligible_candidate"},
+        "reason": {"reason": "baseline_evidence", "rule": "R05Availability", "evidence": evidence},
+        "explanation": {"policy_revision": REVIEWED_REVISION, "steps": [
+            {"step": "gap", "recipe": BASELINE_ID, "passed": census_rules(3),
+             "rule": "R05Availability", "evidence": evidence},
+            {"step": "decided", "rule": "R10NoEligibleCandidate"},
+            {"step": "decided", "rule": "R01BaselineGuard"}
+        ]}
+    });
+    Ok((
+        "a baseline without evidence when needed",
+        decision,
+        expected,
+    ))
+}
+
+/// The first `count` filter rules as their serialized names.
+fn census_rules(count: usize) -> Value {
+    json!(
+        FILTER_RULES[..count]
+            .iter()
+            .map(|rule| format!("{rule:?}"))
+            .collect::<Vec<_>>()
+    )
+}
+
+/// The serde `snake_case` spelling of a declared variant name.
+fn snake(name: &str) -> String {
+    let mut out = String::new();
+    for (at, ch) in name.char_indices() {
+        if ch.is_ascii_uppercase() && at > 0 {
+            out.push('_');
+        }
+        out.push(ch.to_ascii_lowercase());
+    }
+    out
+}
+
+/// Every (enum, tag) a serialized decision carries, read by the position each enum occupies.
+fn census_tags(decision: &Value, into: &mut BTreeSet<(&'static str, String)>) {
+    let mut note = |name: &'static str, value: &Value| {
+        if let Some(tag) = value.as_str() {
+            into.insert((name, tag.to_owned()));
+        }
+    };
+    let mut fallbacks = Vec::new();
+    match decision["route"].as_str() {
+        Some("baseline") => fallbacks.push(&decision["reason"]),
+        Some("refused") => {
+            fallbacks.push(&decision["fallback"]);
+            let refusal = &decision["reason"];
+            note("Refusal", &refusal["reason"]);
+            note("Exclusion", &refusal["why"]["why"]);
+            note("Gap", &refusal["evidence"]["evidence"]);
+        }
+        _ => {}
+    }
+    for fallback in fallbacks {
+        note("Fallback", &fallback["reason"]);
+        for gap in fallback["gaps"].as_array().into_iter().flatten() {
+            note("Gap", &gap["evidence"]["evidence"]);
+        }
+    }
+    for step in decision["explanation"]["steps"]
+        .as_array()
+        .into_iter()
+        .flatten()
+    {
+        note("Step", &step["step"]);
+        note("Exclusion", &step["why"]["why"]);
+        note("Gap", &step["evidence"]["evidence"]);
+    }
+}
+
+/// T09-RT-64 · census of the five decision enums (route-G10; T09 closure W3). Every variant of
+/// `Exclusion`, `Gap`, `Step`, `Fallback` and `Refusal` — enumerated from `src/route.rs`, not listed
+/// here — is produced by at least one named case whose whole serialized decision equals its
+/// literal; a produced tag no declared variant spells is refused too. Prints `variants=N/N`.
+#[test]
+fn every_decision_enum_variant_is_produced_by_a_named_whole_case() -> Outcome {
+    let cases = [
+        census_exclusions()?,
+        census_gaps()?,
+        census_tie()?,
+        census_refused_excluded()?,
+        census_refused_evidence()?,
+    ];
+    let mut produced = BTreeSet::new();
+    for (name, decision, expected) in &cases {
+        let serialized = serde_json::to_value(decision)?;
+        assert_eq!(&serialized, expected, "census case {name:?}");
+        census_tags(&serialized, &mut produced);
+    }
+    let mut declared = BTreeSet::new();
+    for name in CENSUS_ENUMS {
+        for variant in declared_variants(name)? {
+            declared.insert((name, snake(&variant)));
+        }
+    }
+    let missing: Vec<_> = declared.difference(&produced).collect();
+    let undeclared: Vec<_> = produced.difference(&declared).collect();
+    let covered = declared.intersection(&produced).count();
+    println!(
+        "variants={covered}/{} cases={}",
+        declared.len(),
+        cases.len()
+    );
+    assert!(missing.is_empty(), "no named case produces {missing:?}");
+    assert!(
+        undeclared.is_empty(),
+        "cases produce undeclared tags {undeclared:?}"
+    );
+    assert_eq!(
+        declared.len(),
+        22,
+        "7 exclusions, 4 gaps, 6 steps, 3 fallbacks, 2 refusals"
+    );
+    Ok(())
 }

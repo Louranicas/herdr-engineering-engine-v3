@@ -13,6 +13,10 @@ tests/t09_route.rs pins but not the independent source of its answers. Only the 
 `--check` changed; the table it writes is byte-identical to the retained one, including its
 `scope` text, which names the file's original location.
 
+Extended 2026-09-24 (route-G4): a null `context_limit_tokens` is unknown and screens as a gap at
+R03 (`missing_context_limit`), per docs/modules/route.md "Missing measurements stay unknown";
+fixture recipe r-13 carries one and task T13-vision reaches it alone.
+
 Run `python3 tests/fixtures/route/make-known-answers.py --check` to re-derive the committed table
 and compare bytes (prints `matches_generator=yes`, exit 0; otherwise exit 1). Without `--check`
 it rewrites the table.
@@ -51,6 +55,9 @@ def screen(task, recipe, bound):
             if any(c not in recipe["capabilities"] for c in task["required_capabilities"]):
                 return ("excluded", rule)
         elif name == "context_limit":
+            # A null limit is unknown (the roster declares none): a gap, never a guessed number.
+            if recipe["context_limit_tokens"] is None:
+                return ("gap", rule, "missing_context_limit")
             if recipe["context_limit_tokens"] < task["context_tokens"]:
                 return ("excluded", rule)
         elif name == "privacy_class":

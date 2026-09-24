@@ -309,9 +309,11 @@
 
 use crate::contracts::roster::{Availability, Locality};
 use serde::Serialize;
+use sha2::Digest as _;
 use std::cmp::Ordering;
 use std::collections::BTreeSet;
 use std::fmt;
+use std::fmt::Write as _;
 
 /// The roster's record bound; a larger candidate set is refused by count.
 pub const MAX_CANDIDATES: usize = 256;
@@ -485,13 +487,17 @@ impl TieRule {
     }
 }
 
-/// A figure a recipe carries as supplied fixture data.
+/// A figure a recipe carries as supplied data, or lacks. A lacking figure is never invented:
+/// the rule that needed it reports a [`Gap::MissingFigure`] naming it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Figure {
     Cost,
     Quality,
     Latency,
+    /// The recipe's context limit. The RC03 roster definition declares none, so a recipe
+    /// built from a roster record alone carries no limit and R03 cannot pass it.
+    ContextLimit,
 }
 
 /// The task's privacy class. `LocalOnly` is the only class the RC01 profile admits.
@@ -531,7 +537,8 @@ pub struct Recipe<'a> {
     pub id: &'a str,
     pub revision: &'a str,
     pub capabilities: &'a [&'a str],
-    pub context_limit_tokens: u64,
+    /// `None` when no context limit is known; R03 then reports a gap rather than a number.
+    pub context_limit_tokens: Option<u64>,
     pub locality: Locality,
     pub availability: Observation,
     pub cost_microunits: Option<u64>,
@@ -618,9 +625,12 @@ pub enum Step<'a> {
     Decided { rule: Rule },
 }
 
-/// The stable, ordered explanation of one decision.
-#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
+/// The stable, ordered explanation of one decision, naming the admitted policy revision it
+/// was decided under so a replay can require the same policy.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct Explanation<'a> {
+    /// [`Policy::revision`] of the policy that applied every step below.
+    pub policy_revision: String,
     pub steps: Vec<Step<'a>>,
 }
 
@@ -856,6 +866,7 @@ pub struct Policy {
     tie: TieRule,
     baseline: String,
     staleness_bound_ms: u64,
+    revision: String,
 }
 
 impl Policy {
@@ -920,20 +931,28 @@ impl Policy {
         }
         if let Some(figure) = ranking
             .iter()
+            .find(|key| ranking_figure(baseline, **key).is_none())
             .map(|key| key.figure())
-            .find(|figure| baseline_figure(baseline, *figure).is_none())
         {
             return Err(ConfigError::BaselineMissingFigure {
                 recipe: declaration.baseline,
                 figure,
             });
         }
+        let revision = revision(&canonical(
+            &filters,
+            &ranking,
+            tie,
+            declaration.staleness_bound_ms,
+            &declaration.baseline,
+        ));
         Ok(Self {
             filters,
             ranking,
             tie,
             baseline: declaration.baseline,
             staleness_bound_ms: declaration.staleness_bound_ms,
+            revision,
         })
     }
 
@@ -961,6 +980,48 @@ impl Policy {
     pub const fn staleness_bound_ms(&self) -> u64 {
         self.staleness_bound_ms
     }
+
+    /// The admitted policy revision: `sha256:` and the lowercase hex SHA-256 of the canonical
+    /// rendering of the validated values. Two policies share a revision exactly when their
+    /// validated values are equal; formatting and comments in the source do not enter it.
+    #[must_use]
+    pub fn revision(&self) -> &str {
+        &self.revision
+    }
+}
+
+/// The canonical rendering a policy revision digests: a fixed header, then one `key=value`
+/// line per validated value in a fixed order, lists comma-joined in declared order. Every name
+/// is a fixed ASCII word and the baseline identity has no control characters, so no two
+/// distinct policies render alike.
+fn canonical(
+    filters: &[Filter],
+    ranking: &[Key],
+    tie: TieRule,
+    staleness_bound_ms: u64,
+    baseline: &str,
+) -> String {
+    let filters: Vec<&str> = filters.iter().map(|filter| filter.name()).collect();
+    let ranking: Vec<&str> = ranking.iter().map(|key| key.name()).collect();
+    format!(
+        "hee3-route-policy\nschema_version={SCHEMA_VERSION}\nfilters={}\nranking={}\ntie={}\n\
+         staleness_bound_ms={staleness_bound_ms}\nbaseline={baseline}\n",
+        filters.join(","),
+        ranking.join(","),
+        tie.name(),
+    )
+}
+
+/// `sha256:` and the lowercase hex SHA-256 of `rendering`.
+fn revision(rendering: &str) -> String {
+    sha2::Sha256::digest(rendering.as_bytes()).iter().fold(
+        String::from("sha256:"),
+        |mut text, byte| {
+            // Writing into a `String` cannot fail; its `fmt::Result` carries no information.
+            let _ = write!(text, "{byte:02x}");
+            text
+        },
+    )
 }
 
 fn declaration(table: &toml::Table) -> Result<Declaration, ConfigError> {
@@ -1103,11 +1164,12 @@ fn capabilities_valid(values: &[&str]) -> bool {
         && values.iter().collect::<BTreeSet<_>>().len() == values.len()
 }
 
-fn baseline_figure(recipe: &Recipe<'_>, figure: Figure) -> Option<u64> {
-    match figure {
-        Figure::Cost => recipe.cost_microunits,
-        Figure::Quality => recipe.quality_basis_points.map(u64::from),
-        Figure::Latency => recipe.latency_ms,
+/// The figure a ranking key reads from a recipe, if the recipe carries it.
+fn ranking_figure(recipe: &Recipe<'_>, key: Key) -> Option<u64> {
+    match key {
+        Key::Cost => recipe.cost_microunits,
+        Key::Quality => recipe.quality_basis_points.map(u64::from),
+        Key::Latency => recipe.latency_ms,
     }
 }
 
@@ -1197,12 +1259,17 @@ fn apply_filter<'a>(
             .iter()
             .find(|required| !recipe.capabilities.contains(required))
             .map(|capability| Stop::Excluded(Exclusion::MissingCapability { capability })),
-        Filter::ContextLimit => (recipe.context_limit_tokens < task.context_tokens).then_some(
-            Stop::Excluded(Exclusion::ContextExceeded {
-                limit_tokens: recipe.context_limit_tokens,
-                required_tokens: task.context_tokens,
-            }),
-        ),
+        Filter::ContextLimit => match recipe.context_limit_tokens {
+            None => Some(Stop::Gap(Gap::MissingFigure {
+                figure: Figure::ContextLimit,
+            })),
+            Some(limit) => (limit < task.context_tokens).then_some(Stop::Excluded(
+                Exclusion::ContextExceeded {
+                    limit_tokens: limit,
+                    required_tokens: task.context_tokens,
+                },
+            )),
+        },
         Filter::PrivacyClass => (task.privacy == PrivacyClass::LocalOnly
             && recipe.locality != Locality::Local)
             .then_some(Stop::Excluded(Exclusion::PrivacyViolated {
@@ -1463,7 +1530,10 @@ pub fn route<'a>(
     baseline: &Recipe<'a>,
 ) -> Result<Route<'a>, Invalid> {
     validate(policy, task, candidates, baseline)?;
-    let mut explanation = Explanation::default();
+    let mut explanation = Explanation {
+        policy_revision: policy.revision.clone(),
+        steps: Vec::new(),
+    };
     let defect = guard_baseline(policy, task, baseline, &mut explanation);
     let (mut eligible, gaps) = screen_candidates(policy, task, candidates, &mut explanation);
     eligible.sort_by(|(_, left), (_, right)| compare(&policy.ranking, left, right));
