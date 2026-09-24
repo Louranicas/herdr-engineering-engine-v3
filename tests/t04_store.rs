@@ -454,6 +454,121 @@ fn changed_migration_checksum_refuses_even_at_supported_version() {
     ));
 }
 
+/// A ledger that cannot grow refuses admission by name and leaves no partial task, event or
+/// operation behind: the clamp is SQLite's own page bound, not a filesystem arrangement.
+#[test]
+fn full_storage_refuses_admission_by_name_with_no_partial_rows() {
+    let area = Area::new();
+    let mut store = area.open();
+    let pages: i64 = store
+        .connection
+        .query_row("PRAGMA page_count", [], |row| row.get(0))
+        .unwrap();
+    let clamped: i64 = store
+        .connection
+        .query_row(&format!("PRAGMA max_page_count={pages}"), [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(clamped, pages, "the clamp must hold before the write");
+    // A small request fits in free space inside existing pages and is admitted under this clamp
+    // (measured); 512 KiB needs new overflow pages the clamp forbids, under the 1 MiB request bound.
+    let owner = principal();
+    let large = vec![b'x'; 512 * 1024];
+    let mut request = submission(&owner);
+    request.request_bytes = &large;
+    let refused = store.submit(request, deadline());
+    assert!(matches!(refused, Err(Error::Full)), "{refused:?}");
+    // SQLite already rolled that transaction back; the store is not poisoned by it, and a small
+    // request that fits in existing pages is still admitted under the same clamp.
+    assert_eq!(admit(&mut store).sequence, 1);
+    drop(store);
+    drop(area.reopen());
+    for table in ["tasks", "events", "operations"] {
+        assert_eq!(
+            count(&area, table),
+            1,
+            "{table} kept a partial row of the refused request"
+        );
+    }
+    let spec: Vec<u8> = area
+        .inspect()
+        .query_row("SELECT spec FROM tasks", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(spec, b"canonical request");
+}
+
+/// A COMMIT that SQLite itself fails (its commit hook turns it into a rollback) is reported as
+/// uncertain, the same answer the poisoned store gives every later write, never as success.
+#[test]
+fn failed_commit_is_uncertain_and_poisons_later_writes() {
+    let area = Area::new();
+    let mut store = area.open();
+    store.connection.commit_hook(Some(|| true)).unwrap();
+    assert!(matches!(
+        store.submit(submission(&principal()), deadline()),
+        Err(Error::UncertainCommit)
+    ));
+    store.connection.commit_hook(None::<fn() -> bool>).unwrap();
+    assert!(matches!(
+        store.submit(submission(&principal()), deadline()),
+        Err(Error::UncertainCommit)
+    ));
+    drop(store);
+    drop(area.reopen());
+    assert_eq!(count(&area, "tasks"), 0, "the hook rolled the commit back");
+}
+
+/// A transaction SQLite already rolled back (autocommit restored) needs no second rollback; an
+/// open one is rolled back for real.
+#[test]
+fn roll_back_accepts_a_rollback_sqlite_already_made() {
+    let mut db = Connection::open_in_memory().unwrap();
+    db.execute_batch("CREATE TABLE t(x);").unwrap();
+    let tx = db.transaction().unwrap();
+    tx.execute("INSERT INTO t VALUES(1)", []).unwrap();
+    tx.execute_batch("ROLLBACK;").unwrap();
+    assert!(tx.is_autocommit());
+    assert!(roll_back(tx).is_ok());
+    let tx = db.transaction().unwrap();
+    tx.execute("INSERT INTO t VALUES(2)", []).unwrap();
+    assert!(!tx.is_autocommit());
+    assert!(roll_back(tx).is_ok());
+    let rows: i64 = db
+        .query_row("SELECT count(*) FROM t", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(rows, 0);
+}
+
+/// Constraint and no-space failures produced by SQLite and the OS are classified by name.
+#[test]
+fn constraint_and_no_space_failures_are_named() {
+    let db = Connection::open_in_memory().unwrap();
+    db.execute_batch("CREATE TABLE t(x INTEGER NOT NULL CHECK(x > 0));")
+        .unwrap();
+    let refused = db.execute("INSERT INTO t VALUES(0)", []).unwrap_err();
+    assert!(matches!(Error::from(refused), Error::Constraint));
+    let unique = Connection::open_in_memory().unwrap();
+    unique
+        .execute_batch("CREATE TABLE u(x PRIMARY KEY); INSERT INTO u VALUES(1);")
+        .unwrap();
+    let duplicate = unique.execute("INSERT INTO u VALUES(1)", []).unwrap_err();
+    assert!(matches!(Error::from(duplicate), Error::Constraint));
+    assert!(matches!(
+        Error::from(std::io::Error::from_raw_os_error(
+            rustix::io::Errno::NOSPC.raw_os_error()
+        )),
+        Error::Full
+    ));
+    assert!(matches!(Error::from(rustix::io::Errno::NOSPC), Error::Full));
+    let other = db.execute("INSERT INTO missing VALUES(1)", []).unwrap_err();
+    assert!(matches!(Error::from(other), Error::Sqlite(_)));
+    assert!(matches!(
+        Error::from(rustix::io::Errno::ACCESS),
+        Error::Os(_)
+    ));
+}
+
 /// A publication rewrites only the anchor block (d6cd92c did, with no DDL change); the recorded
 /// migration identity must not move, while one more byte of migration body must move it.
 #[test]

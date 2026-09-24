@@ -210,7 +210,7 @@ impl Store {
             .connection
             .transaction_with_behavior(TransactionBehavior::Deferred)?;
         let result = collect(&tx, expected_epoch.as_str(), generation, limits, deadline);
-        match (result, tx.rollback()) {
+        match (result, super::roll_back(tx)) {
             (result, Ok(())) => result,
             (Err(original), Err(failure)) => {
                 self.poisoned = true;

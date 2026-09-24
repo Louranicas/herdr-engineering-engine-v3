@@ -347,9 +347,13 @@ pub enum Error {
     UnsupportedSchema,
     Runtime,
     UncertainCommit,
+    /// Storage refused a write for lack of space (`SQLITE_FULL`, `ENOSPC`). Before commit the
+    /// transaction is rolled back; a failure at commit is `UncertainCommit` instead.
+    Full,
+    /// SQLite refused a write that breaks a declared constraint; the transaction is rolled back.
+    Constraint,
     RecoveryRequired,
     InspectionOnly,
-    Commit(rusqlite::Error),
     Cleanup {
         original: Box<Error>,
         failure: Box<Error>,
@@ -372,19 +376,33 @@ pub enum Error {
 /// promptly rather than after the caller's whole deadline.
 pub const LOCK_SETTLE: Duration = Duration::from_millis(250);
 
+// Every `?` in the store converts through these, so storage-full and constraint failures are
+// named in one place rather than at each call site.
 impl From<std::io::Error> for Error {
     fn from(value: std::io::Error) -> Self {
-        Self::Io(value)
+        if value.raw_os_error() == Some(rustix::io::Errno::NOSPC.raw_os_error()) {
+            Self::Full
+        } else {
+            Self::Io(value)
+        }
     }
 }
 impl From<rustix::io::Errno> for Error {
     fn from(value: rustix::io::Errno) -> Self {
-        Self::Os(value)
+        if value == rustix::io::Errno::NOSPC {
+            Self::Full
+        } else {
+            Self::Os(value)
+        }
     }
 }
 impl From<rusqlite::Error> for Error {
     fn from(value: rusqlite::Error) -> Self {
-        Self::Sqlite(value)
+        match value.sqlite_error_code() {
+            Some(rusqlite::ErrorCode::DiskFull) => Self::Full,
+            Some(rusqlite::ErrorCode::ConstraintViolation) => Self::Constraint,
+            _ => Self::Sqlite(value),
+        }
     }
 }
 impl From<serde_json::Error> for Error {
@@ -423,6 +441,16 @@ fn check_point(fault: Option<CutPoint>, point: CutPoint) -> Result<()> {
     }
     let _ = (fault, point);
     Ok(())
+}
+
+/// Roll back unless SQLite already did. It does so by itself on some failures (`SQLITE_FULL`
+/// among them) and leaves the connection in autocommit mode; that rollback completed, and issuing
+/// another would misreport it as failed and poison a sound store. Every store transaction ends here.
+fn roll_back(tx: Transaction<'_>) -> rusqlite::Result<()> {
+    if tx.is_autocommit() {
+        return Ok(());
+    }
+    tx.rollback()
 }
 
 fn digest(bytes: &[u8]) -> String {
@@ -743,7 +771,7 @@ impl Store {
         let value = match result {
             Ok(value) => value,
             Err(error) => {
-                if let Err(failure) = tx.rollback() {
+                if let Err(failure) = roll_back(tx) {
                     self.poisoned = true;
                     return Err(Error::Rollback {
                         original: Box::new(error),
@@ -753,9 +781,10 @@ impl Store {
                 return Err(error);
             }
         };
-        if let Err(error) = tx.commit() {
+        // A failed COMMIT may or may not be durable; say so, as every later write will.
+        if tx.commit().is_err() {
             self.poisoned = true;
-            return Err(Error::Commit(error));
+            return Err(Error::UncertainCommit);
         }
         if check_point(fault, CutPoint::AfterCommit).is_err() {
             self.poisoned = true;
