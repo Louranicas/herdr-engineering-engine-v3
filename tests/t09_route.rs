@@ -4,9 +4,10 @@
 //! is involved: the age of every availability observation is a value here.
 use habitat_engine::contracts::roster::{Availability, Locality};
 use habitat_engine::route::{
-    ConfigError, Declaration, EvidenceGap, Exclusion, Explanation, Fallback, Figure, Filter, Gap,
-    Invalid, Key, MAX_CANDIDATES, MAX_QUALITY_BASIS_POINTS, MAX_STALENESS_MS, Observation, Policy,
-    PrivacyClass, Ranked, Recipe, Refusal, Route, Rule, Step, Task, TieRule, route,
+    Attempt, ConfigError, Declaration, EvidenceGap, Exclusion, Explanation, Failure, Fallback,
+    Figure, Filter, Gap, Invalid, Key, MAX_CANDIDATES, MAX_QUALITY_BASIS_POINTS, MAX_STALENESS_MS,
+    Observation, Policy, PrivacyClass, Ranked, Recipe, Refusal, Route, Rule, Step, Task, TieRule,
+    evaluate_fallback, route,
 };
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
@@ -1565,7 +1566,8 @@ fn whole_explanation_of_a_baseline_route() -> Outcome {
     Ok(())
 }
 
-/// T09-RT-49 · rule identities are stable and unique: R01 through R12 in evaluation order.
+/// T09-RT-49 · rule identities are stable and unique: R01 through R12 in evaluation order, and
+/// R13, the fallback's previous-attempt exclusion.
 #[test]
 fn rule_identities_are_stable_and_unique() {
     let rules = [
@@ -1581,12 +1583,14 @@ fn rule_identities_are_stable_and_unique() {
         Rule::R10NoEligibleCandidate,
         Rule::R11Ranking,
         Rule::R12Tie,
+        Rule::R13PreviousAttempt,
     ];
     let ids: Vec<&str> = rules.iter().map(|rule| rule.id()).collect();
     assert_eq!(
         ids,
         [
-            "R01", "R02", "R03", "R04", "R05", "R06", "R07", "R08", "R09", "R10", "R11", "R12"
+            "R01", "R02", "R03", "R04", "R05", "R06", "R07", "R08", "R09", "R10", "R11", "R12",
+            "R13"
         ]
     );
     let names: Vec<&str> = Filter::ALL.iter().map(|f| f.name()).collect();
@@ -1927,6 +1931,411 @@ fn an_ineligible_baseline_is_never_dispatched_by_a_fallback() -> Outcome {
     Ok(())
 }
 
+// ------------------------------------------------------------ fallback (operation 3)
+
+const FAILURES: [Failure; 4] = [
+    Failure::Truncated,
+    Failure::Refused,
+    Failure::Failed,
+    Failure::Cancelled,
+];
+
+fn after(
+    previous: &'static str,
+    failure: Failure,
+    candidates: &[Recipe<'static>],
+) -> Result<Route<'static>, Box<dyn Error>> {
+    after_task(&task(), previous, failure, candidates)
+}
+fn after_task(
+    task: &Task<'static>,
+    previous: &'static str,
+    failure: Failure,
+    candidates: &[Recipe<'static>],
+) -> Result<Route<'static>, Box<dyn Error>> {
+    let attempt = Attempt {
+        recipe: previous,
+        failure,
+    };
+    Ok(evaluate_fallback(
+        &policy()?,
+        task,
+        candidates,
+        &baseline(),
+        attempt,
+    )?)
+}
+fn previous_step(recipe: &'static str, failure: Failure) -> Step<'static> {
+    Step::Excluded {
+        recipe,
+        passed: Vec::new(),
+        rule: Rule::R13PreviousAttempt,
+        why: Exclusion::PreviousAttempt { failure },
+    }
+}
+fn eligible(recipe: &'static str) -> Step<'static> {
+    Step::Eligible {
+        recipe,
+        passed: FILTER_RULES.to_vec(),
+    }
+}
+fn explained(steps: Vec<Step<'static>>) -> Result<Explanation<'static>, Box<dyn Error>> {
+    Ok(Explanation {
+        policy_revision: revision()?,
+        steps,
+    })
+}
+/// The per-recipe screening steps of a decision, keyed by recipe: what each filter did to it.
+fn screenings<'a>(decision: &'a Route<'a>) -> Vec<(&'a str, &'a Step<'a>)> {
+    decision
+        .explanation()
+        .steps
+        .iter()
+        .filter_map(|step| match step {
+            Step::Guarded { recipe, .. }
+            | Step::Eligible { recipe, .. }
+            | Step::Excluded { recipe, .. }
+            | Step::Gap { recipe, .. } => Some((*recipe, step)),
+            Step::Ranked { .. } | Step::Decided { .. } => None,
+        })
+        .collect()
+}
+
+/// T09-RT-65 · operation 3 (route-G1; docs/modules/route.md "Evaluate fallback"): the recipe
+/// whose attempt failed is never chosen again. The route chose ALPHA; after ALPHA's attempt fails
+/// in each of the four categories, the fallback is BETA, and the whole explanation names ALPHA
+/// excluded by R13 before any filter, carrying that category. A failed attempt on a recipe that was
+/// not the choice leaves the choice as it was.
+#[test]
+fn a_fallback_never_rechooses_the_previous_recipe() -> Outcome {
+    let mut worse = recipe(BETA);
+    worse.cost_microunits = Some(200);
+    worse.revision = "3";
+    let candidates = [recipe(ALPHA), worse];
+    assert_eq!(chosen(&decide(&candidates)?), Some((ALPHA, "7")));
+    for failure in FAILURES {
+        let expected = Route::Chosen {
+            recipe: BETA,
+            revision: "3",
+            explanation: explained(vec![
+                guarded(),
+                previous_step(ALPHA, failure),
+                eligible(BETA),
+                Step::Ranked {
+                    rule: Rule::R11Ranking,
+                    order: vec![ranked(&worse)],
+                },
+                Step::Decided {
+                    rule: Rule::R11Ranking,
+                },
+            ])?,
+        };
+        assert_eq!(after(ALPHA, failure, &candidates)?, expected, "{failure:?}");
+    }
+    let unmoved = after(BETA, Failure::Failed, &candidates)?;
+    assert_eq!(chosen(&unmoved), Some((ALPHA, "7")));
+    assert_eq!(
+        excluded_by(&unmoved, BETA),
+        Some((
+            Vec::new(),
+            Rule::R13PreviousAttempt,
+            Exclusion::PreviousAttempt {
+                failure: Failure::Failed
+            }
+        ))
+    );
+    Ok(())
+}
+
+/// T09-RT-66 · a fallback after the only candidate failed routes to the baseline because
+/// nothing eligible remains (R10); the baseline is the permitted next recipe, not a relaxation.
+#[test]
+fn a_fallback_after_the_last_candidate_routes_to_the_baseline() -> Outcome {
+    let decision = after(ALPHA, Failure::Truncated, &[recipe(ALPHA)])?;
+    let expected = Route::Baseline {
+        recipe: BASELINE_ID,
+        revision: BASELINE_REVISION,
+        reason: Fallback::NoEligibleCandidate,
+        explanation: explained(vec![
+            guarded(),
+            previous_step(ALPHA, Failure::Truncated),
+            Step::Decided {
+                rule: Rule::R10NoEligibleCandidate,
+            },
+        ])?,
+    };
+    assert_eq!(decision, expected);
+    Ok(())
+}
+
+/// T09-RT-67 · a truthful refusal carries the failure category. When the baseline's own attempt
+/// failed, R13 excludes it; a fallback that then needs the baseline (nothing eligible, or a tie)
+/// is refused by R01 with the R13 exclusion and the category, one per category. A strict choice
+/// among the candidates is still made: the excluded baseline denies only what needs it.
+#[test]
+fn a_refused_fallback_carries_the_failure_category() -> Outcome {
+    for failure in FAILURES {
+        let why = Exclusion::PreviousAttempt { failure };
+        let expected = Route::Refused {
+            fallback: Fallback::NoEligibleCandidate,
+            reason: Refusal::BaselineExcluded {
+                rule: Rule::R13PreviousAttempt,
+                why,
+            },
+            explanation: explained(vec![
+                previous_step(BASELINE_ID, failure),
+                Step::Decided {
+                    rule: Rule::R10NoEligibleCandidate,
+                },
+                Step::Decided {
+                    rule: Rule::R01BaselineGuard,
+                },
+            ])?,
+        };
+        assert_eq!(after(BASELINE_ID, failure, &[])?, expected, "{failure:?}");
+    }
+    let tied = after(
+        BASELINE_ID,
+        Failure::Refused,
+        &[recipe(BETA), recipe(ALPHA)],
+    )?;
+    assert_eq!(
+        refusal(&tied),
+        Some((
+            Refusal::BaselineExcluded {
+                rule: Rule::R13PreviousAttempt,
+                why: Exclusion::PreviousAttempt {
+                    failure: Failure::Refused
+                },
+            },
+            &Fallback::Tie {
+                between: vec![ALPHA, BETA]
+            }
+        ))
+    );
+    let strict = after(BASELINE_ID, Failure::Failed, &[recipe(ALPHA)])?;
+    assert_eq!(chosen(&strict), Some((ALPHA, "7")));
+    assert_eq!(
+        strict.explanation().steps.first(),
+        Some(&previous_step(BASELINE_ID, Failure::Failed))
+    );
+    Ok(())
+}
+
+/// T09-RT-68 · a fallback relaxes no filter (T10: "fallback cannot cross privacy or tool
+/// constraints"; D-3: route owns eligibility). Over a set with one recipe stopped by each of the
+/// seven filters, one stale observation and two eligible recipes, under a task carrying all three
+/// bounds, every recipe in turn (and the baseline) is the failed attempt: every OTHER recipe's
+/// screening step is identical to the one `route` gave it, and only the failed recipe changes, to
+/// the R13 exclusion. A fallback that skipped any filter would turn an excluded recipe eligible.
+#[test]
+fn a_fallback_relaxes_no_filter() -> Outcome {
+    let bounded = Task {
+        required_capabilities: FINAL_ONLY,
+        context_tokens: 8_192,
+        privacy: PrivacyClass::LocalOnly,
+        cost_ceiling_microunits: Some(100),
+        deadline_ms: Some(1_000),
+        quality_floor_basis_points: Some(5_000),
+    };
+    let mut set = vec![recipe("e-0"), recipe("e-8")];
+    let mut e1 = recipe("e-1");
+    e1.capabilities = &["identity"];
+    let mut e2 = recipe("e-2");
+    e2.context_limit_tokens = Some(8_191);
+    let mut e3 = recipe("e-3");
+    e3.locality = Locality::Remote;
+    let mut e4 = recipe("e-4");
+    e4.availability = observed(Availability::Unavailable, 7);
+    let mut e5 = recipe("e-5");
+    e5.cost_microunits = Some(101);
+    let mut e6 = recipe("e-6");
+    e6.latency_ms = Some(1_001);
+    let mut e7 = recipe("e-7");
+    e7.quality_basis_points = Some(4_999);
+    let mut e9 = recipe("e-9");
+    e9.availability = observed(Availability::Available, BOUND_MS);
+    set.extend([e1, e2, e3, e4, e5, e6, e7, e9]);
+    let original = decide_task(&bounded, &set)?;
+    let before = screenings(&original);
+    let stopped: BTreeSet<&str> = original
+        .explanation()
+        .steps
+        .iter()
+        .filter_map(|step| match step {
+            Step::Excluded { rule, .. } | Step::Gap { rule, .. } => Some(rule.id()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        stopped.len(),
+        7,
+        "seven filter rules stop a recipe: {stopped:?}"
+    );
+    let previous: Vec<&'static str> = set
+        .iter()
+        .map(|recipe| recipe.id)
+        .chain([BASELINE_ID])
+        .collect();
+    let mut compared = 0;
+    for failed in &previous {
+        let decision = after_task(&bounded, failed, Failure::Failed, &set)?;
+        let now = screenings(&decision);
+        assert_eq!(now.len(), before.len(), "one screening per recipe");
+        for ((id, step), (was_id, was)) in now.iter().zip(&before) {
+            assert_eq!(id, was_id, "screening order");
+            if id == failed {
+                assert_eq!(*step, &previous_step(failed, Failure::Failed));
+            } else {
+                assert_eq!(step, was, "{id} screened differently after {failed} failed");
+                compared += 1;
+            }
+        }
+        assert_ne!(decision.dispatches(), Some(*failed));
+    }
+    assert_eq!(
+        compared,
+        11 * 10,
+        "eleven failed attempts, ten other recipes each"
+    );
+    Ok(())
+}
+
+/// T09-RT-69 · the DONE-route:28 fault/benign pair at library level, on the fallback path.
+/// Stale evaluation: after ALPHA fails, a cheaper BETA observed exactly at the staleness bound
+/// cannot be selected (an R05 gap routes to the baseline); one millisecond fresher it is chosen.
+/// Forbidden data location: a cheaper GAMMA that is remote or hybrid is excluded by R04 for a
+/// local-only task and the local DELTA is chosen; the same GAMMA declared local is chosen.
+#[test]
+fn stale_evaluation_and_forbidden_location_cannot_be_the_fallback() -> Outcome {
+    let mut stale = recipe(BETA);
+    stale.cost_microunits = Some(50);
+    stale.availability = observed(Availability::Available, BOUND_MS);
+    let fault = after(ALPHA, Failure::Failed, &[recipe(ALPHA), stale])?;
+    assert_eq!(
+        fallback(&fault),
+        Some((
+            BASELINE_ID,
+            BASELINE_REVISION,
+            &Fallback::InsufficientEvidence {
+                gaps: vec![EvidenceGap {
+                    recipe: BETA,
+                    rule: Rule::R05Availability,
+                    evidence: Gap::StaleAvailability {
+                        age_ms: BOUND_MS,
+                        bound_ms: BOUND_MS
+                    },
+                }]
+            }
+        ))
+    );
+    let mut fresh_enough = stale;
+    fresh_enough.availability = observed(Availability::Available, BOUND_MS - 1);
+    let benign = after(ALPHA, Failure::Failed, &[recipe(ALPHA), fresh_enough])?;
+    assert_eq!(chosen(&benign), Some((BETA, "7")));
+
+    let mut local = recipe(DELTA);
+    local.cost_microunits = Some(150);
+    for locality in [Locality::Remote, Locality::Hybrid] {
+        let mut forbidden = recipe(GAMMA);
+        forbidden.cost_microunits = Some(50);
+        forbidden.locality = locality;
+        let fault = after(
+            ALPHA,
+            Failure::Truncated,
+            &[recipe(ALPHA), forbidden, local],
+        )?;
+        assert_eq!(chosen(&fault), Some((DELTA, "7")), "{locality:?}");
+        assert_eq!(
+            excluded_by(&fault, GAMMA),
+            Some((
+                vec![Rule::R02RequiredCapabilities, Rule::R03ContextLimit],
+                Rule::R04PrivacyClass,
+                Exclusion::PrivacyViolated { locality }
+            ))
+        );
+    }
+    let mut permitted = recipe(GAMMA);
+    permitted.cost_microunits = Some(50);
+    let benign = after(
+        ALPHA,
+        Failure::Truncated,
+        &[recipe(ALPHA), permitted, local],
+    )?;
+    assert_eq!(chosen(&benign), Some((GAMMA, "7")));
+    Ok(())
+}
+
+/// T09-RT-70 · a previous attempt naming a recipe that is neither a candidate nor the baseline is
+/// structurally invalid and refused by name before any rule, so an attempt the caller cannot place
+/// is never silently ignored; the ordinary structural refusals still come first.
+#[test]
+fn an_unknown_previous_attempt_is_refused_by_name() -> Outcome {
+    assert_eq!(
+        evaluate_fallback(
+            &policy()?,
+            &task(),
+            &[recipe(ALPHA)],
+            &baseline(),
+            Attempt {
+                recipe: GAMMA,
+                failure: Failure::Failed
+            }
+        ),
+        Err(Invalid::UnknownPreviousAttempt {
+            recipe: GAMMA.to_owned()
+        })
+    );
+    assert_eq!(
+        evaluate_fallback(
+            &policy()?,
+            &task(),
+            &[recipe(ALPHA), recipe(ALPHA)],
+            &baseline(),
+            Attempt {
+                recipe: GAMMA,
+                failure: Failure::Failed
+            }
+        ),
+        Err(Invalid::DuplicateIdentity {
+            recipe: ALPHA.to_owned()
+        })
+    );
+    Ok(())
+}
+
+/// T09-RT-71 · a fallback is permutation invariant: every ordering of four candidates, the
+/// previous attempt among them, yields the identical `Route`, explanation included.
+#[test]
+fn every_permutation_yields_the_identical_fallback() -> Outcome {
+    let mut remote = recipe(GAMMA);
+    remote.locality = Locality::Hybrid;
+    let mut worse = recipe(DELTA);
+    worse.cost_microunits = Some(200);
+    let mut near = recipe(BETA);
+    near.latency_ms = Some(499);
+    let set = [recipe(ALPHA), near, remote, worse];
+    let reference = after(BETA, Failure::Failed, &set)?;
+    assert_eq!(chosen(&reference), Some((ALPHA, "7")));
+    let mut permutations = 0;
+    for a in 0..4 {
+        for b in (0..4).filter(|&b| b != a) {
+            for c in (0..4).filter(|&c| c != a && c != b) {
+                let d = 6 - a - b - c;
+                let order = [set[a], set[b], set[c], set[d]];
+                assert_eq!(
+                    after(BETA, Failure::Failed, &order)?,
+                    reference,
+                    "permutation {a}{b}{c}{d}"
+                );
+                permutations += 1;
+            }
+        }
+    }
+    assert_eq!(permutations, 24, "four candidates have 24 orderings");
+    Ok(())
+}
+
 // -------------------------------------------------------- purity and known answers
 
 /// T09-RT-55 · routing makes zero model calls, zero I/O and reads zero clocks. The policy body
@@ -2166,33 +2575,111 @@ fn known_answer_table_matches_the_independent_oracle() -> Outcome {
     let tasks = fixture["tasks"].as_array().ok_or("tasks")?;
     let mut answers = Vec::new();
     for entry in tasks {
-        let required: Vec<&str> = entry["required_capabilities"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(Value::as_str)
-            .collect();
-        let task = Task {
-            required_capabilities: &required,
-            context_tokens: entry["context_tokens"].as_u64().ok_or("context")?,
-            privacy: if entry["privacy"] == "local_only" {
-                PrivacyClass::LocalOnly
-            } else {
-                PrivacyClass::RemoteAllowed
-            },
-            cost_ceiling_microunits: entry["cost_ceiling_microunits"].as_u64(),
-            deadline_ms: entry["deadline_ms"].as_u64(),
-            quality_floor_basis_points: entry["quality_floor_basis_points"]
-                .as_u64()
-                .map(u16::try_from)
-                .transpose()?,
-        };
+        let required = fixture_capabilities(entry);
+        let task = fixture_task(entry, &required)?;
         let decision = route(&policy, &task, &candidates, &baseline())?;
         answers.push(json!({"task": entry["id"], "answer": project(&decision)}));
     }
     assert_eq!(tasks.len(), 13, "the fixture declares thirteen tasks");
     assert_eq!(Value::Array(answers), expected["answers"]);
     Ok(())
+}
+
+/// T09-RT-72 · fallback known answers from the same independent oracle (route-G1): for each
+/// fixture row naming a task, the recipe whose attempt failed and its category, the oracle's
+/// decision with that recipe excluded first equals `evaluate_fallback`'s over the same fixture,
+/// whole. The rows reach a candidate, the baseline, a strict choice after a tie, and refusals by
+/// R13 and by a filter; each row's category is echoed in the R13 step the router recorded.
+#[test]
+fn fallback_known_answers_match_the_independent_oracle() -> Outcome {
+    let fixture: Value = serde_json::from_str(include_str!("fixtures/route/fixture.json"))?;
+    let expected: Value = serde_json::from_str(include_str!("fixtures/route/known-answers.json"))?;
+    let policy = policy()?;
+    let recipes = fixture["recipes"].as_array().ok_or("recipes")?;
+    let capability_lists: Vec<Vec<&str>> = recipes.iter().map(fixture_capabilities).collect();
+    let candidates: Vec<Recipe<'_>> = recipes
+        .iter()
+        .zip(&capability_lists)
+        .map(|(r, caps)| fixture_recipe(r, caps))
+        .collect::<Result<_, Box<dyn Error>>>()?;
+    let tasks = fixture["tasks"].as_array().ok_or("tasks")?;
+    let rows = fixture["fallbacks"].as_array().ok_or("fallbacks")?;
+    let mut answers = Vec::new();
+    let mut categories = BTreeSet::new();
+    for row in rows {
+        let entry = tasks
+            .iter()
+            .find(|task| task["id"] == row["task"])
+            .ok_or("fallback row names an undeclared task")?;
+        let required = fixture_capabilities(entry);
+        let task = fixture_task(entry, &required)?;
+        let named = row["failure"].as_str().ok_or("failure")?;
+        let failure = FAILURES
+            .into_iter()
+            .find(|failure| serde_json::to_value(failure).ok() == Some(json!(named)))
+            .ok_or("unknown failure category")?;
+        categories.insert(named);
+        let previous = row["previous"].as_str().ok_or("previous")?;
+        let decision = evaluate_fallback(
+            &policy,
+            &task,
+            &candidates,
+            &baseline(),
+            Attempt {
+                recipe: previous,
+                failure,
+            },
+        )?;
+        assert_eq!(
+            excluded_by(&decision, previous),
+            Some((
+                Vec::new(),
+                Rule::R13PreviousAttempt,
+                Exclusion::PreviousAttempt { failure }
+            )),
+            "row {row}"
+        );
+        answers.push(
+            json!({"task": row["task"], "previous": previous, "failure": named,
+                            "answer": project(&decision)}),
+        );
+    }
+    assert_eq!(rows.len(), 11, "the fixture declares eleven fallback rows");
+    assert_eq!(categories.len(), 4, "the rows reach every failure category");
+    assert_eq!(Value::Array(answers), expected["fallback_answers"]);
+    Ok(())
+}
+
+fn fixture_capabilities(row: &Value) -> Vec<&str> {
+    let field = if row.get("capabilities").is_some() {
+        "capabilities"
+    } else {
+        "required_capabilities"
+    };
+    row[field]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .collect()
+}
+
+fn fixture_task<'a>(entry: &Value, required: &'a [&'a str]) -> Result<Task<'a>, Box<dyn Error>> {
+    Ok(Task {
+        required_capabilities: required,
+        context_tokens: entry["context_tokens"].as_u64().ok_or("context")?,
+        privacy: if entry["privacy"] == "local_only" {
+            PrivacyClass::LocalOnly
+        } else {
+            PrivacyClass::RemoteAllowed
+        },
+        cost_ceiling_microunits: entry["cost_ceiling_microunits"].as_u64(),
+        deadline_ms: entry["deadline_ms"].as_u64(),
+        quality_floor_basis_points: entry["quality_floor_basis_points"]
+            .as_u64()
+            .map(u16::try_from)
+            .transpose()?,
+    })
 }
 
 /// T09-RT-59 · the task's quality floor is in range at exactly `MAX_QUALITY_BASIS_POINTS`: the
@@ -2390,6 +2877,22 @@ fn invalid_renderings_b() -> Vec<Rendering> {
             Invalid::QualityRange { recipe: None }.to_string(),
             "quality floor out of range on the task",
         ),
+        (
+            "UnknownPreviousAttempt",
+            Invalid::UnknownPreviousAttempt {
+                recipe: "omicron".to_owned(),
+            }
+            .to_string(),
+            "previous attempt recipe \"omicron\" is neither a candidate nor the baseline",
+        ),
+        (
+            "UnknownPreviousAttempt",
+            Invalid::UnknownPreviousAttempt {
+                recipe: "pi-16".to_owned(),
+            }
+            .to_string(),
+            "previous attempt recipe \"pi-16\" is neither a candidate nor the baseline",
+        ),
     ]
 }
 
@@ -2404,7 +2907,7 @@ fn every_invalid_refusal_renders_its_own_whole_diagnostic() -> Outcome {
         assert_eq!(rendered, expected, "{variant} rendered wrongly");
     }
     let declared = declared_variants("Invalid")?;
-    assert_eq!(declared.len(), 7, "Invalid declares seven variants");
+    assert_eq!(declared.len(), 8, "Invalid declares eight variants");
     for variant in &declared {
         assert!(
             table.iter().any(|(name, ..)| name == variant),
@@ -3028,6 +3531,25 @@ fn census_refused_evidence() -> Result<CensusCase, Box<dyn Error>> {
     ))
 }
 
+/// A fallback after the baseline's own attempt failed, with nothing else to route to: R13
+/// excludes the baseline, and the required fallback is refused by R01 carrying that exclusion
+/// and its failure category.
+fn census_refused_previous() -> Result<CensusCase, Box<dyn Error>> {
+    let decision = after(BASELINE_ID, Failure::Cancelled, &[])?;
+    let why = json!({"why": "previous_attempt", "failure": "cancelled"});
+    let expected = json!({
+        "route": "refused",
+        "fallback": {"reason": "no_eligible_candidate"},
+        "reason": {"reason": "baseline_excluded", "rule": "R13PreviousAttempt", "why": why},
+        "explanation": {"policy_revision": REVIEWED_REVISION, "steps": [
+            {"step": "excluded", "recipe": BASELINE_ID, "passed": [], "rule": "R13PreviousAttempt", "why": why},
+            {"step": "decided", "rule": "R10NoEligibleCandidate"},
+            {"step": "decided", "rule": "R01BaselineGuard"}
+        ]}
+    });
+    Ok(("a baseline whose own attempt failed", decision, expected))
+}
+
 /// The first `count` filter rules as their serialized names.
 fn census_rules(count: usize) -> Value {
     json!(
@@ -3098,6 +3620,7 @@ fn every_decision_enum_variant_is_produced_by_a_named_whole_case() -> Outcome {
         census_tie()?,
         census_refused_excluded()?,
         census_refused_evidence()?,
+        census_refused_previous()?,
     ];
     let mut produced = BTreeSet::new();
     for (name, decision, expected) in &cases {
@@ -3126,8 +3649,8 @@ fn every_decision_enum_variant_is_produced_by_a_named_whole_case() -> Outcome {
     );
     assert_eq!(
         declared.len(),
-        22,
-        "7 exclusions, 4 gaps, 6 steps, 3 fallbacks, 2 refusals"
+        23,
+        "8 exclusions, 4 gaps, 6 steps, 3 fallbacks, 2 refusals"
     );
     Ok(())
 }

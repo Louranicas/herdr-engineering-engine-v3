@@ -1,6 +1,6 @@
 {
  "scope": "known answers computed by oracle/route_oracle.py, an independent Python implementation of config/routes.toml over tests/fixtures/route/fixture.json",
- "fixture_sha256": "cba71db975d7e2548f699d181dafa52badf64c53becedbc7a409d872b2070d4a",
+ "fixture_sha256": "99d288932e9bd0c95f419730751531ec20387fd044b94e12c984a22a234de4d2",
  "staleness_bound_ms": 30000,
  "answers": [
   {
@@ -813,6 +813,742 @@
      ]
     ],
     "gaps": [
+     [
+      "r-13",
+      "R03",
+      "missing_context_limit"
+     ]
+    ]
+   }
+  }
+ ],
+ "fallback_answers": [
+  {
+   "task": "T1-plain",
+   "previous": "r-02",
+   "failure": "failed",
+   "answer": {
+    "route": "chosen",
+    "recipe": "r-12",
+    "reason": null,
+    "decided_by": "R11",
+    "order": [
+     "r-12",
+     "r-01",
+     "r-03",
+     "r-11"
+    ],
+    "exclusions": [
+     [
+      "r-02",
+      "R13"
+     ],
+     [
+      "r-04",
+      "R04"
+     ],
+     [
+      "r-05",
+      "R04"
+     ],
+     [
+      "r-06",
+      "R02"
+     ],
+     [
+      "r-07",
+      "R05"
+     ],
+     [
+      "r-08",
+      "R02"
+     ],
+     [
+      "r-09",
+      "R02"
+     ],
+     [
+      "r-10",
+      "R02"
+     ],
+     [
+      "r-13",
+      "R02"
+     ]
+    ],
+    "gaps": []
+   }
+  },
+  {
+   "task": "T1-plain",
+   "previous": "r-01",
+   "failure": "refused",
+   "answer": {
+    "route": "chosen",
+    "recipe": "r-02",
+    "reason": null,
+    "decided_by": "R11",
+    "order": [
+     "r-02",
+     "r-12",
+     "r-03",
+     "r-11"
+    ],
+    "exclusions": [
+     [
+      "r-01",
+      "R13"
+     ],
+     [
+      "r-04",
+      "R04"
+     ],
+     [
+      "r-05",
+      "R04"
+     ],
+     [
+      "r-06",
+      "R02"
+     ],
+     [
+      "r-07",
+      "R05"
+     ],
+     [
+      "r-08",
+      "R02"
+     ],
+     [
+      "r-09",
+      "R02"
+     ],
+     [
+      "r-10",
+      "R02"
+     ],
+     [
+      "r-13",
+      "R02"
+     ]
+    ],
+    "gaps": []
+   }
+  },
+  {
+   "task": "T2-ceiling-99",
+   "previous": "r-02",
+   "failure": "truncated",
+   "answer": {
+    "route": "baseline",
+    "recipe": "09000000-0000-4000-8000-00000000000b",
+    "reason": [
+     "no_eligible_candidate"
+    ],
+    "decided_by": "R10",
+    "order": [],
+    "exclusions": [
+     [
+      "r-01",
+      "R06"
+     ],
+     [
+      "r-02",
+      "R13"
+     ],
+     [
+      "r-03",
+      "R06"
+     ],
+     [
+      "r-04",
+      "R04"
+     ],
+     [
+      "r-05",
+      "R04"
+     ],
+     [
+      "r-06",
+      "R02"
+     ],
+     [
+      "r-07",
+      "R05"
+     ],
+     [
+      "r-08",
+      "R02"
+     ],
+     [
+      "r-09",
+      "R02"
+     ],
+     [
+      "r-10",
+      "R02"
+     ],
+     [
+      "r-11",
+      "R06"
+     ],
+     [
+      "r-12",
+      "R06"
+     ],
+     [
+      "r-13",
+      "R02"
+     ]
+    ],
+    "gaps": []
+   }
+  },
+  {
+   "task": "T3-ceiling-98",
+   "previous": "09000000-0000-4000-8000-00000000000b",
+   "failure": "cancelled",
+   "answer": {
+    "route": "refused",
+    "recipe": null,
+    "reason": [
+     "baseline_excluded",
+     "R13",
+     [
+      "no_eligible_candidate"
+     ]
+    ],
+    "decided_by": "R01",
+    "order": [],
+    "exclusions": [
+     [
+      "09000000-0000-4000-8000-00000000000b",
+      "R13"
+     ],
+     [
+      "r-01",
+      "R06"
+     ],
+     [
+      "r-02",
+      "R06"
+     ],
+     [
+      "r-03",
+      "R06"
+     ],
+     [
+      "r-04",
+      "R04"
+     ],
+     [
+      "r-05",
+      "R04"
+     ],
+     [
+      "r-06",
+      "R02"
+     ],
+     [
+      "r-07",
+      "R05"
+     ],
+     [
+      "r-08",
+      "R02"
+     ],
+     [
+      "r-09",
+      "R02"
+     ],
+     [
+      "r-10",
+      "R02"
+     ],
+     [
+      "r-11",
+      "R06"
+     ],
+     [
+      "r-12",
+      "R06"
+     ],
+     [
+      "r-13",
+      "R02"
+     ]
+    ],
+    "gaps": []
+   }
+  },
+  {
+   "task": "T5-floor-9001",
+   "previous": "r-12",
+   "failure": "failed",
+   "answer": {
+    "route": "refused",
+    "recipe": null,
+    "reason": [
+     "baseline_excluded",
+     "R08",
+     [
+      "no_eligible_candidate"
+     ]
+    ],
+    "decided_by": "R01",
+    "order": [],
+    "exclusions": [
+     [
+      "09000000-0000-4000-8000-00000000000b",
+      "R08"
+     ],
+     [
+      "r-01",
+      "R08"
+     ],
+     [
+      "r-02",
+      "R08"
+     ],
+     [
+      "r-03",
+      "R08"
+     ],
+     [
+      "r-04",
+      "R04"
+     ],
+     [
+      "r-05",
+      "R04"
+     ],
+     [
+      "r-06",
+      "R02"
+     ],
+     [
+      "r-07",
+      "R05"
+     ],
+     [
+      "r-08",
+      "R02"
+     ],
+     [
+      "r-09",
+      "R02"
+     ],
+     [
+      "r-10",
+      "R02"
+     ],
+     [
+      "r-11",
+      "R08"
+     ],
+     [
+      "r-12",
+      "R13"
+     ],
+     [
+      "r-13",
+      "R02"
+     ]
+    ],
+    "gaps": []
+   }
+  },
+  {
+   "task": "T7-remote-allowed",
+   "previous": "r-04",
+   "failure": "failed",
+   "answer": {
+    "route": "chosen",
+    "recipe": "r-05",
+    "reason": null,
+    "decided_by": "R11",
+    "order": [
+     "r-05",
+     "r-02",
+     "r-12",
+     "r-01",
+     "r-03",
+     "r-11"
+    ],
+    "exclusions": [
+     [
+      "r-04",
+      "R13"
+     ],
+     [
+      "r-06",
+      "R02"
+     ],
+     [
+      "r-07",
+      "R05"
+     ],
+     [
+      "r-08",
+      "R02"
+     ],
+     [
+      "r-09",
+      "R02"
+     ],
+     [
+      "r-10",
+      "R02"
+     ],
+     [
+      "r-13",
+      "R02"
+     ]
+    ],
+    "gaps": []
+   }
+  },
+  {
+   "task": "T10-three-bounds",
+   "previous": "r-01",
+   "failure": "failed",
+   "answer": {
+    "route": "chosen",
+    "recipe": "r-03",
+    "reason": null,
+    "decided_by": "R11",
+    "order": [
+     "r-03"
+    ],
+    "exclusions": [
+     [
+      "09000000-0000-4000-8000-00000000000b",
+      "R07"
+     ],
+     [
+      "r-01",
+      "R13"
+     ],
+     [
+      "r-02",
+      "R07"
+     ],
+     [
+      "r-04",
+      "R04"
+     ],
+     [
+      "r-05",
+      "R04"
+     ],
+     [
+      "r-06",
+      "R02"
+     ],
+     [
+      "r-07",
+      "R05"
+     ],
+     [
+      "r-08",
+      "R02"
+     ],
+     [
+      "r-09",
+      "R02"
+     ],
+     [
+      "r-10",
+      "R02"
+     ],
+     [
+      "r-11",
+      "R08"
+     ],
+     [
+      "r-12",
+      "R07"
+     ],
+     [
+      "r-13",
+      "R02"
+     ]
+    ],
+    "gaps": []
+   }
+  },
+  {
+   "task": "T11-ceiling-and-floor",
+   "previous": "r-12",
+   "failure": "truncated",
+   "answer": {
+    "route": "refused",
+    "recipe": null,
+    "reason": [
+     "baseline_excluded",
+     "R08",
+     [
+      "tie",
+      [
+       "r-01",
+       "r-03"
+      ]
+     ]
+    ],
+    "decided_by": "R01",
+    "order": [
+     "r-01",
+     "r-03"
+    ],
+    "exclusions": [
+     [
+      "09000000-0000-4000-8000-00000000000b",
+      "R08"
+     ],
+     [
+      "r-02",
+      "R08"
+     ],
+     [
+      "r-04",
+      "R04"
+     ],
+     [
+      "r-05",
+      "R04"
+     ],
+     [
+      "r-06",
+      "R02"
+     ],
+     [
+      "r-07",
+      "R05"
+     ],
+     [
+      "r-08",
+      "R02"
+     ],
+     [
+      "r-09",
+      "R02"
+     ],
+     [
+      "r-10",
+      "R02"
+     ],
+     [
+      "r-11",
+      "R08"
+     ],
+     [
+      "r-12",
+      "R13"
+     ],
+     [
+      "r-13",
+      "R02"
+     ]
+    ],
+    "gaps": []
+   }
+  },
+  {
+   "task": "T12-remote-context-65536",
+   "previous": "r-05",
+   "failure": "refused",
+   "answer": {
+    "route": "chosen",
+    "recipe": "r-12",
+    "reason": null,
+    "decided_by": "R11",
+    "order": [
+     "r-12"
+    ],
+    "exclusions": [
+     [
+      "09000000-0000-4000-8000-00000000000b",
+      "R03"
+     ],
+     [
+      "r-01",
+      "R03"
+     ],
+     [
+      "r-02",
+      "R03"
+     ],
+     [
+      "r-03",
+      "R03"
+     ],
+     [
+      "r-04",
+      "R03"
+     ],
+     [
+      "r-05",
+      "R13"
+     ],
+     [
+      "r-06",
+      "R02"
+     ],
+     [
+      "r-07",
+      "R03"
+     ],
+     [
+      "r-08",
+      "R02"
+     ],
+     [
+      "r-09",
+      "R02"
+     ],
+     [
+      "r-10",
+      "R02"
+     ],
+     [
+      "r-11",
+      "R03"
+     ],
+     [
+      "r-13",
+      "R02"
+     ]
+    ],
+    "gaps": []
+   }
+  },
+  {
+   "task": "T13-vision",
+   "previous": "r-13",
+   "failure": "failed",
+   "answer": {
+    "route": "refused",
+    "recipe": null,
+    "reason": [
+     "baseline_excluded",
+     "R02",
+     [
+      "no_eligible_candidate"
+     ]
+    ],
+    "decided_by": "R01",
+    "order": [],
+    "exclusions": [
+     [
+      "09000000-0000-4000-8000-00000000000b",
+      "R02"
+     ],
+     [
+      "r-01",
+      "R02"
+     ],
+     [
+      "r-02",
+      "R02"
+     ],
+     [
+      "r-03",
+      "R02"
+     ],
+     [
+      "r-04",
+      "R02"
+     ],
+     [
+      "r-05",
+      "R02"
+     ],
+     [
+      "r-06",
+      "R02"
+     ],
+     [
+      "r-07",
+      "R02"
+     ],
+     [
+      "r-08",
+      "R02"
+     ],
+     [
+      "r-09",
+      "R02"
+     ],
+     [
+      "r-10",
+      "R02"
+     ],
+     [
+      "r-11",
+      "R02"
+     ],
+     [
+      "r-12",
+      "R02"
+     ],
+     [
+      "r-13",
+      "R13"
+     ]
+    ],
+    "gaps": []
+   }
+  },
+  {
+   "task": "T4-final-only",
+   "previous": "09000000-0000-4000-8000-00000000000b",
+   "failure": "failed",
+   "answer": {
+    "route": "refused",
+    "recipe": null,
+    "reason": [
+     "baseline_excluded",
+     "R13",
+     [
+      "insufficient_evidence"
+     ]
+    ],
+    "decided_by": "R01",
+    "order": [],
+    "exclusions": [
+     [
+      "09000000-0000-4000-8000-00000000000b",
+      "R13"
+     ],
+     [
+      "r-04",
+      "R04"
+     ],
+     [
+      "r-05",
+      "R04"
+     ],
+     [
+      "r-07",
+      "R05"
+     ]
+    ],
+    "gaps": [
+     [
+      "r-08",
+      "R05",
+      "stale_availability"
+     ],
+     [
+      "r-09",
+      "R05",
+      "availability_unknown"
+     ],
+     [
+      "r-10",
+      "R11",
+      "missing_cost"
+     ],
      [
       "r-13",
       "R03",

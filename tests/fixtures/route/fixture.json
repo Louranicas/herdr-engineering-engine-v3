@@ -30,5 +30,18 @@
     {"id": "T11-ceiling-and-floor", "required_capabilities": ["final_output", "identity", "usage"], "context_tokens": 8192, "privacy": "local_only", "cost_ceiling_microunits": 100, "deadline_ms": null, "quality_floor_basis_points": 9000},
     {"id": "T12-remote-context-65536", "required_capabilities": ["final_output", "identity", "usage"], "context_tokens": 65536, "privacy": "remote_allowed", "cost_ceiling_microunits": null, "deadline_ms": null, "quality_floor_basis_points": null},
     {"id": "T13-vision", "required_capabilities": ["final_output", "vision"], "context_tokens": 1024, "privacy": "local_only", "cost_ceiling_microunits": null, "deadline_ms": null, "quality_floor_basis_points": null}
+  ],
+  "fallbacks": [
+    {"task": "T1-plain", "previous": "r-02", "failure": "failed"},
+    {"task": "T1-plain", "previous": "r-01", "failure": "refused"},
+    {"task": "T2-ceiling-99", "previous": "r-02", "failure": "truncated"},
+    {"task": "T3-ceiling-98", "previous": "09000000-0000-4000-8000-00000000000b", "failure": "cancelled"},
+    {"task": "T5-floor-9001", "previous": "r-12", "failure": "failed"},
+    {"task": "T7-remote-allowed", "previous": "r-04", "failure": "failed"},
+    {"task": "T10-three-bounds", "previous": "r-01", "failure": "failed"},
+    {"task": "T11-ceiling-and-floor", "previous": "r-12", "failure": "truncated"},
+    {"task": "T12-remote-context-65536", "previous": "r-05", "failure": "refused"},
+    {"task": "T13-vision", "previous": "r-13", "failure": "failed"},
+    {"task": "T4-final-only", "previous": "09000000-0000-4000-8000-00000000000b", "failure": "failed"}
   ]
 }

@@ -17,6 +17,12 @@ Extended 2026-09-24 (route-G4): a null `context_limit_tokens` is unknown and scr
 R03 (`missing_context_limit`), per docs/modules/route.md "Missing measurements stay unknown";
 fixture recipe r-13 carries one and task T13-vision reaches it alone.
 
+Extended 2026-09-24 (route-G1, operation 3 "Evaluate fallback"): each row of the fixture's
+`fallbacks` names a task, the recipe whose attempt failed and its failure category. The oracle
+decides that task again with the named recipe excluded before any filter (R13), candidate or
+baseline alike, and every other rule unchanged; a baseline so excluded refuses a fallback that
+needs it, exactly as a baseline excluded by a filter does. The rows go to `fallback_answers`.
+
 Run `python3 tests/fixtures/route/make-known-answers.py --check` to re-derive the committed table
 and compare bytes (prints `matches_generator=yes`, exit 0; otherwise exit 1). Without `--check`
 it rewrites the table.
@@ -32,7 +38,8 @@ CONFIG = HERE.parents[2] / "config/routes.toml"
 STALENESS_BOUND_MS = 30000  # config/routes.toml: staleness_bound_ms
 FILTER_ORDER = ["required_capabilities", "context_limit", "privacy_class", "availability", "cost_ceiling", "deadline", "quality_floor"]
 RULE_ID = {"required_capabilities": "R02", "context_limit": "R03", "privacy_class": "R04", "availability": "R05",
-           "cost_ceiling": "R06", "deadline": "R07", "quality_floor": "R08", "ranking": "R11"}
+           "cost_ceiling": "R06", "deadline": "R07", "quality_floor": "R08", "ranking": "R11",
+           "previous_attempt": "R13"}
 
 
 def declared_bound():
@@ -97,10 +104,16 @@ def screen(task, recipe, bound):
     return ("eligible", (recipe["cost_microunits"], -recipe["quality_basis_points"], recipe["latency_ms"]))
 
 
-def decide(task, recipes, baseline, bound):
+def decide(task, recipes, baseline, bound, previous=None):
+    # A recipe whose attempt failed is excluded before any filter; nothing else changes.
+    def screen_or_previous(recipe):
+        if previous is not None and recipe["id"] == previous:
+            return ("excluded", RULE_ID["previous_attempt"])
+        return screen(task, recipe, bound)
+
     # The baseline is screened first and its defect is held; it refuses the decision only
     # when a fallback (gap, empty eligible set or tie) actually requires the baseline.
-    guard = screen(task, baseline, bound)
+    guard = screen_or_previous(baseline)
     baseline_steps = {"exclusions": [], "gaps": []}
     defect = None
     if guard[0] == "excluded":
@@ -111,7 +124,7 @@ def decide(task, recipes, baseline, bound):
         baseline_steps["gaps"].append([baseline["id"], guard[1], guard[2]])
     exclusions, gaps, eligible = list(baseline_steps["exclusions"]), list(baseline_steps["gaps"]), []
     for recipe in sorted(recipes, key=lambda r: r["id"]):
-        verdict = screen(task, recipe, bound)
+        verdict = screen_or_previous(recipe)
         if verdict[0] == "excluded":
             exclusions.append([recipe["id"], verdict[1]])
         elif verdict[0] == "gap":
@@ -141,14 +154,23 @@ def main():
     bound = declared_bound()
     fixture = json.loads(FIXTURE.read_text())
     answers = [{"task": task["id"], "answer": decide(task, fixture["recipes"], fixture["baseline"], bound)} for task in fixture["tasks"]]
+    tasks = {task["id"]: task for task in fixture["tasks"]}
+    known = {recipe["id"] for recipe in fixture["recipes"]} | {fixture["baseline"]["id"]}
+    fallback_answers = []
+    for row in fixture["fallbacks"]:
+        if row["previous"] not in known:
+            raise SystemExit(f"fallback row names unknown recipe {row['previous']}")
+        fallback_answers.append({**row, "answer": decide(tasks[row["task"]], fixture["recipes"], fixture["baseline"], bound,
+                                                          previous=row["previous"])})
     document = {"scope": "known answers computed by oracle/route_oracle.py, an independent Python implementation of config/routes.toml over tests/fixtures/route/fixture.json",
-                "fixture_sha256": hashlib.sha256(FIXTURE.read_bytes()).hexdigest(), "staleness_bound_ms": bound, "answers": answers}
+                "fixture_sha256": hashlib.sha256(FIXTURE.read_bytes()).hexdigest(), "staleness_bound_ms": bound, "answers": answers,
+                "fallback_answers": fallback_answers}
     text = json.dumps(document, indent=1) + "\n"
     table = HERE / "known-answers.json"
     if "--check" in sys.argv[1:]:
         committed = table.read_bytes()
         same = committed == text.encode()
-        print(f"answers={len(answers)} matches_generator={'yes' if same else 'no'} "
+        print(f"answers={len(answers)} fallback_answers={len(fallback_answers)} matches_generator={'yes' if same else 'no'} "
               f"committed_sha256={hashlib.sha256(committed).hexdigest()}")
         sys.exit(0 if same else 1)
     table.write_text(text)

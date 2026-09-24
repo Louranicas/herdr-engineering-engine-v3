@@ -303,7 +303,9 @@
 //! capabilities, an availability observation with its age, and cost, quality
 //! and latency figures that are fixture data here) and one explicit baseline
 //! recipe go in as values; a closed [`Route`] decision comes out, explained by
-//! the named rules applied in order. This file makes no model call, performs
+//! the named rules applied in order. [`evaluate_fallback`] decides the next
+//! recipe after a failed attempt by the same rules, with the previous recipe
+//! excluded first. This file makes no model call, performs
 //! no I/O and reads no clock: the age of every observation is an input value,
 //! and the only place a route configuration is read is [`Policy::load`].
 
@@ -326,7 +328,9 @@ pub const SCHEMA_VERSION: i64 = 1;
 const MAX_TEXT: usize = 128;
 const MAX_CAPABILITIES: usize = 128;
 
-/// The named policy rules, in evaluation order. A decision names the rule that made it.
+/// The named policy rules. R01 to R12 are in evaluation order; R13 applies only in
+/// [`evaluate_fallback`], where it is screened first, before R02. A decision names the rule
+/// that made it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 pub enum Rule {
     /// The baseline is screened first; when a fallback is required it must have passed every
@@ -354,6 +358,9 @@ pub enum Rule {
     R11Ranking,
     /// Equal top keys route to the baseline.
     R12Tie,
+    /// A fallback never re-chooses the recipe whose attempt failed: it is excluded before any
+    /// filter is applied, whether it is a candidate or the baseline.
+    R13PreviousAttempt,
 }
 
 impl Rule {
@@ -372,6 +379,7 @@ impl Rule {
             Self::R10NoEligibleCandidate => "R10",
             Self::R11Ranking => "R11",
             Self::R12Tie => "R12",
+            Self::R13PreviousAttempt => "R13",
         }
     }
 }
@@ -575,6 +583,30 @@ pub enum Exclusion<'a> {
         quality_basis_points: u16,
         floor_basis_points: u16,
     },
+    /// R13: this recipe's attempt failed with the named category, so a fallback cannot choose it.
+    PreviousAttempt {
+        failure: Failure,
+    },
+}
+
+/// Why the previous attempt ended without a usable result. These are the worker's terminal
+/// outcomes other than `Completed` (`src/worker/mod.rs` `Terminal`); route does not depend on
+/// the worker, so the category arrives here as this value. It never relaxes a filter: every
+/// category excludes the previous recipe and leaves the screening of every other recipe as it was.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Failure {
+    Truncated,
+    Refused,
+    Failed,
+    Cancelled,
+}
+
+/// The attempt a fallback follows: the recipe it ran and how it failed.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+pub struct Attempt<'a> {
+    pub recipe: &'a str,
+    pub failure: Failure,
 }
 
 /// Evidence a rule needed and did not have. A gap never excludes; it routes to the baseline.
@@ -726,7 +758,8 @@ impl<'a> Route<'a> {
     }
 }
 
-/// Structurally invalid input: refused before any rule is applied.
+/// Structurally invalid input: refused before any rule is applied. `UnknownPreviousAttempt`: a
+/// fallback's previous attempt names a recipe that is neither a candidate nor the baseline.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Invalid {
     TooManyCandidates { count: usize, limit: usize },
@@ -736,6 +769,7 @@ pub enum Invalid {
     BaselineMismatch { declared: String, supplied: String },
     Capabilities { recipe: Option<String> },
     QualityRange { recipe: Option<String> },
+    UnknownPreviousAttempt { recipe: String },
 }
 
 impl fmt::Display for Invalid {
@@ -771,6 +805,10 @@ impl fmt::Display for Invalid {
             Self::QualityRange { recipe: None } => {
                 write!(formatter, "quality floor out of range on the task")
             }
+            Self::UnknownPreviousAttempt { recipe } => write!(
+                formatter,
+                "previous attempt recipe {recipe:?} is neither a candidate nor the baseline"
+            ),
         }
     }
 }
@@ -1352,7 +1390,24 @@ enum Verdict<'a> {
 
 /// Apply every filter in the declared order, then read every ranking figure in
 /// the declared key order. The first non-pass stops the screening for that recipe.
-fn screen<'a>(policy: &Policy, task: &Task<'a>, recipe: &Recipe<'a>) -> Screening<'a> {
+/// The recipe of a failed previous attempt is stopped by R13 before any filter.
+fn screen<'a>(
+    policy: &Policy,
+    task: &Task<'a>,
+    recipe: &Recipe<'a>,
+    previous: Option<Attempt<'a>>,
+) -> Screening<'a> {
+    if let Some(attempt) = previous.filter(|attempt| attempt.recipe == recipe.id) {
+        return Screening {
+            passed: Vec::new(),
+            verdict: Verdict::Stopped {
+                rule: Rule::R13PreviousAttempt,
+                stop: Stop::Excluded(Exclusion::PreviousAttempt {
+                    failure: attempt.failure,
+                }),
+            },
+        };
+    }
     let mut passed = Vec::with_capacity(policy.filters.len());
     for filter in &policy.filters {
         if let Some(stop) = apply_filter(*filter, policy, task, recipe) {
@@ -1422,9 +1477,10 @@ fn guard_baseline<'a>(
     policy: &Policy,
     task: &Task<'a>,
     baseline: &Recipe<'a>,
+    previous: Option<Attempt<'a>>,
     explanation: &mut Explanation<'a>,
 ) -> Option<Refusal<'a>> {
-    let guard = screen(policy, task, baseline);
+    let guard = screen(policy, task, baseline, previous);
     match guard.verdict {
         Verdict::Eligible(_) => {
             explanation.steps.push(Step::Guarded {
@@ -1466,6 +1522,7 @@ fn screen_candidates<'a, 'c>(
     policy: &Policy,
     task: &Task<'a>,
     candidates: &'c [Recipe<'a>],
+    previous: Option<Attempt<'a>>,
     explanation: &mut Explanation<'a>,
 ) -> (Vec<(&'c Recipe<'a>, Ranked<'a>)>, Vec<EvidenceGap<'a>>) {
     let mut ordered: Vec<&'c Recipe<'a>> = candidates.iter().collect();
@@ -1473,7 +1530,7 @@ fn screen_candidates<'a, 'c>(
     let mut eligible = Vec::new();
     let mut gaps = Vec::new();
     for recipe in ordered {
-        let screening = screen(policy, task, recipe);
+        let screening = screen(policy, task, recipe, previous);
         match screening.verdict {
             Verdict::Eligible(ranked) => {
                 explanation.steps.push(Step::Eligible {
@@ -1530,12 +1587,63 @@ pub fn route<'a>(
     baseline: &Recipe<'a>,
 ) -> Result<Route<'a>, Invalid> {
     validate(policy, task, candidates, baseline)?;
+    Ok(decide(policy, task, candidates, baseline, None))
+}
+
+/// Evaluate the fallback after a failed attempt (operation 3): the permitted next recipe, or a
+/// truthful refusal.
+///
+/// The decision is [`route`]'s, over the same policy, task, candidates and baseline, with one
+/// addition applied before any filter: the recipe the previous attempt ran is excluded by R13,
+/// carrying the failure category, whether it is a candidate or the baseline. Nothing is relaxed:
+/// every other recipe is screened by the same filters in the same declared order, so a recipe
+/// the task's capabilities, privacy class or bounds excluded stays excluded, and a stale or
+/// missing observation stays an evidence gap. When the fallback then needs the baseline and the
+/// baseline was the failed attempt, the result is [`Route::Refused`] naming the R13 exclusion.
+///
+/// Resources: the task's cost ceiling is the only resource bound this function reads (a caller
+/// may pass budget's remaining ceiling there). Affordability against the live balance is
+/// budget's decision on the recipe returned here; route models no balance (D-3).
+///
+/// # Errors
+/// The refusals of [`route`], and [`Invalid::UnknownPreviousAttempt`] when the previous attempt
+/// names a recipe that is neither a candidate nor the baseline.
+pub fn evaluate_fallback<'a>(
+    policy: &Policy,
+    task: &Task<'a>,
+    candidates: &[Recipe<'a>],
+    baseline: &Recipe<'a>,
+    previous: Attempt<'a>,
+) -> Result<Route<'a>, Invalid> {
+    validate(policy, task, candidates, baseline)?;
+    if previous.recipe != baseline.id
+        && !candidates
+            .iter()
+            .any(|candidate| candidate.id == previous.recipe)
+    {
+        return Err(Invalid::UnknownPreviousAttempt {
+            recipe: previous.recipe.to_owned(),
+        });
+    }
+    Ok(decide(policy, task, candidates, baseline, Some(previous)))
+}
+
+/// The decision over validated input: the baseline guard, the candidate screening, then the
+/// ranking and the fallback rules. `previous`, when present, is excluded by R13 first.
+fn decide<'a>(
+    policy: &Policy,
+    task: &Task<'a>,
+    candidates: &[Recipe<'a>],
+    baseline: &Recipe<'a>,
+    previous: Option<Attempt<'a>>,
+) -> Route<'a> {
     let mut explanation = Explanation {
         policy_revision: policy.revision.clone(),
         steps: Vec::new(),
     };
-    let defect = guard_baseline(policy, task, baseline, &mut explanation);
-    let (mut eligible, gaps) = screen_candidates(policy, task, candidates, &mut explanation);
+    let defect = guard_baseline(policy, task, baseline, previous, &mut explanation);
+    let (mut eligible, gaps) =
+        screen_candidates(policy, task, candidates, previous, &mut explanation);
     eligible.sort_by(|(_, left), (_, right)| compare(&policy.ranking, left, right));
     let fallback = if !gaps.is_empty() {
         explanation.steps.push(Step::Decided {
@@ -1558,11 +1666,11 @@ pub fn route<'a>(
             explanation.steps.push(Step::Decided {
                 rule: Rule::R11Ranking,
             });
-            return Ok(Route::Chosen {
+            return Route::Chosen {
                 recipe: best.id,
                 revision: best.revision,
                 explanation,
-            });
+            };
         }
         explanation.steps.push(Step::Decided { rule: Rule::R12Tie });
         let TieRule::Baseline = policy.tie;
@@ -1574,21 +1682,21 @@ pub fn route<'a>(
         Fallback::NoEligibleCandidate
     };
     match defect {
-        None => Ok(Route::Baseline {
+        None => Route::Baseline {
             recipe: baseline.id,
             revision: baseline.revision,
             reason: fallback,
             explanation,
-        }),
+        },
         Some(reason) => {
             explanation.steps.push(Step::Decided {
                 rule: Rule::R01BaselineGuard,
             });
-            Ok(Route::Refused {
+            Route::Refused {
                 fallback,
                 reason,
                 explanation,
-            })
+            }
         }
     }
 }
