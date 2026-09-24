@@ -18,11 +18,21 @@
 //! * **The principal is the peer.** Each accepted connection's uid comes from `SO_PEERCRED`. Only
 //!   the operator — the uid this engine runs as — is served, under the configured local role
 //!   [`OPERATOR_ROLE`]; any other peer is closed before a byte is read.
-//! * **Every wait is bounded.** Reads time out after [`IDLE_TIMEOUT`], writes after
-//!   [`WRITE_TIMEOUT`]; a stalled peer costs one bounded wait, not the engine.
+//! * **Every wait on an admitted peer is bounded.** Reads time out after [`IDLE_TIMEOUT`], writes
+//!   after [`WRITE_TIMEOUT`]; a stalled peer costs its own connection, not the engine.
+//! * **Admission is bounded and never displaces** (contract-decisions.md, "Initial connection and
+//!   grant bounds"). At most [`CONNECTION_CAP`] connections are served at once, each on its own
+//!   scoped thread with one request in flight; a peer over the cap is answered
+//!   `resource_exhausted` for its first frame and closed, and no admitted peer is disturbed. That
+//!   read carries no timer of its own (no new time limit is created here): [`REFUSALS_AT_ONCE`]
+//!   such peers are answered at a time, and one more over capacity is closed unread. Each
+//!   principal's requests pass a token bucket of [`BURST`] refilled at [`RATE_PER_SECOND`], judged
+//!   on the injected clock; a request past it is answered `resource_exhausted` before any effect.
 
-use crate::actions::control::{Composed, Reply, serve_composed};
-use crate::contracts::control::{FrameFault, FrameReader, ReadError};
+use crate::actions::control::{Composed, Grants, Reply, Tasks, serve_composed};
+use crate::contracts::control::{
+    ErrorCode, Fault, FrameFault, FrameReader, Health, ReadError, Received, Retry, receive,
+};
 use crate::store::Principal;
 use rustix::fs::{Mode, OFlags};
 use std::fs::{self, DirBuilder, File};
@@ -30,6 +40,8 @@ use std::io::{self, Read, Write};
 use std::os::unix::fs::{DirBuilderExt, FileTypeExt, MetadataExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
 
 /// The engine's directory under the runtime root.
@@ -44,6 +56,27 @@ pub const OPERATOR_ROLE: &str = "operator";
 pub const IDLE_TIMEOUT: Duration = Duration::from_secs(60);
 /// How long one reply may take to leave.
 pub const WRITE_TIMEOUT: Duration = Duration::from_secs(10);
+/// IPC01 "admits at most8 simultaneous connections total" (contract-decisions.md, "Initial
+/// connection and grant bounds").
+pub const CONNECTION_CAP: usize = 8;
+/// Over-capacity peers answered at once. One more is closed unread: its refusal is the close.
+pub const REFUSALS_AT_ONCE: usize = 1;
+/// Per-principal admission "capped at100 requests/second" (the same line).
+pub const RATE_PER_SECOND: u64 = 100;
+/// "with burst32" (the same line): the tokens a principal may spend at once.
+pub const BURST: u64 = 32;
+/// "an aggregate256 pending control requests" (the same line). Met by construction: each served
+/// connection has one request in flight, so at most [`CONNECTION_CAP`] are pending.
+pub const AGGREGATE_PENDING: usize = 256;
+/// The rule a refused connection names.
+pub const CONNECTION_RULE: &str = "at most 8 simultaneous connections";
+/// The rule a refused request names.
+pub const RATE_RULE: &str = "100 requests/second, burst 32";
+
+const _: () = assert!(CONNECTION_CAP <= AGGREGATE_PENDING);
+
+/// One token, in the thousandths the bucket counts in.
+const TOKEN: u64 = 1000;
 
 /// Why the endpoint could not be prepared or served.
 #[derive(Debug)]
@@ -237,6 +270,106 @@ pub fn admit_peer(uid: u32, operator: u32) -> Result<Principal, String> {
     Principal::new(uid, OPERATOR_ROLE).map_err(|_| "the operator role is invalid".to_owned())
 }
 
+/// Per-principal request admission: a token bucket of [`BURST`] tokens per principal, refilled at
+/// [`RATE_PER_SECOND`] by the clock the caller passes in, never by one of its own.
+///
+/// The table holds at most [`CONNECTION_CAP`] principals, since no more can be connected at once;
+/// a full bucket is the same as an absent one, so it is the one a new principal replaces. A new
+/// principal finding every bucket in use is refused.
+#[derive(Debug, Default)]
+pub struct Admission {
+    buckets: Mutex<Vec<Bucket>>,
+}
+
+#[derive(Debug)]
+struct Bucket {
+    uid: u32,
+    role: String,
+    /// Thousandths of a token.
+    level: u64,
+    /// The latest instant the level was judged at; a clock that steps back refills nothing.
+    at_unix_ms: u64,
+}
+
+impl Bucket {
+    fn refill(&mut self, now_unix_ms: u64) {
+        // RATE_PER_SECOND tokens a second is RATE_PER_SECOND thousandths a millisecond.
+        let earned = now_unix_ms
+            .saturating_sub(self.at_unix_ms)
+            .saturating_mul(RATE_PER_SECOND);
+        self.level = self.level.saturating_add(earned).min(BURST * TOKEN);
+        self.at_unix_ms = self.at_unix_ms.max(now_unix_ms);
+    }
+}
+
+impl Admission {
+    /// An empty table: every principal starts with a full burst.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Whether one more request of `principal` at `now_unix_ms` is admitted; an admitted request
+    /// spends one token.
+    #[must_use]
+    pub fn admit(&self, principal: &Principal, now_unix_ms: u64) -> bool {
+        let mut buckets = self.buckets.lock().unwrap_or_else(PoisonError::into_inner);
+        let found = buckets
+            .iter()
+            .position(|bucket| principal.is(bucket.uid, &bucket.role));
+        let index = if let Some(index) = found {
+            index
+        } else {
+            for bucket in buckets.iter_mut() {
+                bucket.refill(now_unix_ms);
+            }
+            buckets.retain(|bucket| bucket.level < BURST * TOKEN);
+            if buckets.len() >= CONNECTION_CAP {
+                return false;
+            }
+            buckets.push(Bucket {
+                uid: principal.uid(),
+                role: principal.role().to_owned(),
+                level: BURST * TOKEN,
+                at_unix_ms: now_unix_ms,
+            });
+            buckets.len() - 1
+        };
+        let Some(bucket) = buckets.get_mut(index) else {
+            return false;
+        };
+        bucket.refill(now_unix_ms);
+        if bucket.level < TOKEN {
+            return false;
+        }
+        bucket.level -= TOKEN;
+        true
+    }
+}
+
+/// The reply to a frame refused for capacity under `rule`: `resource_exhausted`, correlated to the
+/// frame, or the close RC03 §3 requires for one no reply can be correlated to. Nothing is
+/// dispatched, so nothing has an effect.
+fn exhausted(payload: &[u8], now_unix_ms: u64, rule: &'static str) -> Reply {
+    let fault = Fault::of(
+        ErrorCode::ResourceExhausted,
+        Retry::SameExactRequest,
+        "capacity is exhausted; nothing was done",
+    )
+    .because(rule);
+    match receive(payload, now_unix_ms) {
+        Received::Closed(fault) => Reply::Close(fault),
+        Received::Refused {
+            request_id,
+            request_sha256,
+            ..
+        } => Reply::Frame(fault.frame(&request_id, &request_sha256)),
+        Received::Admitted(envelope) => {
+            Reply::Frame(fault.frame(&envelope.request_id, &envelope.request_sha256))
+        }
+    }
+}
+
 /// How one connection ended.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Ended {
@@ -247,7 +380,8 @@ pub enum Ended {
 }
 
 /// Serve one connection's frames in order until it ends. `now_unix_ms` is read once per frame,
-/// so the deadline window is judged at each frame's receipt.
+/// so the deadline window and the principal's admission are judged at each frame's receipt; a
+/// frame `admission` refuses is answered `resource_exhausted` and never dispatched.
 ///
 /// # Errors
 ///
@@ -257,6 +391,7 @@ pub fn serve_connection(
     mut output: impl Write,
     principal: &Principal,
     composed: Composed<'_>,
+    admission: &Admission,
     now_unix_ms: &dyn Fn() -> u64,
 ) -> io::Result<Ended> {
     let mut reader = FrameReader::new(input);
@@ -268,7 +403,13 @@ pub fn serve_connection(
             Err(ReadError::Fault(fault)) => return Ok(Ended::Closed { served, fault }),
             Err(ReadError::Io(error)) => return Err(error),
         };
-        match serve_composed(&frame, now_unix_ms(), principal, composed) {
+        let now = now_unix_ms();
+        let reply = if admission.admit(principal, now) {
+            serve_composed(&frame, now, principal, composed)
+        } else {
+            exhausted(&frame, now, RATE_RULE)
+        };
+        match reply {
             Reply::Frame(bytes) => {
                 output.write_all(&bytes)?;
                 output.flush()?;
@@ -279,52 +420,156 @@ pub fn serve_connection(
     }
 }
 
-/// Accept and serve connections one at a time, forever. A peer that is not the operator is
-/// closed unread; each connection's outcome is reported through `report`, which never receives
-/// request content.
-///
-/// # Errors
-///
-/// Only a failure of `accept` itself; a failed connection is reported and the loop continues.
-pub fn run(
-    listener: &UnixListener,
-    composed: Composed<'_>,
-    now_unix_ms: &dyn Fn() -> u64,
-    report: &mut dyn FnMut(&str),
-) -> io::Result<()> {
-    let operator = rustix::process::geteuid().as_raw();
-    loop {
-        let (stream, _) = listener.accept()?;
-        let outcome = accept_one(&stream, operator, composed, now_unix_ms);
-        report(&outcome);
+/// What the coordinator composed, shareable by every connection's thread.
+#[derive(Clone, Copy)]
+pub struct Shared<'a> {
+    /// The grant store.
+    pub grants: &'a (dyn Grants + Sync),
+    /// The coordinator's health observation, when composed.
+    pub health: Option<&'a Health>,
+    /// The task owner, when a writable ledger is composed.
+    pub tasks: Option<&'a (dyn Tasks + Sync)>,
+}
+
+impl<'a> Shared<'a> {
+    fn composed(self) -> Composed<'a> {
+        Composed {
+            grants: self.grants,
+            health: self.health,
+            tasks: self.tasks.map(|tasks| tasks as &dyn Tasks),
+        }
     }
 }
 
-fn accept_one(
+/// One place under a cap, given back when dropped: by the thread that served it, by a spawn that
+/// failed, or by an unwinding thread.
+struct Place<'a>(&'a AtomicUsize);
+
+impl<'a> Place<'a> {
+    fn take(taken: &'a AtomicUsize, cap: usize) -> Option<Self> {
+        taken
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
+                (count < cap).then_some(count + 1)
+            })
+            .ok()
+            .map(|_| Self(taken))
+    }
+}
+
+impl Drop for Place<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+/// Accept connections forever, serving each admitted one on its own thread under
+/// [`CONNECTION_CAP`]. A peer that is not the operator is closed unread; a peer over the cap is
+/// refused whole without disturbing an admitted one. Each connection's outcome is reported through
+/// `report`, which never receives request content.
+///
+/// # Errors
+///
+/// Only a failure of `accept` itself, returned once every connection already admitted has ended; a
+/// failed connection is reported and the loop continues.
+pub fn run(
+    listener: &UnixListener,
+    shared: Shared<'_>,
+    now_unix_ms: &(dyn Fn() -> u64 + Sync),
+    report: &(dyn Fn(&str) + Sync),
+) -> io::Result<()> {
+    let operator = rustix::process::geteuid().as_raw();
+    let admission = Admission::new();
+    let serving = AtomicUsize::new(0);
+    let refusing = AtomicUsize::new(0);
+    std::thread::scope(|scope| {
+        loop {
+            let (stream, _) = listener.accept()?;
+            let principal = match peer_of(&stream, operator) {
+                Ok(principal) => principal,
+                Err(refusal) => {
+                    report(&refusal);
+                    continue;
+                }
+            };
+            let admission = &admission;
+            let spawned = if let Some(place) = Place::take(&serving, CONNECTION_CAP) {
+                std::thread::Builder::new().spawn_scoped(scope, move || {
+                    let outcome =
+                        serve_admitted(&stream, &principal, shared, admission, now_unix_ms);
+                    drop(place);
+                    report(&outcome);
+                })
+            } else if let Some(place) = Place::take(&refusing, REFUSALS_AT_ONCE) {
+                std::thread::Builder::new().spawn_scoped(scope, move || {
+                    let outcome = refuse_over_capacity(&stream, now_unix_ms);
+                    drop(place);
+                    report(&outcome);
+                })
+            } else {
+                report("connection refused: over capacity; closed unread");
+                continue;
+            };
+            if let Err(error) = spawned {
+                report(&format!(
+                    "connection refused: no thread to serve it ({error})"
+                ));
+            }
+        }
+    })
+}
+
+fn peer_of(stream: &UnixStream, operator: u32) -> Result<Principal, String> {
+    let uid = peer_uid(stream)
+        .map_err(|error| format!("connection refused: peer credential unreadable ({error})"))?;
+    admit_peer(uid, operator).map_err(|refusal| format!("connection refused: {refusal}"))
+}
+
+fn serve_admitted(
     stream: &UnixStream,
-    operator: u32,
-    composed: Composed<'_>,
+    principal: &Principal,
+    shared: Shared<'_>,
+    admission: &Admission,
     now_unix_ms: &dyn Fn() -> u64,
 ) -> String {
-    let uid = match peer_uid(stream) {
-        Ok(uid) => uid,
-        Err(error) => return format!("connection refused: peer credential unreadable ({error})"),
-    };
-    let principal = match admit_peer(uid, operator) {
-        Ok(principal) => principal,
-        Err(refusal) => return format!("connection refused: {refusal}"),
-    };
     if let Err(error) = stream
         .set_read_timeout(Some(IDLE_TIMEOUT))
         .and_then(|()| stream.set_write_timeout(Some(WRITE_TIMEOUT)))
     {
         return format!("connection refused: timeouts could not be set ({error})");
     }
-    match serve_connection(stream, stream, &principal, composed, now_unix_ms) {
+    match serve_connection(
+        stream,
+        stream,
+        principal,
+        shared.composed(),
+        admission,
+        now_unix_ms,
+    ) {
         Ok(Ended::Clean { served }) => format!("connection ended: served={served}"),
         Ok(Ended::Closed { served, fault }) => {
             format!("connection closed: served={served} fault={}", fault.name())
         }
         Err(error) => format!("connection failed: {error}"),
+    }
+}
+
+/// Answer an over-capacity peer's first frame `resource_exhausted` and close. Nothing is dispatched.
+fn refuse_over_capacity(stream: &UnixStream, now_unix_ms: &dyn Fn() -> u64) -> String {
+    let frame = match FrameReader::new(stream).next_frame() {
+        Ok(Some(frame)) => frame,
+        Ok(None) => return "connection refused: over capacity; closed before a frame".to_owned(),
+        Err(ReadError::Fault(fault)) => {
+            return format!("connection refused: over capacity; fault={}", fault.name());
+        }
+        Err(ReadError::Io(error)) => return format!("connection refused: over capacity ({error})"),
+    };
+    match exhausted(&frame, now_unix_ms(), CONNECTION_RULE) {
+        Reply::Frame(bytes) => match (&*stream).write_all(&bytes) {
+            Ok(()) => "connection refused: over capacity; answered resource_exhausted".to_owned(),
+            Err(error) => format!("connection refused: over capacity ({error})"),
+        },
+        Reply::Close(fault) => {
+            format!("connection refused: over capacity; fault={}", fault.name())
+        }
     }
 }

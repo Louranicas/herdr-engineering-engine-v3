@@ -13,7 +13,7 @@ use habitat_engine::app::control_socket::{
 use habitat_engine::app::grants::{Error as GrantError, FileGrants, GRANT_SCHEMA, MAX_GRANT_BYTES};
 use habitat_engine::app::tasks::{StoreTasks, submit_readback};
 use habitat_engine::contracts::UuidV4;
-use habitat_engine::contracts::control::{FrameFault, request_sha256};
+use habitat_engine::contracts::control::{FrameFault, FrameReader, ReadError, request_sha256};
 use habitat_engine::store::{Principal, Store};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -268,6 +268,7 @@ fn a_connection_is_answered_in_order_and_closed_at_its_first_unanswerable_frame(
             health: None,
             tasks: None,
         },
+        &control_socket::Admission::new(),
         &|| NOW,
     )?;
     assert_eq!(
@@ -304,6 +305,7 @@ fn a_connection_is_answered_in_order_and_closed_at_its_first_unanswerable_frame(
                 health: None,
                 tasks: None
             },
+            &control_socket::Admission::new(),
             &|| NOW
         )?,
         Ended::Clean { served: 1 }
@@ -1914,4 +1916,403 @@ fn blocked_on_stderr(world: &World) -> Result<(Blocked, usize), Box<dyn Error>> 
 struct Blocked {
     engine: Engine,
     _drain: std::io::PipeReader,
+}
+
+/// How long a case waits on one reply from a live engine before calling it a hang.
+const REPLY_BUDGET: Duration = Duration::from_secs(20);
+
+/// A raw peer of a serving engine: sends exact frames and reads replies one record at a time.
+struct Peer {
+    stream: UnixStream,
+    reader: FrameReader<UnixStream>,
+}
+
+impl Peer {
+    fn connect(run: &Path) -> Result<Self, Box<dyn Error>> {
+        let stream = UnixStream::connect(run.join(RUNTIME_DIRECTORY).join(SOCKET_NAME))?;
+        stream.set_read_timeout(Some(REPLY_BUDGET))?;
+        stream.set_write_timeout(Some(REPLY_BUDGET))?;
+        let reader = FrameReader::new(stream.try_clone()?);
+        Ok(Self { stream, reader })
+    }
+
+    fn send(&mut self, frame: &[u8]) -> Outcome {
+        self.stream.write_all(frame)?;
+        Ok(())
+    }
+
+    /// The next reply, or `None` when the engine closed the connection.
+    fn reply(&mut self) -> Result<Option<Value>, Box<dyn Error>> {
+        match self.reader.next_frame() {
+            Ok(Some(record)) => Ok(Some(serde_json::from_slice(&record)?)),
+            Ok(None) => Ok(None),
+            Err(ReadError::Fault(fault)) => Err(fault.name().into()),
+            Err(ReadError::Io(error)) => {
+                Err(format!("no reply within {REPLY_BUDGET:?}: {error}").into())
+            }
+        }
+    }
+
+    fn ask(&mut self, frame: &[u8]) -> Result<Value, Box<dyn Error>> {
+        self.send(frame)?;
+        self.reply()?
+            .ok_or_else(|| "the engine closed the connection".into())
+    }
+}
+
+/// One `tools.list` request frame the wrapper builds, LF-terminated, and its `request_id`.
+fn listing_frame(world: &World) -> Result<(Vec<u8>, Value), Box<dyn Error>> {
+    let mut frame = built(
+        &world.run,
+        &world.scope,
+        &[
+            "tools.list",
+            "query:=null",
+            r#"page:={"limit":1,"cursor":null}"#,
+        ],
+    )?;
+    if frame.last() != Some(&b'\n') {
+        frame.push(b'\n');
+    }
+    let id = serde_json::from_slice::<Value>(&frame)?["request_id"].clone();
+    Ok((frame, id))
+}
+
+/// The whole `resource_exhausted` record the engine answers `request` with, written from the
+/// `ControlErrorV1` schema rather than from the engine's code.
+fn exhausted(request: &[u8], constraint: &str) -> Result<Value, Box<dyn Error>> {
+    let payload = request.strip_suffix(b"\n").unwrap_or(request);
+    let id = serde_json::from_slice::<Value>(payload)?["request_id"].clone();
+    Ok(json!({
+        "protocol": "hee3.control", "version": 1, "kind": "error",
+        "request_id": id, "request_sha256": request_sha256(payload),
+        "code": "resource_exhausted", "effect": "none", "retry": "same_exact_request",
+        "readback": null,
+        "message": "capacity is exhausted; nothing was done",
+        "details": {"field": null, "constraint": constraint, "current_generation": null},
+    }))
+}
+
+#[test]
+fn a_held_connection_does_not_keep_another_peer_waiting() -> Outcome {
+    let world = World::new()?;
+    let _engine = Engine::start(&world.run, &world.home)?;
+    let (frame, id) = listing_frame(&world)?;
+    // The first peer is admitted, answered, and then holds its connection open.
+    let mut held = Peer::connect(&world.run)?;
+    assert_eq!(held.ask(&frame)?["request_id"], id);
+    // A second peer is answered while the first is still connected.
+    let mut second = Peer::connect(&world.run)?;
+    let reply = second.ask(&frame)?;
+    assert_eq!(
+        (&reply["kind"], &reply["request_id"]),
+        (&json!("result"), &id)
+    );
+    // And the first is still served.
+    assert_eq!(held.ask(&frame)?["kind"], json!("result"));
+    Ok(())
+}
+
+#[test]
+fn a_ninth_connection_is_refused_whole_and_the_eight_admitted_are_untouched() -> Outcome {
+    let world = World::new()?;
+    let _engine = Engine::start(&world.run, &world.home)?;
+    let (frame, id) = listing_frame(&world)?;
+    let mut admitted = Vec::new();
+    for _ in 0..8 {
+        let mut peer = Peer::connect(&world.run)?;
+        let reply = peer.ask(&frame)?;
+        assert_eq!(
+            (&reply["kind"], &reply["request_id"]),
+            (&json!("result"), &id)
+        );
+        admitted.push(peer);
+    }
+    let mut ninth = Peer::connect(&world.run)?;
+    assert_eq!(
+        ninth.ask(&frame)?,
+        exhausted(&frame, "at most 8 simultaneous connections")?
+    );
+    assert!(ninth.reply()?.is_none(), "the refused connection is closed");
+    for peer in &mut admitted {
+        assert_eq!(
+            peer.ask(&frame)?["kind"],
+            json!("result"),
+            "an admitted peer is served"
+        );
+    }
+    // A closed peer frees its place: a new connection is admitted once the engine has seen the
+    // close, which it learns asynchronously, so wait for it with a budget.
+    drop(admitted.pop());
+    let started = Instant::now();
+    loop {
+        let reply = Peer::connect(&world.run)?.ask(&frame)?;
+        if reply["kind"] == json!("result") {
+            break;
+        }
+        assert_eq!(reply["code"], json!("resource_exhausted"), "{reply}");
+        assert!(
+            started.elapsed() < REPLY_BUDGET,
+            "the closed peer's place was not freed within {REPLY_BUDGET:?}"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    Ok(())
+}
+
+#[test]
+fn a_principal_past_its_burst_is_refused_before_any_effect_at_the_contract_rate() -> Outcome {
+    // Two connections of one principal, each pipelining this many frames at once.
+    const SENT: usize = 100;
+    let world = World::new()?;
+    let _engine = Engine::start(&world.run, &world.home)?;
+    let (frame, _) = listing_frame(&world)?;
+    let refused = exhausted(&frame, "100 requests/second, burst 32")?;
+    let mut peers = [Peer::connect(&world.run)?, Peer::connect(&world.run)?];
+    let started = Instant::now();
+    let mut senders = Vec::new();
+    for peer in &peers {
+        let mut writer = peer.stream.try_clone()?;
+        let pipelined = frame.repeat(SENT);
+        senders.push(std::thread::spawn(move || writer.write_all(&pipelined)));
+    }
+    let mut served = 0_usize;
+    for peer in &mut peers {
+        for _ in 0..SENT {
+            let reply = peer.reply()?.ok_or("closed before every reply")?;
+            if reply["kind"] == json!("result") {
+                served += 1;
+            } else {
+                assert_eq!(reply, refused);
+            }
+        }
+    }
+    let elapsed_ms = started.elapsed().as_millis();
+    for sender in senders {
+        sender.join().map_err(|_| "a sender panicked")??;
+    }
+    // The principal's one burst plus what 100 per second refills while the replies arrived:
+    // shared by both connections, not one burst each.
+    let bound = 32 + usize::try_from(elapsed_ms / 10)? + 1;
+    assert!(
+        served >= 32 && served <= bound,
+        "served={served} bound={bound} elapsed_ms={elapsed_ms}"
+    );
+    assert!(
+        bound < 64,
+        "elapsed_ms={elapsed_ms}: too slow to tell one burst from two"
+    );
+    Ok(())
+}
+
+#[test]
+fn the_admission_bounds_are_the_contracts_own_figures() -> Outcome {
+    use control_socket::{
+        AGGREGATE_PENDING, BURST, CONNECTION_CAP, CONNECTION_RULE, RATE_PER_SECOND, RATE_RULE,
+    };
+    let contract = fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("docs/contract-decisions.md"),
+    )?;
+    let line = contract
+        .lines()
+        .find(|line| line.starts_with("IPC01 admits"))
+        .ok_or("the contract's connection-bound line")?;
+    for clause in [
+        format!("IPC01 admits at most{CONNECTION_CAP} simultaneous connections total"),
+        format!(
+            "capped at{RATE_PER_SECOND} requests/second with burst{BURST} and an \
+             aggregate{AGGREGATE_PENDING} pending control requests"
+        ),
+    ] {
+        assert!(line.contains(&clause), "{clause:?} is not in {line:?}");
+    }
+    assert_eq!(
+        (CONNECTION_RULE, RATE_RULE),
+        (
+            "at most 8 simultaneous connections",
+            "100 requests/second, burst 32"
+        )
+    );
+    Ok(())
+}
+
+#[test]
+fn a_principals_burst_refills_at_one_token_per_ten_milliseconds_on_the_given_clock() -> Outcome {
+    let admission = control_socket::Admission::new();
+    let operator = operator()?;
+    let t0 = NOW;
+    for spent in 0..32 {
+        assert!(admission.admit(&operator, t0), "token {spent} of the burst");
+    }
+    assert!(
+        !admission.admit(&operator, t0),
+        "the 33rd at the same instant"
+    );
+    assert!(
+        !admission.admit(&operator, t0 + 9),
+        "nine tenths of a token"
+    );
+    assert!(admission.admit(&operator, t0 + 10), "one whole token");
+    assert!(!admission.admit(&operator, t0 + 10), "and only one");
+    // A clock that steps back refills nothing, and the ground it lost is not earned again.
+    assert!(!admission.admit(&operator, t0));
+    assert!(
+        !admission.admit(&operator, t0 + 10),
+        "t0 + 10 was already judged"
+    );
+    assert!(admission.admit(&operator, t0 + 20));
+    assert!(!admission.admit(&operator, t0 + 20));
+    // A long silence refills the burst and no more.
+    let later = t0 + 10_000;
+    let admitted = (0..100)
+        .filter(|_| admission.admit(&operator, later))
+        .count();
+    assert_eq!(admitted, 32);
+    // A clock at the end of time neither overflows nor refills past the burst.
+    let end = (0..40)
+        .filter(|_| admission.admit(&operator, u64::MAX))
+        .count();
+    assert_eq!(end, 32);
+    Ok(())
+}
+
+#[test]
+fn each_principal_has_its_own_bucket_and_the_table_holds_eight_in_use() -> Outcome {
+    let admission = control_socket::Admission::new();
+    let principals = (0..9)
+        .map(|uid| Principal::new(50_000 + uid, OPERATOR_ROLE))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| format!("{error:?}"))?;
+    let t0 = NOW;
+    // One principal's exhaustion leaves another's burst whole.
+    let shared = control_socket::Admission::new();
+    for _ in 0..32 {
+        assert!(shared.admit(&principals[0], t0));
+    }
+    assert!(!shared.admit(&principals[0], t0));
+    assert_eq!(
+        (0..40).filter(|_| shared.admit(&principals[1], t0)).count(),
+        32
+    );
+    // Eight principals with a spent token fill the table; a ninth is refused while they are.
+    for principal in &principals[..8] {
+        assert!(admission.admit(principal, t0));
+    }
+    assert!(
+        !admission.admit(&principals[8], t0),
+        "a ninth principal while eight are in use"
+    );
+    assert!(
+        !admission.admit(&principals[8], t0 + 9),
+        "every bucket is a tenth of a token short of full"
+    );
+    // Once every bucket has refilled, a full bucket is an absent one, and the ninth is admitted.
+    assert!(admission.admit(&principals[8], t0 + 10));
+    Ok(())
+}
+
+/// The replies a `serve_connection` wrote, as records.
+fn records(written: &[u8]) -> Result<Vec<Value>, Box<dyn Error>> {
+    Ok(written
+        .split(|&b| b == b'\n')
+        .filter(|line| !line.is_empty())
+        .map(serde_json::from_slice)
+        .collect::<Result<_, _>>()?)
+}
+
+#[test]
+fn a_frame_past_the_burst_is_answered_resource_exhausted_and_never_dispatched() -> Outcome {
+    let admission = control_socket::Admission::new();
+    let composed = Composed {
+        grants: &Open,
+        health: None,
+        tasks: None,
+    };
+    let frames = |ids: std::ops::Range<u8>| {
+        ids.flat_map(|id| {
+            let mut frame = listing(id);
+            frame.push(b'\n');
+            frame
+        })
+        .collect::<Vec<u8>>()
+    };
+    // Two connections of one principal share one burst: 20 then 20 frames at one instant.
+    let mut first = Vec::new();
+    let ended = serve_connection(
+        frames(0..20).as_slice(),
+        &mut first,
+        &operator()?,
+        composed,
+        &admission,
+        &|| NOW,
+    )?;
+    assert_eq!(ended, Ended::Clean { served: 20 });
+    assert!(
+        records(&first)?
+            .iter()
+            .all(|reply| reply["kind"] == json!("result"))
+    );
+    let mut second = Vec::new();
+    let ended = serve_connection(
+        frames(20..40).as_slice(),
+        &mut second,
+        &operator()?,
+        composed,
+        &admission,
+        &|| NOW,
+    )?;
+    assert_eq!(
+        ended,
+        Ended::Clean { served: 20 },
+        "a refusal does not close the connection"
+    );
+    let replies = records(&second)?;
+    assert!(
+        replies[..12]
+            .iter()
+            .all(|reply| reply["kind"] == json!("result"))
+    );
+    for (id, reply) in (32..40).zip(&replies[12..]) {
+        assert_eq!(
+            reply,
+            &exhausted(&listing(id), "100 requests/second, burst 32")?
+        );
+    }
+    // The clock the caller passes is the one judged: ten milliseconds later, one more is served.
+    let mut third = Vec::new();
+    serve_connection(
+        frames(40..42).as_slice(),
+        &mut third,
+        &operator()?,
+        composed,
+        &admission,
+        &|| NOW + 10,
+    )?;
+    let kinds: Vec<Value> = records(&third)?
+        .iter()
+        .map(|reply| reply["kind"].clone())
+        .collect();
+    assert_eq!(kinds, [json!("result"), json!("error")]);
+    // A clock that advances a token's worth per frame refills as fast as a connection spends.
+    let clock = std::cell::Cell::new(NOW);
+    let advancing = || {
+        clock.set(clock.get() + 10);
+        clock.get()
+    };
+    let mut fourth = Vec::new();
+    serve_connection(
+        frames(0..40).as_slice(),
+        &mut fourth,
+        &operator()?,
+        composed,
+        &control_socket::Admission::new(),
+        &advancing,
+    )?;
+    assert!(
+        records(&fourth)?
+            .iter()
+            .all(|reply| reply["kind"] == json!("result"))
+    );
+    assert_eq!(records(&fourth)?.len(), 40);
+    Ok(())
 }

@@ -191,7 +191,7 @@
 // HEE3-ANCHORS-END
 
 use habitat_engine::actions::Catalogue;
-use habitat_engine::actions::control::{Composed, Grants, NoGrants};
+use habitat_engine::actions::control::{Grants, NoGrants};
 use habitat_engine::app::control_socket::{
     self, IDLE_TIMEOUT, RUNTIME_DIRECTORY, SOCKET_NAME, WRITE_TIMEOUT,
 };
@@ -280,7 +280,7 @@ fn serve() -> ExitCode {
         return ExitCode::from(EXIT_USAGE);
     };
     let directory = home.join(GRANTS_DIRECTORY);
-    let store: Box<dyn Grants> = match FileGrants::open(&directory) {
+    let store: Box<dyn Grants + Sync> = match FileGrants::open(&directory) {
         Ok(store) => Box::new(store),
         Err(grants::Error::Io(error)) if error.kind() == io::ErrorKind::NotFound => {
             eprintln!(
@@ -326,15 +326,15 @@ fn serve() -> ExitCode {
         }
     };
     eprintln!("habitat-engine: serving {}", prepared.socket().display());
-    let mut report = |line: &str| eprintln!("habitat-engine: {line}");
-    let composed = Composed {
+    let report = |line: &str| eprintln!("habitat-engine: {line}");
+    let shared = control_socket::Shared {
         grants: store.as_ref(),
         health: Some(&health),
         tasks: tasks
             .as_ref()
-            .map(|tasks| tasks as &dyn habitat_engine::actions::control::Tasks),
+            .map(|tasks| tasks as &(dyn habitat_engine::actions::control::Tasks + Sync)),
     };
-    match control_socket::run(&listener, composed, &now_unix_ms, &mut report) {
+    match control_socket::run(&listener, shared, &now_unix_ms, &report) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("habitat-engine: accept failed: {error}");
