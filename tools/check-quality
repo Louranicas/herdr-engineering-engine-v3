@@ -79,7 +79,7 @@ T05_STORE_TEST_COUNT = 35
 T06_TARGET_COUNTS = {
     "t06_receipts": 64, "t06_store": 39, "t06_graph": 32,
     "t06_driver": 29, "t06_consistency": 45, "t06_workspace": 35,
-    "t06_terminal": 39, "t06_evidence": 26, "t06_collector": 25,
+    "t06_terminal": 39, "t06_evidence": 26, "t06_collector": 29,
     "t06_availability": 22, "t06_decision": 40, "t06_staging": 20,
     "t06_subjects": 8, "t06_process_timing": 3, "t06_workspace_export": 9,
     "t06_bounded_preflight": 3, "t06_durable_control": 1, "t06_receipt_import": 9,
@@ -118,7 +118,7 @@ T07_INPUTS = ("src/store/recovery.rs", "tests/t07_inventory.rs")
 # interpreter is an evidence pin (see native_client_interpreter), never a
 # candidate input; the other files under tests/fixtures/native are not read by
 # any registered Rust test and earn no input status here.
-T08_TARGET_COUNTS = {"t08_native": 21}
+T08_TARGET_COUNTS = {"t08_native": 23}
 T08_INPUTS = ("src/worker/native.rs", "tests/t08_native.rs", "tests/fixtures/native/client.py")
 NATIVE_CLIENT_FIXTURE = "tests/fixtures/native/client.py"
 # Reviewed T07 engine reconciliation policy target: 58 controls. tests/recovery.rs
@@ -133,7 +133,7 @@ RECOVERY_INPUTS = ("src/recovery.rs", "tests/recovery.rs")
 # reads/writes. The pure policy src/recovery.rs stays pinned by RECOVERY_INPUTS and
 # the inventory reader src/store/recovery.rs by T07_INPUTS; both are read by this
 # battery too, and a file is pinned once by the battery that owns it.
-T07_STARTUP_TARGET_COUNTS = {"t07_startup": 97}
+T07_STARTUP_TARGET_COUNTS = {"t07_startup": 98}
 T07_STARTUP_INPUTS = ("src/app/startup.rs", "src/store/reconciliation.rs", "tests/t07_startup.rs")
 # Reviewed T08 contract battery: 23 controls, no library-unit namespace. The
 # inputs are what tests/t08_contract.rs reads (the offline contract client it
@@ -160,7 +160,7 @@ CONTRACT_CLIENT_FIXTURE = "tests/fixtures/native/contract-client.py"
 # adapter sources it shares with t08_native keep counting for that battery.
 T08_CONTRACT_OWN_SOURCES = tuple(name for name in T08_CONTRACT_INPUTS if name not in T08_INPUTS and name not in T03_IMPLEMENTATION_PATHS)
 
-# Reviewed T09 routing battery: 61 controls, no library-unit namespace. The inputs are
+# Reviewed T09 routing battery: 72 controls, no library-unit namespace. The inputs are
 # what tests/t09_route.rs includes with include_str! -- the router source, the route
 # configuration and the two fixture files -- so the pins follow the battery's own reads
 # rather than a list somebody maintains beside them. The battery is pure and sub-second,
@@ -172,16 +172,16 @@ T08_CONTRACT_OWN_SOURCES = tuple(name for name in T08_CONTRACT_INPUTS if name no
 # t22_cohort, which reads the shared claim-overlap table and the two cohesion fixtures (whose
 # declared joins it replays through cohort::join) at run time through CARGO_MANIFEST_DIR and
 # therefore pins them too.
-BUDGET_TARGET_COUNTS = {"accounting": 79}
+BUDGET_TARGET_COUNTS = {"accounting": 81}
 BUDGET_INPUTS = ("src/budget.rs",)
-NOTIFY_TARGET_COUNTS = {"t11_notify": 71}
+NOTIFY_TARGET_COUNTS = {"t11_notify": 77}
 NOTIFY_INPUTS = ("src/notify.rs",)
-CONTEXT_TARGET_COUNTS = {"t11_context": 59}
+CONTEXT_TARGET_COUNTS = {"t11_context": 67}
 CONTEXT_INPUTS = ("src/context.rs",)
-COHORT_TARGET_COUNTS = {"t22_cohort": 60}
+COHORT_TARGET_COUNTS = {"t22_cohort": 67}
 COHORT_INPUTS = ("src/cohort.rs", "evaluation/cohorts/claim-overlap-v1.json",
                  "tests/fixtures/t22/C01.json", "tests/fixtures/t22/C02.json")
-ACTIONS_TARGET_COUNTS = {"t28_actions": 107}
+ACTIONS_TARGET_COUNTS = {"t28_actions": 121}
 # The control receiver (review coordinator step 1) is served from the catalogue: its wire half in
 # contracts, its catalogue half in actions, and the independent Python oracle its cases run.
 ACTIONS_INPUTS = ("src/actions.rs", "src/worker/tools.rs", "src/actions/control.rs",
@@ -196,19 +196,21 @@ ACTIONS_INPUTS = ("src/actions.rs", "src/worker/tools.rs", "src/actions/control.
                   # RC03's published C01 example: the receiver's known-answer digest.
                   "tests/fixtures/native/control-v1/C01-control-valid-cancel.jsonl",
                   "tests/fixtures/native/control-v1/C01-metadata.json")
-HERDR_TARGET_COUNTS = {"t16_herdr": 54}
+HERDR_TARGET_COUNTS = {"t16_herdr": 71}
 HERDR_INPUTS = ("src/herdr.rs",)
 
-T09_TARGET_COUNTS = {"t09_route": 61}
+T09_TARGET_COUNTS = {"t09_route": 72}
 # make-known-answers.py is the independent Python oracle that wrote known-answers.json; the gate
 # re-derives the table with it (review N9: it had lived only in the evidence store).
 T09_INPUTS = ("config/routes.toml", "src/route.rs", "tests/fixtures/route/fixture.json",
               "tests/fixtures/route/known-answers.json", "tests/fixtures/route/make-known-answers.py")
 
-T13_TARGET_COUNTS = {"t13_service": 50, "t13_probe": 18, "t13_local_probe": 16}
-T21_TARGET_COUNTS = {"t21_analysis": 74, "t21_process": 16}
+T13_TARGET_COUNTS = {"t13_service": 51, "t13_probe": 18, "t13_local_probe": 17}
+T21_TARGET_COUNTS = {"t21_analysis": 83, "t21_process": 22}
 T13_INPUTS = ("src/service.rs", "src/service/probe.rs", "src/service/profile.rs",
-              "src/service/observations.rs", "src/service/local_probe.rs")
+              "src/service/observations.rs", "src/service/local_probe.rs",
+              # t13_service decodes the roster-change file with include_str!.
+              "config/services.toml")
 T21_INPUTS = ("src/numerical.rs", "src/numerical/process.rs", "tests/fixtures/t21/J01.json",
               "tests/fixtures/t21/descendant-control.py", "julia/Project.toml", "julia/Manifest.toml",
               "julia/src/HabitatAnalysis.jl", "julia/src/Evaluate.jl", "julia/src/Cohesion.jl",
@@ -653,6 +655,9 @@ def quality_subject_paths(root, deadline, rust_only):
         # its independent source. Not an input the battery owns, so not in ACTIONS_INPUTS;
         # but absent from the copied subject, sixteen of its cases failed with NotFound.
         required += ["corpus/PLAN_habitat_engine.json"]
+        # t28_control lists schemas/actions and compares it with a fresh regeneration by
+        # generate_control_schema.py (tools.inspect digests, D-4): the directory is the read.
+        required += tree_files(root, "schemas/actions", deadline)
     if has_herdr_battery(root):
         required += HERDR_INPUTS
     if has_t08_contract(root):
@@ -828,11 +833,17 @@ def rust_test_expectations(root):
         if has_t08_contract(root):
             counts.extend(T08_CONTRACT_TARGET_COUNTS.values())
         if has_t13(root):
-            counts[0] += 1
+            # One probe case plus the local probe's four exit-classification cases (the
+            # classification is private to the module, so its cases live in the library).
+            counts[0] += 5
             counts.extend(T13_TARGET_COUNTS.values())
             unit_counts["service::probe::tests::"] = 1
+            unit_counts["service::local_probe::tests::"] = 4
         if has_t21(root):
+            # The process module's ordering classifier is private; its one case is a library unit.
+            counts[0] += 1
             counts.extend(T21_TARGET_COUNTS.values())
+            unit_counts["numerical::process::classify_order_tests::"] = 1
     return {"has_t02": has_t02, "has_t03": has_t03, "has_t04": store_present, "has_t05": roster_present,
             "test_counts": counts, "unit_test_counts": unit_counts, "doctest_count": (2 if has_t02 else 1) + (1 if has_t21(root) else 0)}
 
@@ -1115,28 +1126,28 @@ def main():
         run("process-controls", [sys.executable, "-W", "error", "tests/t25_process.py"], required_text="17 tests")
         run("quality-integration-controls", [sys.executable, "-W", "error", "tests/t25_quality.py"], required_text="Ran 99 tests" if has_t09(ROOT) else "Ran 93 tests" if has_t08_contract(ROOT) or has_recovery(ROOT) else ("Ran 83 tests" if has_t08(ROOT) else ("Ran 73 tests" if has_t07(ROOT) else ("Ran 66 tests" if has_t21(ROOT) or has_t13(ROOT) else ("Ran 47 tests" if has_t06(ROOT) else "Ran 43 tests")))), required_stream="stderr")
         run("workflow-procedure-controls", [sys.executable, "-W", "error", "tests/procedure_schema.py"],
-            required_text="run=46 failures=0 errors=0")
+            required_text="run=75 failures=0 errors=0")
         run("workflow-site-sweep", [sys.executable, "tools/check-workflow-sites"],
-            required_text="sites=16 killed=16 survived=0")
+            required_text="sites=22 killed=22 survived=0")
         run("skill-package-controls", [sys.executable, "-W", "error", "tests/skill_schema.py"],
-            required_text="run=44 failures=0 errors=0")
+            required_text="run=70 failures=0 errors=0")
         run("skill-site-sweep", [sys.executable, "tools/check-skill-sites"],
-            required_text="sites=15 killed=15 survived=0")
+            required_text="sites=20 killed=20 survived=0")
         run("bash-wrapper-controls", [sys.executable, "-W", "error", "tests/bash_wrapper.py"],
-            required_text="run=126 failures=0 errors=0")
+            required_text="run=149 failures=0 errors=0")
         run("bash-site-sweep", [sys.executable, "tools/check-bash-sites"],
-            required_text="sites=37 plants=18 killed=55 survived=0 drifted=0")
+            required_text="sites=37 plants=42 killed=79 survived=0 drifted=0")
         run("pi-extension-controls", [sys.executable, "-W", "error", "tests/pi_extension.py"],
-            required_text="run=34 failures=0 errors=0")
+            required_text="run=69 failures=0 errors=0")
         run("pi-site-sweep", [sys.executable, "tools/check-pi-sites"],
-            required_text="sites=14 killed=14 survived=0")
+            required_text="sites=19 killed=19 wrong_reason=0 survived=0")
         run("mutation-survivor-audit", [sys.executable, "-W", "error", "tests/mutation_survivors.py"],
             required_text="run=11 failures=0 errors=0")
         run("claim-overlap-table", [sys.executable, "evaluation/cohorts/make-claim-overlap.py", "--check"],
             required_text="matches_generator=yes")
         if has_t09(ROOT):
             run("route-oracle-table", [sys.executable, "tests/fixtures/route/make-known-answers.py", "--check"],
-                required_text="answers=12 matches_generator=yes")
+                required_text="answers=13 fallback_answers=11 matches_generator=yes")
         run("rustc-identity", [str(compiler), "-vV"], required_text="rustc 1.98.0 ")
         cargo = str(binaries["cargo"])
         metadata = run("offline-dependency-resolution", [cargo, "metadata", "--locked", "--offline", "--format-version=1"])
