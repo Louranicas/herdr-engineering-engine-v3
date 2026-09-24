@@ -373,6 +373,13 @@ pub enum Error {
         attempts: u64,
         limit: u64,
     },
+    /// More effect-bearing open attempts than startup's bound: refused with both numbers, since
+    /// readiness requires every one reconciled and a truncated set would claim what it skipped
+    /// (B03b).
+    StartupBound {
+        open: u64,
+        limit: u64,
+    },
     /// A writable open could not take the ledger's write lock: SQLite opened the ledger, or its
     /// WAL index, read-only whatever the flags asked for (see `require_write_lock`).
     NotWritable,
@@ -1447,7 +1454,7 @@ mod staging_tests;
 
 pub use recovery::{
     DurableAcceptance, DurableAttempt, DurableStop, DurableTask, DurableVerification,
-    PendingDelivery, RecoveryInventory, RecoveryLimits, TaskView,
+    PendingDelivery, RecoveryInventory, RecoveryLimits, StartupInventory, StartupLimits, TaskView,
 };
 
 pub use reconciliation::{

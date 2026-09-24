@@ -647,6 +647,18 @@ fn commission(home: &Path) -> Result<PathBuf, Box<dyn Error>> {
         .join("ledger.sqlite3"))
 }
 
+/// The existing ledger at `root`, opened writable for a fixture to add to.
+fn ledger_at(root: &Path) -> Result<Store, Box<dyn Error>> {
+    Store::open(
+        root,
+        UuidV4::parse(GENERATION)?,
+        UuidV4::parse(EPOCH)?,
+        false,
+        Instant::now() + Duration::from_secs(10),
+    )
+    .map_err(|error| format!("{error:?}").into())
+}
+
 /// The ledger at `root` for [`GENERATION`] and [`EPOCH`], created when absent.
 fn ledger(root: &Path) -> Result<Store, Box<dyn Error>> {
     Store::open(
@@ -1095,6 +1107,147 @@ fn a_chain_submits_and_reads_back_through_the_engine_and_stops_at_a_refusal() ->
             &json!(["never"])
         ),
         "{summary}"
+    );
+    Ok(())
+}
+
+/// One task failed after a settled attempt and a failed verification, through the store's own
+/// API: a settled attempt of a terminal task, the history B03b's startup must not count.
+fn fail_task(
+    store: &mut Store,
+    evidence: &habitat_engine::store::Object,
+    criteria: habitat_engine::contracts::Sha256Digest<'_>,
+    index: u32,
+) -> Outcome {
+    use habitat_engine::contracts::receipt::Name;
+    use habitat_engine::store::{
+        Allocation, Effect, Expected, Settlement, Stop, Submission, VerificationVerdict,
+    };
+    let nth = |role: u16| format!("{role:08x}-0000-4000-8000-{index:012x}");
+    let (task, attempt) = (nth(0x28d2), nth(0x28d4));
+    let principal = operator()?;
+    let reason = Name::new("fixture-stop").map_err(|error| format!("{error:?}"))?;
+    let until = Instant::now() + Duration::from_secs(10);
+    let fault = |error: habitat_engine::store::Error| format!("{index}: {error:?}");
+    store
+        .submit(
+            Submission {
+                principal: &principal,
+                key: UuidV4::parse(&nth(0x28d1))?,
+                task: UuidV4::parse(&task)?,
+                event: UuidV4::parse(&nth(0x28d3))?,
+                request_bytes: b"restart past the wall",
+                criteria,
+                allocation: Allocation {
+                    limit_ms: 1_200_000,
+                    work_ms: 900_000,
+                    verify_ms: 300_000,
+                },
+            },
+            until,
+        )
+        .map_err(fault)?;
+    store
+        .begin_attempt(
+            UuidV4::parse(&task)?,
+            "1".parse()?,
+            UuidV4::parse(&attempt)?,
+            UuidV4::parse(&nth(0x28d5))?,
+            until,
+        )
+        .map_err(fault)?;
+    let generation = |store: &Store| -> Result<String, Box<dyn Error>> {
+        Ok(store
+            .get(&principal, UuidV4::parse(&task)?, until)
+            .map_err(|error| format!("{error:?}"))?
+            .generation)
+    };
+    let expected = |generation: &str| -> Result<Expected<'_>, Box<dyn Error>> {
+        Ok(Expected {
+            task: UuidV4::parse(&task)?,
+            task_generation: generation.parse()?,
+            attempt: UuidV4::parse(&attempt)?,
+            attempt_generation: "1".parse()?,
+        })
+    };
+    let now = generation(store)?;
+    store
+        .settle_attempt(
+            &expected(&now)?,
+            Settlement {
+                effect: Effect::None,
+                used_ms: Some(10),
+                cleanup_settled: true,
+                ready_to_verify: true,
+            },
+            UuidV4::parse(&nth(0x28d6))?,
+            until,
+        )
+        .map_err(fault)?;
+    let now = generation(store)?;
+    store
+        .record_verification(
+            &expected(&now)?,
+            &habitat_engine::store::Verification {
+                verdict: VerificationVerdict::Failed,
+                subject: criteria,
+                evidence: evidence.clone(),
+                used_ms: Some(20),
+                cleanup_settled: true,
+            },
+            UuidV4::parse(&nth(0x28d7))?,
+            until,
+        )
+        .map_err(fault)?;
+    let now = generation(store)?;
+    store
+        .finish_unaccepted(
+            &principal,
+            Stop {
+                task: UuidV4::parse(&task)?,
+                generation: now.parse()?,
+                reason: &reason,
+                evidence,
+                event: UuidV4::parse(&nth(0x28d8))?,
+            },
+            until,
+        )
+        .map_err(fault)?;
+    Ok(())
+}
+
+/// B03b, at the binary: a ledger past the measured wall — 1,025 tasks, each failed after a settled
+/// attempt, once refused by startup's whole-ledger read at 1,024 (health `ready: false`,
+/// `recovery: blocked`, measured on the pre-B03b tree) — starts ready. Settled history is not
+/// effect-bearing, and the cleanup tail it leaves does not gate readiness.
+#[test]
+fn the_engine_restarts_ready_past_the_old_inventory_wall() -> Outcome {
+    let world = World::seeing(&["app"])?;
+    commission(&world.home)?;
+    let mut store = ledger_at(&world.home.join(".local/state/herdr-engineering-engine-v3"))?;
+    let evidence = store
+        .publish(
+            b"retained fixture evidence",
+            UuidV4::parse(EPOCH)?,
+            Instant::now() + Duration::from_secs(10),
+        )
+        .map_err(|error| format!("{error:?}"))?;
+    let criteria_text = format!("sha256:{}", "5".repeat(64));
+    let criteria = habitat_engine::contracts::Sha256Digest::parse(&criteria_text)?;
+    for index in 0..1_025_u32 {
+        fail_task(&mut store, &evidence, criteria, index)?;
+    }
+    drop(store);
+    let _engine = Engine::start(&world.run, &world.home)?;
+    let health = reply_of(&wrapper(&world.run, &world.scope, &["health"])?)?;
+    assert_eq!(
+        (
+            &health["body"]["ready"],
+            &health["body"]["recovery"],
+            &health["body"]["database"]
+        ),
+        (&json!(true), &json!("complete"), &json!("ready")),
+        "{health}"
     );
     Ok(())
 }
