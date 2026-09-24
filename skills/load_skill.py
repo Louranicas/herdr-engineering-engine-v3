@@ -196,7 +196,8 @@ def read_package(root, manifest):
 
     The bounds hold at the point of acquisition: a path whose resolution leaves `root` --
     through a symlinked file or directory -- is refused as `unsafe_path` before it is opened,
-    and no body is read past `max_reference_bytes + 1`, so an oversize file costs one byte
+    provided the tree is not changed between resolution and open (O_NOFOLLOW narrows that
+    window for the final component only; no test can pin it), and no body is read past `max_reference_bytes + 1`, so an oversize file costs one byte
     over the bound and reaches `load()` as `reference_too_large`. A reference that is absent,
     or is not a regular file, is left out of the map, which `load()` names as
     `stale_reference`. A FIFO is opened non-blocking and never read.
@@ -215,9 +216,14 @@ def read_package(root, manifest):
             descriptor = os.open(resolved, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
         except OSError:
             continue
-        with os.fdopen(descriptor, "rb") as handle:
-            if stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+        try:
+            # Judged on the descriptor itself: a file object cannot be built over a directory.
+            if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+                continue
+            with os.fdopen(descriptor, "rb", closefd=False) as handle:
                 contents[identity] = handle.read(ceiling)
+        finally:
+            os.close(descriptor)
     return contents
 
 

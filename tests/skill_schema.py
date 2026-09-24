@@ -566,6 +566,23 @@ class Acquisition(unittest.TestCase):
             contents = LS.read_package(root, minimal(references=[reference()]))
         self.assertEqual(contents, {"r1": b"shared\n"})
 
+    def test_a_directory_reference_is_left_out_and_its_descriptor_closed(self):
+        # os.open succeeds on a directory; the check must run on the descriptor, before any
+        # file object is built over it, and the descriptor must be closed on the way out.
+        manifest = minimal(references=[reference(), reference("r2", "references/b.md")])
+        with tempfile.TemporaryDirectory() as outer:
+            root = Path(outer)
+            (root / "references/a.md").mkdir(parents=True)
+            (root / "references/b.md").write_bytes(b"beside\n")
+            before = len(os.listdir("/proc/self/fd"))
+            for _ in range(5):
+                contents = LS.read_package(root, manifest)
+            after = len(os.listdir("/proc/self/fd"))
+        self.assertEqual((contents, after - before), ({"r2": b"beside\n"}, 0))
+        packet = LS.load(manifest, HELD, {}, ["reviewer"], contents, 100_000)
+        self.assertEqual(packet["omissions"],
+                         [{"reference_id": "r1", "reason": "stale_reference"}])
+
     def test_a_fifo_is_not_waited_on(self):
         # A named pipe with no writer blocks a plain open() forever. The read runs in a child
         # so that a regression fails on this budget instead of hanging the suite.

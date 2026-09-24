@@ -83,7 +83,9 @@ packets to differ only in byte counts.
 `read_package(root, manifest)` reads each reference from under `root` and returns the
 `contents` map `load()` takes. The bounds hold where the bytes are acquired: a path that
 resolves outside `root` — through a symlinked file or directory — is refused as `unsafe_path`
-before it is opened, and no file is read past `max_reference_bytes + 1`, so an oversize file
+before it is opened — provided nothing swaps a path component between resolution and open;
+`O_NOFOLLOW` narrows that window for the final component only, and no deterministic test pins
+it — and no file is read past `max_reference_bytes + 1`, so an oversize file
 reaches `load()` as `reference_too_large`. An absent reference, or one that is not a regular
 file, is left out of the map and named by `load()` as `stale_reference`. A FIFO is opened
 non-blocking and never read, so a named pipe cannot stall a load.
