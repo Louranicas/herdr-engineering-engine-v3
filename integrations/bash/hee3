@@ -423,7 +423,7 @@ chain() {
     producer >/dev/null
     local runner
     runner=$(cat <<'PY'
-import json, os, signal, subprocess, sys, time
+import itertools, json, os, re, signal, subprocess, sys, time
 
 (wrapper, spec_path, max_steps, max_spec_bytes, max_chain_ms, max_args, exit_usage,
  exit_timeout, exit_contract, grace_ms, check_ms, slice_ms) = sys.argv[1:13]
@@ -596,6 +596,56 @@ def pair(name, value):
                                    separators=(",", ":"))
 
 
+# BASH-G2: RFC 6901. A provided field or an input whose name begins with "/" is a JSON Pointer;
+# any other name is the top-level member it names, exactly as before pointers existed.
+MISSING = object()
+
+
+def pointer(text, where):
+    """The reference tokens `text` names: split on "/", then "~1" -> "/" and "~0" -> "~", in that
+    order (RFC 6901 section 4), so "~01" is the key "~1". A bare name is one token."""
+    if not text.startswith("/"):
+        return [text]
+    raw = text[1:].split("/")
+    if any(re.search("~(?![01])", token) for token in raw):
+        refuse(f"{where}: {text!r} is not an RFC 6901 pointer: ~ must be followed by 0 or 1")
+    return [token.replace("~1", "/").replace("~0", "~") for token in raw]
+
+
+def resolve(document, tokens):
+    """The value `tokens` reach in `document`, or MISSING. An array index is decimal with no
+    leading zero; "-" (the element after the last) and any index past the end name nothing."""
+    node = document
+    for token in tokens:
+        if isinstance(node, dict) and token in node:
+            node = node[token]
+        elif (isinstance(node, list) and re.fullmatch("0|[1-9][0-9]*", token)
+              and int(token) < len(node)):
+            node = node[int(token)]
+        else:
+            return MISSING
+    return node
+
+
+def input_pairs(step, value_of):
+    """The request door's arguments for a step's inputs: a bare name is `name=value`; pointer
+    targets are grouped under their top-level member and sent as one `member:=JSON`. One
+    builder for the static check (empty values) and for the run, so the two cannot differ."""
+    pairs, members = [], {}
+    for name, source in step["inputs"].items():
+        value, tokens = value_of(source), targets[step["id"]][name]
+        if not name.startswith("/"):
+            pairs.append(f"{name}={value}")
+        elif len(tokens) == 1:
+            members[tokens[0]] = value
+        else:
+            node = members.setdefault(tokens[0], {})
+            for token in tokens[1:-1]:
+                node = node.setdefault(token, {})
+            node[tokens[-1]] = value
+    return pairs + [pair(member, value) for member, value in members.items()]
+
+
 try:
     spec = parse(acquire(spec_path))
 except ValueError as error:
@@ -611,6 +661,7 @@ if not isinstance(steps, list) or not 1 <= len(steps) <= max_steps:
     refuse(f"steps must be a list of 1 to {max_steps} steps")
 
 declared = {}
+targets = {}
 for index, step in enumerate(steps):
     where = f"step {index}"
     exact_keys(step, where, ("id", "action"),
@@ -639,13 +690,19 @@ for index, step in enumerate(steps):
         refuse(f"{where}: provides must be a list of at most {max_args} distinct field names")
     if provides and output != "json":
         refuse(f"{where}: only a json output can provide fields")
+    for field in provides:
+        pointer(field, where)
     inputs = step.setdefault("inputs", {})
     if not isinstance(inputs, dict):
         refuse(f"{where}: inputs must be an object")
+    targets[sid] = {}
     for name, source in inputs.items():
         argument_name(name, where)
-        if name in arguments:
-            refuse(f"{where}: {name!r} is both a literal argument and an input")
+        tokens = pointer(name, where)
+        argument_name(tokens[0], where)
+        if tokens[0] in arguments:
+            refuse(f"{where}: {tokens[0]!r} is both a literal argument and an input")
+        targets[sid][name] = tokens
         exact_keys(source, f"{where} input {name!r}", ("step", "field"))
         if not isinstance(source["step"], str) or not isinstance(source["field"], str):
             refuse(f"{where}: input {name!r} step and field must be strings")
@@ -656,6 +713,10 @@ for index, step in enumerate(steps):
         if source["field"] not in origin["provides"]:
             refuse(f"{where}: input {name!r} reads {source['field']!r}, which step "
                    f"{source['step']!r} does not declare in provides")
+    # Two targets where one lies inside the other would write one member twice.
+    for (a, first), (b, second) in itertools.combinations(sorted(targets[sid].items()), 2):
+        if first[:len(second)] == second or second[:len(first)] == first:
+            refuse(f"{where}: inputs {a!r} and {b!r} overlap")
     if "timeout_ms" in step:
         milliseconds(step["timeout_ms"], f"{where}: timeout_ms", chain_ms)
     declared[sid] = step
@@ -679,7 +740,7 @@ def check(argv, what):
 for step in steps:
     check(["bash", wrapper, "--check", step["action"],
            *(pair(name, value) for name, value in step["arguments"].items()),
-           *(f"{name}=" for name in step["inputs"])], f"step {step['id']!r}")
+           *input_pairs(step, lambda source: "")], f"step {step['id']!r}")
 
 # The tuple those checks admitted -- the digest of the catalogue and the wrapper, from the
 # wrapper's own `--pin` -- is handed to every step as HEE3_PIN_SHA256, and the request door
@@ -727,8 +788,7 @@ for index, step in enumerate(steps):
     step_s = step.get("timeout_ms", chain_ms) / 1000
     budget, limit = (step_s, "step") if step_s < left else (left, "chain")
     pairs = [pair(name, value) for name, value in step["arguments"].items()]
-    pairs += [f"{name}={produced[source['step']][source['field']]}"
-              for name, source in step["inputs"].items()]
+    pairs += input_pairs(step, lambda source: produced[source["step"]][source["field"]])
     env = dict(os.environ, HEE3_CHAIN_STEP=sid,
                HEE3_TIMEOUT_MS=str(max(1, int(budget * 1000))))
     ran.append(sid)
@@ -770,16 +830,17 @@ for index, step in enumerate(steps):
             record["outcome"] = "contract"
             emit(record)
             finish("contract", exit_contract, sid, f"declared json output is not JSON: {error}")
+        values = {field: resolve(result, pointer(field, f"step {sid!r}"))
+                  for field in step["provides"]}
         if step["provides"]:
-            missing = [field for field in step["provides"]
-                       if not isinstance(result, dict) or not isinstance(result.get(field), str)]
+            missing = [field for field, value in values.items() if not isinstance(value, str)]
             if missing:
                 record["outcome"] = "contract"
                 emit(record)
                 finish("contract", exit_contract, sid,
                        f"declared field(s) absent or not a string: {', '.join(missing)}")
         record["result"] = result
-        produced[sid] = result
+        produced[sid] = values
     record["outcome"] = "ok"
     emit(record)
 

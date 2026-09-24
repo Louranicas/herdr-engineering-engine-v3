@@ -150,6 +150,17 @@ against what it actually produced: a `json` step must print one JSON document, a
 field it `provides` must be present and a string. Coercing `5` to `"5"` would be the wrapper
 deciding what the producer meant, so it refuses instead.
 
+**Fields and targets may be JSON Pointers (RFC 6901).** Engine results nest under `body`, and
+typed request members nest too, so a `provides` entry or an input name that begins with `/` is
+a pointer: `"provides": ["/body/task/task_id"]` reads that string out of the step's result, and
+`"inputs": {"/selector/task_id": {"step": "submit", "field": "/body/task/task_id"}}` writes it
+into the next request's `selector` object. `~1` is `/` and `~0` is `~`, unescaped in that order;
+an array index is decimal without a leading zero, and `-` or an index past the end names
+nothing, which is the same contract failure as an absent field, named by its pointer. Targets
+under one member are sent together as one `member:=JSON` argument; a target whose member is also
+a literal argument, or two targets where one lies inside the other, are refused before any step
+runs. A name without a leading `/` is the top-level member it names, as before.
+
 **The admitted tuple is pinned.** Each step is a fresh process that reads the catalogue and
 the wrapper again, so once every check has passed the chain takes `hee3 --pin` — the SHA-256 of
 the catalogue and of the wrapper — and hands it to every step as `HEE3_PIN_SHA256`. The request
@@ -225,7 +236,9 @@ dependency/environment/cancellation/pin slice); `bash -n` remains in the suite. 
 `tests/bash_wrapper.py` drive the real script end to end against real producer fixtures.
 `tools/check-bash-sites` neuters every `refuse`/`finish` site of the chain runner and applies
 hand-named plants, each required to fail the test named for it (`sites=37 plants=42 killed=79
-survived=0` on 2026-09-24). The plants were enumerated by the author, so they are a floor,
+survived=0` on 2026-09-24; `sites=39 plants=45 killed=84 survived=0 drifted=0` on 2026-09-25,
+after JSON-pointer inputs, whose rewrite first left two plants `drifted` until they were
+re-pointed at the new spelling of the same rule). The plants were enumerated by the author, so they are a floor,
 not a census; dropping env's `--` is recorded there as an equivalent mutant, with its reason.
 
 The suite invokes the wrapper as `bash integrations/bash/hee3`, not by executing it. The

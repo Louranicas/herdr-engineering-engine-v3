@@ -1192,6 +1192,128 @@ class ChainContracts(ChainCase):
         self.assertEqual(self.records(result)[-1]["detail"], "stdout is not UTF-8")
 
 
+class ChainPointers(ChainCase):
+    """BASH-G2: an input's source field and its target may be RFC 6901 JSON Pointers, so a chain
+    can carry `/body/task/task_id` from one step's result into `/selector/task_id` of the next.
+
+    The known answers are RFC 6901 section 5's published example table -- an independent source,
+    not this runner's reasoning (F94). One adaptation, stated: a provided field must be a string
+    (a coercion would be the runner deciding what the producer meant), so the document's numeric
+    leaves are given as their decimal strings. The keys, which are what a pointer addresses, are
+    the RFC's verbatim.
+    """
+
+    # RFC 6901 section 5: the document, and each pointer with the value it evaluates to.
+    RFC_DOCUMENT = {"foo": ["bar", "baz"], "": "0", "a/b": "1", "c%d": "2", "e^f": "3",
+                    "g|h": "4", "i\\j": "5", 'k"l': "6", " ": "7", "m~n": "8"}
+    RFC_ANSWERS = [("/foo/0", "bar"), ("/", "0"), ("/a~1b", "1"), ("/c%d", "2"),
+                   ("/e^f", "3"), ("/g|h", "4"), ("/i\\j", "5"), ('/k"l', "6"),
+                   ("/ ", "7"), ("/m~0n", "8")]
+
+    def produce(self, step, document):
+        self.behave(step, f'printf "%s\\n" {shlex_quote(json.dumps(document))}\n')
+
+    def test_the_rfc_6901_section_5_examples_resolve_as_published(self):
+        self.produce("find", self.RFC_DOCUMENT)
+        fields = [pointer for pointer, _ in self.RFC_ANSWERS]
+        result = self.chain([
+            {"id": "find", "action": "task.list", "output": "json", "provides": fields},
+            {"id": "get", "action": "task.get",
+             "inputs": {f"n{i}": {"step": "find", "field": pointer}
+                        for i, pointer in enumerate(fields)}}])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.calls()[1]["arguments"],
+                         {f"n{i}": value for i, (_, value) in enumerate(self.RFC_ANSWERS)})
+
+    def test_a_pointer_carries_a_nested_result_into_a_nested_body_member(self):
+        hostile = "two  spaces; $(touch pwned) \"q\" \\ *.txt"
+        self.produce("submit", {"body": {"task": {"task_id": hostile}}})
+        result = self.chain([
+            {"id": "submit", "action": "task.list", "output": "json",
+             "provides": ["/body/task/task_id"]},
+            {"id": "get", "action": "task.get", "arguments": {"evidence": "none"},
+             "inputs": {"/selector/task_id": {"step": "submit",
+                                             "field": "/body/task/task_id"}}}])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.calls()[1]["arguments"],
+                         {"evidence": "none", "selector": {"task_id": hostile}})
+        self.assertFalse((self.work / "pwned").exists())
+
+    def test_two_targets_under_one_member_build_one_object(self):
+        self.produce("find", {"items": [{"id": "x"}, {"id": "y", "~/": "z"}]})
+        result = self.chain([
+            {"id": "find", "action": "task.list", "output": "json",
+             "provides": ["/items/1/id", "/items/1/~0~1"]},
+            {"id": "get", "action": "task.get",
+             "inputs": {"/selector/a~1b": {"step": "find", "field": "/items/1/id"},
+                        "/selector/c": {"step": "find", "field": "/items/1/~0~1"}}}])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.calls()[1]["arguments"], {"selector": {"a/b": "y", "c": "z"}})
+
+    def test_tilde_one_is_unescaped_before_tilde_zero(self):
+        # RFC 6901 section 4: "the string '~01' correctly becomes '~1' after transformation";
+        # the other order would make it '/'.
+        self.produce("find", {"~1": "right", "/": "wrong"})
+        result = self.chain([
+            {"id": "find", "action": "task.list", "output": "json", "provides": ["/~01"]},
+            {"id": "get", "action": "task.get", "inputs": {"t": {"step": "find", "field": "/~01"}}}])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.calls()[1]["arguments"], {"t": "right"})
+
+    def missing(self, document, field):
+        self.produce("find", document)
+        result = self.chain([
+            {"id": "find", "action": "task.list", "output": "json", "provides": [field]},
+            {"id": "get", "action": "task.get", "inputs": {"t": {"step": "find", "field": field}}}])
+        self.assertEqual(result.returncode, EXIT_CONTRACT, result.stderr)
+        self.assertEqual(self.records(result)[-1]["detail"],
+                         f"declared field(s) absent or not a string: {field}")
+        self.assertEqual([call["step"] for call in self.calls()], ["find"])
+
+    def test_a_path_that_is_not_there_is_a_contract_failure_naming_it(self):
+        self.missing({"body": {}}, "/body/task/task_id")
+
+    def test_an_index_past_the_end_is_not_there(self):
+        self.missing({"items": ["a"]}, "/items/1")
+
+    def test_the_append_index_names_no_element(self):
+        # RFC 6901 section 4: "-" refers to the nonexistent element after the last.
+        self.missing({"items": ["a"]}, "/items/-")
+
+    def test_an_index_with_a_leading_zero_is_not_an_index(self):
+        self.missing({"items": ["a", "b"]}, "/items/01")
+
+    def test_a_pointer_to_a_container_is_not_a_string(self):
+        self.missing(self.RFC_DOCUMENT, "/foo")
+
+    def spec_refused(self, steps, needle):
+        path = self.spec(steps)
+        result = self.run_wrapper("chain", str(path), producer=self.model)
+        self.assertEqual(result.returncode, EXIT_USAGE, result.stderr)
+        self.assertIn(needle, result.stderr)
+        self.assertEqual(self.calls(), [])
+
+    def test_an_escape_other_than_tilde_zero_or_one_is_refused(self):
+        self.spec_refused([{"id": "a", "action": "task.list", "output": "json",
+                            "provides": ["/a~2b"]}],
+                          "'/a~2b' is not an RFC 6901 pointer: ~ must be followed by 0 or 1")
+
+    def test_overlapping_targets_are_refused(self):
+        self.spec_refused([
+            {"id": "a", "action": "task.list", "output": "json", "provides": ["t"]},
+            {"id": "b", "action": "task.get",
+             "inputs": {"/selector": {"step": "a", "field": "t"},
+                        "/selector/task_id": {"step": "a", "field": "t"}}}],
+            "step 'b': inputs '/selector' and '/selector/task_id' overlap")
+
+    def test_a_target_member_that_is_also_a_literal_argument_is_refused(self):
+        self.spec_refused([
+            {"id": "a", "action": "task.list", "output": "json", "provides": ["t"]},
+            {"id": "b", "action": "task.get", "arguments": {"selector": {}},
+             "inputs": {"/selector/task_id": {"step": "a", "field": "t"}}}],
+            "step 'b': 'selector' is both a literal argument and an input")
+
+
 class ChainSpec(ChainCase):
     """The spec is acquired with its bound and parsed strictly; every refusal runs nothing."""
 
