@@ -116,6 +116,12 @@ PLANTS = (
      ("test_a_catalogue_of_another_protocol_or_version_is_refused_at_every_door",)),
     ("bool-is-a-version", "type(found[1]) is not int or ", "",
      ("test_a_catalogue_of_another_protocol_or_version_is_refused_at_every_door",)),
+    ("no-request-is-agreement", "if not requests:", "if False:",
+     ("test_a_catalogue_declaring_no_request_is_a_mismatch_not_a_match",)),
+    # --version counts the catalogue it read, not the one it was tested against.
+    ("version-count-frozen", "printf 'catalogue_actions: %s\\n' \"${#listed[@]}\"",
+     "printf 'catalogue_actions: %s\\n' 21",
+     ("test_version_counts_the_actions_of_the_catalogue_it_read",)),
     ("admission-drops-catalogue-refusal", '    names=$(actions) || exit "$?"\n    while',
      "    names=$(actions) || true\n    while",
      ("test_a_catalogue_of_another_protocol_or_version_is_refused_at_every_door",)),
@@ -134,6 +140,14 @@ PLANTS = (
      ("test_a_term_to_the_wrapper_alone_reaches_the_producer",)),
     ("cancel-does-not-wait", '        wait "$!" || true\n', "        true\n",
      ("test_a_step_that_ignores_term_is_killed_within_the_grace",)),
+    # INT and HUP are trapped into the same forwarding, and each exits 128+n for its own n.
+    ("int-exits-without-forwarding", "trap 'cancel 130' INT", "trap 'exit 130' INT",
+     ("test_an_int_to_the_wrapper_alone_reaches_the_producer_and_exits_130",)),
+    ("hup-exits-without-forwarding", "trap 'cancel 129' HUP", "trap 'exit 129' HUP",
+     ("test_a_hup_to_the_wrapper_alone_reaches_the_producer_and_exits_129",)),
+    ("cancel-code-flattened", '    exit "$1"\n}', "    exit 143\n}",
+     ("test_an_int_to_the_wrapper_alone_reaches_the_producer_and_exits_130",
+      "test_a_hup_to_the_wrapper_alone_reaches_the_producer_and_exits_129")),
     # The admitted tuple is pinned through every step.
     ("pin-not-handed-on", 'os.environ["HEE3_PIN_SHA256"] = check(', "_unused = check(",
      ("test_a_catalogue_changed_after_the_checks_refuses_the_next_step",)),

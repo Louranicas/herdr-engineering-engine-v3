@@ -183,11 +183,15 @@ class Vocabulary(WrapperCase):
         self.assertEqual(result.stdout, "")
 
     def test_an_empty_catalogue_is_a_failure(self):
+        # The real request definitions are kept, so the protocol check passes and the refusal
+        # heard is the empty vocabulary's own, not the catalogue that speaks nothing.
+        catalogue = json.loads(CATALOGUE.read_text())
+        catalogue["$defs"]["ActionId"]["enum"] = []
         empty = self.work / "empty.json"
-        empty.write_text(json.dumps({"$defs": {"ActionId": {"enum": []}}}))
+        empty.write_text(json.dumps(catalogue))
         result = self.run_wrapper("--actions", env={"HEE3_CATALOGUE": str(empty)})
         self.assertEqual(result.returncode, EXIT_NO_PRODUCER)
-        self.assertIn("empty", result.stderr)
+        self.assertIn("the action catalogue is empty", result.stderr)
 
 
 class MissingProducer(WrapperCase):
@@ -436,6 +440,38 @@ class Inspection(WrapperCase):
                                   result.stderr)
                     self.assertEqual(result.stdout, "")
         self.assertFalse(marker.exists(), "a mismatched catalogue reached the producer")
+
+    def test_version_counts_the_actions_of_the_catalogue_it_read(self):
+        # Off the real catalogue's 21: a count frozen to the one fixture would pass that case.
+        catalogue = json.loads(CATALOGUE.read_text())
+        catalogue["$defs"]["ActionId"]["enum"] = ["health", "task.get", "task.list"]
+        path = self.work / "catalogue.json"
+        path.write_text(json.dumps(catalogue))
+        result = self.run_wrapper("--version", env={"HEE3_CATALOGUE": str(path)})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("\ncatalogue_actions: 3\n", result.stdout)
+
+    def test_a_catalogue_declaring_no_request_is_a_mismatch_not_a_match(self):
+        # The protocol check compares every Request_* definition; with none, nothing was
+        # compared, and a comparison that did not happen must not read as agreement.
+        catalogue = json.loads(CATALOGUE.read_text())
+        catalogue["$defs"] = {name: definition
+                              for name, definition in catalogue["$defs"].items()
+                              if not name.startswith("Request_")}
+        path = self.work / "catalogue.json"
+        path.write_text(json.dumps(catalogue))
+        marker = self.work / "invoked"
+        producer = self.producer(f"touch '{marker}'\n")
+        for door in (("--version",), ("--actions",), ("--check", "health"), ("health",)):
+            with self.subTest(door=door):
+                result = self.run_wrapper(*door, producer=producer,
+                                          env={"HEE3_CATALOGUE": str(path)})
+                self.assertEqual(result.returncode, EXIT_NO_PRODUCER, result.stderr)
+                self.assertIn("dependency/version mismatch: the catalogue declares no "
+                              "Request_* definition; this wrapper speaks \"hee3.control\"/1",
+                              result.stderr)
+                self.assertEqual(result.stdout, "")
+        self.assertFalse(marker.exists(), "a catalogue speaking nothing reached the producer")
 
     def test_version_names_an_absent_producer(self):
         self.assertIn("producer: ABSENT", self.run_wrapper("--version").stdout)
@@ -710,10 +746,12 @@ class Cleanup(WrapperCase):
         self.assertEqual(process.wait(timeout=10), 143)
         self.assertEqual(list(tmp.iterdir()), [])
 
-    def test_a_term_to_the_wrapper_alone_reaches_the_producer(self):
+    def cancel_the_wrapper_alone(self, sig, code):
         # Not the group: a supervisor that knows only the wrapper's pid signals only it. Bash
         # runs a trap only after a FOREGROUND command ends, so a producer run in the foreground
-        # never hears of the cancellation and runs on until its own timeout.
+        # never hears of the cancellation and runs on until its own timeout. The producer is
+        # an asynchronous job, which ignores INT, so whatever arrived reaches it as TERM --
+        # and the wrapper exits 128+n for the signal IT received, not for the one it sent.
         started, heard = self.work / "started", self.work / "heard-term"
         producer = self.producer(f"trap 'touch {shlex_quote(str(heard))}; exit 0' TERM\n"
                                  f"touch '{started}'\nwhile :; do sleep 0.05; done\n")
@@ -723,9 +761,18 @@ class Cleanup(WrapperCase):
                                    start_new_session=True)
         self.addCleanup(stop_group, process)
         wait_for(started)
-        os.kill(process.pid, signal.SIGTERM)
+        os.kill(process.pid, sig)
         wait_for(heard, budget=GRACE_S)
-        self.assertEqual(process.wait(timeout=10), 143)
+        self.assertEqual(process.wait(timeout=10), code)
+
+    def test_a_term_to_the_wrapper_alone_reaches_the_producer(self):
+        self.cancel_the_wrapper_alone(signal.SIGTERM, 143)
+
+    def test_an_int_to_the_wrapper_alone_reaches_the_producer_and_exits_130(self):
+        self.cancel_the_wrapper_alone(signal.SIGINT, 130)
+
+    def test_a_hup_to_the_wrapper_alone_reaches_the_producer_and_exits_129(self):
+        self.cancel_the_wrapper_alone(signal.SIGHUP, 129)
 
 
 def stop_group(process):

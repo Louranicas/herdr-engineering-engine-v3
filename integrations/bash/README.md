@@ -26,7 +26,9 @@ action added to the engine is nameable here without anyone editing a list.
 of `true`, which Python would compare equal to 1) is refused with exit 3 and
 `dependency/version mismatch: Request_<x> speaks "<p>"/<v>; this wrapper speaks "hee3.control"/1`
 at every door — invoke, `--check`, `--actions`, `--inspect`, `--version` and so every chain
-step. An unreadable catalogue is exit 3 at every door too, `--version` included (it once
+step. A catalogue with no `Request_*` definition at all is the same refusal
+(`the catalogue declares no Request_* definition`): nothing was compared, and a comparison
+that did not happen is not agreement. An unreadable catalogue is exit 3 at every door too, `--version` included (it once
 printed `catalogue_actions: 0` and exited 0). A version query of the producer itself belongs to
 the engine (T28) and is not made here.
 
@@ -153,6 +155,10 @@ the wrapper again, so once every check has passed the chain takes `hee3 --pin` �
 the catalogue and of the wrapper — and hands it to every step as `HEE3_PIN_SHA256`. The request
 door refuses a step whose files no longer match (exit 3, `the catalogue or the wrapper changed
 since the chain was checked`), so no step runs under a tuple the checks did not admit.
+Two residuals, stated rather than closed: a file changed between a step's pin check and its
+read of that file is not seen; and the check is made by the wrapper file it pins, so a
+wrapper replaced by one without the check is not refused by it. The runner does not re-digest
+before spawning a step; closing both needs the runner to run the bytes it verified.
 
 **Inputs stay literal.** A step's input is a named string field of an earlier step's output,
 passed on as one `name=value` argument — never spliced into a command, and bounded by the same
@@ -218,7 +224,7 @@ otherwise the producer's own code, unchanged.
 dependency/environment/cancellation/pin slice); `bash -n` remains in the suite. The cases in
 `tests/bash_wrapper.py` drive the real script end to end against real producer fixtures.
 `tools/check-bash-sites` neuters every `refuse`/`finish` site of the chain runner and applies
-hand-named plants, each required to fail the test named for it (`sites=37 plants=37 killed=74
+hand-named plants, each required to fail the test named for it (`sites=37 plants=42 killed=79
 survived=0` on 2026-09-24). The plants were enumerated by the author, so they are a floor,
 not a census; dropping env's `--` is recorded there as an equivalent mutant, with its reason.
 

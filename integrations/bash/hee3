@@ -103,15 +103,21 @@ import json, sys
 catalogue, protocol, version = sys.argv[1], sys.argv[2], int(sys.argv[3])
 with open(catalogue, encoding="utf-8") as handle:
     definitions = json.load(handle)["$defs"]
-for name in sorted(definitions):
-    if name.startswith("Request_"):
-        fields = definitions[name].get("properties", {})
-        found = (fields.get("protocol", {}).get("const"), fields.get("version", {}).get("const"))
-        # type(): True == 1 in Python, and a version of `true` is not version 1.
-        if found[0] != protocol or type(found[1]) is not int or found[1] != version:
-            print(f"{name} speaks {json.dumps(found[0])}/{json.dumps(found[1])}; "
-                  f"this wrapper speaks {json.dumps(protocol)}/{version}")
-            sys.exit(2)
+requests = [name for name in sorted(definitions) if name.startswith("Request_")]
+# A catalogue with no request definition was compared against nothing, and a comparison that
+# did not happen is not agreement.
+if not requests:
+    print(f"the catalogue declares no Request_* definition; "
+          f"this wrapper speaks {json.dumps(protocol)}/{version}")
+    sys.exit(2)
+for name in requests:
+    fields = definitions[name].get("properties", {})
+    found = (fields.get("protocol", {}).get("const"), fields.get("version", {}).get("const"))
+    # type(): True == 1 in Python, and a version of `true` is not version 1.
+    if found[0] != protocol or type(found[1]) is not int or found[1] != version:
+        print(f"{name} speaks {json.dumps(found[0])}/{json.dumps(found[1])}; "
+              f"this wrapper speaks {json.dumps(protocol)}/{version}")
+        sys.exit(2)
 print("\n".join(definitions["ActionId"]["enum"]))
 PY
 ) || status=$?
