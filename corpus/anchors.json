@@ -54656,8 +54656,8 @@
       "bytes": 6019
     },
     "tools/check-quality": {
-      "sha256": "9232742babf3d34a5fe4e0eb43bae2121dc48781c0faa1b75c7c2e088d977489",
-      "bytes": 78382
+      "sha256": "692f02ff30986c4043831a1a3d176bdad11a48403645e1a9645733c33c7e977b",
+      "bytes": 80339
     },
     "tools/development_process.py": {
       "sha256": "e76e3a794193e5df7ee96fabf700113d718527745a0f9a9dba1e04fd5c7baaf3",
@@ -54668,8 +54668,8 @@
       "bytes": 10433
     },
     "tests/t25_quality.py": {
-      "sha256": "0e1bdec5b0742b00bf62188071ac81510efa42ba1e56ca64846aba08e52f9ce0",
-      "bytes": 141476
+      "sha256": "331ec8d3af1dca3d0526f3f4db9ca9f84f6470639689ece27befa055aec22ad3",
+      "bytes": 143869
     },
     "julia/Manifest.toml": {
       "sha256": "097d5028df4e1667a970a8297d41eedb908e0319a0b4154c7ec12548140a9f79",
@@ -55408,8 +55408,8 @@
       "bytes": 13662
     },
     "tests/t04_store.rs": {
-      "sha256": "92a8c261e56c21a23a87d2ffbdd984eaf2adebf4304f410aaa1686a5e46d312c",
-      "bytes": 69387
+      "sha256": "8fb7be9db1b719ffb153d7192329d91a4bb44fc8ccfebcc0a74fb7a93beaa660",
+      "bytes": 74681
     },
     "docs/store-contract.md": {
       "sha256": "b65ffe744d2abf93c3b0c40345787940213806ade52e9ef010e17f3012a81396",
@@ -55420,7 +55420,7 @@
       "bytes": 10139
     },
     "tools/check-store-mutations": {
-      "sha256": "e2efa63f07a8622f09554e86726eb91123de6f9423eb9ee12062fb776139c06a",
+      "sha256": "c5e7246ebc104f0f1f915b7c196736678ed08640b0307a8439ecffd57d2e6968",
       "bytes": 18978
     },
     "tools/sqlite-inputs/sqlite-amalgamation-3530400.zip": {
@@ -55600,8 +55600,8 @@
       "bytes": 3292
     },
     "development/t06/fixed-runtime-frontend/prepare-inputs.py": {
-      "sha256": "7c9588f91c9bb2165ee977a5a9032bd70b1669eb92569d9134bc736c014384fd",
-      "bytes": 16799
+      "sha256": "ebb581dbf1cfb52e3256bfa0e876b1a6a71a95338235b176cf8366e14f2c8574",
+      "bytes": 16785
     },
     "development/t06/fixed-runtime-frontend/src/frontend.rs": {
       "sha256": "fbf71307a3c2f237cfd7f0123a7b18a5aa829a960bc3211c836348fe51e8d5e4",
@@ -55824,8 +55824,8 @@
       "bytes": 26561
     },
     "src/main.rs": {
-      "sha256": "b1964807ec824596eaed15c4baeb1d08c136126f0e1bd557b1c256e638c7523b",
-      "bytes": 32757
+      "sha256": "2dd9f15ea5f08616310a97eb7173efe7d1f862b609fbc0597b65c50118fead17",
+      "bytes": 33688
     },
     "src/store/staging.rs": {
       "sha256": "8bb17b5598550fd2c002dc7063ddfa56cf4a6e0a51566264b908ba655acce5d3",
