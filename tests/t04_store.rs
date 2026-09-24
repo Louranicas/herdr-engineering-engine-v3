@@ -21,6 +21,11 @@ const STAGE: &str = "00000000-0000-4000-8000-00000000000b";
 const OTHER: &str = "00000000-0000-4000-8000-00000000000c";
 const CRITERIA: &str = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const HELLO: &str = "sha256:2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824";
+/// Migration 1's identity: SHA-256 of the bytes after `-- HEE3-ANCHORS-END\n`, computed by
+/// `sha256sum` over that suffix at 0ec69d6, f74fb14, d6cd92c and 20bd971 (identical at all four
+/// while the whole-file digest changed three times). Not derived from the crate's own digest.
+const MIGRATION_1_BODY: &str =
+    "sha256:ac5916feaee05749404dd7d87d98cde7e2ae93048e8b07e133ba7868fc1ee9f2";
 static NEXT_ROOT: AtomicU64 = AtomicU64::new(0);
 
 struct Area {
@@ -274,10 +279,7 @@ fn fresh_ledger_has_exact_runtime_profile_and_migration() {
         1
     );
     let history: (i64,String,i64,Option<String>) = db.query_row("SELECT version,checksum,predecessor_version,predecessor_checksum FROM migration_history", [], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?))).unwrap();
-    assert_eq!(
-        history,
-        (1, digest(include_bytes!("../migrations/001.sql")), 0, None)
-    );
+    assert_eq!(history, (1, MIGRATION_1_BODY.to_owned(), 0, None));
     assert_eq!(count(&area, "migration_history"), 1);
     no_admission(&area);
 }
@@ -445,6 +447,89 @@ fn changed_migration_checksum_refuses_even_at_supported_version() {
     drop(area.open());
     area.edit_closed(&format!(
         "UPDATE migration_history SET checksum='{CRITERIA}';"
+    ));
+    assert!(matches!(
+        Store::open(&area.path, uuid(GEN), uuid(EPOCH), false, deadline()),
+        Err(Error::UnsupportedSchema)
+    ));
+}
+
+/// A publication rewrites only the anchor block (d6cd92c did, with no DDL change); the recorded
+/// migration identity must not move, while one more byte of migration body must move it.
+#[test]
+fn anchor_block_rewrite_keeps_migration_identity()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let id = |sql: &str| schema::identity(sql).map_err(|error| format!("{error:?}"));
+    let sql = include_str!("../migrations/001.sql");
+    let (block, body) = sql
+        .split_once("-- HEE3-ANCHORS-END\n")
+        .ok_or("migration 1 has no anchor end marker")?;
+    let rewritten = format!(
+        "{}-- a later publication rewrote this block\n-- HEE3-ANCHORS-END\n{body}",
+        block.replace("Readiness binding", "Readiness rebinding")
+    );
+    assert_ne!(
+        rewritten, sql,
+        "the fixture must differ inside the anchor block"
+    );
+    assert_eq!(id(sql)?, MIGRATION_1_BODY);
+    assert_eq!(id(&rewritten)?, MIGRATION_1_BODY);
+    assert_ne!(
+        id(&format!("{sql}-- one more byte of migration\n"))?,
+        MIGRATION_1_BODY
+    );
+    Ok(())
+}
+
+/// Without exactly one end marker there is no body to name; a second marker could hide DDL.
+#[test]
+fn migration_identity_refuses_missing_or_repeated_anchor_end() {
+    let sql = include_str!("../migrations/001.sql");
+    assert!(matches!(
+        schema::identity(&sql.replace("-- HEE3-ANCHORS-END\n", "")),
+        Err(Error::UnsupportedSchema)
+    ));
+    assert!(matches!(
+        schema::identity(&format!("{sql}-- HEE3-ANCHORS-END\n")),
+        Err(Error::UnsupportedSchema)
+    ));
+}
+
+/// The whole file executes but only the body is hashed, so SQL inside the excluded block would
+/// run unnamed. A statement in the block, or a marker trailing a statement, is refused.
+#[test]
+fn executable_sql_in_the_excluded_anchor_block_is_refused() {
+    let sql = include_str!("../migrations/001.sql");
+    assert!(schema::identity(sql).is_ok());
+    let planted = sql.replacen(
+        "-- HEE3-ANCHORS-BEGIN\n",
+        "-- HEE3-ANCHORS-BEGIN\nCREATE TABLE unnamed(x);\n",
+        1,
+    );
+    assert!(matches!(
+        schema::identity(&planted),
+        Err(Error::UnsupportedSchema)
+    ));
+    let trailing = sql.replacen(
+        "-- HEE3-ANCHORS-END\n",
+        "CREATE TABLE unnamed(x); -- HEE3-ANCHORS-END\n",
+        1,
+    );
+    assert!(matches!(
+        schema::identity(&trailing),
+        Err(Error::UnsupportedSchema)
+    ));
+}
+
+/// A ledger that recorded the whole-file digest (the rule before the freeze) is refused, not
+/// silently re-blessed: no live ledger exists (RC02), so there is nothing to migrate.
+#[test]
+fn whole_file_checksum_recorded_before_the_freeze_is_refused() {
+    let area = Area::new();
+    drop(area.open());
+    area.edit_closed(&format!(
+        "UPDATE migration_history SET checksum='{}';",
+        digest(include_bytes!("../migrations/001.sql"))
     ));
     assert!(matches!(
         Store::open(&area.path, uuid(GEN), uuid(EPOCH), false, deadline()),

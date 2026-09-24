@@ -5,10 +5,31 @@ use rusqlite::{Connection, TransactionBehavior, params};
 use std::time::{Duration, Instant};
 
 const SQL: &str = include_str!("../../migrations/001.sql");
+/// The corpus publisher owns every byte up to and including this line and rewrites it without
+/// changing any DDL, so a migration's identity is the digest of what follows it.
+const ANCHOR_END: &str = "-- HEE3-ANCHORS-END\n";
 const APPLICATION_ID: i64 = 0x4845_4533;
 const PACKAGE: &str = concat!("hee3-draft-schema1/", env!("CARGO_PKG_VERSION"));
 const SOURCE_ID: &str =
     "2026-07-24 19:02:57 bf7c7f30031888f4e796e429ab3978879485813aaca6f641c7b33e4e09459bcc";
+
+/// Digest of the migration body below the single publisher-owned anchor block. The whole file is
+/// executed, so the excluded block must be unable to execute anything: every line of it is a `--`
+/// comment or blank. A missing or repeated end marker is refused: a second block could otherwise
+/// hide a DDL change.
+pub(super) fn identity(sql: &str) -> Result<String> {
+    match sql.split_once(ANCHOR_END) {
+        Some((block, body))
+            if !body.contains(ANCHOR_END)
+                && block
+                    .lines()
+                    .all(|line| line.is_empty() || line.starts_with("--")) =>
+        {
+            Ok(digest(body.as_bytes()))
+        }
+        _ => Err(Error::UnsupportedSchema),
+    }
+}
 
 pub(super) fn runtime(deadline: Instant) -> Result<()> {
     super::remaining(deadline)?;
@@ -117,7 +138,7 @@ pub(super) fn initialize(
     check_point(fault, CutPoint::MigrationWrite)?;
     tx.execute(
         "INSERT INTO migration_history VALUES(1,?,0,NULL,?)",
-        params![digest(SQL.as_bytes()), PACKAGE],
+        params![identity(SQL)?, PACKAGE],
     )?;
     tx.execute(
         "INSERT INTO ledger_meta VALUES(1,?,?,'normal')",
@@ -161,7 +182,7 @@ pub(super) fn validate(connection: &Connection, generation: &str, deadline: Inst
         row.get(0)
     })?;
     let history:(i64,String,i64,Option<String>,String)=connection.query_row("SELECT version,checksum,predecessor_version,predecessor_checksum,package_identity FROM migration_history",[],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?)))?;
-    if count != 1 || history != (1, digest(SQL.as_bytes()), 0, None, PACKAGE.to_owned()) {
+    if count != 1 || history != (1, identity(SQL)?, 0, None, PACKAGE.to_owned()) {
         return Err(Error::UnsupportedSchema);
     }
     let actual: String = connection.query_row(
