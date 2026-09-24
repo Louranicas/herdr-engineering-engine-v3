@@ -126,8 +126,10 @@ pub fn remove_owned(path: &Path, deadline: Instant) -> Result<(), Error> {
     if held.st_uid != rustix::process::geteuid().as_raw() || held.st_mode & 0o777 != 0o700 {
         return Err(Error::Custody);
     }
-    let mut entries = 0;
-    empty_directory(&directory, 0, &mut entries, deadline)?;
+    // A census first: every bound is enforced before anything is unlinked, so a refused removal
+    // leaves the workspace whole rather than half-deleted.
+    walk(&directory, 0, &mut 0, deadline, Walk::Census)?;
+    walk(&directory, 0, &mut 0, deadline, Walk::Remove)?;
     let named = statat(&parent, name, AtFlags::SYMLINK_NOFOLLOW).map_err(|_| Error::Changed)?;
     if (named.st_dev, named.st_ino) != (held.st_dev, held.st_ino) {
         return Err(Error::Changed);
@@ -135,11 +137,24 @@ pub fn remove_owned(path: &Path, deadline: Instant) -> Result<(), Error> {
     unlinkat(&parent, name, AtFlags::REMOVEDIR).map_err(|_| Error::Io)
 }
 
-fn empty_directory(
+/// Whether a walk only counts, or also removes.
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum Walk {
+    Census,
+    Remove,
+}
+
+/// Visit every entry under `directory`, enforcing [`MAX_DEPTH`], [`MAX_ENTRIES`] and the deadline.
+///
+/// Each entry is opened as a directory without following a link; `ENOTDIR` or `ELOOP` means it is
+/// not one (a file, a link, a device), and it is unlinked as itself. There is no separate type
+/// check to race: the open that decides is the open that is used.
+fn walk(
     directory: &rustix::fd::OwnedFd,
     depth: usize,
     entries: &mut usize,
     deadline: Instant,
+    mode: Walk,
 ) -> Result<(), Error> {
     if depth > MAX_DEPTH {
         return Err(Error::Bound);
@@ -161,19 +176,25 @@ fn empty_directory(
         if Instant::now() >= deadline {
             return Err(Error::Deadline);
         }
-        let stat = statat(directory, &name, AtFlags::SYMLINK_NOFOLLOW).map_err(|_| Error::Io)?;
-        if rustix::fs::FileType::from_raw_mode(stat.st_mode) == rustix::fs::FileType::Directory {
-            let child = openat(
-                directory,
-                &name,
-                READ_FLAGS | OFlags::DIRECTORY,
-                Mode::empty(),
-            )
-            .map_err(|_| Error::Changed)?;
-            empty_directory(&child, depth + 1, entries, deadline)?;
-            unlinkat(directory, &name, AtFlags::REMOVEDIR).map_err(|_| Error::Io)?;
-        } else {
-            unlinkat(directory, &name, AtFlags::empty()).map_err(|_| Error::Io)?;
+        match openat(
+            directory,
+            &name,
+            READ_FLAGS | OFlags::DIRECTORY,
+            Mode::empty(),
+        ) {
+            Ok(child) => {
+                walk(&child, depth + 1, entries, deadline, mode)?;
+                if mode == Walk::Remove {
+                    unlinkat(directory, &name, AtFlags::REMOVEDIR).map_err(|_| Error::Io)?;
+                }
+            }
+            Err(rustix::io::Errno::NOTDIR | rustix::io::Errno::LOOP) => {
+                if mode == Walk::Remove {
+                    unlinkat(directory, &name, AtFlags::empty()).map_err(|_| Error::Io)?;
+                }
+            }
+            Err(rustix::io::Errno::NOENT) => return Err(Error::Changed),
+            Err(_) => return Err(Error::Io),
         }
     }
     Ok(())

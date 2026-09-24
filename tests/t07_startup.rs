@@ -34,7 +34,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, DirBuilder};
 use std::io::{BufRead, BufReader};
 use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
@@ -3599,10 +3599,21 @@ fn a_store_lock_held_past_the_settle_window_refuses_well_before_the_deadline()
     let _first = Store::open(&area.store(), id(GEN), id(EPOCH), true, deadline())
         .map_err(|error| format!("{error:?}"))?;
     let started = Instant::now();
-    assert!(matches!(
-        Store::open(&area.store(), id(GEN), id(EPOCH), false, deadline()),
-        Err(StoreError::Locked)
-    ));
+    // The contended open runs on its own thread and is waited on with a budget: a retry loop that
+    // ignored its window would otherwise hang this case instead of failing it (a planted mutant did).
+    let store = area.store();
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let refused = matches!(
+            Store::open(&store, id(GEN), id(EPOCH), false, deadline()),
+            Err(StoreError::Locked)
+        );
+        let _ = sender.send(refused);
+    });
+    let refused = receiver
+        .recv_timeout(Duration::from_secs(5))
+        .map_err(|_| "the contended open did not return within 5 s")?;
+    assert!(refused, "a second writer is refused Locked");
     let waited = started.elapsed();
     assert!(
         waited >= LOCK_SETTLE && waited < Duration::from_secs(2),
@@ -3666,5 +3677,96 @@ fn the_workspace_owner_refuses_a_directory_that_is_not_0700()
     ));
     assert_eq!(fs::read(root.join("keep"))?, b"keep");
     fs::set_permissions(&root, fs::Permissions::from_mode(0o700))?;
+    Ok(())
+}
+
+/// T07-AP-86 · a workspace whose parent is a symlink is refused, and the directory the link names
+/// is untouched: the parent is opened without following its final component.
+#[test]
+fn the_workspace_owner_refuses_a_workspace_reached_through_a_symlinked_parent()
+-> Result<(), Box<dyn std::error::Error>> {
+    let area = Area::new("remove-parent-alias");
+    let real = area.path.join("real");
+    DirBuilder::new().mode(0o700).create(&real)?;
+    DirBuilder::new()
+        .mode(0o700)
+        .create(real.join("workspace"))?;
+    fs::write(real.join("workspace/keep"), b"keep")?;
+    std::os::unix::fs::symlink(&real, area.path.join("alias"))?;
+    assert!(matches!(
+        remove_owned(&area.path.join("alias/workspace"), deadline()),
+        Err(WorkspaceError::Io)
+    ));
+    assert_eq!(fs::read(real.join("workspace/keep"))?, b"keep");
+    Ok(())
+}
+
+/// A chain of `levels` directories under `root`, the deepest holding one file; returns its path.
+fn chain(root: &Path, levels: usize) -> Result<PathBuf, Box<dyn std::error::Error>> {
+    let mut deepest = root.to_path_buf();
+    for _ in 0..levels {
+        deepest.push("d");
+        DirBuilder::new().mode(0o700).create(&deepest)?;
+    }
+    let file = deepest.join("leaf");
+    fs::write(&file, b"x")?;
+    Ok(file)
+}
+
+/// T07-AP-87 · the depth bound, from both sides: 32 levels below the workspace are removed, 33 are
+/// refused before anything on that chain is unlinked.
+#[test]
+fn the_workspace_depth_bound_admits_thirty_two_levels_and_refuses_thirty_three()
+-> Result<(), Box<dyn std::error::Error>> {
+    let area = Area::new("remove-depth");
+    let admitted = area.path.join("admitted");
+    DirBuilder::new().mode(0o700).create(&admitted)?;
+    chain(&admitted, 32)?;
+    remove_owned(&admitted, deadline()).map_err(|error| format!("{error:?}"))?;
+    assert!(
+        fs::symlink_metadata(&admitted).is_err(),
+        "32 levels are removed whole"
+    );
+    let refused = area.path.join("refused");
+    DirBuilder::new().mode(0o700).create(&refused)?;
+    let leaf = chain(&refused, 33)?;
+    assert!(matches!(
+        remove_owned(&refused, deadline()),
+        Err(WorkspaceError::Bound)
+    ));
+    assert_eq!(fs::read(&leaf)?, b"x", "the refused chain is intact");
+    Ok(())
+}
+
+/// T07-AP-88 · the entry bound counts the whole tree, from both sides: 4096 entries are removed,
+/// 4097 are refused before any is unlinked.
+#[test]
+fn the_workspace_entry_bound_admits_4096_entries_and_refuses_4097()
+-> Result<(), Box<dyn std::error::Error>> {
+    let area = Area::new("remove-entries");
+    for (name, count) in [("admitted", 4096_usize), ("refused", 4097)] {
+        let root = area.path.join(name);
+        DirBuilder::new().mode(0o700).create(&root)?;
+        // Half in a subdirectory, so the count is proved to run across levels.
+        DirBuilder::new().mode(0o700).create(root.join("sub"))?;
+        for index in 1..count {
+            let place = if index % 2 == 0 {
+                root.join("sub")
+            } else {
+                root.clone()
+            };
+            fs::write(place.join(format!("f{index}")), b"")?;
+        }
+    }
+    remove_owned(&area.path.join("admitted"), deadline()).map_err(|error| format!("{error:?}"))?;
+    assert!(fs::symlink_metadata(area.path.join("admitted")).is_err());
+    assert!(matches!(
+        remove_owned(&area.path.join("refused"), deadline()),
+        Err(WorkspaceError::Bound)
+    ));
+    assert!(
+        fs::symlink_metadata(area.path.join("refused/f1")).is_ok(),
+        "nothing was unlinked"
+    );
     Ok(())
 }

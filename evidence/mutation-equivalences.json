@@ -91,6 +91,50 @@
     "a_settlement_lost_to_a_concurrent_writer_is_recorded_as_refused"
    ],
    "history": "Reported by mutation shard C on 2026-09-23 together with its `false` twin. The `false` mutant was real -- the conflict arm had never been reached -- and is killed by T07-AP-30b, which settles the column through a second connection between the readback and its row."
+  },
+  {
+   "id": "workspace-remove-owned-flag-xor",
+   "file": "src/worker/workspace.rs",
+   "function": "remove_owned",
+   "mutants": [
+    "replace | with ^ in remove_owned"
+   ],
+   "argument": "READ_FLAGS is RDONLY|NOFOLLOW|NONBLOCK|CLOEXEC and OFlags::DIRECTORY shares no bit with it (distinct O_* flags; RDONLY is 0), so for these operands `a ^ b` equals `a | b` bit for bit.",
+   "falsifier": "READ_FLAGS gaining OFlags::DIRECTORY (or any bit it is combined with), after which xor would clear it.",
+   "pinned_by": [
+    "the_workspace_owner_refuses_a_symlinked_workspace",
+    "the_workspace_owner_refuses_a_workspace_reached_through_a_symlinked_parent"
+   ],
+   "history": "Reported by the T07 closure diff-mutant run on de1278f (2026-09-24). The `&` mutant on the same operator was NOT equivalent: it drops NOFOLLOW/DIRECTORY; T07-AP-86 kills it."
+  },
+  {
+   "id": "workspace-walk-flag-xor",
+   "file": "src/worker/workspace.rs",
+   "function": "walk",
+   "mutants": [
+    "replace | with ^ in walk"
+   ],
+   "argument": "READ_FLAGS is RDONLY|NOFOLLOW|NONBLOCK|CLOEXEC and OFlags::DIRECTORY shares no bit with it (distinct O_* flags; RDONLY is 0), so for these operands `a ^ b` equals `a | b` bit for bit.",
+   "falsifier": "READ_FLAGS gaining OFlags::DIRECTORY, after which xor would clear it.",
+   "pinned_by": [
+    "the_workspace_owner_removes_a_tree_without_following_links"
+   ],
+   "history": "The two-pass walk (2026-09-24) replaced a statat-then-openat pair; its open is the one that decides the entry's kind, so its flags are load-bearing and the `&` mutant (no NOFOLLOW) empties a linked directory: T07-AP-83 kills it."
+  },
+  {
+   "id": "store-lock-settle-boundary",
+   "file": "src/store/artifact.rs",
+   "function": "Directory::lock",
+   "mutants": [
+    "replace < with <= in Directory::lock"
+   ],
+   "argument": "`Instant::now() < until` and `<=` differ only when a fresh monotonic reading equals `until` exactly; the next iteration re-reads the clock after a 2 ms sleep and takes the refusing arm either way, so the only difference is at most one extra 2 ms retry inside a 250 ms settle window.",
+   "falsifier": "A caller that depends on the refusal arriving at exactly `until`, or a retry that changes state (it does not: try_lock is idempotent).",
+   "pinned_by": [
+    "a_momentarily_held_store_lock_is_waited_out",
+    "a_store_lock_held_past_the_settle_window_refuses_well_before_the_deadline"
+   ],
+   "history": "Reported by the T07 closure diff-mutant run on de1278f. Its sibling (guard -> true) TIMED OUT because T07-AP-82 waited unbudgeted; the case now waits with recv_timeout(5 s), so that mutant fails it instead of hanging it."
   }
  ]
 }

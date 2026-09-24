@@ -1046,7 +1046,7 @@ class T06QualityInventoryControls(unittest.TestCase):
         if quality.has_t09(ROOT):
             reviewed.append(61)
         if quality.has_t07_startup(ROOT):
-            reviewed.append(94)
+            reviewed.append(97)
         if quality.has_budget_battery(ROOT):
             reviewed.append(79)
         if quality.has_notify_battery(ROOT):
@@ -1060,7 +1060,7 @@ class T06QualityInventoryControls(unittest.TestCase):
         if quality.has_herdr_battery(ROOT):
             reviewed.append(54)
         self.assertEqual(sorted(expected["test_counts"]), sorted(reviewed))
-        self.assertEqual(sum(expected["test_counts"]), 795 + (85 if quality.has_t13(ROOT) else 0) + (90 if quality.has_t21(ROOT) else 0) + (51 if quality.has_t07(ROOT) else 0) + (21 if quality.has_t08(ROOT) else 0) + (60 if quality.has_recovery(ROOT) else 0) + (24 if quality.has_t08_contract(ROOT) else 0) + (61 if quality.has_t09(ROOT) else 0) + (94 if quality.has_t07_startup(ROOT) else 0) + (79 if quality.has_budget_battery(ROOT) else 0) + (71 if quality.has_notify_battery(ROOT) else 0) + (59 if quality.has_context_battery(ROOT) else 0) + (60 if quality.has_cohort_battery(ROOT) else 0) + (94 if quality.has_actions_battery(ROOT) else 0) + (54 if quality.has_herdr_battery(ROOT) else 0) + (6 if quality.has_context_battery(ROOT) else 0))
+        self.assertEqual(sum(expected["test_counts"]), 795 + (85 if quality.has_t13(ROOT) else 0) + (90 if quality.has_t21(ROOT) else 0) + (51 if quality.has_t07(ROOT) else 0) + (21 if quality.has_t08(ROOT) else 0) + (60 if quality.has_recovery(ROOT) else 0) + (24 if quality.has_t08_contract(ROOT) else 0) + (61 if quality.has_t09(ROOT) else 0) + (97 if quality.has_t07_startup(ROOT) else 0) + (79 if quality.has_budget_battery(ROOT) else 0) + (71 if quality.has_notify_battery(ROOT) else 0) + (59 if quality.has_context_battery(ROOT) else 0) + (60 if quality.has_cohort_battery(ROOT) else 0) + (94 if quality.has_actions_battery(ROOT) else 0) + (54 if quality.has_herdr_battery(ROOT) else 0) + (6 if quality.has_context_battery(ROOT) else 0))
         self.assertEqual(sum(expected["unit_test_counts"].values()), 167 if quality.has_t13(ROOT) else 166)
         paths = quality.quality_subject_paths(ROOT, time.monotonic() + 5, True)
         for path in ["tests/fixtures/receipts/inventory-examples.json",
@@ -1172,7 +1172,7 @@ class T06QualityInventoryControls(unittest.TestCase):
 
     def test_combined_fixed_970_census_preserves_both_sixteen_groups(self):
         expected = quality.rust_test_expectations(ROOT)
-        self.assertEqual(sum(expected["test_counts"]), 970 + (51 if quality.has_t07(ROOT) else 0) + (21 if quality.has_t08(ROOT) else 0) + (60 if quality.has_recovery(ROOT) else 0) + (24 if quality.has_t08_contract(ROOT) else 0) + (61 if quality.has_t09(ROOT) else 0) + (94 if quality.has_t07_startup(ROOT) else 0) + (79 if quality.has_budget_battery(ROOT) else 0) + (71 if quality.has_notify_battery(ROOT) else 0) + (59 if quality.has_context_battery(ROOT) else 0) + (60 if quality.has_cohort_battery(ROOT) else 0) + (94 if quality.has_actions_battery(ROOT) else 0) + (54 if quality.has_herdr_battery(ROOT) else 0) + (6 if quality.has_context_battery(ROOT) else 0))
+        self.assertEqual(sum(expected["test_counts"]), 970 + (51 if quality.has_t07(ROOT) else 0) + (21 if quality.has_t08(ROOT) else 0) + (60 if quality.has_recovery(ROOT) else 0) + (24 if quality.has_t08_contract(ROOT) else 0) + (61 if quality.has_t09(ROOT) else 0) + (97 if quality.has_t07_startup(ROOT) else 0) + (79 if quality.has_budget_battery(ROOT) else 0) + (71 if quality.has_notify_battery(ROOT) else 0) + (59 if quality.has_context_battery(ROOT) else 0) + (60 if quality.has_cohort_battery(ROOT) else 0) + (94 if quality.has_actions_battery(ROOT) else 0) + (54 if quality.has_herdr_battery(ROOT) else 0) + (6 if quality.has_context_battery(ROOT) else 0))
         self.assertEqual(len(expected["test_counts"]), 32 + sum(1 for present in (quality.has_t07, quality.has_t08, quality.has_recovery, quality.has_t08_contract, quality.has_t09, quality.has_t07_startup, quality.has_budget_battery, quality.has_notify_battery, quality.has_context_battery, quality.has_cohort_battery, quality.has_actions_battery, quality.has_herdr_battery) if present(ROOT)))
         self.assertEqual(expected["test_counts"].count(16), 2)
         self.assertEqual(sum(expected["unit_test_counts"].values()), 167)
@@ -1451,7 +1451,7 @@ class T06QualityInventoryControls(unittest.TestCase):
 
     def test_t07_fixed_51_inventory_census_and_owned_inputs(self):
         expected = quality.rust_test_expectations(ROOT)
-        self.assertEqual(sum(expected["test_counts"]), 1704)
+        self.assertEqual(sum(expected["test_counts"]), 1707)
         self.assertEqual(len(expected["test_counts"]), 44)
         self.assertEqual(expected["test_counts"].count(51), 1)
         self.assertEqual(expected["test_counts"].count(43), 0)
@@ -1498,7 +1498,7 @@ class T06QualityInventoryControls(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "required extension input"):
                     quality.rust_test_expectations(root)
                 path.unlink(); path.write_bytes(before)
-            self.assertEqual(sum(quality.rust_test_expectations(root)["test_counts"]), 1704)
+            self.assertEqual(sum(quality.rust_test_expectations(root)["test_counts"]), 1707)
 
     def test_t07_omitted_changed_or_conditional_target_refuses(self):
         with tempfile.TemporaryDirectory() as raw:
@@ -1550,7 +1550,7 @@ class T06QualityInventoryControls(unittest.TestCase):
 
     def test_t08_native_fixed_21_census_and_owned_inputs(self):
         expected = quality.rust_test_expectations(ROOT)
-        self.assertEqual(sum(expected["test_counts"]), 1704)
+        self.assertEqual(sum(expected["test_counts"]), 1707)
         self.assertEqual(len(expected["test_counts"]), 44)
         self.assertEqual(expected["test_counts"].count(21), 1)
         self.assertEqual(expected["test_counts"].count(51), 1)
@@ -1607,7 +1607,7 @@ class T06QualityInventoryControls(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "required extension input: " + re.escape(name)):
                     quality.rust_test_expectations(root)
                 path.unlink(); path.write_bytes(before)
-            self.assertEqual(sum(quality.rust_test_expectations(root)["test_counts"]), 1704)
+            self.assertEqual(sum(quality.rust_test_expectations(root)["test_counts"]), 1707)
 
     def test_t08_omitted_changed_or_conditional_target_refuses_by_name(self):
         with tempfile.TemporaryDirectory() as raw:
@@ -1744,9 +1744,9 @@ class T06QualityInventoryControls(unittest.TestCase):
             with self.subTest(fault=fault[-80:]), self.assertRaisesRegex(ValueError, "required Rust"):
                 quality.run_rust_test_partitions(ROOT, self.serve(expected_counts, {"t06": fault}), "cargo", [], "T06-split-fault", expected_counts)
 
-    def test_recovery_and_contract_fixed_1704_census_and_owned_inputs(self):
+    def test_recovery_and_contract_fixed_1707_census_and_owned_inputs(self):
         expected = quality.rust_test_expectations(ROOT)
-        self.assertEqual(sum(expected["test_counts"]), 1704)
+        self.assertEqual(sum(expected["test_counts"]), 1707)
         self.assertEqual(len(expected["test_counts"]), 44)
         # Three targets hold 60: the T02 battery, recovery (since T07-RC-59/60) and t22_cohort (since
         # the review D5/N3 cases) -- the multiplicity rule of the 24-rows below.
@@ -1781,7 +1781,7 @@ class T06QualityInventoryControls(unittest.TestCase):
             self.assertIn("tests/" + relative, quality.T08_CONTRACT_INPUTS)
         self.assertEqual(sorted(set(re.findall(r"habitat_engine::(\w+)", (ROOT / "tests/recovery.rs").read_text()))), ["recovery"])
 
-    def test_recovery_absent_keeps_1644_and_43_groups(self):
+    def test_recovery_absent_keeps_1647_and_43_groups(self):
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw); manifest = self.combined_fixture(root)
             manifest.write_text(self.strip_targets(manifest.read_text(), ["recovery"]))
@@ -1790,14 +1790,14 @@ class T06QualityInventoryControls(unittest.TestCase):
             self.assertFalse(quality.has_recovery(root))
             self.assertTrue(quality.has_t08_contract(root))
             expected = quality.rust_test_expectations(root)
-            self.assertEqual(sum(expected["test_counts"]), 1644)
+            self.assertEqual(sum(expected["test_counts"]), 1647)
             self.assertEqual(len(expected["test_counts"]), 43)
             self.assertEqual(expected["test_counts"].count(60), 2)
             quality.require_rust_test_summaries(self.synthetic_combined_output(expected), expected, "recovery-absent")
             self.assertEqual([n for n, _ in quality.rust_test_partitions(root)], ["tests-main", "tests-t06", "tests-t21-process", "tests-t07-inventory", "tests-t08-native", "tests-t08-contract"])
             self.assertNotIn("src/recovery.rs", quality.quality_subject_paths(root, time.monotonic() + 5, True))
 
-    def test_contract_absent_keeps_1680_and_43_groups_and_no_examples(self):
+    def test_contract_absent_keeps_1683_and_43_groups_and_no_examples(self):
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw); manifest = self.combined_fixture(root)
             manifest.write_text(self.strip_targets(manifest.read_text(), ["t08_contract"]))
@@ -1807,7 +1807,7 @@ class T06QualityInventoryControls(unittest.TestCase):
             self.assertTrue(quality.has_t08(root))
             self.assertEqual(quality.expected_examples(root), [])
             expected = quality.rust_test_expectations(root)
-            self.assertEqual(sum(expected["test_counts"]), 1680)
+            self.assertEqual(sum(expected["test_counts"]), 1683)
             self.assertEqual(len(expected["test_counts"]), 43)
             self.assertEqual(expected["test_counts"].count(23), 0)
             quality.require_rust_test_summaries(self.synthetic_combined_output(expected), expected, "contract-absent")
@@ -1826,7 +1826,7 @@ class T06QualityInventoryControls(unittest.TestCase):
                 with self.subTest(name=name, kind="symlink"), self.assertRaisesRegex(ValueError, "required (?:extension input|T03 source|example source): " + re.escape(name)):
                     quality.rust_test_expectations(root)
                 path.unlink(); path.write_bytes(before)
-            self.assertEqual(sum(quality.rust_test_expectations(root)["test_counts"]), 1704)
+            self.assertEqual(sum(quality.rust_test_expectations(root)["test_counts"]), 1707)
 
     def test_recovery_or_contract_omitted_changed_or_conditional_target_refuses_by_name(self):
         with tempfile.TemporaryDirectory() as raw:
@@ -1951,7 +1951,7 @@ class T06QualityInventoryControls(unittest.TestCase):
 
     def test_t09_fixed_61_route_census_and_owned_inputs(self):
         expected = quality.rust_test_expectations(ROOT)
-        self.assertEqual(sum(expected["test_counts"]), 1704)
+        self.assertEqual(sum(expected["test_counts"]), 1707)
         self.assertEqual(len(expected["test_counts"]), 44)
         self.assertEqual(expected["test_counts"].count(61), 1)
         self.assertEqual(sum(expected["unit_test_counts"].values()), 167)
@@ -1969,7 +1969,7 @@ class T06QualityInventoryControls(unittest.TestCase):
             self.assertIn(resolved, quality.T09_INPUTS)
         self.assertEqual(sorted(set(re.findall(r"habitat_engine::(\w+)", (ROOT / "tests/t09_route.rs").read_text()))), ["contracts", "route"])
 
-    def test_t09_absent_keeps_1643_and_43_groups(self):
+    def test_t09_absent_keeps_1646_and_43_groups(self):
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw); manifest = self.combined_fixture(root)
             manifest.write_text(self.strip_targets(manifest.read_text(), ["t09_route"]))
@@ -1978,7 +1978,7 @@ class T06QualityInventoryControls(unittest.TestCase):
             self.assertFalse(quality.has_t09(root))
             self.assertTrue(quality.has_t08_contract(root))
             expected = quality.rust_test_expectations(root)
-            self.assertEqual(sum(expected["test_counts"]), 1643)
+            self.assertEqual(sum(expected["test_counts"]), 1646)
             self.assertEqual(len(expected["test_counts"]), 43)
             self.assertEqual(expected["test_counts"].count(61), 0)
             quality.require_rust_test_summaries(self.synthetic_combined_output(expected), expected, "t09-absent")
@@ -2000,7 +2000,7 @@ class T06QualityInventoryControls(unittest.TestCase):
                 with self.subTest(name=name, kind="symlink"), self.assertRaisesRegex(ValueError, "required extension input: " + re.escape(name)):
                     quality.rust_test_expectations(root)
                 path.unlink(); path.write_bytes(before)
-            self.assertEqual(sum(quality.rust_test_expectations(root)["test_counts"]), 1704)
+            self.assertEqual(sum(quality.rust_test_expectations(root)["test_counts"]), 1707)
 
     def test_t09_omitted_changed_or_duplicated_target_refuses_by_name(self):
         with tempfile.TemporaryDirectory() as raw:
@@ -2020,7 +2020,7 @@ class T06QualityInventoryControls(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "Substituted required T06 target: t09_route"):
                 quality.rust_test_expectations(root)
             manifest.write_text(original)
-            self.assertEqual(sum(quality.rust_test_expectations(root)["test_counts"]), 1704)
+            self.assertEqual(sum(quality.rust_test_expectations(root)["test_counts"]), 1707)
 
     def test_t09_census_faults_refuse(self):
         expected = quality.rust_test_expectations(ROOT)
