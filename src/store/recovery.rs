@@ -535,15 +535,21 @@ fn read_view(
 
 /// B03b · the ONE definition of a terminal attempt's confirmed-clean closure, as an SQL condition
 /// over an `attempts` row aliased `a`. Closed means a startup record for the attempt carries the
-/// ENGINE'S OWN physical readback showing it clean — never a worker's `cleanup_settled` claim
-/// (T07-AP-42 falsified that). Two record kinds can show it:
+/// ENGINE'S OWN physical readback showing it clean or its workspace deliberately retained — never a
+/// worker's `cleanup_settled` claim (T07-AP-42 falsified that). Two record kinds can show it:
 ///
 /// * `reconciliation_decided`: `handed` is what the shell observed and handed the policy; closed
 ///   when its cleanup readback is `complete` AND its process custody is positively not a live
 ///   holder. Custody is an allow-list — `absent` (nothing holds it), `pid_reused` (the PID is now
 ///   another process: not ours, R07), `unobserved` (a settled attempt's observation was never a
 ///   local process, RC-24). `live_same_identity`, `unreadable` and any other or future spelling
-///   keep the attempt open: unknown is never closed.
+///   keep the attempt open: unknown is never closed. ALSO closed, with the disposition "workspace
+///   retained", when the decision is a standing one (`acceptance_stands` / `cancellation_stands`),
+///   custody is in the same allow-list and the workspace readback shows it still `writable`:
+///   startup never deletes a standing task's workspace (it may be the retained evidence), so
+///   without this clause such attempts refill every batch and starve the cleanable ones behind
+///   them. Their retention and collection belong to T18 (route: "retained-workspace
+///   retention/GC"), not to startup.
 /// * `reconciliation_readback` of the `cleanup` effect whose readback is `complete`.
 ///
 /// The bodies are the engine's own serialized records (`app::startup`), an owned contract; a
@@ -553,6 +559,10 @@ const CLOSED_BY_ENGINE_READBACK: &str = "EXISTS (SELECT 1 FROM events e WHERE e.
     AND json_extract(CAST(e.body AS TEXT),'$.attempt')=a.id AND ( \
     (e.kind='reconciliation_decided' \
      AND json_extract(CAST(e.body AS TEXT),'$.handed.cleanup.cleanup_readback')='complete' \
+     AND json_extract(CAST(e.body AS TEXT),'$.handed.process.custody') IN ('absent','pid_reused','unobserved')) \
+    OR (e.kind='reconciliation_decided' \
+     AND json_extract(CAST(e.body AS TEXT),'$.decision.decision') IN ('acceptance_stands','cancellation_stands') \
+     AND json_extract(CAST(e.body AS TEXT),'$.handed.workspace.workspace')='writable' \
      AND json_extract(CAST(e.body AS TEXT),'$.handed.process.custody') IN ('absent','pid_reused','unobserved')) \
     OR (e.kind='reconciliation_readback' \
      AND json_extract(CAST(e.body AS TEXT),'$.effect')='cleanup' \
