@@ -267,16 +267,16 @@ def main():
     with ThreadPoolExecutor(max_workers=WORKERS) as pool:
         outcomes = list(pool.map(lambda job: run_suite(job[2], selection(job)), jobs))
 
-    (_, baseline), = [(job, outcome) for job, outcome in zip(jobs, outcomes)
+    (_, baseline), = [(job, outcome) for job, outcome in zip(jobs, outcomes, strict=True)
                       if job[0] == "baseline"]
     if baseline[0] != 0:
         raise SystemExit(f"the suite is not green on the unmutated wrapper (rc={baseline[0]}): "
                          f"{sorted(baseline[1])}")
-    jobs, outcomes = zip(*[(job, outcome) for job, outcome in zip(jobs, outcomes)
-                           if job[0] != "baseline"])
+    jobs, outcomes = zip(*[(job, outcome) for job, outcome in zip(jobs, outcomes, strict=True)
+                           if job[0] != "baseline"], strict=True)
 
     survivors = []
-    for (kind, label, _, tests), (rc, failing) in zip(jobs, outcomes):
+    for (kind, label, _, tests), (rc, failing) in zip(jobs, outcomes, strict=True):
         if rc is None:
             verdict = f"SURVIVED (hung past {BUDGET_S}s; a hang is not a kill)"
         elif rc == 0:
