@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generation": "20260923T220558-9ddf7a15",
+  "generation": "20260924T014842-bff3ebb8",
   "status": "complete",
   "roots": {
     "source": {
@@ -63,7 +63,7 @@
   "roots_drift": [],
   "roots_changed": null,
   "scope": "documentation anchors and declared observation consistency only",
-  "journal": "/var/mnt/STORAGE-10TB/Louranicas-ssd-offload/planning/herdr-engine-vault-20260915/ultra-map-review/publications/20260923T220558-9ddf7a15",
+  "journal": "/var/mnt/STORAGE-10TB/Louranicas-ssd-offload/planning/herdr-engine-vault-20260915/ultra-map-review/publications/20260924T014842-bff3ebb8",
   "previous_diary_navigation_blocks": {
     "/var/mnt/STORAGE-10TB/fedora-obsidian-vaults/my-diary.vault/Reflections/Assertions Measured Against the Code.md": "16ffa47077b2267b12162913a9582150bb1f0b6b1d7ed6dec35d907c77d72da3",
     "/var/mnt/STORAGE-10TB/fedora-obsidian-vaults/my-diary.vault/Reflections/Mistakes I Made.md": "8b3a6c8db053155fb5bdd64c403bbe4f216fa2edd48a9e3e1f15e27dfd823bb5",
@@ -129,8 +129,8 @@
     ]
   },
   "prior_publication_snapshot": {
-    "path": "/var/mnt/STORAGE-10TB/Louranicas-ssd-offload/planning/herdr-engine-vault-20260915/ultra-map-review/prior-records/20260923T220558-9ddf7a15.json",
-    "sha256": "dea34697b308498daff1ae58ca0a90ef4fad93dad860018f8e9f15e46fdfe218"
+    "path": "/var/mnt/STORAGE-10TB/Louranicas-ssd-offload/planning/herdr-engine-vault-20260915/ultra-map-review/prior-records/20260924T014842-bff3ebb8.json",
+    "sha256": "2d7735e328714662fab97a9e2192ff8b23786eb31f47ee7fca4945ed2063b519"
   },
   "diary_navigation_blocks": {
     "/var/mnt/STORAGE-10TB/fedora-obsidian-vaults/my-diary.vault/Reflections/Assertions Measured Against the Code.md": "16ffa47077b2267b12162913a9582150bb1f0b6b1d7ed6dec35d907c77d72da3",
@@ -149,7 +149,7 @@
     "/var/mnt/STORAGE-10TB/fedora-obsidian-vaults/my-diary.vault/00 - Diary Index.md": "dc9771a488347e7af68061955829674ce77e01ede1b61d99429cb376c1b93675",
     "/var/mnt/STORAGE-10TB/fedora-obsidian-vaults/my-diary.vault/00 - Master Index.md": "dc9771a488347e7af68061955829674ce77e01ede1b61d99429cb376c1b93675"
   },
-  "at": "2026-09-23T22:14:52.665501+00:00",
+  "at": "2026-09-24T01:58:05.472623+00:00",
   "checks": {
     "module_context_cards": 22,
     "module_context_workflow": true,
@@ -165,7 +165,7 @@
     "stub_files": 65,
     "native_notes": 557,
     "reciprocal_facet_module_anchors": 2517,
-    "file_anchor_occurrences_checked": 11305,
+    "file_anchor_occurrences_checked": 11309,
     "full_native_reachability": true,
     "engine_task_acceptance_changed": false,
     "testing_standard_modules": 22,
@@ -181,7 +181,7 @@
     "scoped_lessons": 14,
     "learning_module_bindings": 126,
     "diary_return_routes_verified": true,
-    "discovered_maintenance_cases": 205,
+    "discovered_maintenance_cases": 209,
     "completion_modules": 22,
     "completion_gates": 13,
     "fully_complete_modules": 0,
@@ -194,9 +194,9 @@
     "interactive_model_selection": "not performed by corpus publication"
   },
   "live_navigation": {
-    "files_indexed_by_obsidian": 6588,
+    "files_indexed_by_obsidian": 7076,
     "native_notes": 557,
-    "obsidian_cli_orphan_files": 158,
+    "obsidian_cli_orphan_files": 168,
     "obsidian_cli_orphan_paths": [
       "Atlas/evidence/consolidation-20260915/t02-maintenance-final/stderr",
       "Atlas/evidence/consolidation-20260915/t02-maintenance-final/stdout",
@@ -329,6 +329,16 @@
       "Atlas/evidence/implementation-T06-20260921/closure-final/subjects/current-source/tools/check-t01",
       "Atlas/evidence/implementation-T06-20260921/closure-final/subjects/current-source/tools/check-workload-u64",
       "Atlas/evidence/implementation-T06-20260921/closure-final/subjects/current-source/tools/corpus-sync",
+      "Atlas/evidence/implementation-T07-20260924/closure/subjects/source/integrations/bash/hee3",
+      "Atlas/evidence/implementation-T07-20260924/closure/subjects/source/tests/fixtures/native/actual/overbound-03-stderr",
+      "Atlas/evidence/implementation-T07-20260924/closure/subjects/source/tests/fixtures/native/actual/overbound-03-stdout",
+      "Atlas/evidence/implementation-T07-20260924/closure/subjects/source/tools/check-bash-sites",
+      "Atlas/evidence/implementation-T07-20260924/closure/subjects/source/tools/check-mutation-survivors",
+      "Atlas/evidence/implementation-T07-20260924/closure/subjects/source/tools/check-pi-sites",
+      "Atlas/evidence/implementation-T07-20260924/closure/subjects/source/tools/check-quality",
+      "Atlas/evidence/implementation-T07-20260924/closure/subjects/source/tools/check-skill-sites",
+      "Atlas/evidence/implementation-T07-20260924/closure/subjects/source/tools/check-store-mutations",
+      "Atlas/evidence/implementation-T07-20260924/closure/subjects/source/tools/check-workflow-sites",
       "Atlas/evidence/implementation-T08-20260921/closure-final/subjects/archive/common__matrix-stderr",
       "Atlas/evidence/implementation-T08-20260921/closure-final/subjects/archive/common__matrix-stdout",
       "Atlas/evidence/implementation-T08-20260921/closure-final/subjects/source/tests/fixtures/native/actual/overbound-03-stderr",
@@ -751,6 +761,36 @@
       "Atlas/evidence/implementation-T06-20260921/closure-final/subjects/current-source/tools/corpus-sync": [
         "Evidence/Reports and Receipts.md"
       ],
+      "Atlas/evidence/implementation-T07-20260924/closure/subjects/source/integrations/bash/hee3": [
+        "Evidence/Reports and Receipts.md"
+      ],
+      "Atlas/evidence/implementation-T07-20260924/closure/subjects/source/tests/fixtures/native/actual/overbound-03-stderr": [
+        "Evidence/Reports and Receipts.md"
+      ],
+      "Atlas/evidence/implementation-T07-20260924/closure/subjects/source/tests/fixtures/native/actual/overbound-03-stdout": [
+        "Evidence/Reports and Receipts.md"
+      ],
+      "Atlas/evidence/implementation-T07-20260924/closure/subjects/source/tools/check-bash-sites": [
+        "Evidence/Reports and Receipts.md"
+      ],
+      "Atlas/evidence/implementation-T07-20260924/closure/subjects/source/tools/check-mutation-survivors": [
+        "Evidence/Reports and Receipts.md"
+      ],
+      "Atlas/evidence/implementation-T07-20260924/closure/subjects/source/tools/check-pi-sites": [
+        "Evidence/Reports and Receipts.md"
+      ],
+      "Atlas/evidence/implementation-T07-20260924/closure/subjects/source/tools/check-quality": [
+        "Evidence/Reports and Receipts.md"
+      ],
+      "Atlas/evidence/implementation-T07-20260924/closure/subjects/source/tools/check-skill-sites": [
+        "Evidence/Reports and Receipts.md"
+      ],
+      "Atlas/evidence/implementation-T07-20260924/closure/subjects/source/tools/check-store-mutations": [
+        "Evidence/Reports and Receipts.md"
+      ],
+      "Atlas/evidence/implementation-T07-20260924/closure/subjects/source/tools/check-workflow-sites": [
+        "Evidence/Reports and Receipts.md"
+      ],
       "Atlas/evidence/implementation-T08-20260921/closure-final/subjects/archive/common__matrix-stderr": [
         "Evidence/Reports and Receipts.md"
       ],
@@ -854,7 +894,7 @@
   },
   "build": {
     "generated_native_notes": 543,
-    "copied_files": 6017,
+    "copied_files": 6505,
     "ultra_map": {
       "modules": 22,
       "branches": 6,
@@ -864,18 +904,18 @@
       "facet_module_pairs": 2517
     }
   },
-  "plan_sha256": "a14363806a84c8d6e34a13a1ac9437bf7516fd4ce0f2546b75ec470a884a3330",
-  "source_anchor_map_sha256": "8afc6c6ef0f9419963b659b240b62f67c621540abd5619aecc67cd767af915ff",
+  "plan_sha256": "e62091172c60c391bbd5221dd7d3a9bfa398c8a89a1b66c8c5de97c4ddc88d0c",
+  "source_anchor_map_sha256": "4da7150f7383da044c69074fdcca9027129fef5e223b75b019f8237fb6b112fa",
   "publication_outputs_journal": {
-    "path": "/var/mnt/STORAGE-10TB/Louranicas-ssd-offload/planning/herdr-engine-vault-20260915/ultra-map-review/publications/20260923T220558-9ddf7a15/publication-outputs.json",
+    "path": "/var/mnt/STORAGE-10TB/Louranicas-ssd-offload/planning/herdr-engine-vault-20260915/ultra-map-review/publications/20260924T014842-bff3ebb8/publication-outputs.json",
     "fallback_path": "/var/home/herdr-engineering-engine-v3/corpus/publication-outputs.json",
-    "count": 9657,
-    "sha256": "189bd7d3c9bb887c57ebdb010bc69ba43b060c864155956a70dff4f1942091c0",
-    "fallback_sha256": "189bd7d3c9bb887c57ebdb010bc69ba43b060c864155956a70dff4f1942091c0"
+    "count": 10152,
+    "sha256": "94e21b5b2c250d21bef88616d8481758c7e6d0a677cf8beaacd1863e9e1b4e0f",
+    "fallback_sha256": "94e21b5b2c250d21bef88616d8481758c7e6d0a677cf8beaacd1863e9e1b4e0f"
   },
   "final_qa": {
-    "/var/mnt/STORAGE-10TB/fedora-obsidian-vaults/herdr-engineering-engine-v3.vault/Maintenance/alignment-qa.json": "c0c7928df8dce7c49143bb66c3d34ae16ac99c5b5fc0f719f3fe207795bced52",
-    "/var/mnt/STORAGE-10TB/fedora-obsidian-vaults/herdr-engineering-engine-v3.vault/Maintenance/navigation-qa.json": "fe8d2b05ed21520e270444651cbddcd833ab8ff7d7c1c94348fa3479c62598f6"
+    "/var/mnt/STORAGE-10TB/fedora-obsidian-vaults/herdr-engineering-engine-v3.vault/Maintenance/alignment-qa.json": "d3a7706eb028eaa28d0bb7a59597743324997796bc9475a38348c8465f6ee428",
+    "/var/mnt/STORAGE-10TB/fedora-obsidian-vaults/herdr-engineering-engine-v3.vault/Maintenance/navigation-qa.json": "732b5a1687609e617af935e40e7b0ae4f267075d2a602550efd7681dd0160622"
   },
   "limits": [
     "No engine validators, deployment commands or provider calls executed.",

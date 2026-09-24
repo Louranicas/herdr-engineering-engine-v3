@@ -481,31 +481,13 @@
             "validation_cmd": "Proposed, not implemented: habitat-engine-check case T07 --fixture-root <disposable-fixtures>",
             "validator_available": false,
             "acceptance": "Crashes before/after dispatch acknowledgement, stale generations, PID reuse, queued Pi messages and partial cleanup produce correct recoverable states without duplicate writes. Ambiguous external outcomes remain explicit. Cover restart at verification/evidence/acceptance boundaries; lease expiry alone cannot authorize reuse of a still-writable old workspace. Acceptance explicitly rejects any earlier committed cancellation intent, even before terminal cleanup. If acceptance committed first, later cancellation cannot rewrite history. Startup may reattach observation to a positively reconciled live attempt without redispatch. Restored ledger epochs cannot silently reuse prior event cursors.",
-            "state": "wip",
+            "state": "done",
             "evidence": [
               {
-                "path": "evidence/implementation-T07-20260921/progress.json",
-                "sha256": "fe3c93a8aa1bd4f74c670adc3fae92b534acf41a7c2224904d32caf9855f9445",
+                "path": "evidence/implementation-T07-20260924/closure/T07-closure.json",
+                "sha256": "6f27249a245568566b53078b68e9324a3cae0056d04ad165ae40dbd3830e8d4e",
                 "task_id": "T07",
-                "scope": "implementation_candidate"
-              },
-              {
-                "path": "evidence/implementation-T07-20260921/progress-pid-reuse.json",
-                "sha256": "26bb44665194c191d5ce7ff8b379805047a6c4784c9381ac4a78fd20adb4d641",
-                "task_id": "T07",
-                "scope": "implementation_candidate"
-              },
-              {
-                "path": "evidence/implementation-T07-20260921/progress-3.json",
-                "sha256": "4e26b521365e5e69de0e63f6f3667ba96b9a25c7b6cf0fb7e3b5ff81387c07f0",
-                "task_id": "T07",
-                "scope": "implementation_candidate"
-              },
-              {
-                "path": "evidence/implementation-T07-20260923/progress.json",
-                "sha256": "b231848e1c29113a7a091b13a409d565239294ef8e861e11bc9bfb66662c3634",
-                "task_id": "T07",
-                "scope": "implementation_candidate"
+                "scope": "task_contract_review"
               }
             ],
             "research_refs": [

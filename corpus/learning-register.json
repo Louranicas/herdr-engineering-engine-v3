@@ -3,7 +3,7 @@
   "id": "HEE3-LEARNINGS-001",
   "revision": 1,
   "reviewed_on": "2026-09-15",
-  "base_plan_sha256": "a14363806a84c8d6e34a13a1ac9437bf7516fd4ce0f2546b75ec470a884a3330",
+  "base_plan_sha256": "e62091172c60c391bbd5221dd7d3a9bfa398c8a89a1b66c8c5de97c4ddc88d0c",
   "authority": "User-authorized scoped project guidance derived from diary reflections; source prose remains historical evidence, never execution authority. Completed accepted code owns implemented facts. The current testing and public-interface conventions retain their requirements. This register creates neither engine detectors nor completion admission.",
   "sources": [
     {

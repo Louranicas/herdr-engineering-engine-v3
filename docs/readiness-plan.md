@@ -582,11 +582,11 @@ The table preserves the historical advisory defaults. Revision 2 resolves REC-D1
 
 ## Source fingerprints and primary evidence
 
-- [PLAN_habitat_engine.json](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Atlas%2FPLAN_habitat_engine.json) — SHA-256 `a14363806a84c8d6e34a13a1ac9437bf7516fd4ce0f2546b75ec470a884a3330`.
-- [TESTING_STANDARD_habitat_engine.json](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Atlas%2FTESTING_STANDARD_habitat_engine.json) — SHA-256 `f68d836a62a0522f46459f630f3beca159d1e87b6294a337101bd72392b5c578`.
-- [MODULE_INTERFACES_habitat_engine.json](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Atlas%2FMODULE_INTERFACES_habitat_engine.json) — SHA-256 `fe9171dc482e2121ffb85acc0fec7cc794ac64ed853a7f76cda794fead8124ec`.
-- [COMPLETION_STANDARD_habitat_engine.json](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Atlas%2FCOMPLETION_STANDARD_habitat_engine.json) — SHA-256 `d593a1eef4c78de87afe0202ff1dcfbdd3c782692fae6480a425e40774b6a85b`.
-- [SECURITY_PROFILE_habitat_engine.json](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Atlas%2FSECURITY_PROFILE_habitat_engine.json) — SHA-256 `11286ae726e81930616012017569108e7c39eb2bc625fcb08674ab6a47355c08`.
+- [PLAN_habitat_engine.json](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Atlas%2FPLAN_habitat_engine.json) — SHA-256 `e62091172c60c391bbd5221dd7d3a9bfa398c8a89a1b66c8c5de97c4ddc88d0c`.
+- [TESTING_STANDARD_habitat_engine.json](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Atlas%2FTESTING_STANDARD_habitat_engine.json) — SHA-256 `d643fb699b502af05898a718aec4eb9f9461b882cfbb94a89850358166e69336`.
+- [MODULE_INTERFACES_habitat_engine.json](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Atlas%2FMODULE_INTERFACES_habitat_engine.json) — SHA-256 `ddd56488c228140c6b1e239691d4b9a6c34fcd8edb3770a2ad9206354b42aabd`.
+- [COMPLETION_STANDARD_habitat_engine.json](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Atlas%2FCOMPLETION_STANDARD_habitat_engine.json) — SHA-256 `b0f0ee8c52c2b93249f49e5048d274a18beb0ffdbd294b0731d486a09dbf31be`.
+- [SECURITY_PROFILE_habitat_engine.json](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Atlas%2FSECURITY_PROFILE_habitat_engine.json) — SHA-256 `93c4282a5d1da8ac6c6942ac3c71a68bf55f500e4c4f66190f22711c21ee087d`.
 - [evidence/final-review-20260915/assessment.md](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Atlas%2Fevidence%2Ffinal-review-20260915%2Fassessment) — SHA-256 `2b01b4a81e77929738c21adc43181881dffe05b9dfe66fb989d31ee8afed5b1d`.
 - [evidence/readiness-adoption-20260915/PLAN_readiness.json](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Atlas%2Fevidence%2Freadiness-adoption-20260915%2FPLAN_readiness.json) — SHA-256 `e9e113691d00d77794af09a092a425d0a2cd30406dee9461045b334de13997ec`.
 - [evidence/readiness-adoption-20260915/PLAN_readiness.md](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Atlas%2Fevidence%2Freadiness-adoption-20260915%2FPLAN_readiness) — SHA-256 `e795395ba7e7f000caaf8156058c863c6bbecc8eee0837306c062ab114633073`.
@@ -639,6 +639,7 @@ The table preserves the historical advisory defaults. Revision 2 resolves REC-D1
 - [evidence/implementation-T07-20260923/progress.json](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Atlas%2Fevidence%2Fimplementation-T07-20260923%2Fprogress.json) — SHA-256 `b231848e1c29113a7a091b13a409d565239294ef8e861e11bc9bfb66662c3634`.
 - [evidence/implementation-T09-20260923/progress.json](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Atlas%2Fevidence%2Fimplementation-T09-20260923%2Fprogress.json) — SHA-256 `5ed90915f7ba0ba7fdef724683972011b673f0a263dde55d650d5bb772e8d403`.
 - [evidence/implementation-T09-20260924/closure/T09-closure.json](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Atlas%2Fevidence%2Fimplementation-T09-20260924%2Fclosure%2FT09-closure.json) — SHA-256 `746b0caf65a908befb6f6ab1a3689a14204598f12b054625d169418237a32343`.
+- [evidence/implementation-T07-20260924/closure/T07-closure.json](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Atlas%2Fevidence%2Fimplementation-T07-20260924%2Fclosure%2FT07-closure.json) — SHA-256 `6f27249a245568566b53078b68e9324a3cae0056d04ad165ae40dbd3830e8d4e`.
 - [Clippy usage](https://doc.rust-lang.org/clippy/usage.html) — Workspace/all-target selection and warnings-as-errors controls; pinned project profiles still require qualification. Reviewed 2026-09-15.
 - [Cargo test](https://doc.rust-lang.org/cargo/commands/cargo-test.html) — Explicit all-target selection does not substitute for a separate library doctest route; locked resolution needs an existing lockfile. Reviewed 2026-09-15.
 - [Julia Test](https://docs.julialang.org/en/v1/stdlib/Test/) — @test_skip is reported as Broken; @test_nowarn covers stderr, while @warn requires @test_logs handling. Reviewed 2026-09-15.

@@ -6,44 +6,44 @@
     "vault": "/var/mnt/STORAGE-10TB/fedora-obsidian-vaults/herdr-engineering-engine-v3.vault",
     "codebase": "/var/home/herdr-engineering-engine-v3"
   },
-  "source_plan_sha256": "a14363806a84c8d6e34a13a1ac9437bf7516fd4ce0f2546b75ec470a884a3330",
+  "source_plan_sha256": "e62091172c60c391bbd5221dd7d3a9bfa398c8a89a1b66c8c5de97c4ddc88d0c",
   "catalogue_sha256": "8a96e05fe0f32f7cc21d0b1dda2df5f1b0a934d9216acfb4b7d510a476e36025",
   "readiness": {
     "id": "HEE3-READINESS-001",
-    "sha256": "3bcde91b4617c1a38bcbb97c36bddbc9e999c7692a69b0ba21caec9f559fe250",
+    "sha256": "f574043487f39db6424c4988bce58e88a6e766f02f974fbcf3fa8dd6e0003548",
     "note": "Delivery/Readiness/Index.md",
     "engine_proof": "pending",
     "scores_promoted": false
   },
   "security_profile": {
     "id": "HEE3-SECURITY-DAYBREAK-001",
-    "sha256": "11286ae726e81930616012017569108e7c39eb2bc625fcb08674ab6a47355c08",
+    "sha256": "93c4282a5d1da8ac6c6942ac3c71a68bf55f500e4c4f66190f22711c21ee087d",
     "requested_model": "gpt-daybreak-blue-latest",
     "runtime_enabled": false,
     "qualification": "unassessed"
   },
   "completion": {
     "id": "HEE3-COMPLETION-001",
-    "sha256": "d593a1eef4c78de87afe0202ff1dcfbdd3c782692fae6480a425e40774b6a85b",
+    "sha256": "b0f0ee8c52c2b93249f49e5048d274a18beb0ffdbd294b0731d486a09dbf31be",
     "note": "Standards/Module Completion.md",
     "admission_validator_available": false,
     "accepted_modules": []
   },
   "testing_standard": {
     "id": "HEE3-TEST-STD-001",
-    "sha256": "f68d836a62a0522f46459f630f3beca159d1e87b6294a337101bd72392b5c578",
+    "sha256": "d643fb699b502af05898a718aec4eb9f9461b882cfbb94a89850358166e69336",
     "note": "Standards/Module Testing.md"
   },
   "learnings": {
     "id": "HEE3-LEARNINGS-001",
-    "sha256": "c891722d3a43c58acbcb9de19739e1f865c9d34ef4c5f75acafde399bf2ba4e5",
+    "sha256": "c8bef62302cb8bc1573451c5bba4143fdc527088c9d00ec2f2b402d58d82d680",
     "note": "Learnings/Index.md",
     "sources": 13,
     "lessons": 14
   },
   "public_interfaces": {
     "id": "HEE3-INTERFACES-001",
-    "sha256": "fe9171dc482e2121ffb85acc0fec7cc794ac64ed853a7f76cda794fead8124ec",
+    "sha256": "ddd56488c228140c6b1e239691d4b9a6c34fcd8edb3770a2ad9206354b42aabd",
     "note": "Interfaces/Module Public Contracts.md",
     "admission_validator_available": false,
     "accepted_modules": []
@@ -967,31 +967,13 @@
           "validation_cmd": "Proposed, not implemented: habitat-engine-check case T07 --fixture-root <disposable-fixtures>",
           "validator_available": false,
           "acceptance": "Crashes before/after dispatch acknowledgement, stale generations, PID reuse, queued Pi messages and partial cleanup produce correct recoverable states without duplicate writes. Ambiguous external outcomes remain explicit. Cover restart at verification/evidence/acceptance boundaries; lease expiry alone cannot authorize reuse of a still-writable old workspace. Acceptance explicitly rejects any earlier committed cancellation intent, even before terminal cleanup. If acceptance committed first, later cancellation cannot rewrite history. Startup may reattach observation to a positively reconciled live attempt without redispatch. Restored ledger epochs cannot silently reuse prior event cursors.",
-          "state": "wip",
+          "state": "done",
           "evidence": [
             {
-              "path": "evidence/implementation-T07-20260921/progress.json",
-              "sha256": "fe3c93a8aa1bd4f74c670adc3fae92b534acf41a7c2224904d32caf9855f9445",
+              "path": "evidence/implementation-T07-20260924/closure/T07-closure.json",
+              "sha256": "6f27249a245568566b53078b68e9324a3cae0056d04ad165ae40dbd3830e8d4e",
               "task_id": "T07",
-              "scope": "implementation_candidate"
-            },
-            {
-              "path": "evidence/implementation-T07-20260921/progress-pid-reuse.json",
-              "sha256": "26bb44665194c191d5ce7ff8b379805047a6c4784c9381ac4a78fd20adb4d641",
-              "task_id": "T07",
-              "scope": "implementation_candidate"
-            },
-            {
-              "path": "evidence/implementation-T07-20260921/progress-3.json",
-              "sha256": "4e26b521365e5e69de0e63f6f3667ba96b9a25c7b6cf0fb7e3b5ff81387c07f0",
-              "task_id": "T07",
-              "scope": "implementation_candidate"
-            },
-            {
-              "path": "evidence/implementation-T07-20260923/progress.json",
-              "sha256": "b231848e1c29113a7a091b13a409d565239294ef8e861e11bc9bfb66662c3634",
-              "task_id": "T07",
-              "scope": "implementation_candidate"
+              "scope": "task_contract_review"
             }
           ],
           "research_refs": [
@@ -3551,7 +3533,7 @@
       ],
       "readiness": {
         "id": "HEE3-READINESS-001",
-        "sha256": "3bcde91b4617c1a38bcbb97c36bddbc9e999c7692a69b0ba21caec9f559fe250",
+        "sha256": "f574043487f39db6424c4988bce58e88a6e766f02f974fbcf3fa8dd6e0003548",
         "facets": [
           "F2",
           "F3",
@@ -3610,7 +3592,7 @@
       },
       "testing_standard": {
         "standard_id": "HEE3-TEST-STD-001",
-        "standard_sha256": "f68d836a62a0522f46459f630f3beca159d1e87b6294a337101bd72392b5c578",
+        "standard_sha256": "d643fb699b502af05898a718aec4eb9f9461b882cfbb94a89850358166e69336",
         "minimum_qualifying_cases": 50,
         "maximum_baseline_warnings": 0,
         "maximum_baseline_errors": 0,
@@ -3626,7 +3608,7 @@
       },
       "public_interface": {
         "convention_id": "HEE3-INTERFACES-001",
-        "convention_sha256": "fe9171dc482e2121ffb85acc0fec7cc794ac64ed853a7f76cda794fead8124ec",
+        "convention_sha256": "ddd56488c228140c6b1e239691d4b9a6c34fcd8edb3770a2ad9206354b42aabd",
         "accepted_current_interface": null,
         "admission_validator_available": false,
         "profile": {
@@ -3658,7 +3640,7 @@
       },
       "completion": {
         "standard_id": "HEE3-COMPLETION-001",
-        "standard_sha256": "d593a1eef4c78de87afe0202ff1dcfbdd3c782692fae6480a425e40774b6a85b",
+        "standard_sha256": "b0f0ee8c52c2b93249f49e5048d274a18beb0ffdbd294b0731d486a09dbf31be",
         "state": "unassessed",
         "admission_validator_available": false,
         "profile": {
@@ -3694,7 +3676,7 @@
       },
       "security_review": {
         "requested_model": "gpt-daybreak-blue-latest",
-        "profile_sha256": "11286ae726e81930616012017569108e7c39eb2bc625fcb08674ab6a47355c08",
+        "profile_sha256": "93c4282a5d1da8ac6c6942ac3c71a68bf55f500e4c4f66190f22711c21ee087d",
         "runtime_enabled": false,
         "completion_authority": false,
         "silent_fallback_allowed": false,
@@ -3708,7 +3690,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "c891722d3a43c58acbcb9de19739e1f865c9d34ef4c5f75acafde399bf2ba4e5",
+        "convention_sha256": "c8bef62302cb8bc1573451c5bba4143fdc527088c9d00ec2f2b402d58d82d680",
         "lessons": [
           "LRN01",
           "LRN03",
@@ -4942,31 +4924,13 @@
           "validation_cmd": "Proposed, not implemented: habitat-engine-check case T07 --fixture-root <disposable-fixtures>",
           "validator_available": false,
           "acceptance": "Crashes before/after dispatch acknowledgement, stale generations, PID reuse, queued Pi messages and partial cleanup produce correct recoverable states without duplicate writes. Ambiguous external outcomes remain explicit. Cover restart at verification/evidence/acceptance boundaries; lease expiry alone cannot authorize reuse of a still-writable old workspace. Acceptance explicitly rejects any earlier committed cancellation intent, even before terminal cleanup. If acceptance committed first, later cancellation cannot rewrite history. Startup may reattach observation to a positively reconciled live attempt without redispatch. Restored ledger epochs cannot silently reuse prior event cursors.",
-          "state": "wip",
+          "state": "done",
           "evidence": [
             {
-              "path": "evidence/implementation-T07-20260921/progress.json",
-              "sha256": "fe3c93a8aa1bd4f74c670adc3fae92b534acf41a7c2224904d32caf9855f9445",
+              "path": "evidence/implementation-T07-20260924/closure/T07-closure.json",
+              "sha256": "6f27249a245568566b53078b68e9324a3cae0056d04ad165ae40dbd3830e8d4e",
               "task_id": "T07",
-              "scope": "implementation_candidate"
-            },
-            {
-              "path": "evidence/implementation-T07-20260921/progress-pid-reuse.json",
-              "sha256": "26bb44665194c191d5ce7ff8b379805047a6c4784c9381ac4a78fd20adb4d641",
-              "task_id": "T07",
-              "scope": "implementation_candidate"
-            },
-            {
-              "path": "evidence/implementation-T07-20260921/progress-3.json",
-              "sha256": "4e26b521365e5e69de0e63f6f3667ba96b9a25c7b6cf0fb7e3b5ff81387c07f0",
-              "task_id": "T07",
-              "scope": "implementation_candidate"
-            },
-            {
-              "path": "evidence/implementation-T07-20260923/progress.json",
-              "sha256": "b231848e1c29113a7a091b13a409d565239294ef8e861e11bc9bfb66662c3634",
-              "task_id": "T07",
-              "scope": "implementation_candidate"
+              "scope": "task_contract_review"
             }
           ],
           "research_refs": [
@@ -6854,7 +6818,7 @@
       ],
       "readiness": {
         "id": "HEE3-READINESS-001",
-        "sha256": "3bcde91b4617c1a38bcbb97c36bddbc9e999c7692a69b0ba21caec9f559fe250",
+        "sha256": "f574043487f39db6424c4988bce58e88a6e766f02f974fbcf3fa8dd6e0003548",
         "facets": [
           "F1",
           "F2",
@@ -6920,7 +6884,7 @@
       },
       "testing_standard": {
         "standard_id": "HEE3-TEST-STD-001",
-        "standard_sha256": "f68d836a62a0522f46459f630f3beca159d1e87b6294a337101bd72392b5c578",
+        "standard_sha256": "d643fb699b502af05898a718aec4eb9f9461b882cfbb94a89850358166e69336",
         "minimum_qualifying_cases": 50,
         "maximum_baseline_warnings": 0,
         "maximum_baseline_errors": 0,
@@ -6936,7 +6900,7 @@
       },
       "public_interface": {
         "convention_id": "HEE3-INTERFACES-001",
-        "convention_sha256": "fe9171dc482e2121ffb85acc0fec7cc794ac64ed853a7f76cda794fead8124ec",
+        "convention_sha256": "ddd56488c228140c6b1e239691d4b9a6c34fcd8edb3770a2ad9206354b42aabd",
         "accepted_current_interface": null,
         "admission_validator_available": false,
         "profile": {
@@ -6968,7 +6932,7 @@
       },
       "completion": {
         "standard_id": "HEE3-COMPLETION-001",
-        "standard_sha256": "d593a1eef4c78de87afe0202ff1dcfbdd3c782692fae6480a425e40774b6a85b",
+        "standard_sha256": "b0f0ee8c52c2b93249f49e5048d274a18beb0ffdbd294b0731d486a09dbf31be",
         "state": "unassessed",
         "admission_validator_available": false,
         "profile": {
@@ -7004,7 +6968,7 @@
       },
       "security_review": {
         "requested_model": "gpt-daybreak-blue-latest",
-        "profile_sha256": "11286ae726e81930616012017569108e7c39eb2bc625fcb08674ab6a47355c08",
+        "profile_sha256": "93c4282a5d1da8ac6c6942ac3c71a68bf55f500e4c4f66190f22711c21ee087d",
         "runtime_enabled": false,
         "completion_authority": false,
         "silent_fallback_allowed": false,
@@ -7018,7 +6982,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "c891722d3a43c58acbcb9de19739e1f865c9d34ef4c5f75acafde399bf2ba4e5",
+        "convention_sha256": "c8bef62302cb8bc1573451c5bba4143fdc527088c9d00ec2f2b402d58d82d680",
         "lessons": [
           "LRN01",
           "LRN04",
@@ -7793,31 +7757,13 @@
           "validation_cmd": "Proposed, not implemented: habitat-engine-check case T07 --fixture-root <disposable-fixtures>",
           "validator_available": false,
           "acceptance": "Crashes before/after dispatch acknowledgement, stale generations, PID reuse, queued Pi messages and partial cleanup produce correct recoverable states without duplicate writes. Ambiguous external outcomes remain explicit. Cover restart at verification/evidence/acceptance boundaries; lease expiry alone cannot authorize reuse of a still-writable old workspace. Acceptance explicitly rejects any earlier committed cancellation intent, even before terminal cleanup. If acceptance committed first, later cancellation cannot rewrite history. Startup may reattach observation to a positively reconciled live attempt without redispatch. Restored ledger epochs cannot silently reuse prior event cursors.",
-          "state": "wip",
+          "state": "done",
           "evidence": [
             {
-              "path": "evidence/implementation-T07-20260921/progress.json",
-              "sha256": "fe3c93a8aa1bd4f74c670adc3fae92b534acf41a7c2224904d32caf9855f9445",
+              "path": "evidence/implementation-T07-20260924/closure/T07-closure.json",
+              "sha256": "6f27249a245568566b53078b68e9324a3cae0056d04ad165ae40dbd3830e8d4e",
               "task_id": "T07",
-              "scope": "implementation_candidate"
-            },
-            {
-              "path": "evidence/implementation-T07-20260921/progress-pid-reuse.json",
-              "sha256": "26bb44665194c191d5ce7ff8b379805047a6c4784c9381ac4a78fd20adb4d641",
-              "task_id": "T07",
-              "scope": "implementation_candidate"
-            },
-            {
-              "path": "evidence/implementation-T07-20260921/progress-3.json",
-              "sha256": "4e26b521365e5e69de0e63f6f3667ba96b9a25c7b6cf0fb7e3b5ff81387c07f0",
-              "task_id": "T07",
-              "scope": "implementation_candidate"
-            },
-            {
-              "path": "evidence/implementation-T07-20260923/progress.json",
-              "sha256": "b231848e1c29113a7a091b13a409d565239294ef8e861e11bc9bfb66662c3634",
-              "task_id": "T07",
-              "scope": "implementation_candidate"
+              "scope": "task_contract_review"
             }
           ],
           "research_refs": [
@@ -9783,7 +9729,7 @@
       ],
       "readiness": {
         "id": "HEE3-READINESS-001",
-        "sha256": "3bcde91b4617c1a38bcbb97c36bddbc9e999c7692a69b0ba21caec9f559fe250",
+        "sha256": "f574043487f39db6424c4988bce58e88a6e766f02f974fbcf3fa8dd6e0003548",
         "facets": [
           "F2",
           "F3",
@@ -9852,7 +9798,7 @@
       },
       "testing_standard": {
         "standard_id": "HEE3-TEST-STD-001",
-        "standard_sha256": "f68d836a62a0522f46459f630f3beca159d1e87b6294a337101bd72392b5c578",
+        "standard_sha256": "d643fb699b502af05898a718aec4eb9f9461b882cfbb94a89850358166e69336",
         "minimum_qualifying_cases": 50,
         "maximum_baseline_warnings": 0,
         "maximum_baseline_errors": 0,
@@ -9868,7 +9814,7 @@
       },
       "public_interface": {
         "convention_id": "HEE3-INTERFACES-001",
-        "convention_sha256": "fe9171dc482e2121ffb85acc0fec7cc794ac64ed853a7f76cda794fead8124ec",
+        "convention_sha256": "ddd56488c228140c6b1e239691d4b9a6c34fcd8edb3770a2ad9206354b42aabd",
         "accepted_current_interface": null,
         "admission_validator_available": false,
         "profile": {
@@ -9900,7 +9846,7 @@
       },
       "completion": {
         "standard_id": "HEE3-COMPLETION-001",
-        "standard_sha256": "d593a1eef4c78de87afe0202ff1dcfbdd3c782692fae6480a425e40774b6a85b",
+        "standard_sha256": "b0f0ee8c52c2b93249f49e5048d274a18beb0ffdbd294b0731d486a09dbf31be",
         "state": "unassessed",
         "admission_validator_available": false,
         "profile": {
@@ -9936,7 +9882,7 @@
       },
       "security_review": {
         "requested_model": "gpt-daybreak-blue-latest",
-        "profile_sha256": "11286ae726e81930616012017569108e7c39eb2bc625fcb08674ab6a47355c08",
+        "profile_sha256": "93c4282a5d1da8ac6c6942ac3c71a68bf55f500e4c4f66190f22711c21ee087d",
         "runtime_enabled": false,
         "completion_authority": false,
         "silent_fallback_allowed": false,
@@ -9950,7 +9896,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "c891722d3a43c58acbcb9de19739e1f865c9d34ef4c5f75acafde399bf2ba4e5",
+        "convention_sha256": "c8bef62302cb8bc1573451c5bba4143fdc527088c9d00ec2f2b402d58d82d680",
         "lessons": [
           "LRN04",
           "LRN05",
@@ -11645,7 +11591,7 @@
       ],
       "readiness": {
         "id": "HEE3-READINESS-001",
-        "sha256": "3bcde91b4617c1a38bcbb97c36bddbc9e999c7692a69b0ba21caec9f559fe250",
+        "sha256": "f574043487f39db6424c4988bce58e88a6e766f02f974fbcf3fa8dd6e0003548",
         "facets": [
           "F2",
           "F3",
@@ -11702,7 +11648,7 @@
       },
       "testing_standard": {
         "standard_id": "HEE3-TEST-STD-001",
-        "standard_sha256": "f68d836a62a0522f46459f630f3beca159d1e87b6294a337101bd72392b5c578",
+        "standard_sha256": "d643fb699b502af05898a718aec4eb9f9461b882cfbb94a89850358166e69336",
         "minimum_qualifying_cases": 50,
         "maximum_baseline_warnings": 0,
         "maximum_baseline_errors": 0,
@@ -11718,7 +11664,7 @@
       },
       "public_interface": {
         "convention_id": "HEE3-INTERFACES-001",
-        "convention_sha256": "fe9171dc482e2121ffb85acc0fec7cc794ac64ed853a7f76cda794fead8124ec",
+        "convention_sha256": "ddd56488c228140c6b1e239691d4b9a6c34fcd8edb3770a2ad9206354b42aabd",
         "accepted_current_interface": null,
         "admission_validator_available": false,
         "profile": {
@@ -11750,7 +11696,7 @@
       },
       "completion": {
         "standard_id": "HEE3-COMPLETION-001",
-        "standard_sha256": "d593a1eef4c78de87afe0202ff1dcfbdd3c782692fae6480a425e40774b6a85b",
+        "standard_sha256": "b0f0ee8c52c2b93249f49e5048d274a18beb0ffdbd294b0731d486a09dbf31be",
         "state": "unassessed",
         "admission_validator_available": false,
         "profile": {
@@ -11786,7 +11732,7 @@
       },
       "security_review": {
         "requested_model": "gpt-daybreak-blue-latest",
-        "profile_sha256": "11286ae726e81930616012017569108e7c39eb2bc625fcb08674ab6a47355c08",
+        "profile_sha256": "93c4282a5d1da8ac6c6942ac3c71a68bf55f500e4c4f66190f22711c21ee087d",
         "runtime_enabled": false,
         "completion_authority": false,
         "silent_fallback_allowed": false,
@@ -11800,7 +11746,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "c891722d3a43c58acbcb9de19739e1f865c9d34ef4c5f75acafde399bf2ba4e5",
+        "convention_sha256": "c8bef62302cb8bc1573451c5bba4143fdc527088c9d00ec2f2b402d58d82d680",
         "lessons": [
           "LRN05",
           "LRN08",
@@ -13279,7 +13225,7 @@
       ],
       "readiness": {
         "id": "HEE3-READINESS-001",
-        "sha256": "3bcde91b4617c1a38bcbb97c36bddbc9e999c7692a69b0ba21caec9f559fe250",
+        "sha256": "f574043487f39db6424c4988bce58e88a6e766f02f974fbcf3fa8dd6e0003548",
         "facets": [
           "F1",
           "F2",
@@ -13343,7 +13289,7 @@
       },
       "testing_standard": {
         "standard_id": "HEE3-TEST-STD-001",
-        "standard_sha256": "f68d836a62a0522f46459f630f3beca159d1e87b6294a337101bd72392b5c578",
+        "standard_sha256": "d643fb699b502af05898a718aec4eb9f9461b882cfbb94a89850358166e69336",
         "minimum_qualifying_cases": 50,
         "maximum_baseline_warnings": 0,
         "maximum_baseline_errors": 0,
@@ -13359,7 +13305,7 @@
       },
       "public_interface": {
         "convention_id": "HEE3-INTERFACES-001",
-        "convention_sha256": "fe9171dc482e2121ffb85acc0fec7cc794ac64ed853a7f76cda794fead8124ec",
+        "convention_sha256": "ddd56488c228140c6b1e239691d4b9a6c34fcd8edb3770a2ad9206354b42aabd",
         "accepted_current_interface": null,
         "admission_validator_available": false,
         "profile": {
@@ -13391,7 +13337,7 @@
       },
       "completion": {
         "standard_id": "HEE3-COMPLETION-001",
-        "standard_sha256": "d593a1eef4c78de87afe0202ff1dcfbdd3c782692fae6480a425e40774b6a85b",
+        "standard_sha256": "b0f0ee8c52c2b93249f49e5048d274a18beb0ffdbd294b0731d486a09dbf31be",
         "state": "unassessed",
         "admission_validator_available": false,
         "profile": {
@@ -13427,7 +13373,7 @@
       },
       "security_review": {
         "requested_model": "gpt-daybreak-blue-latest",
-        "profile_sha256": "11286ae726e81930616012017569108e7c39eb2bc625fcb08674ab6a47355c08",
+        "profile_sha256": "93c4282a5d1da8ac6c6942ac3c71a68bf55f500e4c4f66190f22711c21ee087d",
         "runtime_enabled": false,
         "completion_authority": false,
         "silent_fallback_allowed": false,
@@ -13441,7 +13387,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "c891722d3a43c58acbcb9de19739e1f865c9d34ef4c5f75acafde399bf2ba4e5",
+        "convention_sha256": "c8bef62302cb8bc1573451c5bba4143fdc527088c9d00ec2f2b402d58d82d680",
         "lessons": [
           "LRN05",
           "LRN08",
@@ -15085,7 +15031,7 @@
       ],
       "readiness": {
         "id": "HEE3-READINESS-001",
-        "sha256": "3bcde91b4617c1a38bcbb97c36bddbc9e999c7692a69b0ba21caec9f559fe250",
+        "sha256": "f574043487f39db6424c4988bce58e88a6e766f02f974fbcf3fa8dd6e0003548",
         "facets": [
           "F1",
           "F2",
@@ -15151,7 +15097,7 @@
       },
       "testing_standard": {
         "standard_id": "HEE3-TEST-STD-001",
-        "standard_sha256": "f68d836a62a0522f46459f630f3beca159d1e87b6294a337101bd72392b5c578",
+        "standard_sha256": "d643fb699b502af05898a718aec4eb9f9461b882cfbb94a89850358166e69336",
         "minimum_qualifying_cases": 50,
         "maximum_baseline_warnings": 0,
         "maximum_baseline_errors": 0,
@@ -15167,7 +15113,7 @@
       },
       "public_interface": {
         "convention_id": "HEE3-INTERFACES-001",
-        "convention_sha256": "fe9171dc482e2121ffb85acc0fec7cc794ac64ed853a7f76cda794fead8124ec",
+        "convention_sha256": "ddd56488c228140c6b1e239691d4b9a6c34fcd8edb3770a2ad9206354b42aabd",
         "accepted_current_interface": null,
         "admission_validator_available": false,
         "profile": {
@@ -15199,7 +15145,7 @@
       },
       "completion": {
         "standard_id": "HEE3-COMPLETION-001",
-        "standard_sha256": "d593a1eef4c78de87afe0202ff1dcfbdd3c782692fae6480a425e40774b6a85b",
+        "standard_sha256": "b0f0ee8c52c2b93249f49e5048d274a18beb0ffdbd294b0731d486a09dbf31be",
         "state": "unassessed",
         "admission_validator_available": false,
         "profile": {
@@ -15235,7 +15181,7 @@
       },
       "security_review": {
         "requested_model": "gpt-daybreak-blue-latest",
-        "profile_sha256": "11286ae726e81930616012017569108e7c39eb2bc625fcb08674ab6a47355c08",
+        "profile_sha256": "93c4282a5d1da8ac6c6942ac3c71a68bf55f500e4c4f66190f22711c21ee087d",
         "runtime_enabled": false,
         "completion_authority": false,
         "silent_fallback_allowed": false,
@@ -15249,7 +15195,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "c891722d3a43c58acbcb9de19739e1f865c9d34ef4c5f75acafde399bf2ba4e5",
+        "convention_sha256": "c8bef62302cb8bc1573451c5bba4143fdc527088c9d00ec2f2b402d58d82d680",
         "lessons": [
           "LRN08",
           "LRN09",
@@ -16230,31 +16176,13 @@
           "validation_cmd": "Proposed, not implemented: habitat-engine-check case T07 --fixture-root <disposable-fixtures>",
           "validator_available": false,
           "acceptance": "Crashes before/after dispatch acknowledgement, stale generations, PID reuse, queued Pi messages and partial cleanup produce correct recoverable states without duplicate writes. Ambiguous external outcomes remain explicit. Cover restart at verification/evidence/acceptance boundaries; lease expiry alone cannot authorize reuse of a still-writable old workspace. Acceptance explicitly rejects any earlier committed cancellation intent, even before terminal cleanup. If acceptance committed first, later cancellation cannot rewrite history. Startup may reattach observation to a positively reconciled live attempt without redispatch. Restored ledger epochs cannot silently reuse prior event cursors.",
-          "state": "wip",
+          "state": "done",
           "evidence": [
             {
-              "path": "evidence/implementation-T07-20260921/progress.json",
-              "sha256": "fe3c93a8aa1bd4f74c670adc3fae92b534acf41a7c2224904d32caf9855f9445",
+              "path": "evidence/implementation-T07-20260924/closure/T07-closure.json",
+              "sha256": "6f27249a245568566b53078b68e9324a3cae0056d04ad165ae40dbd3830e8d4e",
               "task_id": "T07",
-              "scope": "implementation_candidate"
-            },
-            {
-              "path": "evidence/implementation-T07-20260921/progress-pid-reuse.json",
-              "sha256": "26bb44665194c191d5ce7ff8b379805047a6c4784c9381ac4a78fd20adb4d641",
-              "task_id": "T07",
-              "scope": "implementation_candidate"
-            },
-            {
-              "path": "evidence/implementation-T07-20260921/progress-3.json",
-              "sha256": "4e26b521365e5e69de0e63f6f3667ba96b9a25c7b6cf0fb7e3b5ff81387c07f0",
-              "task_id": "T07",
-              "scope": "implementation_candidate"
-            },
-            {
-              "path": "evidence/implementation-T07-20260923/progress.json",
-              "sha256": "b231848e1c29113a7a091b13a409d565239294ef8e861e11bc9bfb66662c3634",
-              "task_id": "T07",
-              "scope": "implementation_candidate"
+              "scope": "task_contract_review"
             }
           ],
           "research_refs": [
@@ -19952,7 +19880,7 @@
       ],
       "readiness": {
         "id": "HEE3-READINESS-001",
-        "sha256": "3bcde91b4617c1a38bcbb97c36bddbc9e999c7692a69b0ba21caec9f559fe250",
+        "sha256": "f574043487f39db6424c4988bce58e88a6e766f02f974fbcf3fa8dd6e0003548",
         "facets": [
           "F2",
           "F3",
@@ -20013,7 +19941,7 @@
       },
       "testing_standard": {
         "standard_id": "HEE3-TEST-STD-001",
-        "standard_sha256": "f68d836a62a0522f46459f630f3beca159d1e87b6294a337101bd72392b5c578",
+        "standard_sha256": "d643fb699b502af05898a718aec4eb9f9461b882cfbb94a89850358166e69336",
         "minimum_qualifying_cases": 50,
         "maximum_baseline_warnings": 0,
         "maximum_baseline_errors": 0,
@@ -20029,7 +19957,7 @@
       },
       "public_interface": {
         "convention_id": "HEE3-INTERFACES-001",
-        "convention_sha256": "fe9171dc482e2121ffb85acc0fec7cc794ac64ed853a7f76cda794fead8124ec",
+        "convention_sha256": "ddd56488c228140c6b1e239691d4b9a6c34fcd8edb3770a2ad9206354b42aabd",
         "accepted_current_interface": null,
         "admission_validator_available": false,
         "profile": {
@@ -20061,7 +19989,7 @@
       },
       "completion": {
         "standard_id": "HEE3-COMPLETION-001",
-        "standard_sha256": "d593a1eef4c78de87afe0202ff1dcfbdd3c782692fae6480a425e40774b6a85b",
+        "standard_sha256": "b0f0ee8c52c2b93249f49e5048d274a18beb0ffdbd294b0731d486a09dbf31be",
         "state": "unassessed",
         "admission_validator_available": false,
         "profile": {
@@ -20097,7 +20025,7 @@
       },
       "security_review": {
         "requested_model": "gpt-daybreak-blue-latest",
-        "profile_sha256": "11286ae726e81930616012017569108e7c39eb2bc625fcb08674ab6a47355c08",
+        "profile_sha256": "93c4282a5d1da8ac6c6942ac3c71a68bf55f500e4c4f66190f22711c21ee087d",
         "runtime_enabled": false,
         "completion_authority": false,
         "silent_fallback_allowed": false,
@@ -20111,7 +20039,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "c891722d3a43c58acbcb9de19739e1f865c9d34ef4c5f75acafde399bf2ba4e5",
+        "convention_sha256": "c8bef62302cb8bc1573451c5bba4143fdc527088c9d00ec2f2b402d58d82d680",
         "lessons": [
           "LRN03",
           "LRN05",
@@ -20927,31 +20855,13 @@
           "validation_cmd": "Proposed, not implemented: habitat-engine-check case T07 --fixture-root <disposable-fixtures>",
           "validator_available": false,
           "acceptance": "Crashes before/after dispatch acknowledgement, stale generations, PID reuse, queued Pi messages and partial cleanup produce correct recoverable states without duplicate writes. Ambiguous external outcomes remain explicit. Cover restart at verification/evidence/acceptance boundaries; lease expiry alone cannot authorize reuse of a still-writable old workspace. Acceptance explicitly rejects any earlier committed cancellation intent, even before terminal cleanup. If acceptance committed first, later cancellation cannot rewrite history. Startup may reattach observation to a positively reconciled live attempt without redispatch. Restored ledger epochs cannot silently reuse prior event cursors.",
-          "state": "wip",
+          "state": "done",
           "evidence": [
             {
-              "path": "evidence/implementation-T07-20260921/progress.json",
-              "sha256": "fe3c93a8aa1bd4f74c670adc3fae92b534acf41a7c2224904d32caf9855f9445",
+              "path": "evidence/implementation-T07-20260924/closure/T07-closure.json",
+              "sha256": "6f27249a245568566b53078b68e9324a3cae0056d04ad165ae40dbd3830e8d4e",
               "task_id": "T07",
-              "scope": "implementation_candidate"
-            },
-            {
-              "path": "evidence/implementation-T07-20260921/progress-pid-reuse.json",
-              "sha256": "26bb44665194c191d5ce7ff8b379805047a6c4784c9381ac4a78fd20adb4d641",
-              "task_id": "T07",
-              "scope": "implementation_candidate"
-            },
-            {
-              "path": "evidence/implementation-T07-20260921/progress-3.json",
-              "sha256": "4e26b521365e5e69de0e63f6f3667ba96b9a25c7b6cf0fb7e3b5ff81387c07f0",
-              "task_id": "T07",
-              "scope": "implementation_candidate"
-            },
-            {
-              "path": "evidence/implementation-T07-20260923/progress.json",
-              "sha256": "b231848e1c29113a7a091b13a409d565239294ef8e861e11bc9bfb66662c3634",
-              "task_id": "T07",
-              "scope": "implementation_candidate"
+              "scope": "task_contract_review"
             }
           ],
           "research_refs": [
@@ -25465,7 +25375,7 @@
       ],
       "readiness": {
         "id": "HEE3-READINESS-001",
-        "sha256": "3bcde91b4617c1a38bcbb97c36bddbc9e999c7692a69b0ba21caec9f559fe250",
+        "sha256": "f574043487f39db6424c4988bce58e88a6e766f02f974fbcf3fa8dd6e0003548",
         "facets": [
           "F2",
           "F3",
@@ -25535,7 +25445,7 @@
       },
       "testing_standard": {
         "standard_id": "HEE3-TEST-STD-001",
-        "standard_sha256": "f68d836a62a0522f46459f630f3beca159d1e87b6294a337101bd72392b5c578",
+        "standard_sha256": "d643fb699b502af05898a718aec4eb9f9461b882cfbb94a89850358166e69336",
         "minimum_qualifying_cases": 50,
         "maximum_baseline_warnings": 0,
         "maximum_baseline_errors": 0,
@@ -25551,7 +25461,7 @@
       },
       "public_interface": {
         "convention_id": "HEE3-INTERFACES-001",
-        "convention_sha256": "fe9171dc482e2121ffb85acc0fec7cc794ac64ed853a7f76cda794fead8124ec",
+        "convention_sha256": "ddd56488c228140c6b1e239691d4b9a6c34fcd8edb3770a2ad9206354b42aabd",
         "accepted_current_interface": null,
         "admission_validator_available": false,
         "profile": {
@@ -25583,7 +25493,7 @@
       },
       "completion": {
         "standard_id": "HEE3-COMPLETION-001",
-        "standard_sha256": "d593a1eef4c78de87afe0202ff1dcfbdd3c782692fae6480a425e40774b6a85b",
+        "standard_sha256": "b0f0ee8c52c2b93249f49e5048d274a18beb0ffdbd294b0731d486a09dbf31be",
         "state": "unassessed",
         "admission_validator_available": false,
         "profile": {
@@ -25619,7 +25529,7 @@
       },
       "security_review": {
         "requested_model": "gpt-daybreak-blue-latest",
-        "profile_sha256": "11286ae726e81930616012017569108e7c39eb2bc625fcb08674ab6a47355c08",
+        "profile_sha256": "93c4282a5d1da8ac6c6942ac3c71a68bf55f500e4c4f66190f22711c21ee087d",
         "runtime_enabled": false,
         "completion_authority": false,
         "silent_fallback_allowed": false,
@@ -25633,7 +25543,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "c891722d3a43c58acbcb9de19739e1f865c9d34ef4c5f75acafde399bf2ba4e5",
+        "convention_sha256": "c8bef62302cb8bc1573451c5bba4143fdc527088c9d00ec2f2b402d58d82d680",
         "lessons": [
           "LRN01",
           "LRN02",
@@ -26285,31 +26195,13 @@
           "validation_cmd": "Proposed, not implemented: habitat-engine-check case T07 --fixture-root <disposable-fixtures>",
           "validator_available": false,
           "acceptance": "Crashes before/after dispatch acknowledgement, stale generations, PID reuse, queued Pi messages and partial cleanup produce correct recoverable states without duplicate writes. Ambiguous external outcomes remain explicit. Cover restart at verification/evidence/acceptance boundaries; lease expiry alone cannot authorize reuse of a still-writable old workspace. Acceptance explicitly rejects any earlier committed cancellation intent, even before terminal cleanup. If acceptance committed first, later cancellation cannot rewrite history. Startup may reattach observation to a positively reconciled live attempt without redispatch. Restored ledger epochs cannot silently reuse prior event cursors.",
-          "state": "wip",
+          "state": "done",
           "evidence": [
             {
-              "path": "evidence/implementation-T07-20260921/progress.json",
-              "sha256": "fe3c93a8aa1bd4f74c670adc3fae92b534acf41a7c2224904d32caf9855f9445",
+              "path": "evidence/implementation-T07-20260924/closure/T07-closure.json",
+              "sha256": "6f27249a245568566b53078b68e9324a3cae0056d04ad165ae40dbd3830e8d4e",
               "task_id": "T07",
-              "scope": "implementation_candidate"
-            },
-            {
-              "path": "evidence/implementation-T07-20260921/progress-pid-reuse.json",
-              "sha256": "26bb44665194c191d5ce7ff8b379805047a6c4784c9381ac4a78fd20adb4d641",
-              "task_id": "T07",
-              "scope": "implementation_candidate"
-            },
-            {
-              "path": "evidence/implementation-T07-20260921/progress-3.json",
-              "sha256": "4e26b521365e5e69de0e63f6f3667ba96b9a25c7b6cf0fb7e3b5ff81387c07f0",
-              "task_id": "T07",
-              "scope": "implementation_candidate"
-            },
-            {
-              "path": "evidence/implementation-T07-20260923/progress.json",
-              "sha256": "b231848e1c29113a7a091b13a409d565239294ef8e861e11bc9bfb66662c3634",
-              "task_id": "T07",
-              "scope": "implementation_candidate"
+              "scope": "task_contract_review"
             }
           ],
           "research_refs": [
@@ -27011,7 +26903,7 @@
       ],
       "readiness": {
         "id": "HEE3-READINESS-001",
-        "sha256": "3bcde91b4617c1a38bcbb97c36bddbc9e999c7692a69b0ba21caec9f559fe250",
+        "sha256": "f574043487f39db6424c4988bce58e88a6e766f02f974fbcf3fa8dd6e0003548",
         "facets": [
           "F2",
           "F3",
@@ -27079,7 +26971,7 @@
       },
       "testing_standard": {
         "standard_id": "HEE3-TEST-STD-001",
-        "standard_sha256": "f68d836a62a0522f46459f630f3beca159d1e87b6294a337101bd72392b5c578",
+        "standard_sha256": "d643fb699b502af05898a718aec4eb9f9461b882cfbb94a89850358166e69336",
         "minimum_qualifying_cases": 50,
         "maximum_baseline_warnings": 0,
         "maximum_baseline_errors": 0,
@@ -27095,7 +26987,7 @@
       },
       "public_interface": {
         "convention_id": "HEE3-INTERFACES-001",
-        "convention_sha256": "fe9171dc482e2121ffb85acc0fec7cc794ac64ed853a7f76cda794fead8124ec",
+        "convention_sha256": "ddd56488c228140c6b1e239691d4b9a6c34fcd8edb3770a2ad9206354b42aabd",
         "accepted_current_interface": null,
         "admission_validator_available": false,
         "profile": {
@@ -27127,7 +27019,7 @@
       },
       "completion": {
         "standard_id": "HEE3-COMPLETION-001",
-        "standard_sha256": "d593a1eef4c78de87afe0202ff1dcfbdd3c782692fae6480a425e40774b6a85b",
+        "standard_sha256": "b0f0ee8c52c2b93249f49e5048d274a18beb0ffdbd294b0731d486a09dbf31be",
         "state": "unassessed",
         "admission_validator_available": false,
         "profile": {
@@ -27163,7 +27055,7 @@
       },
       "security_review": {
         "requested_model": "gpt-daybreak-blue-latest",
-        "profile_sha256": "11286ae726e81930616012017569108e7c39eb2bc625fcb08674ab6a47355c08",
+        "profile_sha256": "93c4282a5d1da8ac6c6942ac3c71a68bf55f500e4c4f66190f22711c21ee087d",
         "runtime_enabled": false,
         "completion_authority": false,
         "silent_fallback_allowed": false,
@@ -27177,7 +27069,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "c891722d3a43c58acbcb9de19739e1f865c9d34ef4c5f75acafde399bf2ba4e5",
+        "convention_sha256": "c8bef62302cb8bc1573451c5bba4143fdc527088c9d00ec2f2b402d58d82d680",
         "lessons": [
           "LRN05",
           "LRN06",
@@ -28826,7 +28718,7 @@
       ],
       "readiness": {
         "id": "HEE3-READINESS-001",
-        "sha256": "3bcde91b4617c1a38bcbb97c36bddbc9e999c7692a69b0ba21caec9f559fe250",
+        "sha256": "f574043487f39db6424c4988bce58e88a6e766f02f974fbcf3fa8dd6e0003548",
         "facets": [
           "F2",
           "F3",
@@ -28883,7 +28775,7 @@
       },
       "testing_standard": {
         "standard_id": "HEE3-TEST-STD-001",
-        "standard_sha256": "f68d836a62a0522f46459f630f3beca159d1e87b6294a337101bd72392b5c578",
+        "standard_sha256": "d643fb699b502af05898a718aec4eb9f9461b882cfbb94a89850358166e69336",
         "minimum_qualifying_cases": 50,
         "maximum_baseline_warnings": 0,
         "maximum_baseline_errors": 0,
@@ -28899,7 +28791,7 @@
       },
       "public_interface": {
         "convention_id": "HEE3-INTERFACES-001",
-        "convention_sha256": "fe9171dc482e2121ffb85acc0fec7cc794ac64ed853a7f76cda794fead8124ec",
+        "convention_sha256": "ddd56488c228140c6b1e239691d4b9a6c34fcd8edb3770a2ad9206354b42aabd",
         "accepted_current_interface": null,
         "admission_validator_available": false,
         "profile": {
@@ -28931,7 +28823,7 @@
       },
       "completion": {
         "standard_id": "HEE3-COMPLETION-001",
-        "standard_sha256": "d593a1eef4c78de87afe0202ff1dcfbdd3c782692fae6480a425e40774b6a85b",
+        "standard_sha256": "b0f0ee8c52c2b93249f49e5048d274a18beb0ffdbd294b0731d486a09dbf31be",
         "state": "unassessed",
         "admission_validator_available": false,
         "profile": {
@@ -28967,7 +28859,7 @@
       },
       "security_review": {
         "requested_model": "gpt-daybreak-blue-latest",
-        "profile_sha256": "11286ae726e81930616012017569108e7c39eb2bc625fcb08674ab6a47355c08",
+        "profile_sha256": "93c4282a5d1da8ac6c6942ac3c71a68bf55f500e4c4f66190f22711c21ee087d",
         "runtime_enabled": false,
         "completion_authority": false,
         "silent_fallback_allowed": false,
@@ -28981,7 +28873,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "c891722d3a43c58acbcb9de19739e1f865c9d34ef4c5f75acafde399bf2ba4e5",
+        "convention_sha256": "c8bef62302cb8bc1573451c5bba4143fdc527088c9d00ec2f2b402d58d82d680",
         "lessons": [
           "LRN07",
           "LRN08",
@@ -30417,7 +30309,7 @@
       ],
       "readiness": {
         "id": "HEE3-READINESS-001",
-        "sha256": "3bcde91b4617c1a38bcbb97c36bddbc9e999c7692a69b0ba21caec9f559fe250",
+        "sha256": "f574043487f39db6424c4988bce58e88a6e766f02f974fbcf3fa8dd6e0003548",
         "facets": [
           "F2",
           "F3",
@@ -30475,7 +30367,7 @@
       },
       "testing_standard": {
         "standard_id": "HEE3-TEST-STD-001",
-        "standard_sha256": "f68d836a62a0522f46459f630f3beca159d1e87b6294a337101bd72392b5c578",
+        "standard_sha256": "d643fb699b502af05898a718aec4eb9f9461b882cfbb94a89850358166e69336",
         "minimum_qualifying_cases": 50,
         "maximum_baseline_warnings": 0,
         "maximum_baseline_errors": 0,
@@ -30491,7 +30383,7 @@
       },
       "public_interface": {
         "convention_id": "HEE3-INTERFACES-001",
-        "convention_sha256": "fe9171dc482e2121ffb85acc0fec7cc794ac64ed853a7f76cda794fead8124ec",
+        "convention_sha256": "ddd56488c228140c6b1e239691d4b9a6c34fcd8edb3770a2ad9206354b42aabd",
         "accepted_current_interface": null,
         "admission_validator_available": false,
         "profile": {
@@ -30523,7 +30415,7 @@
       },
       "completion": {
         "standard_id": "HEE3-COMPLETION-001",
-        "standard_sha256": "d593a1eef4c78de87afe0202ff1dcfbdd3c782692fae6480a425e40774b6a85b",
+        "standard_sha256": "b0f0ee8c52c2b93249f49e5048d274a18beb0ffdbd294b0731d486a09dbf31be",
         "state": "unassessed",
         "admission_validator_available": false,
         "profile": {
@@ -30559,7 +30451,7 @@
       },
       "security_review": {
         "requested_model": "gpt-daybreak-blue-latest",
-        "profile_sha256": "11286ae726e81930616012017569108e7c39eb2bc625fcb08674ab6a47355c08",
+        "profile_sha256": "93c4282a5d1da8ac6c6942ac3c71a68bf55f500e4c4f66190f22711c21ee087d",
         "runtime_enabled": false,
         "completion_authority": false,
         "silent_fallback_allowed": false,
@@ -30573,7 +30465,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "c891722d3a43c58acbcb9de19739e1f865c9d34ef4c5f75acafde399bf2ba4e5",
+        "convention_sha256": "c8bef62302cb8bc1573451c5bba4143fdc527088c9d00ec2f2b402d58d82d680",
         "lessons": [
           "LRN03",
           "LRN08",
@@ -31263,31 +31155,13 @@
           "validation_cmd": "Proposed, not implemented: habitat-engine-check case T07 --fixture-root <disposable-fixtures>",
           "validator_available": false,
           "acceptance": "Crashes before/after dispatch acknowledgement, stale generations, PID reuse, queued Pi messages and partial cleanup produce correct recoverable states without duplicate writes. Ambiguous external outcomes remain explicit. Cover restart at verification/evidence/acceptance boundaries; lease expiry alone cannot authorize reuse of a still-writable old workspace. Acceptance explicitly rejects any earlier committed cancellation intent, even before terminal cleanup. If acceptance committed first, later cancellation cannot rewrite history. Startup may reattach observation to a positively reconciled live attempt without redispatch. Restored ledger epochs cannot silently reuse prior event cursors.",
-          "state": "wip",
+          "state": "done",
           "evidence": [
             {
-              "path": "evidence/implementation-T07-20260921/progress.json",
-              "sha256": "fe3c93a8aa1bd4f74c670adc3fae92b534acf41a7c2224904d32caf9855f9445",
+              "path": "evidence/implementation-T07-20260924/closure/T07-closure.json",
+              "sha256": "6f27249a245568566b53078b68e9324a3cae0056d04ad165ae40dbd3830e8d4e",
               "task_id": "T07",
-              "scope": "implementation_candidate"
-            },
-            {
-              "path": "evidence/implementation-T07-20260921/progress-pid-reuse.json",
-              "sha256": "26bb44665194c191d5ce7ff8b379805047a6c4784c9381ac4a78fd20adb4d641",
-              "task_id": "T07",
-              "scope": "implementation_candidate"
-            },
-            {
-              "path": "evidence/implementation-T07-20260921/progress-3.json",
-              "sha256": "4e26b521365e5e69de0e63f6f3667ba96b9a25c7b6cf0fb7e3b5ff81387c07f0",
-              "task_id": "T07",
-              "scope": "implementation_candidate"
-            },
-            {
-              "path": "evidence/implementation-T07-20260923/progress.json",
-              "sha256": "b231848e1c29113a7a091b13a409d565239294ef8e861e11bc9bfb66662c3634",
-              "task_id": "T07",
-              "scope": "implementation_candidate"
+              "scope": "task_contract_review"
             }
           ],
           "research_refs": [
@@ -31981,7 +31855,7 @@
       ],
       "readiness": {
         "id": "HEE3-READINESS-001",
-        "sha256": "3bcde91b4617c1a38bcbb97c36bddbc9e999c7692a69b0ba21caec9f559fe250",
+        "sha256": "f574043487f39db6424c4988bce58e88a6e766f02f974fbcf3fa8dd6e0003548",
         "facets": [
           "F2",
           "F3",
@@ -32049,7 +31923,7 @@
       },
       "testing_standard": {
         "standard_id": "HEE3-TEST-STD-001",
-        "standard_sha256": "f68d836a62a0522f46459f630f3beca159d1e87b6294a337101bd72392b5c578",
+        "standard_sha256": "d643fb699b502af05898a718aec4eb9f9461b882cfbb94a89850358166e69336",
         "minimum_qualifying_cases": 50,
         "maximum_baseline_warnings": 0,
         "maximum_baseline_errors": 0,
@@ -32065,7 +31939,7 @@
       },
       "public_interface": {
         "convention_id": "HEE3-INTERFACES-001",
-        "convention_sha256": "fe9171dc482e2121ffb85acc0fec7cc794ac64ed853a7f76cda794fead8124ec",
+        "convention_sha256": "ddd56488c228140c6b1e239691d4b9a6c34fcd8edb3770a2ad9206354b42aabd",
         "accepted_current_interface": null,
         "admission_validator_available": false,
         "profile": {
@@ -32097,7 +31971,7 @@
       },
       "completion": {
         "standard_id": "HEE3-COMPLETION-001",
-        "standard_sha256": "d593a1eef4c78de87afe0202ff1dcfbdd3c782692fae6480a425e40774b6a85b",
+        "standard_sha256": "b0f0ee8c52c2b93249f49e5048d274a18beb0ffdbd294b0731d486a09dbf31be",
         "state": "unassessed",
         "admission_validator_available": false,
         "profile": {
@@ -32133,7 +32007,7 @@
       },
       "security_review": {
         "requested_model": "gpt-daybreak-blue-latest",
-        "profile_sha256": "11286ae726e81930616012017569108e7c39eb2bc625fcb08674ab6a47355c08",
+        "profile_sha256": "93c4282a5d1da8ac6c6942ac3c71a68bf55f500e4c4f66190f22711c21ee087d",
         "runtime_enabled": false,
         "completion_authority": false,
         "silent_fallback_allowed": false,
@@ -32147,7 +32021,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "c891722d3a43c58acbcb9de19739e1f865c9d34ef4c5f75acafde399bf2ba4e5",
+        "convention_sha256": "c8bef62302cb8bc1573451c5bba4143fdc527088c9d00ec2f2b402d58d82d680",
         "lessons": [
           "LRN01",
           "LRN03",
@@ -33710,7 +33584,7 @@
       ],
       "readiness": {
         "id": "HEE3-READINESS-001",
-        "sha256": "3bcde91b4617c1a38bcbb97c36bddbc9e999c7692a69b0ba21caec9f559fe250",
+        "sha256": "f574043487f39db6424c4988bce58e88a6e766f02f974fbcf3fa8dd6e0003548",
         "facets": [
           "F2",
           "F3",
@@ -33779,7 +33653,7 @@
       },
       "testing_standard": {
         "standard_id": "HEE3-TEST-STD-001",
-        "standard_sha256": "f68d836a62a0522f46459f630f3beca159d1e87b6294a337101bd72392b5c578",
+        "standard_sha256": "d643fb699b502af05898a718aec4eb9f9461b882cfbb94a89850358166e69336",
         "minimum_qualifying_cases": 50,
         "maximum_baseline_warnings": 0,
         "maximum_baseline_errors": 0,
@@ -33795,7 +33669,7 @@
       },
       "public_interface": {
         "convention_id": "HEE3-INTERFACES-001",
-        "convention_sha256": "fe9171dc482e2121ffb85acc0fec7cc794ac64ed853a7f76cda794fead8124ec",
+        "convention_sha256": "ddd56488c228140c6b1e239691d4b9a6c34fcd8edb3770a2ad9206354b42aabd",
         "accepted_current_interface": null,
         "admission_validator_available": false,
         "profile": {
@@ -33827,7 +33701,7 @@
       },
       "completion": {
         "standard_id": "HEE3-COMPLETION-001",
-        "standard_sha256": "d593a1eef4c78de87afe0202ff1dcfbdd3c782692fae6480a425e40774b6a85b",
+        "standard_sha256": "b0f0ee8c52c2b93249f49e5048d274a18beb0ffdbd294b0731d486a09dbf31be",
         "state": "unassessed",
         "admission_validator_available": false,
         "profile": {
@@ -33863,7 +33737,7 @@
       },
       "security_review": {
         "requested_model": "gpt-daybreak-blue-latest",
-        "profile_sha256": "11286ae726e81930616012017569108e7c39eb2bc625fcb08674ab6a47355c08",
+        "profile_sha256": "93c4282a5d1da8ac6c6942ac3c71a68bf55f500e4c4f66190f22711c21ee087d",
         "runtime_enabled": false,
         "completion_authority": false,
         "silent_fallback_allowed": false,
@@ -33877,7 +33751,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "c891722d3a43c58acbcb9de19739e1f865c9d34ef4c5f75acafde399bf2ba4e5",
+        "convention_sha256": "c8bef62302cb8bc1573451c5bba4143fdc527088c9d00ec2f2b402d58d82d680",
         "lessons": [
           "LRN06",
           "LRN07",
@@ -35099,7 +34973,7 @@
       ],
       "readiness": {
         "id": "HEE3-READINESS-001",
-        "sha256": "3bcde91b4617c1a38bcbb97c36bddbc9e999c7692a69b0ba21caec9f559fe250",
+        "sha256": "f574043487f39db6424c4988bce58e88a6e766f02f974fbcf3fa8dd6e0003548",
         "facets": [
           "F2",
           "F3",
@@ -35156,7 +35030,7 @@
       },
       "testing_standard": {
         "standard_id": "HEE3-TEST-STD-001",
-        "standard_sha256": "f68d836a62a0522f46459f630f3beca159d1e87b6294a337101bd72392b5c578",
+        "standard_sha256": "d643fb699b502af05898a718aec4eb9f9461b882cfbb94a89850358166e69336",
         "minimum_qualifying_cases": 50,
         "maximum_baseline_warnings": 0,
         "maximum_baseline_errors": 0,
@@ -35172,7 +35046,7 @@
       },
       "public_interface": {
         "convention_id": "HEE3-INTERFACES-001",
-        "convention_sha256": "fe9171dc482e2121ffb85acc0fec7cc794ac64ed853a7f76cda794fead8124ec",
+        "convention_sha256": "ddd56488c228140c6b1e239691d4b9a6c34fcd8edb3770a2ad9206354b42aabd",
         "accepted_current_interface": null,
         "admission_validator_available": false,
         "profile": {
@@ -35204,7 +35078,7 @@
       },
       "completion": {
         "standard_id": "HEE3-COMPLETION-001",
-        "standard_sha256": "d593a1eef4c78de87afe0202ff1dcfbdd3c782692fae6480a425e40774b6a85b",
+        "standard_sha256": "b0f0ee8c52c2b93249f49e5048d274a18beb0ffdbd294b0731d486a09dbf31be",
         "state": "unassessed",
         "admission_validator_available": false,
         "profile": {
@@ -35240,7 +35114,7 @@
       },
       "security_review": {
         "requested_model": "gpt-daybreak-blue-latest",
-        "profile_sha256": "11286ae726e81930616012017569108e7c39eb2bc625fcb08674ab6a47355c08",
+        "profile_sha256": "93c4282a5d1da8ac6c6942ac3c71a68bf55f500e4c4f66190f22711c21ee087d",
         "runtime_enabled": false,
         "completion_authority": false,
         "silent_fallback_allowed": false,
@@ -35254,7 +35128,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "c891722d3a43c58acbcb9de19739e1f865c9d34ef4c5f75acafde399bf2ba4e5",
+        "convention_sha256": "c8bef62302cb8bc1573451c5bba4143fdc527088c9d00ec2f2b402d58d82d680",
         "lessons": [
           "LRN01",
           "LRN08",
@@ -37093,7 +36967,7 @@
       ],
       "readiness": {
         "id": "HEE3-READINESS-001",
-        "sha256": "3bcde91b4617c1a38bcbb97c36bddbc9e999c7692a69b0ba21caec9f559fe250",
+        "sha256": "f574043487f39db6424c4988bce58e88a6e766f02f974fbcf3fa8dd6e0003548",
         "facets": [
           "F1",
           "F2",
@@ -37158,7 +37032,7 @@
       },
       "testing_standard": {
         "standard_id": "HEE3-TEST-STD-001",
-        "standard_sha256": "f68d836a62a0522f46459f630f3beca159d1e87b6294a337101bd72392b5c578",
+        "standard_sha256": "d643fb699b502af05898a718aec4eb9f9461b882cfbb94a89850358166e69336",
         "minimum_qualifying_cases": 50,
         "maximum_baseline_warnings": 0,
         "maximum_baseline_errors": 0,
@@ -37174,7 +37048,7 @@
       },
       "public_interface": {
         "convention_id": "HEE3-INTERFACES-001",
-        "convention_sha256": "fe9171dc482e2121ffb85acc0fec7cc794ac64ed853a7f76cda794fead8124ec",
+        "convention_sha256": "ddd56488c228140c6b1e239691d4b9a6c34fcd8edb3770a2ad9206354b42aabd",
         "accepted_current_interface": null,
         "admission_validator_available": false,
         "profile": {
@@ -37206,7 +37080,7 @@
       },
       "completion": {
         "standard_id": "HEE3-COMPLETION-001",
-        "standard_sha256": "d593a1eef4c78de87afe0202ff1dcfbdd3c782692fae6480a425e40774b6a85b",
+        "standard_sha256": "b0f0ee8c52c2b93249f49e5048d274a18beb0ffdbd294b0731d486a09dbf31be",
         "state": "unassessed",
         "admission_validator_available": false,
         "profile": {
@@ -37242,7 +37116,7 @@
       },
       "security_review": {
         "requested_model": "gpt-daybreak-blue-latest",
-        "profile_sha256": "11286ae726e81930616012017569108e7c39eb2bc625fcb08674ab6a47355c08",
+        "profile_sha256": "93c4282a5d1da8ac6c6942ac3c71a68bf55f500e4c4f66190f22711c21ee087d",
         "runtime_enabled": false,
         "completion_authority": false,
         "silent_fallback_allowed": false,
@@ -37256,7 +37130,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "c891722d3a43c58acbcb9de19739e1f865c9d34ef4c5f75acafde399bf2ba4e5",
+        "convention_sha256": "c8bef62302cb8bc1573451c5bba4143fdc527088c9d00ec2f2b402d58d82d680",
         "lessons": [
           "LRN03",
           "LRN05",
@@ -39073,7 +38947,7 @@
       ],
       "readiness": {
         "id": "HEE3-READINESS-001",
-        "sha256": "3bcde91b4617c1a38bcbb97c36bddbc9e999c7692a69b0ba21caec9f559fe250",
+        "sha256": "f574043487f39db6424c4988bce58e88a6e766f02f974fbcf3fa8dd6e0003548",
         "facets": [
           "F1",
           "F2",
@@ -39140,7 +39014,7 @@
       },
       "testing_standard": {
         "standard_id": "HEE3-TEST-STD-001",
-        "standard_sha256": "f68d836a62a0522f46459f630f3beca159d1e87b6294a337101bd72392b5c578",
+        "standard_sha256": "d643fb699b502af05898a718aec4eb9f9461b882cfbb94a89850358166e69336",
         "minimum_qualifying_cases": 50,
         "maximum_baseline_warnings": 0,
         "maximum_baseline_errors": 0,
@@ -39156,7 +39030,7 @@
       },
       "public_interface": {
         "convention_id": "HEE3-INTERFACES-001",
-        "convention_sha256": "fe9171dc482e2121ffb85acc0fec7cc794ac64ed853a7f76cda794fead8124ec",
+        "convention_sha256": "ddd56488c228140c6b1e239691d4b9a6c34fcd8edb3770a2ad9206354b42aabd",
         "accepted_current_interface": null,
         "admission_validator_available": false,
         "profile": {
@@ -39188,7 +39062,7 @@
       },
       "completion": {
         "standard_id": "HEE3-COMPLETION-001",
-        "standard_sha256": "d593a1eef4c78de87afe0202ff1dcfbdd3c782692fae6480a425e40774b6a85b",
+        "standard_sha256": "b0f0ee8c52c2b93249f49e5048d274a18beb0ffdbd294b0731d486a09dbf31be",
         "state": "unassessed",
         "admission_validator_available": false,
         "profile": {
@@ -39224,7 +39098,7 @@
       },
       "security_review": {
         "requested_model": "gpt-daybreak-blue-latest",
-        "profile_sha256": "11286ae726e81930616012017569108e7c39eb2bc625fcb08674ab6a47355c08",
+        "profile_sha256": "93c4282a5d1da8ac6c6942ac3c71a68bf55f500e4c4f66190f22711c21ee087d",
         "runtime_enabled": false,
         "completion_authority": false,
         "silent_fallback_allowed": false,
@@ -39238,7 +39112,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "c891722d3a43c58acbcb9de19739e1f865c9d34ef4c5f75acafde399bf2ba4e5",
+        "convention_sha256": "c8bef62302cb8bc1573451c5bba4143fdc527088c9d00ec2f2b402d58d82d680",
         "lessons": [
           "LRN03",
           "LRN05",
@@ -41780,7 +41654,7 @@
       ],
       "readiness": {
         "id": "HEE3-READINESS-001",
-        "sha256": "3bcde91b4617c1a38bcbb97c36bddbc9e999c7692a69b0ba21caec9f559fe250",
+        "sha256": "f574043487f39db6424c4988bce58e88a6e766f02f974fbcf3fa8dd6e0003548",
         "facets": [
           "F1",
           "F2",
@@ -41858,7 +41732,7 @@
       },
       "testing_standard": {
         "standard_id": "HEE3-TEST-STD-001",
-        "standard_sha256": "f68d836a62a0522f46459f630f3beca159d1e87b6294a337101bd72392b5c578",
+        "standard_sha256": "d643fb699b502af05898a718aec4eb9f9461b882cfbb94a89850358166e69336",
         "minimum_qualifying_cases": 50,
         "maximum_baseline_warnings": 0,
         "maximum_baseline_errors": 0,
@@ -41874,7 +41748,7 @@
       },
       "public_interface": {
         "convention_id": "HEE3-INTERFACES-001",
-        "convention_sha256": "fe9171dc482e2121ffb85acc0fec7cc794ac64ed853a7f76cda794fead8124ec",
+        "convention_sha256": "ddd56488c228140c6b1e239691d4b9a6c34fcd8edb3770a2ad9206354b42aabd",
         "accepted_current_interface": null,
         "admission_validator_available": false,
         "profile": {
@@ -41906,7 +41780,7 @@
       },
       "completion": {
         "standard_id": "HEE3-COMPLETION-001",
-        "standard_sha256": "d593a1eef4c78de87afe0202ff1dcfbdd3c782692fae6480a425e40774b6a85b",
+        "standard_sha256": "b0f0ee8c52c2b93249f49e5048d274a18beb0ffdbd294b0731d486a09dbf31be",
         "state": "unassessed",
         "admission_validator_available": false,
         "profile": {
@@ -41942,7 +41816,7 @@
       },
       "security_review": {
         "requested_model": "gpt-daybreak-blue-latest",
-        "profile_sha256": "11286ae726e81930616012017569108e7c39eb2bc625fcb08674ab6a47355c08",
+        "profile_sha256": "93c4282a5d1da8ac6c6942ac3c71a68bf55f500e4c4f66190f22711c21ee087d",
         "runtime_enabled": false,
         "completion_authority": false,
         "silent_fallback_allowed": false,
@@ -41956,7 +41830,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "c891722d3a43c58acbcb9de19739e1f865c9d34ef4c5f75acafde399bf2ba4e5",
+        "convention_sha256": "c8bef62302cb8bc1573451c5bba4143fdc527088c9d00ec2f2b402d58d82d680",
         "lessons": [
           "LRN01",
           "LRN02",
@@ -43669,7 +43543,7 @@
       ],
       "readiness": {
         "id": "HEE3-READINESS-001",
-        "sha256": "3bcde91b4617c1a38bcbb97c36bddbc9e999c7692a69b0ba21caec9f559fe250",
+        "sha256": "f574043487f39db6424c4988bce58e88a6e766f02f974fbcf3fa8dd6e0003548",
         "facets": [
           "F2",
           "F3",
@@ -43728,7 +43602,7 @@
       },
       "testing_standard": {
         "standard_id": "HEE3-TEST-STD-001",
-        "standard_sha256": "f68d836a62a0522f46459f630f3beca159d1e87b6294a337101bd72392b5c578",
+        "standard_sha256": "d643fb699b502af05898a718aec4eb9f9461b882cfbb94a89850358166e69336",
         "minimum_qualifying_cases": 50,
         "maximum_baseline_warnings": 0,
         "maximum_baseline_errors": 0,
@@ -43744,7 +43618,7 @@
       },
       "public_interface": {
         "convention_id": "HEE3-INTERFACES-001",
-        "convention_sha256": "fe9171dc482e2121ffb85acc0fec7cc794ac64ed853a7f76cda794fead8124ec",
+        "convention_sha256": "ddd56488c228140c6b1e239691d4b9a6c34fcd8edb3770a2ad9206354b42aabd",
         "accepted_current_interface": null,
         "admission_validator_available": false,
         "profile": {
@@ -43776,7 +43650,7 @@
       },
       "completion": {
         "standard_id": "HEE3-COMPLETION-001",
-        "standard_sha256": "d593a1eef4c78de87afe0202ff1dcfbdd3c782692fae6480a425e40774b6a85b",
+        "standard_sha256": "b0f0ee8c52c2b93249f49e5048d274a18beb0ffdbd294b0731d486a09dbf31be",
         "state": "unassessed",
         "admission_validator_available": false,
         "profile": {
@@ -43812,7 +43686,7 @@
       },
       "security_review": {
         "requested_model": "gpt-daybreak-blue-latest",
-        "profile_sha256": "11286ae726e81930616012017569108e7c39eb2bc625fcb08674ab6a47355c08",
+        "profile_sha256": "93c4282a5d1da8ac6c6942ac3c71a68bf55f500e4c4f66190f22711c21ee087d",
         "runtime_enabled": false,
         "completion_authority": false,
         "silent_fallback_allowed": false,
@@ -43826,7 +43700,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "c891722d3a43c58acbcb9de19739e1f865c9d34ef4c5f75acafde399bf2ba4e5",
+        "convention_sha256": "c8bef62302cb8bc1573451c5bba4143fdc527088c9d00ec2f2b402d58d82d680",
         "lessons": [
           "LRN01",
           "LRN02",
@@ -45069,7 +44943,7 @@
       ],
       "readiness": {
         "id": "HEE3-READINESS-001",
-        "sha256": "3bcde91b4617c1a38bcbb97c36bddbc9e999c7692a69b0ba21caec9f559fe250",
+        "sha256": "f574043487f39db6424c4988bce58e88a6e766f02f974fbcf3fa8dd6e0003548",
         "facets": [
           "F2",
           "F3",
@@ -45126,7 +45000,7 @@
       },
       "testing_standard": {
         "standard_id": "HEE3-TEST-STD-001",
-        "standard_sha256": "f68d836a62a0522f46459f630f3beca159d1e87b6294a337101bd72392b5c578",
+        "standard_sha256": "d643fb699b502af05898a718aec4eb9f9461b882cfbb94a89850358166e69336",
         "minimum_qualifying_cases": 50,
         "maximum_baseline_warnings": 0,
         "maximum_baseline_errors": 0,
@@ -45142,7 +45016,7 @@
       },
       "public_interface": {
         "convention_id": "HEE3-INTERFACES-001",
-        "convention_sha256": "fe9171dc482e2121ffb85acc0fec7cc794ac64ed853a7f76cda794fead8124ec",
+        "convention_sha256": "ddd56488c228140c6b1e239691d4b9a6c34fcd8edb3770a2ad9206354b42aabd",
         "accepted_current_interface": null,
         "admission_validator_available": false,
         "profile": {
@@ -45174,7 +45048,7 @@
       },
       "completion": {
         "standard_id": "HEE3-COMPLETION-001",
-        "standard_sha256": "d593a1eef4c78de87afe0202ff1dcfbdd3c782692fae6480a425e40774b6a85b",
+        "standard_sha256": "b0f0ee8c52c2b93249f49e5048d274a18beb0ffdbd294b0731d486a09dbf31be",
         "state": "unassessed",
         "admission_validator_available": false,
         "profile": {
@@ -45210,7 +45084,7 @@
       },
       "security_review": {
         "requested_model": "gpt-daybreak-blue-latest",
-        "profile_sha256": "11286ae726e81930616012017569108e7c39eb2bc625fcb08674ab6a47355c08",
+        "profile_sha256": "93c4282a5d1da8ac6c6942ac3c71a68bf55f500e4c4f66190f22711c21ee087d",
         "runtime_enabled": false,
         "completion_authority": false,
         "silent_fallback_allowed": false,
@@ -45224,7 +45098,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "c891722d3a43c58acbcb9de19739e1f865c9d34ef4c5f75acafde399bf2ba4e5",
+        "convention_sha256": "c8bef62302cb8bc1573451c5bba4143fdc527088c9d00ec2f2b402d58d82d680",
         "lessons": [
           "LRN03",
           "LRN04",
@@ -46556,7 +46430,7 @@
       ],
       "readiness": {
         "id": "HEE3-READINESS-001",
-        "sha256": "3bcde91b4617c1a38bcbb97c36bddbc9e999c7692a69b0ba21caec9f559fe250",
+        "sha256": "f574043487f39db6424c4988bce58e88a6e766f02f974fbcf3fa8dd6e0003548",
         "facets": [
           "F2",
           "F3",
@@ -46613,7 +46487,7 @@
       },
       "testing_standard": {
         "standard_id": "HEE3-TEST-STD-001",
-        "standard_sha256": "f68d836a62a0522f46459f630f3beca159d1e87b6294a337101bd72392b5c578",
+        "standard_sha256": "d643fb699b502af05898a718aec4eb9f9461b882cfbb94a89850358166e69336",
         "minimum_qualifying_cases": 50,
         "maximum_baseline_warnings": 0,
         "maximum_baseline_errors": 0,
@@ -46629,7 +46503,7 @@
       },
       "public_interface": {
         "convention_id": "HEE3-INTERFACES-001",
-        "convention_sha256": "fe9171dc482e2121ffb85acc0fec7cc794ac64ed853a7f76cda794fead8124ec",
+        "convention_sha256": "ddd56488c228140c6b1e239691d4b9a6c34fcd8edb3770a2ad9206354b42aabd",
         "accepted_current_interface": null,
         "admission_validator_available": false,
         "profile": {
@@ -46661,7 +46535,7 @@
       },
       "completion": {
         "standard_id": "HEE3-COMPLETION-001",
-        "standard_sha256": "d593a1eef4c78de87afe0202ff1dcfbdd3c782692fae6480a425e40774b6a85b",
+        "standard_sha256": "b0f0ee8c52c2b93249f49e5048d274a18beb0ffdbd294b0731d486a09dbf31be",
         "state": "unassessed",
         "admission_validator_available": false,
         "profile": {
@@ -46697,7 +46571,7 @@
       },
       "security_review": {
         "requested_model": "gpt-daybreak-blue-latest",
-        "profile_sha256": "11286ae726e81930616012017569108e7c39eb2bc625fcb08674ab6a47355c08",
+        "profile_sha256": "93c4282a5d1da8ac6c6942ac3c71a68bf55f500e4c4f66190f22711c21ee087d",
         "runtime_enabled": false,
         "completion_authority": false,
         "silent_fallback_allowed": false,
@@ -46711,7 +46585,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "c891722d3a43c58acbcb9de19739e1f865c9d34ef4c5f75acafde399bf2ba4e5",
+        "convention_sha256": "c8bef62302cb8bc1573451c5bba4143fdc527088c9d00ec2f2b402d58d82d680",
         "lessons": [
           "LRN03",
           "LRN04",
@@ -48048,7 +47922,7 @@
       ],
       "readiness": {
         "id": "HEE3-READINESS-001",
-        "sha256": "3bcde91b4617c1a38bcbb97c36bddbc9e999c7692a69b0ba21caec9f559fe250",
+        "sha256": "f574043487f39db6424c4988bce58e88a6e766f02f974fbcf3fa8dd6e0003548",
         "facets": [
           "F2",
           "F3",
@@ -48105,7 +47979,7 @@
       },
       "testing_standard": {
         "standard_id": "HEE3-TEST-STD-001",
-        "standard_sha256": "f68d836a62a0522f46459f630f3beca159d1e87b6294a337101bd72392b5c578",
+        "standard_sha256": "d643fb699b502af05898a718aec4eb9f9461b882cfbb94a89850358166e69336",
         "minimum_qualifying_cases": 50,
         "maximum_baseline_warnings": 0,
         "maximum_baseline_errors": 0,
@@ -48121,7 +47995,7 @@
       },
       "public_interface": {
         "convention_id": "HEE3-INTERFACES-001",
-        "convention_sha256": "fe9171dc482e2121ffb85acc0fec7cc794ac64ed853a7f76cda794fead8124ec",
+        "convention_sha256": "ddd56488c228140c6b1e239691d4b9a6c34fcd8edb3770a2ad9206354b42aabd",
         "accepted_current_interface": null,
         "admission_validator_available": false,
         "profile": {
@@ -48153,7 +48027,7 @@
       },
       "completion": {
         "standard_id": "HEE3-COMPLETION-001",
-        "standard_sha256": "d593a1eef4c78de87afe0202ff1dcfbdd3c782692fae6480a425e40774b6a85b",
+        "standard_sha256": "b0f0ee8c52c2b93249f49e5048d274a18beb0ffdbd294b0731d486a09dbf31be",
         "state": "unassessed",
         "admission_validator_available": false,
         "profile": {
@@ -48189,7 +48063,7 @@
       },
       "security_review": {
         "requested_model": "gpt-daybreak-blue-latest",
-        "profile_sha256": "11286ae726e81930616012017569108e7c39eb2bc625fcb08674ab6a47355c08",
+        "profile_sha256": "93c4282a5d1da8ac6c6942ac3c71a68bf55f500e4c4f66190f22711c21ee087d",
         "runtime_enabled": false,
         "completion_authority": false,
         "silent_fallback_allowed": false,
@@ -48203,7 +48077,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "c891722d3a43c58acbcb9de19739e1f865c9d34ef4c5f75acafde399bf2ba4e5",
+        "convention_sha256": "c8bef62302cb8bc1573451c5bba4143fdc527088c9d00ec2f2b402d58d82d680",
         "lessons": [
           "LRN04",
           "LRN08",
@@ -49599,7 +49473,7 @@
       ],
       "readiness": {
         "id": "HEE3-READINESS-001",
-        "sha256": "3bcde91b4617c1a38bcbb97c36bddbc9e999c7692a69b0ba21caec9f559fe250",
+        "sha256": "f574043487f39db6424c4988bce58e88a6e766f02f974fbcf3fa8dd6e0003548",
         "facets": [
           "F2",
           "F3",
@@ -49658,7 +49532,7 @@
       },
       "testing_standard": {
         "standard_id": "HEE3-TEST-STD-001",
-        "standard_sha256": "f68d836a62a0522f46459f630f3beca159d1e87b6294a337101bd72392b5c578",
+        "standard_sha256": "d643fb699b502af05898a718aec4eb9f9461b882cfbb94a89850358166e69336",
         "minimum_qualifying_cases": 50,
         "maximum_baseline_warnings": 0,
         "maximum_baseline_errors": 0,
@@ -49674,7 +49548,7 @@
       },
       "public_interface": {
         "convention_id": "HEE3-INTERFACES-001",
-        "convention_sha256": "fe9171dc482e2121ffb85acc0fec7cc794ac64ed853a7f76cda794fead8124ec",
+        "convention_sha256": "ddd56488c228140c6b1e239691d4b9a6c34fcd8edb3770a2ad9206354b42aabd",
         "accepted_current_interface": null,
         "admission_validator_available": false,
         "profile": {
@@ -49706,7 +49580,7 @@
       },
       "completion": {
         "standard_id": "HEE3-COMPLETION-001",
-        "standard_sha256": "d593a1eef4c78de87afe0202ff1dcfbdd3c782692fae6480a425e40774b6a85b",
+        "standard_sha256": "b0f0ee8c52c2b93249f49e5048d274a18beb0ffdbd294b0731d486a09dbf31be",
         "state": "unassessed",
         "admission_validator_available": false,
         "profile": {
@@ -49742,7 +49616,7 @@
       },
       "security_review": {
         "requested_model": "gpt-daybreak-blue-latest",
-        "profile_sha256": "11286ae726e81930616012017569108e7c39eb2bc625fcb08674ab6a47355c08",
+        "profile_sha256": "93c4282a5d1da8ac6c6942ac3c71a68bf55f500e4c4f66190f22711c21ee087d",
         "runtime_enabled": false,
         "completion_authority": false,
         "silent_fallback_allowed": false,
@@ -49756,7 +49630,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "c891722d3a43c58acbcb9de19739e1f865c9d34ef4c5f75acafde399bf2ba4e5",
+        "convention_sha256": "c8bef62302cb8bc1573451c5bba4143fdc527088c9d00ec2f2b402d58d82d680",
         "lessons": [
           "LRN01",
           "LRN02",
@@ -54782,8 +54656,8 @@
       "bytes": 6019
     },
     "tools/check-quality": {
-      "sha256": "4ed3c1aee02189bcc9c9e3d091b48953540e5143f9537efed33474739c57882c",
-      "bytes": 73423
+      "sha256": "0cdabd01c665cb60addc73a2ed2235f25e3b648ed21468a2df0e7b090b3e14ca",
+      "bytes": 74668
     },
     "tools/development_process.py": {
       "sha256": "e76e3a794193e5df7ee96fabf700113d718527745a0f9a9dba1e04fd5c7baaf3",
@@ -54794,8 +54668,8 @@
       "bytes": 10433
     },
     "tests/t25_quality.py": {
-      "sha256": "58addbc1f5c6c5a24902de24581e160ddae8ed8e591674bffd78528434b76946",
-      "bytes": 136111
+      "sha256": "865dc14726e87d9ebe9ccbddc601482921bec9b5cc6a666731716f1ee654f54e",
+      "bytes": 137244
     },
     "julia/Manifest.toml": {
       "sha256": "097d5028df4e1667a970a8297d41eedb908e0319a0b4154c7ec12548140a9f79",
@@ -55522,8 +55396,8 @@
       "bytes": 4161
     },
     "src/store/artifact.rs": {
-      "sha256": "2481e982da471f0f82fac17920e65e5981c8dfc341356e64b29815c331fc193d",
-      "bytes": 7475
+      "sha256": "18b2164babcb70e42a6aa24d0249b54f91afd49879236dea90989a2696bc5d39",
+      "bytes": 8748
     },
     "src/store/schema.rs": {
       "sha256": "2a5de4e3880a71d1b2b1b998d2481975f4740406e20d51aa1a576df31beeb22e",
@@ -55882,8 +55756,8 @@
       "bytes": 9861
     },
     "src/app/mod.rs": {
-      "sha256": "092dfaecc20d24d806d28ec53e2c39929c8743e5e1c255f838f8708c3e48b030",
-      "bytes": 240
+      "sha256": "85806536fa8d694455497cdfe620b378a1663d97bd5a9909978a3ea12d38ac7b",
+      "bytes": 281
     },
     "src/app/receipt_import.rs": {
       "sha256": "393bd6b147ebe968ffe29532665c1e542972d9f1ea9708699cc6ef962ba0735d",
@@ -55946,16 +55820,16 @@
       "bytes": 2257
     },
     "src/contracts.rs": {
-      "sha256": "2f0c789da3c1bf563546975447f778d2188752854b0a15be1321a223aea75172",
-      "bytes": 26327
+      "sha256": "245812188100493f1dc307aff199ac6cb34cf9bb2588ef9d6bf0e8673291187d",
+      "bytes": 26345
     },
     "src/main.rs": {
-      "sha256": "4b0f78aed16caf445afa8dc6f40f466f5b4db719287911c619e322a77320769d",
-      "bytes": 24298
+      "sha256": "a2e2a3fa21386402b619b0cfb9b34d92e9e15efdbb0ce57a5d719374b0bd2701",
+      "bytes": 30946
     },
     "src/store/staging.rs": {
-      "sha256": "9e403e342828dd1638f32e5a48b4a3f1356e964480df9c7e80d8a2a16a8aab91",
-      "bytes": 3031
+      "sha256": "cfcdd5ba8e2074a3a6dae74e480b98bd409c6f8a5db2530991e11255d293997f",
+      "bytes": 3039
     },
     "src/store/terminal.rs": {
       "sha256": "ac68b11e5e38f841385811d52e52a7959c6a39ad4849ead8179b1fb76b6dfdc2",
@@ -55994,8 +55868,8 @@
       "bytes": 14339
     },
     "src/worker/workspace.rs": {
-      "sha256": "a5847eb5726e477b497a2f88184d78af577196d92dcef575f2bb50e2e0d55836",
-      "bytes": 23553
+      "sha256": "28c4921e271fae2cad882175d18fcf9b0e52255f5f1705e9c11711a5c4cd49d1",
+      "bytes": 27836
     },
     "tests/fixtures/receipt-import/nonpass.json": {
       "sha256": "496d768d300ec5e962a807bc85c6a2a3a78bbe7525b9b133dd4913cd0622b73d",
@@ -56154,8 +56028,8 @@
       "bytes": 43396
     },
     "tests/t28_actions.rs": {
-      "sha256": "eafbe6121d987b2820f8ebdfc2d54ebb96efc5210e9ff9eadf85f411d2e15001",
-      "bytes": 41953
+      "sha256": "957b8507fe13b5e9f82be858a05d5cdea2fe2f3f902590ab7b558652cb55d34c",
+      "bytes": 44563
     },
     "tests/t16_herdr.rs": {
       "sha256": "ef25e42123533b23baf56222f884eda85a43329aea043e53ef87d728add8d5d7",

@@ -16,7 +16,7 @@ Declared build dependencies: contracts. Declared consumers: app, bash, pi_extens
 
 Own one semantic action catalogue projected to CLI, Unix API and LLM tools. Model-provided risk/approval fields cannot grant authority; same fixtures must produce equivalent decisions across surfaces.
 
-[Adopted readiness requirements and evidence roadmap](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Delivery%2FReadiness%2FIndex) · [Codebase readiness plan](file:///var/home/herdr-engineering-engine-v3/docs/readiness-plan.md) · [Six resolved design contracts](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Delivery%2FContracts%2FIndex) · [Concrete contract decisions](file:///var/home/herdr-engineering-engine-v3/docs/contract-decisions.md). Binding: `HEE3-READINESS-001` / `3bcde91b4617c1a38bcbb97c36bddbc9e999c7692a69b0ba21caec9f559fe250`. Adoption is complete; the required engine proof is pending.
+[Adopted readiness requirements and evidence roadmap](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Delivery%2FReadiness%2FIndex) · [Codebase readiness plan](file:///var/home/herdr-engineering-engine-v3/docs/readiness-plan.md) · [Six resolved design contracts](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Delivery%2FContracts%2FIndex) · [Concrete contract decisions](file:///var/home/herdr-engineering-engine-v3/docs/contract-decisions.md). Binding: `HEE3-READINESS-001` / `f574043487f39db6424c4988bce58e88a6e766f02f974fbcf3fa8dd6e0003548`. Adoption is complete; the required engine proof is pending.
 
 | Applicable facet / criterion IDs | Primary contract owners |
 | --- | --- |
@@ -66,7 +66,7 @@ Every operation inherits the catalogue requirements for caller capability, ident
 
 Observed source kind: `engine_source`. Accepted current interface: **unavailable**. No completion admission collector is implemented. A source body would be an implementation candidate, not automatically an accepted module. After verified admission exists, exact accepted source/schema and tests govern current interface facts; intended changes remain in the atlas.
 
-Convention SHA-256: `fe9171dc482e2121ffb85acc0fec7cc794ac64ed853a7f76cda794fead8124ec`. This binding proves which documentation convention is projected, not runtime correctness.
+Convention SHA-256: `ddd56488c228140c6b1e239691d4b9a6c34fcd8edb3770a2ad9206354b42aabd`. This binding proves which documentation convention is projected, not runtime correctness.
 
 ## Fully-complete contract
 
@@ -74,7 +74,7 @@ Convention SHA-256: `fe9171dc482e2121ffb85acc0fec7cc794ac64ed853a7f76cda794fead8
 
 [Concrete module outcome, failure controls and admission checklist](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Standards%2FCompletion%2FDONE-actions) · [Corpus architecture and update schematics](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Schematics%2FCorpus%2FIndex) · [Open clickable drawings](file:///var/home/herdr-engineering-engine-v3/docs/corpus-schematics.html) · [Fully-complete standard](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Standards%2FModule%20Completion) · [Justfile and runbooks](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Operations%2FJustfiles%20and%20Runbooks) · [Context handoff](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Context%20Handoff) · [Executive summary](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Executive%20Summary) · [Daybreak security profile](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Security%2FDaybreak%20Profile) · [Graphify full corpus](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Graphify%2FIndex) · [Adopted readiness requirements and evidence roadmap](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Delivery%2FReadiness%2FIndex) · [Codebase readiness plan](file:///var/home/herdr-engineering-engine-v3/docs/readiness-plan.md) · [Six resolved design contracts](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Delivery%2FContracts%2FIndex) · [Concrete contract decisions](file:///var/home/herdr-engineering-engine-v3/docs/contract-decisions.md)
 
-Completion standard SHA-256: `d593a1eef4c78de87afe0202ff1dcfbdd3c782692fae6480a425e40774b6a85b`. All 13 gates apply; only an inapplicable subcheck may be explicitly justified.
+Completion standard SHA-256: `b0f0ee8c52c2b93249f49e5048d274a18beb0ffdbd294b0731d486a09dbf31be`. All 13 gates apply; only an inapplicable subcheck may be explicitly justified.
 
 **Required finished behavior:** One versioned catalogue gives caller-visible discovery, typed inspection and dispatch contracts for all 21 declared actions.
 
@@ -117,7 +117,7 @@ These are scoped design and review obligations. Their engine detectors remain un
 
 Bind assimilation, mutation sensitivity, lint coverage and raw evidence to the exact candidate. Property iterations, assertions, retries, lint findings and mutant runs do not multiply case credits. The current observation schema does not establish this qualification.
 
-Standard: `HEE3-TEST-STD-001`; SHA-256: `f68d836a62a0522f46459f630f3beca159d1e87b6294a337101bd72392b5c578`. Full-standard qualification: **unassessed; collector/validator not implemented**.
+Standard: `HEE3-TEST-STD-001`; SHA-256: `d643fb699b502af05898a718aec4eb9f9461b882cfbb94a89850358166e69336`. Full-standard qualification: **unassessed; collector/validator not implemented**.
 
 Module priorities: command/tool schema equivalence; method authority and effect classification; idempotency/readback/correlation; hostile arguments and consistent errors.
 
