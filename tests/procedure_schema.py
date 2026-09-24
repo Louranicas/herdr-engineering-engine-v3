@@ -42,6 +42,24 @@ def _load_validator_module():
 
 
 VP = _load_validator_module()
+
+
+def _load_generator_module():
+    spec = importlib.util.spec_from_file_location(
+        "hee3_generate_procedure_schema", ROOT / "workflows/generate_procedure_schema.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def catalogue_of(*pins):
+    """A catalogue document whose request definitions pin each `(action, version)` given."""
+    return {"$defs": {
+        f"Request_{index}": {"properties": {"action": {"const": action},
+                                            "action_version": {"const": version}}}
+        for index, (action, version) in enumerate(pins)
+    }}
 SCHEMA = json.loads(SCHEMA_PATH.read_text())
 BOUNDS = SCHEMA["hee3"]["bounds"]
 
@@ -114,6 +132,28 @@ class SchemaShape(unittest.TestCase):
         }
         self.assertEqual(SCHEMA["hee3"]["action_versions"], expected)
         self.assertEqual(len(expected), 21)
+
+    def test_generator_stops_on_two_pins_that_disagree(self):
+        # WF-03: keeping the first pin would admit a version the catalogue also refuses.
+        generator = _load_generator_module()
+        catalogue = catalogue_of(("health", 1), ("task.get", 1), ("health", 2))
+        with self.assertRaises(SystemExit) as caught:
+            generator.catalogue_action_versions(catalogue, ("health", "task.get"))
+        self.assertIn("pins 'health' at two versions", str(caught.exception))
+
+    def test_generator_stops_on_an_admitted_action_with_no_pin(self):
+        generator = _load_generator_module()
+        catalogue = catalogue_of(("health", 1))
+        with self.assertRaises(SystemExit) as caught:
+            generator.catalogue_action_versions(catalogue, ("health", "task.get"))
+        self.assertIn("pins no action_version for ['task.get']", str(caught.exception))
+
+    def test_generator_reads_each_pin_as_the_catalogue_states_it(self):
+        # Off the identity element: agreeing duplicate pins of 3 and 2 are kept, not reset.
+        generator = _load_generator_module()
+        catalogue = catalogue_of(("health", 3), ("task.get", 2), ("health", 3))
+        self.assertEqual(generator.catalogue_action_versions(catalogue, ("task.get", "health")),
+                         {"task.get": 2, "health": 3})
 
     def test_reference_procedure_validates(self):
         Draft202012Validator(SCHEMA).validate(base())
@@ -355,6 +395,17 @@ class Refusals(unittest.TestCase):
     def test_join_refuses_outcomes_recorded_under_another_version(self):
         self.refused(procedure([step("a")]), "stale_procedure_version",
                      outcomes=record({"a": "done"}, version=3))
+
+    def test_committed_under_a_boolean_procedure_version(self):
+        # True == 1 in Python; the record's version is an integer or it is not this version.
+        detail = self.refused(procedure([step("a")]), "stale_procedure_version",
+                              committed=record({}, version=True))
+        self.assertIn("version True", detail)
+
+    def test_join_refuses_outcomes_recorded_under_a_float_version(self):
+        detail = self.refused(procedure([step("a")]), "stale_procedure_version",
+                              outcomes=record({"a": "done"}, version=1.0))
+        self.assertIn("version 1.0", detail)
 
     def test_resume_refuses_an_unreconciled_effect(self):
         detail = self.refused(procedure([step("a"), step("b", depends_on=["a"])]),

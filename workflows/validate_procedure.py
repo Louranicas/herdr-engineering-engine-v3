@@ -218,9 +218,12 @@ def _committed_steps(procedure, record, known):
         refuse("identity_mismatch",
                f"record was committed under procedure {record.get('procedure_id')!r}, "
                f"not {procedure['procedure_id']!r}")
-    if record.get("procedure_version") != procedure["procedure_version"]:
+    # `type(...) is not int` first: True == 1 and 1.0 == 1 in Python, and the schema this
+    # module keeps says a version is an integer, not a boolean or a float (WF-06).
+    version = record.get("procedure_version")
+    if type(version) is not int or version != procedure["procedure_version"]:
         refuse("stale_procedure_version",
-               f"record was committed under version {record.get('procedure_version')!r}; "
+               f"record was committed under version {version!r}; "
                f"the procedure is version {procedure['procedure_version']}")
     states = schema()["hee3"]["step_states"]
     for identity, state in record["steps"].items():

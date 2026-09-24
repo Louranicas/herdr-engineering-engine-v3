@@ -66,9 +66,13 @@ REFUSALS = (
 )
 
 
-def catalogue_actions():
-    """The admitted action names, taken from the schema that defines them."""
-    schema = json.loads(CATALOGUE.read_text())
+def read_catalogue():
+    """The action catalogue document, read once and handed to whatever derives from it."""
+    return json.loads(CATALOGUE.read_text())
+
+
+def catalogue_actions(schema):
+    """The admitted action names, taken from the catalogue document that defines them."""
     defs = schema.get("$defs", {})
     node = defs.get("ActionId")
     if isinstance(node, dict) and isinstance(node.get("enum"), list) and node["enum"]:
@@ -82,14 +86,15 @@ def catalogue_actions():
     )
 
 
-def catalogue_action_versions(actions):
+def catalogue_action_versions(schema, actions):
     """The version the catalogue serves of each admitted action, from its request definition.
 
     Every request definition pins `action` and `action_version` as constants. The map is read
     from those rather than assumed to be 1, and an admitted action with no pinned version, or
-    with two that disagree, stops the generator instead of being guessed.
+    with two that disagree, stops the generator instead of being guessed. `schema` is the
+    catalogue document, passed in rather than re-read, so both guards are reachable by
+    choosing an argument.
     """
-    schema = json.loads(CATALOGUE.read_text())
     versions = {}
     for definition in schema.get("$defs", {}).values():
         properties = definition.get("properties", {}) if isinstance(definition, dict) else {}
@@ -120,9 +125,9 @@ def count(maximum, description):
     return {"type": "integer", "minimum": 0, "maximum": maximum, "description": description}
 
 
-def build():
-    actions = catalogue_actions()
-    versions = catalogue_action_versions(actions)
+def build(catalogue):
+    actions = catalogue_actions(catalogue)
+    versions = catalogue_action_versions(catalogue, actions)
     return {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "$id": "https://hee3.local/schemas/workflows/procedure-v1.schema.json",
@@ -293,7 +298,9 @@ def main():
     parser.add_argument("--check", action="store_true",
                         help="compare the adjacent artifact byte-for-byte instead of writing it")
     arguments = parser.parse_args()
-    text_out = json.dumps(build(), indent=2) + "\n"
+    catalogue = read_catalogue()
+    actions = catalogue_actions(catalogue)
+    text_out = json.dumps(build(catalogue), indent=2) + "\n"
     if arguments.check:
         if not ARTIFACT.exists():
             raise SystemExit(f"{ARTIFACT} is absent")
@@ -304,10 +311,11 @@ def main():
                 f"{sum(1 for a, b in zip(actual, text_out) if a != b) + abs(len(actual) - len(text_out))} "
                 "characters; regenerate it or fix the generator"
             )
-        print(f"procedure schema: matches_generator=yes actions={len(catalogue_actions())}")
+        print(f"procedure schema: matches_generator=yes actions={len(actions)}")
         return
     ARTIFACT.write_text(text_out)
-    print(f"wrote {ARTIFACT.name}: bytes={len(text_out.encode())} actions={len(catalogue_actions())}")
+    print(f"wrote {ARTIFACT.name}: bytes={len(text_out.encode())} actions={len(actions)}")
 
 
-main()
+if __name__ == "__main__":
+    main()

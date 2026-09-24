@@ -12,7 +12,7 @@ and never accepts a parent.
 | `generate_procedure_schema.py` | Authors that schema. `--check` compares exact bytes. |
 | `validate_procedure.py` | The obligations a schema cannot state: acyclicity, completeness, budget, resume safety. Also the command line (below). |
 | `examples/verify-and-close-v1.json` | A reference procedure: preview → submit → threads → verify → record. |
-| `../tests/procedure_schema.py` | 70 cases over both. |
+| `../tests/procedure_schema.py` | 75 cases over both. |
 
 ## The action vocabulary is not copied here
 
@@ -82,7 +82,7 @@ it is not here: the justfile is a generated publication output owned by `complet
 
 ## Why the case count is not the evidence
 
-Forty-six passing cases say nothing about whether the rules are load-bearing.
+However many cases pass, they say nothing about whether the rules are load-bearing.
 `tools/check-workflow-sites` neuters each refusal site in `validate_procedure.py` in turn —
 the sites enumerated from the file's own syntax tree, never from a list — and requires the
 suite to go red.
