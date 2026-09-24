@@ -498,6 +498,15 @@ def require_t21_julia_summaries(stdout, stderr, cohort=False):
         raise ValueError("Missing exact T21 Julia evaluator assertion group")
 
 
+def gate_runs_root():
+    """Where each run's results.json and streams are retained: outside every published tree.
+
+    Runs used to land under the repository's evidence/ (~1,400 files each), which the corpus
+    publisher and the Graphify projection walk (operator-delegated decision #16, 2026-09-24).
+    """
+    return Path.home() / "hee3-evidence" / "gate-runs"
+
+
 def retained_command_environment(environment, output, label):
     if not re.fullmatch(r"[a-z0-9-]+", label):
         raise ValueError("Invalid retained command label")
@@ -1019,7 +1028,7 @@ def main():
     parser.add_argument("--rust-only", action="store_true", help="scoped Rust development observation; does not close the full T25 matrix")
     arguments = parser.parse_args()
     stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
-    output = ROOT / ("evidence/implementation/T05/quality-runs" if has_t05(ROOT) else "evidence/implementation/T25/runs") / stamp
+    output = gate_runs_root() / stamp
     output.mkdir(parents=True, mode=0o700)
     refuse_unsupported_cargo_inputs(ROOT)
     rust_offline.validate_bundle(ROOT / "Cargo.lock", ROOT / RUST_OFFLINE_BUNDLE, work_deadline)
@@ -1132,7 +1141,7 @@ def main():
             return texts
 
         run("process-controls", [sys.executable, "-W", "error", "tests/t25_process.py"], required_text="17 tests")
-        run("quality-integration-controls", [sys.executable, "-W", "error", "tests/t25_quality.py"], required_text="Ran 100 tests" if has_t09(ROOT) else "Ran 93 tests" if has_t08_contract(ROOT) or has_recovery(ROOT) else ("Ran 83 tests" if has_t08(ROOT) else ("Ran 73 tests" if has_t07(ROOT) else ("Ran 66 tests" if has_t21(ROOT) or has_t13(ROOT) else ("Ran 47 tests" if has_t06(ROOT) else "Ran 43 tests")))), required_stream="stderr")
+        run("quality-integration-controls", [sys.executable, "-W", "error", "tests/t25_quality.py"], required_text="Ran 101 tests" if has_t09(ROOT) else "Ran 93 tests" if has_t08_contract(ROOT) or has_recovery(ROOT) else ("Ran 83 tests" if has_t08(ROOT) else ("Ran 73 tests" if has_t07(ROOT) else ("Ran 66 tests" if has_t21(ROOT) or has_t13(ROOT) else ("Ran 47 tests" if has_t06(ROOT) else "Ran 43 tests")))), required_stream="stderr")
         run("workflow-procedure-controls", [sys.executable, "-W", "error", "tests/procedure_schema.py"],
             required_text="run=75 failures=0 errors=0")
         run("workflow-site-sweep", [sys.executable, "tools/check-workflow-sites"],

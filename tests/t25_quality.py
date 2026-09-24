@@ -69,6 +69,13 @@ class QualityIntegrationControls(unittest.TestCase):
         source = (ROOT / "tools/check-quality").read_text()
         self.assertIn('parallel_main = {key: value for key, value in env.items() if key != "RUST_TEST_THREADS"}', source)
 
+    def test_gate_runs_are_retained_outside_the_repository(self):
+        root = quality.gate_runs_root()
+        self.assertTrue(root.is_absolute())
+        self.assertFalse(root.resolve().is_relative_to(ROOT.resolve()), root)
+        self.assertEqual(root, Path.home() / "hee3-evidence" / "gate-runs")
+        self.assertIn("output = gate_runs_root() / stamp", (ROOT / "tools/check-quality").read_text())
+
     def test_gate_build_parallelism_is_the_operator_decision_and_has_one_owner(self):
         # Operator decisions 2026-09-24: from 2 to 8, then the full capacity of the hardware. The rule
         # is "every CPU this process may run on"; the independent source is the kernel's affinity mask.
@@ -1761,7 +1768,7 @@ class T06QualityInventoryControls(unittest.TestCase):
         # The recheck reads the pin's own path and digest, after the Rust commands.
         recheck = text.index("Pinned interpreter changed")
         self.assertGreater(recheck, text.index("run_rust_test_partitions(ROOT, run, cargo, common, label, test_expectations, parallel_main)"))
-        self.assertIn("required_text='Ran 100 tests' if has_t09(ROOT) else", text)
+        self.assertIn("required_text='Ran 101 tests' if has_t09(ROOT) else", text)
         self.assertIn("'Ran 93 tests' if has_t08_contract(ROOT) or has_recovery(ROOT) else", text)
 
     def test_t06_partition_holds_every_t06_target_once_and_nothing_else(self):
