@@ -1339,6 +1339,13 @@ fn a_thread_carries_a_bounded_role() -> Outcome_ {
     );
     let widest = Role::new(&"r".repeat(MAX_ROLE_BYTES))?;
     assert_eq!(widest.as_str().len(), MAX_ROLE_BYTES);
+    // Multi-byte names are bounded in bytes, not characters: 33 two-byte characters are
+    // 66 bytes and refused, though only 33 characters; 32 of them are exactly the bound.
+    let wide_over = "\u{e9}".repeat(MAX_ROLE_BYTES / 2 + 1);
+    assert_eq!(wide_over.chars().count(), MAX_ROLE_BYTES / 2 + 1);
+    assert_eq!(Role::new(&wide_over), Err(Refusal::RoleLimit));
+    let wide_exact = Role::new(&"\u{e9}".repeat(MAX_ROLE_BYTES / 2))?;
+    assert_eq!(wide_exact.as_str().len(), MAX_ROLE_BYTES);
     let mut cohort = Cohort::new(1);
     cohort.assign(&id(1), Role::new("reviewer")?, &[], claim("src/a")?, true)?;
     cohort.assign(&id(2), widest, &[], claim("src/b")?, false)?;
