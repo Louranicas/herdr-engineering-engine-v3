@@ -54656,8 +54656,8 @@
       "bytes": 6019
     },
     "tools/check-quality": {
-      "sha256": "368d77d53dbc2a467e5e82e1760acf3b832cd547973d54df906ddb51e8b7de2e",
-      "bytes": 77757
+      "sha256": "7b5de941dbeebf70bdd8475d72b34f11bd8173c0bd556cbe2b2537eacd940911",
+      "bytes": 78225
     },
     "tools/development_process.py": {
       "sha256": "e76e3a794193e5df7ee96fabf700113d718527745a0f9a9dba1e04fd5c7baaf3",
@@ -54668,8 +54668,8 @@
       "bytes": 10433
     },
     "tests/t25_quality.py": {
-      "sha256": "f272e36d1976de8b6876b678db674e0c42beb1ea6c58c141f5acad7611548579",
-      "bytes": 141250
+      "sha256": "e49fda306653259eeab77606d3f9a51bbe759eed832df0463b509655d33a575f",
+      "bytes": 141476
     },
     "julia/Manifest.toml": {
       "sha256": "097d5028df4e1667a970a8297d41eedb908e0319a0b4154c7ec12548140a9f79",
@@ -55408,8 +55408,8 @@
       "bytes": 13662
     },
     "tests/t04_store.rs": {
-      "sha256": "4278691bd2793dc3ed2b45566df350070a4feb465cb3771ccf3cafb9cea16604",
-      "bytes": 67325
+      "sha256": "92a8c261e56c21a23a87d2ffbdd984eaf2adebf4304f410aaa1686a5e46d312c",
+      "bytes": 69387
     },
     "docs/store-contract.md": {
       "sha256": "b65ffe744d2abf93c3b0c40345787940213806ade52e9ef010e17f3012a81396",
@@ -55420,7 +55420,7 @@
       "bytes": 10139
     },
     "tools/check-store-mutations": {
-      "sha256": "7137432159eeefba1371ed558946478f24334d3ef7af98ed35e390316af6619c",
+      "sha256": "e2efa63f07a8622f09554e86726eb91123de6f9423eb9ee12062fb776139c06a",
       "bytes": 18978
     },
     "tools/sqlite-inputs/sqlite-amalgamation-3530400.zip": {
@@ -55824,8 +55824,8 @@
       "bytes": 26561
     },
     "src/main.rs": {
-      "sha256": "c772bad84b0bef1451d4e79c3f0f27720df131df6cb659aeb524f3d885fcf2ed",
-      "bytes": 32663
+      "sha256": "b1964807ec824596eaed15c4baeb1d08c136126f0e1bd557b1c256e638c7523b",
+      "bytes": 32757
     },
     "src/store/staging.rs": {
       "sha256": "8bb17b5598550fd2c002dc7063ddfa56cf4a6e0a51566264b908ba655acce5d3",
