@@ -646,10 +646,22 @@ fn malformed_attempt_identity_is_refused() {
 #[test]
 fn duplicate_startup_cannot_take_inventory_custody() {
     let mut r = Rig::ready();
-    assert!(matches!(
-        Store::open(&r.area.path, id(GEN), id(EPOCH), false, deadline()),
-        Err(Error::Locked)
-    ));
+    // The contended open is waited on with a budget: a lock retry that ignored its window would
+    // otherwise hang this case instead of failing it (the T07 closure's mutant run found one).
+    let path = r.area.path.clone();
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let refused = matches!(
+            Store::open(&path, id(GEN), id(EPOCH), false, deadline()),
+            Err(Error::Locked)
+        );
+        let _ = sender.send(refused);
+    });
+    assert_eq!(
+        receiver.recv_timeout(std::time::Duration::from_secs(5)),
+        Ok(true),
+        "a duplicate startup is refused Locked within 5 s"
+    );
     assert_eq!(r.snapshot().attempts.len(), 1);
 }
 
