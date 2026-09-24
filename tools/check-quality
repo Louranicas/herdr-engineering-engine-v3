@@ -50,6 +50,39 @@ RUST_OFFLINE_BUNDLE = "tools/rust-offline-inputs"
 # them. The offline bundles are fetched archives verified by digest against their manifests
 # (tools/rust-offline.py, tools/sqlite-static.py); bytecode caches are written by the
 # interpreter and swept into the package directories' file lists.
+# WF-10 / BASH-G11: every Python subject the gate copies is linted by a pinned ruff, offline, reading
+# no configuration, with only pyflakes (F) and bugbear (B) selected -- the families whose findings are
+# defects rather than style. Measured 2026-09-25: 12 findings repo-wide, each fixed at its call site
+# (no noqa, no per-file ignore); the step starts at zero and denies. A missing ruff refuses the gate
+# by name; there is no network fallback.
+RUFF = Path.home() / ".local/bin/ruff"
+RUFF_VERSION = "ruff 0.16.8"
+RUFF_RULES = "F,B"
+RUFF_CLEAN = "All checks passed!"
+
+
+def python_subjects(root, names):
+    """Every subject that is Python: a `.py` file, or a file whose first line is a python3 shebang.
+    Derived from the gate's own subject set, so a script added tomorrow is linted tomorrow."""
+    found = []
+    for name in names:
+        if name.endswith(".py"):
+            found.append(name)
+            continue
+        with (root / name).open("rb") as handle:
+            first = handle.readline(128)
+        if first.startswith(b"#!") and b"python3" in first:
+            found.append(name)
+    return sorted(found)
+
+
+def python_lint_argv(ruff, names):
+    """The lint command: this gate's rules, never a configuration file's, and no cache written into
+    the tree the gate hashes."""
+    return [str(ruff), "check", "--isolated", "--no-cache", "--select", RUFF_RULES,
+            "--output-format", "concise", "--", *names]
+
+
 UNTRACKED_BY_DESIGN = (
     (RUST_OFFLINE_BUNDLE + "/", "fetched"),
     ("tools/sqlite-inputs/", "fetched"),
@@ -1150,7 +1183,7 @@ def main():
             return texts
 
         run("process-controls", [sys.executable, "-W", "error", "tests/t25_process.py"], required_text="17 tests")
-        run("quality-integration-controls", [sys.executable, "-W", "error", "tests/t25_quality.py"], required_text="Ran 102 tests" if has_t09(ROOT) else "Ran 93 tests" if has_t08_contract(ROOT) or has_recovery(ROOT) else ("Ran 83 tests" if has_t08(ROOT) else ("Ran 73 tests" if has_t07(ROOT) else ("Ran 66 tests" if has_t21(ROOT) or has_t13(ROOT) else ("Ran 47 tests" if has_t06(ROOT) else "Ran 43 tests")))), required_stream="stderr")
+        run("quality-integration-controls", [sys.executable, "-W", "error", "tests/t25_quality.py"], required_text="Ran 105 tests" if has_t09(ROOT) else "Ran 93 tests" if has_t08_contract(ROOT) or has_recovery(ROOT) else ("Ran 83 tests" if has_t08(ROOT) else ("Ran 73 tests" if has_t07(ROOT) else ("Ran 66 tests" if has_t21(ROOT) or has_t13(ROOT) else ("Ran 47 tests" if has_t06(ROOT) else "Ran 43 tests")))), required_stream="stderr")
         run("workflow-procedure-controls", [sys.executable, "-W", "error", "tests/procedure_schema.py"],
             required_text="run=103 failures=0 errors=0")
         run("workflow-site-sweep", [sys.executable, "tools/check-workflow-sites"],
@@ -1161,6 +1194,12 @@ def main():
             required_text="sites=20 killed=20 survived=0")
         run("bash-wrapper-controls", [sys.executable, "-W", "error", "tests/bash_wrapper.py"],
             required_text="run=161 failures=0 errors=0")
+        if not RUFF.is_file() or not os.access(RUFF, os.X_OK):
+            raise ValueError("Python lint needs ruff at " + str(RUFF) + "; the gate has no network fallback")
+        report["executables"]["ruff"] = {"path": str(RUFF), "sha256": digest(RUFF)}
+        run("ruff-identity", [str(RUFF), "--version"], required_text=RUFF_VERSION + "\n")
+        run("python-lint", python_lint_argv(RUFF, python_subjects(work, subject)),
+            required_text=RUFF_CLEAN)
         run("bash-site-sweep", [sys.executable, "tools/check-bash-sites"],
             required_text="sites=39 plants=45 killed=84 survived=0 drifted=0")
         run("pi-extension-controls", [sys.executable, "-W", "error", "tests/pi_extension.py"],
@@ -1329,7 +1368,7 @@ def main():
             if digest(ROOT / name) != subject[name] or digest(work / name) != subject[name]:
                 raise ValueError("Subject changed during quality checks: " + name)
         for name in ("python", "native-client-interpreter", "native-daemon-stand-in",
-                     "contract-client-interpreter", "contract-daemon-stand-in"):
+                     "contract-client-interpreter", "contract-daemon-stand-in", "ruff"):
             pin = report["executables"].get(name)
             if pin is not None and digest(Path(pin["path"])) != pin["sha256"]:
                 raise ValueError("Pinned interpreter changed during quality checks: " + name)

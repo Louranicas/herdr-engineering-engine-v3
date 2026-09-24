@@ -76,7 +76,7 @@ def assigned_states():
     found = []
     for node in ast.walk(ast.parse(Path(__file__).read_text())):
         if isinstance(node, ast.Dict):
-            found += [value.value for key, value in zip(node.keys, node.values)
+            found += [value.value for key, value in zip(node.keys, node.values, strict=True)
                       if isinstance(key, ast.Constant) and key.value == "state"
                       and isinstance(value, ast.Constant)]
         elif isinstance(node, ast.Assign) and isinstance(node.value, ast.Constant):

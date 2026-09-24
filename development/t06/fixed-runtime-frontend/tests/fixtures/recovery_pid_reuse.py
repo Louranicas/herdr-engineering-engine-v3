@@ -121,8 +121,8 @@ def inspect(inspector,path,name,evidence,record):
     argv=[str(inspector),'inspect-recovery',str(path/'store'),GEN,EPOCH,str(path/name)]
     child=subprocess.Popen(argv,stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.PIPE,close_fds=True)
     try:out,err=child.communicate(timeout=3)
-    except subprocess.TimeoutExpired:
-        record['unreaped'].append({'name':name,'pid':child.pid});raise Refused(f'{name} timeout')
+    except subprocess.TimeoutExpired as expired:
+        record['unreaped'].append({'name':name,'pid':child.pid});raise Refused(f'{name} timeout') from expired
     retain(evidence/(name+'-command.json'),{'argv':argv,'returncode':child.returncode,'stdout':list(out),'stderr':list(err)})
     if child.returncode!=0 or out or err:raise Refused(f'{name} rc={child.returncode} stderr={err!r}')
     return json.loads((path/name/'report.json').read_text())
@@ -259,7 +259,7 @@ def expect(mode,result,o,evidence):
 
 def main():
     if sys.argv[1]=='--init':
-        binary,inspector,mode,path,evidence=sys.argv[2:7];parent=dict(zip(('pid','user','mnt'),sys.argv[7:10]))
+        binary,inspector,mode,path,evidence=sys.argv[2:7];parent=dict(zip(('pid','user','mnt'),sys.argv[7:10],strict=True))
         return init(Path(binary),Path(inspector),mode,Path(path),Path(evidence),parent)
     binary,inspector,mode,path,evidence=map(str,sys.argv[1:]);path=Path(path);evidence=Path(evidence);evidence.mkdir()
     assert mode in MODES

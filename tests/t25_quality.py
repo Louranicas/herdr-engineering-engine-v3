@@ -19,6 +19,7 @@ import tempfile
 import time
 import unittest
 from unittest import mock
+import subprocess
 import sys
 import zipfile
 
@@ -230,7 +231,6 @@ Precompiling packages...
                 target.writestr(entry, data)
 
     def sqlite_fake_build(self, root, fault=None):
-        source = quality.sqlite_static
         archive, _, pins = self.sqlite_archive_fixture(root)
         tools = []
         for name in ("cc-fixture", "ar-fixture"):
@@ -708,6 +708,44 @@ Precompiling packages...
                 else:
                     result = quality.rust_offline.extract_archive(archive, destination, package)
                     self.assertIn("Cargo.toml", result)
+
+    def test_python_lint_names_each_planted_defect_by_its_rule(self):
+        # WF-10's negative control asserts on the rule's own diagnostic (F96/F130): a planted unused
+        # import and a planted blind assertRaises must each fail the step and be named, and the
+        # benign mirror must print the step's required text.
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            (root / "unused.py").write_text("import os\n")
+            (root / "blind.py").write_text(
+                "import unittest\n\n\nclass T(unittest.TestCase):\n"
+                "    def test(self):\n        with self.assertRaises(Exception):\n            pass\n")
+            (root / "clean.py").write_text("print('ok')\n")
+            planted = subprocess.run(quality.python_lint_argv(quality.RUFF, ["blind.py", "unused.py"]),
+                                     cwd=root, capture_output=True, text=True, check=False)
+            self.assertEqual(planted.returncode, 1, planted.stderr)
+            self.assertIn("unused.py:1:8: F401", planted.stdout)
+            self.assertIn("blind.py:6:14: B017", planted.stdout)
+            clean = subprocess.run(quality.python_lint_argv(quality.RUFF, ["clean.py"]),
+                                   cwd=root, capture_output=True, text=True, check=False)
+            self.assertEqual((clean.returncode, clean.stdout.strip()), (0, quality.RUFF_CLEAN))
+
+    def test_python_lint_reads_no_configuration_and_selects_only_defect_families(self):
+        self.assertEqual(quality.python_lint_argv(Path("/r"), ["a.py", "b"]),
+                         ["/r", "check", "--isolated", "--no-cache", "--select", "F,B",
+                          "--output-format", "concise", "--", "a.py", "b"])
+
+    def test_python_subjects_are_every_py_file_and_every_python3_script(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            (root / "tools").mkdir()
+            (root / "a.py").write_text("x = 1\n")
+            (root / "tools/check").write_text("#!/usr/bin/env python3\nx = 1\n")
+            (root / "tools/direct").write_text("#!/usr/bin/python3\nx = 1\n")
+            (root / "tools/shell").write_text("#!/usr/bin/env bash\ntrue\n")
+            (root / "lib.rs").write_text("fn main() {}\n")
+            self.assertEqual(
+                quality.python_subjects(root, ["lib.rs", "tools/shell", "tools/direct", "a.py", "tools/check"]),
+                ["a.py", "tools/check", "tools/direct"])
 
     def test_t02_data_and_archives_are_explicit_copied_subjects(self):
         paths = set(quality.quality_subject_paths(ROOT, time.monotonic() + 5, True))
@@ -1501,7 +1539,6 @@ class T06QualityInventoryControls(unittest.TestCase):
     def test_t21_partition_missing_duplicate_or_filtered_result_refuses(self):
         expected = quality.rust_test_expectations(ROOT)
         process = self.summary(22)
-        main = self.synthetic_combined_output(expected).replace(process, "", 1)
         for result in ("", process + process, process.replace("22 passed", "21 passed")):
             with self.subTest(result=result), self.assertRaisesRegex(ValueError, "Rust test count"):
                 quality.run_rust_test_partitions(ROOT, self.serve(expected, {"t21_process": result}), "cargo", [], "fixture", expected)
@@ -1774,11 +1811,11 @@ class T06QualityInventoryControls(unittest.TestCase):
         self.assertIn("if has_t08(ROOT):\n            report['executables']['native-client-interpreter']", text)
         self.assertIn("'resolved': str(Path(sys.executable).resolve(strict=True))", text)
         self.assertIn("Pinned interpreter changed during quality checks", text)
-        self.assertEqual(text.count("for name in ('python', 'native-client-interpreter', 'native-daemon-stand-in', 'contract-client-interpreter', 'contract-daemon-stand-in'):"), 1)
+        self.assertEqual(text.count("for name in ('python', 'native-client-interpreter', 'native-daemon-stand-in', 'contract-client-interpreter', 'contract-daemon-stand-in', 'ruff'):"), 1)
         # The recheck reads the pin's own path and digest, after the Rust commands.
         recheck = text.index("Pinned interpreter changed")
         self.assertGreater(recheck, text.index("run_rust_test_partitions(ROOT, run, cargo, common, label, test_expectations, parallel_main)"))
-        self.assertIn("required_text='Ran 102 tests' if has_t09(ROOT) else", text)
+        self.assertIn("required_text='Ran 105 tests' if has_t09(ROOT) else", text)
         self.assertIn("'Ran 93 tests' if has_t08_contract(ROOT) or has_recovery(ROOT) else", text)
 
     def test_t06_partition_holds_every_t06_target_once_and_nothing_else(self):

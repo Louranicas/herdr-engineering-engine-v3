@@ -21,7 +21,7 @@ import sys
 import unittest
 from pathlib import Path
 
-from jsonschema import Draft202012Validator
+from jsonschema import Draft202012Validator, ValidationError
 
 ROOT = Path(__file__).resolve().parents[1]
 SCHEMA_PATH = ROOT / "integrations/pi/pi-extension-v1.schema.json"
@@ -67,9 +67,12 @@ class SchemaShape(unittest.TestCase):
         self.assertFalse(binding["additionalProperties"])
 
     def test_any_host_binding_field_is_unspellable(self):
-        with self.assertRaises(Exception):
+        with self.assertRaises(ValidationError) as caught:
             Draft202012Validator(SCHEMA).validate(
                 package(host_binding={"register": "pi.register_tool"}))
+        self.assertEqual((caught.exception.validator, list(caught.exception.absolute_path)),
+                         ("additionalProperties", ["host_binding"]))
+        self.assertIn("'register' was unexpected", caught.exception.message)
 
     def test_the_schema_names_what_is_unqualified(self):
         # A gap stated in the artifact, so a reader of the schema alone cannot miss it.

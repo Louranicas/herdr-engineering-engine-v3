@@ -1,5 +1,5 @@
 """Finite local Pi peer + actual Rust parent loss; never invokes a provider."""
-import hashlib,importlib.util,json,os,select,signal,sqlite3,subprocess,sys,time
+import hashlib,importlib.util,json,os,select,sqlite3,subprocess,sys,time
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[5]
 GEN='07000000-0000-4000-8000-000000000001'
