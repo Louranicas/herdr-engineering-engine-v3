@@ -18,13 +18,19 @@
 #   * A missing producer is a failure, never an empty success. A wrapper that prints nothing
 #     and exits 0 because the thing it wraps was absent is the worst outcome available.
 #
-# Exit codes: 0 producer succeeded; 2 usage; 3 missing producer; 4 bounds; 5 chain timeout;
+# Exit codes: 0 producer succeeded; 2 usage; 3 missing producer or catalogue, or a
+# dependency/version mismatch; 4 bounds; 5 chain timeout;
 # 6 chain output contract; 128+n cancelled by signal n; otherwise the producer's own code,
 # passed through unchanged. A code alone cannot tell a producer's 5 from a chain timeout --
 # the chain's final `summary` record on stdout is the decisive verdict, and names which.
 set -euo pipefail
 
 readonly HEE3_WRAPPER_VERSION=1
+# The protocol this wrapper speaks. A catalogue whose request definitions name another is a
+# dependency/version mismatch, refused by name at every door -- not a request built from
+# whatever the catalogue says and left for the engine to reject.
+readonly CONTROL_PROTOCOL=hee3.control
+readonly CONTROL_VERSION=1
 readonly MAX_ARGS=64
 readonly MAX_VALUE_BYTES=8192
 readonly MAX_OUTPUT_BYTES=1048576
@@ -62,6 +68,8 @@ hee3 --check <action> [argument ...]
 hee3 chain <spec.json | ->         run a declared sequence of actions, in order
 hee3 --inspect <action>            that action's arguments and the producer it needs
 hee3 --version                     wrapper version and producer diagnostics
+hee3 --pin                         the digest of this wrapper and its catalogue, which a
+                                   chain holds every step to
 
 Arguments build a control-v1 request for the action:
   name=value         body field, this literal text
@@ -71,6 +79,8 @@ Values are never re-parsed as shell, so spaces, quotes, newlines, $(...) and ; a
 a :=JSON value is parsed strictly as JSON and as nothing else.
 Set HEE3_PRODUCER to the producer executable, HEE3_GRANT_ID and HEE3_SCOPE_SHA256 to the
 authority the request is made under, and optionally HEE3_TIMEOUT_MS (deadline, at most 60 s).
+The producer runs with only PATH, HOME, XDG_RUNTIME_DIR, LC_ALL, HEE3_CHAIN_STEP and
+HEE3_TIMEOUT_MS of the caller's environment.
 USAGE
 }
 
@@ -86,30 +96,62 @@ actions() {
     # real fault.
     # Python arrives through a quoted heredoc, as the chain runner's does: nothing in it can
     # expand, and a JSON key such as `$defs` is plainly data rather than a shell word.
-    names=$(python3 - "$CATALOGUE" <<'PY'
+    # Exit 2 is the one refusal the reader names itself: a request definition speaking another
+    # protocol or version, described on stdout.
+    names=$(python3 - "$CATALOGUE" "$CONTROL_PROTOCOL" "$CONTROL_VERSION" <<'PY'
 import json, sys
-with open(sys.argv[1], encoding="utf-8") as handle:
-    print("\n".join(json.load(handle)["$defs"]["ActionId"]["enum"]))
+catalogue, protocol, version = sys.argv[1], sys.argv[2], int(sys.argv[3])
+with open(catalogue, encoding="utf-8") as handle:
+    definitions = json.load(handle)["$defs"]
+for name in sorted(definitions):
+    if name.startswith("Request_"):
+        fields = definitions[name].get("properties", {})
+        found = (fields.get("protocol", {}).get("const"), fields.get("version", {}).get("const"))
+        # type(): True == 1 in Python, and a version of `true` is not version 1.
+        if found[0] != protocol or type(found[1]) is not int or found[1] != version:
+            print(f"{name} speaks {json.dumps(found[0])}/{json.dumps(found[1])}; "
+                  f"this wrapper speaks {json.dumps(protocol)}/{version}")
+            sys.exit(2)
+print("\n".join(definitions["ActionId"]["enum"]))
 PY
 ) || status=$?
     status=${status:-0}
+    (( status != 2 )) || fail "$EXIT_NO_PRODUCER" "dependency/version mismatch: $names"
     (( status == 0 )) || fail "$EXIT_NO_PRODUCER" "could not read the action catalogue (rc=$status)"
     [[ -n $names ]] || fail "$EXIT_NO_PRODUCER" "the action catalogue is empty"
     printf '%s\n' "$names"
 }
 
 is_admitted() {
-    local wanted=$1 name
+    local wanted=$1 name names
+    # Not `done < <(actions)`: a process substitution's exit status is lost, so an unreadable
+    # or mismatched catalogue became "unknown action" (exit 2) instead of its own refusal.
+    # `|| exit` because a caller's `||` suspends set -e inside this function.
+    names=$(actions) || exit "$?"
     while IFS= read -r name; do
         [[ $name == "$wanted" ]] && return 0
-    done < <(actions)
+    done <<<"$names"
     return 1
+}
+
+# The tuple a chain pins: the digest of the catalogue and of this file, read through stdin so
+# that sha256sum cannot escape an unusual file name into its output.
+pin() {
+    local file digest joined=
+    for file in "$CATALOGUE" "${BASH_SOURCE[0]}"; do
+        digest=$(sha256sum <"$file") || fail "$EXIT_NO_PRODUCER" "cannot digest $file"
+        joined+=${joined:+:}${digest%% *}
+    done
+    printf '%s\n' "$joined"
 }
 
 producer() {
     local path=${HEE3_PRODUCER:-}
     [[ -n $path ]] || fail "$EXIT_NO_PRODUCER" "HEE3_PRODUCER is unset; there is no producer to invoke"
     [[ -x $path ]] || fail "$EXIT_NO_PRODUCER" "producer is not executable: $path"
+    # The producer runs under `env -i`, which reads a NAME=value word as an assignment: it
+    # would print its environment and exit 0 without running the producer at all.
+    [[ $path != *=* ]] || fail "$EXIT_NO_PRODUCER" "producer path contains '=': $path"
     printf '%s' "$path"
 }
 
@@ -243,6 +285,13 @@ PY
 check_request() {
     local action=$1
     shift
+    # A chain's steps run under the tuple its check phase admitted, or not at all.
+    if [[ -n ${HEE3_PIN_SHA256:-} ]]; then
+        local now
+        now=$(pin) || exit "$?"
+        [[ $now == "$HEE3_PIN_SHA256" ]] || fail "$EXIT_NO_PRODUCER" \
+            "the catalogue or the wrapper changed since the chain was checked (pinned $HEE3_PIN_SHA256, now $now)"
+    fi
     (( $# <= MAX_ARGS )) || fail "$EXIT_BOUNDS" "$# arguments against a limit of $MAX_ARGS"
     local pair
     for pair in "$@"; do
@@ -251,6 +300,26 @@ check_request() {
     done
     is_admitted "$action" || fail "$EXIT_USAGE" "unknown action: $action"
     build_request "$action" "$@" || fail "$EXIT_USAGE" "could not build the request"
+}
+
+# A cancelling signal during an invocation: forward TERM to the producer, wait for it to end,
+# then exit 128+n. TERM whatever arrived, because an asynchronous command in a non-interactive
+# shell ignores INT, so forwarding INT would reach nothing. The producer is the last job
+# started, so `$!` names it from the moment it exists -- a variable assigned after `&` would
+# leave a window in which a signal found it unset. Before the producer starts, `$!` is head
+# (which TERM ends) or unset.
+#
+# The wait carries no budget of its own, deliberately: the wrapper does not report a
+# cancellation while its producer still runs, and a producer that ignores TERM is ended by
+# whoever supervises the wrapper -- the chain escalates to KILL on the step's whole group.
+cancel() {
+    # `|| true` on both: under set -e, a producer already gone (kill fails, wait reports 127)
+    # or one that exits non-zero would end the wrapper with THAT status instead of 128+n.
+    if [[ -n ${!-} ]]; then
+        kill -TERM "$!" 2>/dev/null || true
+        wait "$!" || true
+    fi
+    exit "$1"
 }
 
 invoke() {
@@ -266,31 +335,49 @@ invoke() {
     # The producer's stdout is bounded by head, in the stream, so an unbounded producer is
     # stopped rather than merely truncated after the fact.
     #
-    # The pipeline runs HERE, in this shell, and its result goes to a file. It cannot run
-    # inside `$(...)`: a command substitution is a subshell, so the parent's PIPESTATUS
-    # describes the assignment, not the pipeline, and the producer's status is lost. `|| true`
-    # is equally fatal -- it makes `true` the last command and PIPESTATUS becomes `(0)`.
-    # Both were in the first version of this function and ten cases caught them.
-    #
-    # stages[1] is the producer. head exits 0 whether the producer succeeded, failed, or was
-    # killed for exceeding the bound, so the LAST element is exactly the wrong one to read.
+    # The producer runs in the BACKGROUND and this shell waits for it. Bash runs a trap only
+    # after a foreground command ends, so a producer in the foreground never heard a TERM sent
+    # to this wrapper's pid alone: the wrapper waited on, the producer ran until its own
+    # timeout. `wait` is interrupted by a trapped signal, and the trap forwards it (review 7.3).
+    # The producer's status is `wait`'s, read from its own pid: it is never the last command
+    # of a pipeline, so head's zero -- head exits 0 whether the producer succeeded, failed, or
+    # was killed for exceeding the bound -- cannot stand in for it. The two meet at a FIFO.
     local scratch
     scratch=$(mktemp -d) || fail "$EXIT_BOUNDS" "could not create a scratch directory"
     # EXIT rather than RETURN, with the three cancelling signals turned into exits: bash runs
     # no trap at all when an untrapped signal kills it, so a cancelled invocation used to
     # leave its scratch directory behind. 128+n keeps "killed by a signal" legible to the
-    # caller. Bash defers the trap until the foreground pipeline ends, and the producer in
-    # that pipeline received the same signal when it was sent to the process group.
+    # caller.
     # shellcheck disable=SC2064  # the path is expanded now, deliberately: $scratch is local.
     trap "rm -rf -- '$scratch'" EXIT
-    trap 'exit 129' HUP
-    trap 'exit 130' INT
-    trap 'exit 143' TERM
+    trap 'cancel 129' HUP
+    trap 'cancel 130' INT
+    trap 'cancel 143' TERM
+    printf '%s' "$request" >"$scratch/request"
+    mkfifo -- "$scratch/stdout" || fail "$EXIT_BOUNDS" "could not create the output pipe"
+
+    # The environment is an allowlist: what the producer reads (XDG_RUNTIME_DIR, HOME), what
+    # makes it runnable with stable output (PATH, LC_ALL), and what a chain hands its step.
+    # A name the caller did not set stays unset rather than arriving empty.
+    local -a inherited=()
+    local name
+    for name in PATH HOME XDG_RUNTIME_DIR LC_ALL HEE3_CHAIN_STEP HEE3_TIMEOUT_MS; do
+        [[ ! -v $name ]] || inherited+=("$name=${!name}")
+    done
+
     set +e
-    printf '%s' "$request" | "$bin" "$action" | head -c "$MAX_OUTPUT_BYTES" >"$scratch/out"
-    local -a stages=("${PIPESTATUS[@]}")
+    head -c "$MAX_OUTPUT_BYTES" <"$scratch/stdout" >"$scratch/out" &
+    local reader=$!
+    # stdout is opened first: were the request's redirection to fail, the FIFO has still been
+    # opened and closed, so head sees end-of-file rather than waiting for a writer forever.
+    # The producer is the LAST job started, which is what lets `cancel` name it as `$!`.
+    # `--` first, so a producer path beginning with `-` is never read as an option of env's.
+    # Belt and braces today: bash always sets PATH, so an assignment precedes the path anyway.
+    env -i -- "${inherited[@]}" "$bin" "$action" >"$scratch/stdout" <"$scratch/request" &
+    wait "$!"
+    status=$?
+    wait "$reader"
     set -e
-    status=${stages[1]:-0}
 
     # `cat` the file rather than $(...) it: command substitution strips trailing newlines,
     # so a producer emitting two would have had one silently removed. A wrapper that edits
@@ -567,21 +654,31 @@ for index, step in enumerate(steps):
         milliseconds(step["timeout_ms"], f"{where}: timeout_ms", chain_ms)
     declared[sid] = step
 
+def check(argv, what):
+    """One local read of the wrapper, bounded like every check; its stdout if it succeeded."""
+    outcome, returncode, out, _ = run_child(argv, check_ms / 1000, dict(os.environ))
+    if STATE["signal"] is not None:
+        refuse("cancelled before any step ran", 128 + STATE["signal"])
+    if outcome != "done":
+        refuse(f"checking {what} did not finish in {check_ms} ms")
+    if returncode != 0:
+        refuse(f"{what} was refused before any step ran",
+               status_of(returncode))
+    return out
+
+
 # Every step through the one door before any step runs. An input's value is not known yet,
 # so its argument is checked by name with an empty value; its size is checked again, by the
 # same door, when the step runs.
 for step in steps:
-    argv = ["bash", wrapper, "--check", step["action"],
-            *(pair(name, value) for name, value in step["arguments"].items()),
-            *(f"{name}=" for name in step["inputs"])]
-    outcome, returncode, _, _ = run_child(argv, check_ms / 1000, dict(os.environ))
-    if STATE["signal"] is not None:
-        refuse("cancelled before any step ran", 128 + STATE["signal"])
-    if outcome != "done":
-        refuse(f"checking step {step['id']!r} did not finish in {check_ms} ms")
-    if returncode != 0:
-        refuse(f"step {step['id']!r} was refused before any step ran",
-               status_of(returncode))
+    check(["bash", wrapper, "--check", step["action"],
+           *(pair(name, value) for name, value in step["arguments"].items()),
+           *(f"{name}=" for name in step["inputs"])], f"step {step['id']!r}")
+
+# The tuple those checks admitted -- the digest of the catalogue and the wrapper, from the
+# wrapper's own `--pin` -- is handed to every step as HEE3_PIN_SHA256, and the request door
+# refuses a step whose files no longer match it. A change after the checks cannot reach a step.
+os.environ["HEE3_PIN_SHA256"] = check(["bash", wrapper, "--pin"], "the pin").decode().strip()
 
 
 def emit(record):
@@ -710,10 +807,20 @@ main() {
     case $1 in
         --help|-h) usage; exit 0 ;;
         --version)
+            # The catalogue is read BEFORE anything is printed, and its refusal is carried
+            # out: inside printf's argument its failure was lost, and an unreadable catalogue
+            # printed `catalogue_actions: 0` and exited 0.
+            local names
+            local -a listed
+            names=$(actions) || exit "$?"
+            mapfile -t listed <<<"$names"
             printf 'wrapper_version: %s\n' "$HEE3_WRAPPER_VERSION"
+            printf 'control_protocol: %s/%s\n' "$CONTROL_PROTOCOL" "$CONTROL_VERSION"
             printf 'producer: %s\n' "${HEE3_PRODUCER:-ABSENT}"
-            printf 'catalogue_actions: %s\n' "$(actions | wc -l)"
+            printf 'catalogue_actions: %s\n' "${#listed[@]}"
             exit 0 ;;
+        --pin) (( $# == 1 )) || fail "$EXIT_USAGE" "--pin takes no arguments"
+            pin; exit 0 ;;
         --actions) actions; exit 0 ;;
         --inspect)
             (( $# == 2 )) || fail "$EXIT_USAGE" "--inspect takes exactly one action"

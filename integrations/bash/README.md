@@ -12,13 +12,31 @@ hee3 chain <spec.json | ->         run a declared sequence of actions, in order
 hee3 --check <action> [...]        print the request that would be sent; send nothing
 hee3 --actions                     list the actions this wrapper can name
 hee3 --inspect <action>            that action's prerequisites and the bounds in force
-hee3 --version                     wrapper version and producer diagnostics
+hee3 --version                     wrapper version, control protocol and producer diagnostics
+hee3 --pin                         the digest of this wrapper and its catalogue
 ```
 
 `HEE3_PRODUCER` names the producer executable; `HEE3_GRANT_ID` and `HEE3_SCOPE_SHA256` name the
 authority every request is made under, and a request without them is refused by name. `HEE3_CATALOGUE` overrides where the action
 vocabulary is read from; the default is `schemas/actions/control-v1.schema.json`, so an
 action added to the engine is nameable here without anyone editing a list.
+
+**Dependency/version mismatch.** The wrapper speaks `hee3.control/1`. A catalogue with any
+`Request_*` definition whose `protocol` or `version` const says otherwise (including a version
+of `true`, which Python would compare equal to 1) is refused with exit 3 and
+`dependency/version mismatch: Request_<x> speaks "<p>"/<v>; this wrapper speaks "hee3.control"/1`
+at every door — invoke, `--check`, `--actions`, `--inspect`, `--version` and so every chain
+step. An unreadable catalogue is exit 3 at every door too, `--version` included (it once
+printed `catalogue_actions: 0` and exited 0). A version query of the producer itself belongs to
+the engine (T28) and is not made here.
+
+**Environment.** The producer runs under `env -i` with only `PATH`, `HOME`, `XDG_RUNTIME_DIR`,
+`LC_ALL`, `HEE3_CHAIN_STEP` and `HEE3_TIMEOUT_MS` of the caller's environment — what the engine
+reads (`XDG_RUNTIME_DIR` for its socket, `HOME` for `serve`), what makes it runnable with stable
+output, and what a chain hands its step. A name the caller did not set stays unset. The grant,
+scope and catalogue path have done their work in the request by then. A producer path
+containing `=` is refused (exit 3), because `env` would read it as an assignment, print its
+environment and exit 0 without running anything.
 
 ## Requests
 
@@ -52,9 +70,10 @@ precondition unchanged.
 **No eval, and no re-parsing of untrusted strings.** Values travel in arrays from `argv` to
 the producer, and the request is encoded by a JSON writer rather than built by
 concatenation. A value containing a space, a quote, a backslash, a newline, `$(...)`,
-backticks, `;` or `*` is a value. Fourteen cases assert on what *arrived* at the producer,
-not merely that nothing exploded — a wrapper that dropped, split or executed a value would
-pass a smoke test and fail every one of them.
+backticks, `;`, `*`, braces, `${...}` or `$VAR` is a value, as text and inside a `:=` JSON
+value alike. The cases assert on what *arrived* at the producer, and that its argv was exactly
+the action and nothing more — a wrapper that dropped, split, expanded or executed a value, or
+passed an extra argument, would pass a smoke test and fail them.
 
 **A missing producer is a failure.** Unset, absent or non-executable each exit 3 with a
 diagnostic. Printing nothing and exiting 0 because the wrapped thing was absent is the worst
@@ -81,10 +100,18 @@ pipeline. And `|| true` makes `true` the last command, which resets `PIPESTATUS`
 Ten of the fifty-two cases went red, including `a failing producer fails the wrapper through
 the pipe` — the one written for exactly this.
 
-The pipeline now runs in this shell, with its output going to a file, and `stages[1]` is read
-before anything else touches `PIPESTATUS`. Every producer code from 1 to 127 is passed
-through unchanged, a producer killed by a signal is not a success, and a producer that
-overruns the output bound dies of `SIGPIPE` rather than being quietly truncated into one.
+The pipeline then ran in this shell, with its output going to a file, and `stages[1]` was
+read before anything else touched `PIPESTATUS`. That left one hole (review 7.3, confirmed by a
+case that went red): bash runs a trap only after a *foreground* command ends, so a `TERM` sent
+to the wrapper's pid alone — not its group — never reached the producer, which ran on until its
+own timeout. The producer now runs in the background, writing into a FIFO that `head` bounds,
+and the wrapper `wait`s on the producer's own pid; its status is `wait`'s, never a pipeline's
+last element. A cancelling signal interrupts the `wait`, the trap forwards `TERM` to the
+producer (an asynchronous command ignores `INT`), waits for it, and exits 128+n. That wait has
+no budget of its own: a producer that ignores `TERM` is ended by whoever supervises the
+wrapper, as the chain does with `KILL` on the step's group. Every producer code from 1 to 127
+is passed through unchanged, a producer killed by a signal is not a success, and a producer
+that overruns the output bound dies of `SIGPIPE` rather than being quietly truncated into one.
 
 A second, smaller edit came from the same direction: `output=$(cat file)` strips trailing
 newlines, so a producer emitting `{}\n\n\n` had one silently removed. The wrapper now `cat`s
@@ -120,6 +147,12 @@ arrive after step 1 has had its effect. After each step, its declared output is 
 against what it actually produced: a `json` step must print one JSON document, and every
 field it `provides` must be present and a string. Coercing `5` to `"5"` would be the wrapper
 deciding what the producer meant, so it refuses instead.
+
+**The admitted tuple is pinned.** Each step is a fresh process that reads the catalogue and
+the wrapper again, so once every check has passed the chain takes `hee3 --pin` — the SHA-256 of
+the catalogue and of the wrapper — and hands it to every step as `HEE3_PIN_SHA256`. The request
+door refuses a step whose files no longer match (exit 3, `the catalogue or the wrapper changed
+since the chain was checked`), so no step runs under a tuple the checks did not admit.
 
 **Inputs stay literal.** A step's input is a named string field of an earlier step's output,
 passed on as one `name=value` argument — never spliced into a command, and bounded by the same
@@ -174,18 +207,20 @@ nothing, and needs no producer.
 Each bound is checked from both sides: 64 arguments must be accepted and 65 refused, or only
 the refusing half was ever tested.
 
-Exit codes: `0` producer succeeded · `2` usage · `3` missing producer · `4` bounds ·
+Exit codes: `0` producer succeeded · `2` usage · `3` missing producer or catalogue, or a
+dependency/version mismatch · `4` bounds ·
 `5` chain timeout · `6` chain output contract · `128+n` cancelled by signal n ·
 otherwise the producer's own code, unchanged.
 
 ## Scope
 
-`shellcheck` is not installed in this habitat, so the syntax check here is `bash -n`, which
-cannot see a missing `]`. That gap is stated rather than papered over; the 100 cases in
-`tests/bash_wrapper.py` drive the real script end to end against real producer fixtures,
-which is the stronger evidence available today. The chain runner was checked by 18
-planted mutants, one per rule, each required to fail the test named for it: 18 killed.
-The rules were enumerated by the author, so that is a floor, not a census.
+`shellcheck` reports nothing on the wrapper (measured 2026-09-24, before and after the
+dependency/environment/cancellation/pin slice); `bash -n` remains in the suite. The cases in
+`tests/bash_wrapper.py` drive the real script end to end against real producer fixtures.
+`tools/check-bash-sites` neuters every `refuse`/`finish` site of the chain runner and applies
+hand-named plants, each required to fail the test named for it (`sites=37 plants=37 killed=74
+survived=0` on 2026-09-24). The plants were enumerated by the author, so they are a floor,
+not a census; dropping env's `--` is recorded there as an equivalent mutant, with its reason.
 
 The suite invokes the wrapper as `bash integrations/bash/hee3`, not by executing it. The
 corpus publisher owns this file's mode — it is listed in `corpus/publication-outputs.json`

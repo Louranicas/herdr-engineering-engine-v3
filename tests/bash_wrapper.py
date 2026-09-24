@@ -14,6 +14,7 @@ mismatch"*, and each class below names which part it covers.
 """
 
 import ctypes
+import hashlib
 import json
 import os
 import shutil
@@ -34,6 +35,7 @@ EXIT_USAGE, EXIT_NO_PRODUCER, EXIT_BOUNDS, EXIT_TIMEOUT, EXIT_CONTRACT = 2, 3, 4
 RUN_BUDGET_S = 30
 PR_SET_CHILD_SUBREAPER = 36
 REAP_BUDGET_S = 10.0
+GRACE_S = 2.0  # the wrapper's GRACE_MS: how long a forwarded TERM may take to land
 LIVE_GRACE_S = 1.0
 TEST_GRANT = "123e4567-e89b-42d3-a456-00000000abcd"
 TEST_SCOPE = "sha256:" + "ab" * 32
@@ -283,14 +285,17 @@ class HostileValues(WrapperCase):
     ECHO = '''
         python3 -c '
 import json, sys
-print(json.dumps(json.load(sys.stdin)["body"], sort_keys=True))
-'
+print(json.dumps({"argv": sys.argv[1:], "body": json.load(sys.stdin)["body"]}, sort_keys=True))
+' "$@"
     '''
 
     def arrived(self, *pairs):
         result = self.run_wrapper("task.get", *pairs, producer=self.producer(self.ECHO))
         self.assertEqual(result.returncode, 0, result.stderr)
-        return json.loads(result.stdout)
+        echoed = json.loads(result.stdout)
+        # The producer's whole argv, not only $1: an extra argument would pass a $1 check.
+        self.assertEqual(echoed["argv"], ["task.get"])
+        return echoed["body"]
 
     def test_a_value_with_spaces_arrives_whole(self):
         self.assertEqual(self.arrived("note=two  spaces  here"),
@@ -324,6 +329,19 @@ print(json.dumps(json.load(sys.stdin)["body"], sort_keys=True))
 
     def test_an_empty_value_is_carried(self):
         self.assertEqual(self.arrived("note="), {"note": ""})
+
+    def test_braces_are_data(self):
+        self.assertEqual(self.arrived("note={a}"), {"note": "{a}"})
+
+    def test_a_braced_parameter_expansion_is_data(self):
+        self.assertEqual(self.arrived("note=${HOME}"), {"note": "${HOME}"})
+
+    def test_a_bare_parameter_expansion_is_data(self):
+        self.assertEqual(self.arrived("note=$HOME"), {"note": "$HOME"})
+
+    def test_braces_and_expansions_inside_a_typed_json_value_are_data(self):
+        self.assertEqual(self.arrived('note:="{a}"', 'home:="${HOME}"', 'map:={"k":"$HOME {b}"}'),
+                         {"note": "{a}", "home": "${HOME}", "map": {"k": "$HOME {b}"}})
 
     def test_unicode_survives(self):
         self.assertEqual(self.arrived("note=café — 日本語"), {"note": "café — 日本語"})
@@ -383,6 +401,41 @@ class Inspection(WrapperCase):
         self.assertEqual(result.returncode, 0)
         self.assertIn("wrapper_version: 1", result.stdout)
         self.assertIn("catalogue_actions: 21", result.stdout)
+
+    def test_version_reports_the_control_protocol_it_speaks(self):
+        result = self.run_wrapper("--version")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("control_protocol: hee3.control/1\n", result.stdout)
+
+    def test_version_with_an_unreadable_catalogue_is_a_failure(self):
+        # A count of zero with exit 0 would be the empty success the wrapper exists to refuse.
+        result = self.run_wrapper("--version", producer=self.producer("exit 0\n"),
+                                  env={"HEE3_CATALOGUE": str(self.work / "gone")})
+        self.assertEqual(result.returncode, EXIT_NO_PRODUCER, result.stdout)
+        self.assertIn("action catalogue is unreadable", result.stderr)
+        self.assertEqual(result.stdout, "")
+
+    def test_a_catalogue_of_another_protocol_or_version_is_refused_at_every_door(self):
+        marker = self.work / "invoked"
+        producer = self.producer(f"touch '{marker}'\n")
+        for field, value, speaks in (("version", 2, '"hee3.control"/2'),
+                                     ("version", True, '"hee3.control"/true'),
+                                     ("protocol", "hee3.other", '"hee3.other"/1')):
+            catalogue = json.loads(CATALOGUE.read_text())
+            catalogue["$defs"]["Request_task_get"]["properties"][field]["const"] = value
+            path = self.work / "catalogue.json"
+            path.write_text(json.dumps(catalogue))
+            for door in (("--version",), ("--actions",), ("--check", "health"), ("health",),
+                         ("--inspect", "health")):
+                with self.subTest(field=field, value=value, door=door):
+                    result = self.run_wrapper(*door, producer=producer,
+                                              env={"HEE3_CATALOGUE": str(path)})
+                    self.assertEqual(result.returncode, EXIT_NO_PRODUCER, result.stderr)
+                    self.assertIn("dependency/version mismatch: Request_task_get speaks "
+                                  f'{speaks}; this wrapper speaks "hee3.control"/1',
+                                  result.stderr)
+                    self.assertEqual(result.stdout, "")
+        self.assertFalse(marker.exists(), "a mismatched catalogue reached the producer")
 
     def test_version_names_an_absent_producer(self):
         self.assertIn("producer: ABSENT", self.run_wrapper("--version").stdout)
@@ -657,6 +710,100 @@ class Cleanup(WrapperCase):
         self.assertEqual(process.wait(timeout=10), 143)
         self.assertEqual(list(tmp.iterdir()), [])
 
+    def test_a_term_to_the_wrapper_alone_reaches_the_producer(self):
+        # Not the group: a supervisor that knows only the wrapper's pid signals only it. Bash
+        # runs a trap only after a FOREGROUND command ends, so a producer run in the foreground
+        # never hears of the cancellation and runs on until its own timeout.
+        started, heard = self.work / "started", self.work / "heard-term"
+        producer = self.producer(f"trap 'touch {shlex_quote(str(heard))}; exit 0' TERM\n"
+                                 f"touch '{started}'\nwhile :; do sleep 0.05; done\n")
+        process = subprocess.Popen(["bash", str(WRAPPER), "health"],
+                                   env=wrapper_environment(HEE3_PRODUCER=str(producer)),
+                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                   start_new_session=True)
+        self.addCleanup(stop_group, process)
+        wait_for(started)
+        os.kill(process.pid, signal.SIGTERM)
+        wait_for(heard, budget=GRACE_S)
+        self.assertEqual(process.wait(timeout=10), 143)
+
+
+def stop_group(process):
+    """Kill a case's whole session if it is still running, then collect it -- bounded."""
+    if process.poll() is None:
+        os.killpg(process.pid, signal.SIGKILL)
+    process.wait(timeout=10)
+    process.stdout.close()
+    process.stderr.close()
+
+
+class Environment(WrapperCase):
+    """*"Bound ... environment inheritance"*: the producer receives the declared names only.
+
+    The real producer reads XDG_RUNTIME_DIR (its socket) and HOME (`serve`); PATH and LC_ALL
+    make it runnable and its output stable; HEE3_CHAIN_STEP and HEE3_TIMEOUT_MS are what a
+    chain hands its step. Everything else -- the authority, the catalogue path, the caller's
+    own secrets -- has already done its work in the request, or has no business there.
+    """
+
+    DUMP = ("exec python3 -c 'import json, os; "
+            "print(json.dumps(dict(os.environ), sort_keys=True))'\n")
+    # What bash itself adds to every command it runs; not inherited from anyone.
+    BASH_OWN = frozenset({"PWD", "SHLVL", "_"})
+
+    def test_only_the_declared_names_reach_the_producer(self):
+        declared = {"PATH": os.environ["PATH"], "HOME": "/nonexistent/home",
+                    "XDG_RUNTIME_DIR": str(self.work), "LC_ALL": "C",
+                    "HEE3_CHAIN_STEP": "s1", "HEE3_TIMEOUT_MS": "4321"}
+        result = self.run_wrapper("health", producer=self.producer(self.DUMP),
+                                  env={**declared, "HEE3_UNRELATED_SECRET": "planted"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        seen = json.loads(result.stdout)
+        self.assertEqual({name: value for name, value in seen.items()
+                          if name not in self.BASH_OWN}, declared)
+
+    def test_an_unset_declared_name_stays_unset(self):
+        # Off the full set: a declared name the caller did not set must arrive absent, never
+        # as an empty value, and the planted names must still not arrive.
+        environment = wrapper_environment(HEE3_PRODUCER=str(self.producer(self.DUMP)),
+                                          HEE3_UNRELATED_SECRET="planted")
+        for name in ("HOME", "XDG_RUNTIME_DIR", "HEE3_CHAIN_STEP"):
+            environment.pop(name, None)
+        result = subprocess.run(["bash", str(WRAPPER), "health"], capture_output=True,
+                                text=True, env=environment, cwd=self.work, check=False,
+                                timeout=RUN_BUDGET_S)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        seen = json.loads(result.stdout)
+        self.assertEqual({name: value for name, value in seen.items()
+                          if name not in self.BASH_OWN},
+                         {"PATH": environment["PATH"], "LC_ALL": "C"})
+
+    def test_a_producer_path_beginning_with_a_dash_is_not_an_option(self):
+        # Relative to the working directory, as `[[ -x ]]` reads it; env must not parse it.
+        # A binary, not a script: a `#!/usr/bin/env bash` script at such a path is refused by
+        # bash itself, which reads the path the kernel hands it as an option.
+        directory = self.work / "-d"
+        directory.mkdir()
+        shutil.copy(shutil.which("echo"), directory / "producer")
+        result = self.run_wrapper("health", producer="-d/producer")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "health\n")
+
+    def test_a_producer_path_containing_an_equals_sign_is_refused(self):
+        # env reads a leading NAME=value word as an assignment: it would print its
+        # environment, exit 0 and never run the producer.
+        directory = self.work / "a=b"
+        directory.mkdir()
+        marker = self.work / "invoked"
+        path = directory / "producer"
+        path.write_text(f"#!/usr/bin/env bash\ntouch '{marker}'\n")
+        path.chmod(0o755)
+        result = self.run_wrapper("health", producer=path)
+        self.assertEqual(result.returncode, EXIT_NO_PRODUCER, result.stdout)
+        self.assertIn("contains '='", result.stderr)
+        self.assertEqual(result.stdout, "")
+        self.assertFalse(marker.exists())
+
 
 def wait_for(path, budget=10.0):
     """Every loop in a test needs a budget, and the failure names both numbers."""
@@ -685,7 +832,9 @@ class ChainCase(WrapperCase):
 
     The producer is a MODEL, not a script: it appends every call it receives -- action,
     step, budget and the arguments that arrived -- to a log, so a case asserts on what each
-    step was handed, not merely on the exit code the chain chose to report.
+    step was handed, not merely on the exit code the chain chose to report. Its log and
+    behaviour paths are written into it rather than read from the environment: the wrapper
+    hands a producer only the names it declares (`Environment`).
     """
 
     MODEL = r'''
@@ -705,7 +854,9 @@ PY
         self.log = self.work / "calls.jsonl"
         self.behaviours = self.work / "behaviour"
         self.behaviours.mkdir()
-        self.model = self.producer(self.MODEL, name="model")
+        self.model = self.producer(f"LOG={shlex_quote(str(self.log))}\n"
+                                   f"BEHAVIOUR_DIR={shlex_quote(str(self.behaviours))}\n"
+                                   + textwrap.dedent(self.MODEL), name="model")
 
     def behave(self, step, body):
         """What the model does for one step, after it has logged the call."""
@@ -723,14 +874,10 @@ PY
         path.write_text(json.dumps(document))
         return path
 
-    def environment(self):
-        return {"LOG": str(self.log), "BEHAVIOUR_DIR": str(self.behaviours)}
-
     def chain(self, steps, timeout_ms=20000, producer="model"):
         path = self.spec(steps, timeout_ms)
         return self.run_wrapper("chain", str(path),
-                                producer=self.model if producer == "model" else producer,
-                                env=self.environment())
+                                producer=self.model if producer == "model" else producer)
 
     def records(self, result):
         return [json.loads(line) for line in result.stdout.splitlines()]
@@ -770,7 +917,7 @@ class ChainOrder(ChainCase):
 
     def test_spec_can_be_read_from_stdin(self):
         path = self.spec([{"id": "only", "action": "health"}])
-        environment = wrapper_environment(HEE3_PRODUCER=str(self.model), **self.environment())
+        environment = wrapper_environment(HEE3_PRODUCER=str(self.model))
         result = subprocess.run(["bash", str(WRAPPER), "chain", "-"], input=path.read_text(),
                                 capture_output=True, text=True, env=environment,
                                 cwd=self.work, check=False, timeout=RUN_BUDGET_S)
@@ -819,8 +966,7 @@ class ChainFailure(ChainCase):
         self.assertEqual(self.records(result)[-1]["outcome"], "failed")
 
     def test_a_missing_producer_runs_nothing(self):
-        result = self.run_wrapper("chain", str(self.spec([{"id": "a", "action": "health"}])),
-                                  env=self.environment())
+        result = self.run_wrapper("chain", str(self.spec([{"id": "a", "action": "health"}])))
         self.assertEqual(result.returncode, EXIT_NO_PRODUCER)
         self.assertEqual(result.stdout, "")
         self.assertEqual(self.calls(), [])
@@ -842,6 +988,29 @@ class ChainContracts(ChainCase):
         self.assertFalse((self.work / "pwned").exists())
         self.assertFalse((self.work / "pwned2").exists())
         self.assertEqual(self.records(result)[0]["result"], {"task_id": hostile})
+
+    def test_a_parameter_expansion_in_a_declared_field_arrives_literal(self):
+        value = "${x} $HOME {a} ${HOME:-z}"
+        self.behave("find", f'printf "%s\\n" {shlex_quote(json.dumps({"t": value}))}\n')
+        result = self.chain([
+            {"id": "find", "action": "task.list", "output": "json", "provides": ["t"]},
+            {"id": "get", "action": "task.get",
+             "inputs": {"t": {"step": "find", "field": "t"}}}])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.calls()[1]["arguments"], {"t": value})
+
+    def test_an_undeclared_variable_does_not_reach_a_steps_producer(self):
+        seen = self.work / "seen.json"
+        self.behave("a", "python3 -c 'import json, os, sys; "
+                         "print(json.dumps(sorted(os.environ)))' >" + shlex_quote(str(seen)) + "\n")
+        path = self.spec([{"id": "a", "action": "health"}])
+        result = self.run_wrapper("chain", str(path), producer=self.model,
+                                  env={"HEE3_UNRELATED_SECRET": "planted"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        names = json.loads(seen.read_text())
+        self.assertNotIn("HEE3_UNRELATED_SECRET", names)
+        self.assertNotIn("HEE3_PIN_SHA256", names)
+        self.assertIn("HEE3_CHAIN_STEP", names)
 
     def test_literal_arguments_arrive_whole(self):
         value = "a=b; $(x)"
@@ -978,8 +1147,7 @@ class ChainSpec(ChainCase):
     def refused(self, document, needle, raw=None):
         path = self.work / "chain.json"
         path.write_text(raw if raw is not None else json.dumps(document))
-        result = self.run_wrapper("chain", str(path), producer=self.model,
-                                  env=self.environment())
+        result = self.run_wrapper("chain", str(path), producer=self.model)
         self.assertEqual(result.returncode, EXIT_USAGE, result.stderr)
         self.assertIn(needle, result.stderr)
         self.assertEqual(self.calls(), [])
@@ -1007,8 +1175,7 @@ class ChainSpec(ChainCase):
         text = json.dumps(self.base())
         path = self.work / "chain.json"
         path.write_text(text + " " * (65536 - len(text)))
-        result = self.run_wrapper("chain", str(path), producer=self.model,
-                                  env=self.environment())
+        result = self.run_wrapper("chain", str(path), producer=self.model)
         self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_an_unreadable_spec_is_refused(self):
@@ -1052,7 +1219,7 @@ class ChainSpec(ChainCase):
     def test_a_spec_that_is_not_utf8_is_refused(self):
         path = self.work / "chain.json"
         path.write_bytes(b'{"protocol": "\xff"}')
-        result = self.run_wrapper("chain", str(path), producer=self.model, env=self.environment())
+        result = self.run_wrapper("chain", str(path), producer=self.model)
         self.assertEqual(result.returncode, EXIT_USAGE)
         self.assertIn("the spec is not UTF-8", result.stderr)
 
@@ -1104,6 +1271,76 @@ class ChainSpec(ChainCase):
                                       {"id": "a", "action": "health"}]), "used twice")
         self.refused(self.base(steps=[{"id": "A b", "action": "health"}]), "[a-z0-9_-]")
         self.refused(self.base(steps=[{"id": "x" * 65, "action": "health"}]), "[a-z0-9_-]")
+
+
+class ChainPin(ChainCase):
+    """*"Keep the admitted package/protocol tuple pinned through every active attempt"*.
+
+    The check phase admits every step against one catalogue and one wrapper; each step is a
+    fresh process that reads both again. The chain records their digest once the checks
+    pass and every step is held to it, so a step cannot run under a tuple nobody checked.
+    """
+
+    def run_chain_changing(self, target, wrapper):
+        self.behave("a", f"printf '\\n' >>{shlex_quote(str(target))}\n")
+        path = self.spec([{"id": "a", "action": "health"}, {"id": "b", "action": "task.list"},
+                          {"id": "c", "action": "health"}])
+        environment = wrapper_environment(HEE3_PRODUCER=str(self.model),
+                                          HEE3_CATALOGUE=str(self.catalogue))
+        return subprocess.run(["bash", str(wrapper), "chain", str(path)], capture_output=True,
+                              text=True, env=environment, cwd=self.work, check=False,
+                              timeout=RUN_BUDGET_S)
+
+    def setUp(self):
+        super().setUp()
+        self.catalogue = self.work / "catalogue.json"
+        shutil.copyfile(CATALOGUE, self.catalogue)
+        self.wrapper = self.work / "hee3"
+        shutil.copyfile(WRAPPER, self.wrapper)
+
+    def assert_refused_at_the_second_step(self, result):
+        self.assertEqual(result.returncode, EXIT_NO_PRODUCER, result.stderr)
+        self.assertIn("the catalogue or the wrapper changed since the chain was checked",
+                      result.stderr)
+        self.assertEqual([call["step"] for call in self.calls()], ["a"])
+        summary = self.records(result)[-1]
+        self.assertEqual((summary["outcome"], summary["failed_step"], summary["status"],
+                          summary["ran"], summary["not_run"]),
+                         ("failed", "b", EXIT_NO_PRODUCER, ["a", "b"], ["c"]))
+
+    def test_a_catalogue_changed_after_the_checks_refuses_the_next_step(self):
+        self.assert_refused_at_the_second_step(
+            self.run_chain_changing(self.catalogue, self.wrapper))
+
+    def test_a_wrapper_changed_after_the_checks_refuses_the_next_step(self):
+        self.assert_refused_at_the_second_step(
+            self.run_chain_changing(self.wrapper, self.wrapper))
+
+    def test_an_unchanged_tuple_runs_every_step(self):
+        self.behave("a", "true\n")
+        path = self.spec([{"id": "a", "action": "health"}, {"id": "b", "action": "task.list"}])
+        environment = wrapper_environment(HEE3_PRODUCER=str(self.model),
+                                          HEE3_CATALOGUE=str(self.catalogue))
+        result = subprocess.run(["bash", str(self.wrapper), "chain", str(path)],
+                                capture_output=True, text=True, env=environment,
+                                cwd=self.work, check=False, timeout=RUN_BUDGET_S)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual([call["step"] for call in self.calls()], ["a", "b"])
+
+    def test_the_pin_is_the_digest_of_the_catalogue_and_the_wrapper(self):
+        # An independent digest: hashlib here, sha256sum in the wrapper.
+        result = self.run_wrapper("--pin", env={"HEE3_CATALOGUE": str(self.catalogue)})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        expected = ":".join(hashlib.sha256(path.read_bytes()).hexdigest()
+                            for path in (self.catalogue, WRAPPER))
+        self.assertEqual(result.stdout, expected + "\n")
+
+    def test_a_request_under_a_stale_pin_is_refused_by_name(self):
+        result = self.run_wrapper("--check", "health",
+                                  env={"HEE3_PIN_SHA256": "0" * 64 + ":" + "0" * 64})
+        self.assertEqual(result.returncode, EXIT_NO_PRODUCER)
+        self.assertIn("changed since the chain was checked (pinned " + "0" * 64, result.stderr)
+        self.assertEqual(result.stdout, "")
 
 
 class ChainTimeout(ChainCase):
@@ -1173,7 +1410,7 @@ class ChainCancellation(ChainCase):
         path = self.spec([{"id": "quick", "action": "health"},
                           {"id": "long", "action": "health"},
                           {"id": "after", "action": "health"}])
-        environment = wrapper_environment(HEE3_PRODUCER=str(self.model), **self.environment())
+        environment = wrapper_environment(HEE3_PRODUCER=str(self.model))
         process = subprocess.Popen(["bash", str(WRAPPER), "chain", str(path)], env=environment,
                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         wait_for(started)
@@ -1218,7 +1455,7 @@ class ChainBetweenSteps(ChainCase):
         self.behave("big", "head -c 300000 /dev/zero | tr '\\0' x\n")
         path = self.spec([{"id": "big", "action": "health"},
                           {"id": "next", "action": "health"}], timeout_ms)
-        environment = wrapper_environment(HEE3_PRODUCER=str(self.model), **self.environment())
+        environment = wrapper_environment(HEE3_PRODUCER=str(self.model))
         process = subprocess.Popen(["bash", str(WRAPPER), "chain", str(path)], env=environment,
                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         self.addCleanup(lambda: process.poll() is None and process.kill())
@@ -1266,7 +1503,7 @@ class ChainCheckPhase(ChainCase):
         fifo = self.work / "catalogue.fifo"
         os.mkfifo(fifo)
         path = self.spec([{"id": "a", "action": "health"}])
-        environment = wrapper_environment(HEE3_CATALOGUE=str(fifo), HEE3_PRODUCER=str(self.model), **self.environment())
+        environment = wrapper_environment(HEE3_CATALOGUE=str(fifo), HEE3_PRODUCER=str(self.model))
         process = subprocess.Popen(["bash", str(WRAPPER), "chain", str(path)], env=environment,
                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         self.addCleanup(lambda: process.poll() is None and process.kill())

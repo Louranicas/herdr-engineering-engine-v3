@@ -45,11 +45,12 @@ WORKERS = 8
 # (name, exact fragment, replacement, tests of which at least one must fail). Each fragment
 # must occur exactly once; a plant whose anchor has drifted is reported, never skipped.
 PLANTS = (
-    ("no-static-check", '    if returncode != 0:\n        refuse(f"step {step[\'id\']!r} was refused',
-     '    if False:\n        refuse(f"step {step[\'id\']!r} was refused',
+    ("no-static-check", '    if returncode != 0:\n        refuse(f"{what} was refused',
+     '    if False:\n        refuse(f"{what} was refused',
      ("test_an_unknown_action_in_a_late_step_stops_the_chain_before_the_first",)),
-    ("input-not-counted-upfront", '            *(f"{name}=" for name in step["inputs"])]',
-     "            ]", ("test_an_input_counts_toward_the_argument_bound_before_anything_runs",)),
+    ("input-not-counted-upfront",
+     '           *(f"{name}=" for name in step["inputs"])], f"step',
+     '           ], f"step', ("test_an_input_counts_toward_the_argument_bound_before_anything_runs",)),
     ("no-process-group", "start_new_session=True)", "start_new_session=False)",
      ("test_a_step_that_outruns_its_budget_is_stopped_with_its_descendants",)),
     ("step-budget-ignored", 'if step_s < left else (left, "chain")', 'if False else (left, "chain")',
@@ -89,6 +90,61 @@ PLANTS = (
     ("scratch-trap-on-return", "trap \"rm -rf -- '$scratch'\" EXIT",
      "trap \"rm -rf -- '$scratch'\" RETURN",
      ("test_a_terminated_invocation_removes_its_scratch_directory",)),
+    # Hostile values (braces, ${...}, $VAR) and the producer's exact argv.
+    ("producer-extra-argument", '"$bin" "$action" >"$scratch/stdout"',
+     '"$bin" "$action" extra >"$scratch/stdout"', ("test_a_value_with_spaces_arrives_whole",)),
+    ("value-expanded", "target[name] = strict(name, value) if typed else value",
+     "target[name] = strict(name, value) if typed else os.path.expandvars(value)",
+     ("test_a_bare_parameter_expansion_is_data", "test_a_braced_parameter_expansion_is_data")),
+    ("value-formatted", "target[name] = strict(name, value) if typed else value",
+     "target[name] = strict(name, value) if typed else value.format_map(os.environ)",
+     ("test_braces_are_data",)),
+    ("typed-value-expanded", "target[name] = strict(name, value) if typed",
+     "target[name] = strict(name, os.path.expandvars(value)) if typed",
+     ("test_braces_and_expansions_inside_a_typed_json_value_are_data",)),
+    ("input-expanded", "pairs += [f\"{name}={produced[source['step']][source['field']]}\"",
+     "pairs += [f\"{name}=\" + os.path.expandvars(produced[source['step']][source['field']])",
+     ("test_a_parameter_expansion_in_a_declared_field_arrives_literal",)),
+    # --version carries the catalogue's refusal out.
+    ("version-failure-lost", '            names=$(actions) || exit "$?"\n',
+     "            names=$(actions) || true\n",
+     ("test_version_with_an_unreadable_catalogue_is_a_failure",)),
+    # Dependency/version mismatch, at every door.
+    ("protocol-unchecked", "if found[0] != protocol or ", "if ",
+     ("test_a_catalogue_of_another_protocol_or_version_is_refused_at_every_door",)),
+    ("version-unchecked", " or found[1] != version:", ":",
+     ("test_a_catalogue_of_another_protocol_or_version_is_refused_at_every_door",)),
+    ("bool-is-a-version", "type(found[1]) is not int or ", "",
+     ("test_a_catalogue_of_another_protocol_or_version_is_refused_at_every_door",)),
+    ("admission-drops-catalogue-refusal", '    names=$(actions) || exit "$?"\n    while',
+     "    names=$(actions) || true\n    while",
+     ("test_a_catalogue_of_another_protocol_or_version_is_refused_at_every_door",)),
+    # The producer's environment is an allowlist.
+    ("environment-inherited", "env -i -- ", "env -- ",
+     ("test_only_the_declared_names_reach_the_producer",)),
+    ("unset-name-arrives-empty", '[[ ! -v $name ]] || inherited+=("$name=${!name}")',
+     'inherited+=("$name=${!name-}")', ("test_an_unset_declared_name_stays_unset",)),
+    # Not planted: dropping env's `--` is an EQUIVALENT mutant. Bash always sets PATH (it
+    # supplies a default when the caller has none), so PATH=... is always the first word after
+    # `env -i`, and a non-option word ends env's option parsing before the producer path.
+    ("equals-path-allowed", "[[ $path != *=* ]] ||", "true ||",
+     ("test_a_producer_path_containing_an_equals_sign_is_refused",)),
+    # A TERM to the wrapper alone reaches the producer, and the wrapper outlives it.
+    ("term-not-forwarded", '        kill -TERM "$!" 2>/dev/null || true\n', "        true\n",
+     ("test_a_term_to_the_wrapper_alone_reaches_the_producer",)),
+    ("cancel-does-not-wait", '        wait "$!" || true\n', "        true\n",
+     ("test_a_step_that_ignores_term_is_killed_within_the_grace",)),
+    # The admitted tuple is pinned through every step.
+    ("pin-not-handed-on", 'os.environ["HEE3_PIN_SHA256"] = check(', "_unused = check(",
+     ("test_a_catalogue_changed_after_the_checks_refuses_the_next_step",)),
+    ("pin-not-enforced", '[[ $now == "$HEE3_PIN_SHA256" ]] ||', "true ||",
+     ("test_a_request_under_a_stale_pin_is_refused_by_name",
+      "test_a_catalogue_changed_after_the_checks_refuses_the_next_step")),
+    ("pin-omits-the-wrapper", 'for file in "$CATALOGUE" "${BASH_SOURCE[0]}"; do',
+     'for file in "$CATALOGUE"; do', ("test_a_wrapper_changed_after_the_checks_refuses_the_next_step",)),
+    ("pin-omits-the-catalogue", 'for file in "$CATALOGUE" "${BASH_SOURCE[0]}"; do',
+     'for file in "${BASH_SOURCE[0]}"; do',
+     ("test_a_catalogue_changed_after_the_checks_refuses_the_next_step",)),
 )
 
 RUNNER = re.compile(r"runner=\$\(cat <<'PY'\n(.*?)\nPY\n\)", re.S)
