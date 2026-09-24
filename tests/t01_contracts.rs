@@ -3,9 +3,54 @@
 //! Table rows and property iterations do not multiply behavioral case credit.
 //! JSON framing/serialization, caller acquisition bounds, and authority are absent.
 
+use habitat_engine::contracts::rc01::{CLEANUP_RESERVE, MAX_ATTEMPTS, MAX_NO_PROGRESS, TASK_LIMIT};
 use habitat_engine::contracts::{
     Generation, ScalarError, Sha256Digest, U32Decimal, U64Decimal, UuidV4, parse_u64_decimal,
 };
+
+/// The published RC01 decision, read as text: the independent source for the limits' values.
+const DECISIONS: &str = include_str!("../docs/contract-decisions.md");
+
+/// The decimal (thousands separators allowed) that follows `marker` in the RC01 table row `row`.
+fn published(row: &str, marker: &str) -> Result<u64, String> {
+    let line = DECISIONS
+        .lines()
+        .find(|line| line.starts_with(row))
+        .ok_or(format!("no RC01 row {row:?}"))?;
+    let (_, rest) = line
+        .split_once(marker)
+        .ok_or(format!("row {row:?} has no {marker:?}"))?;
+    let digits: String = rest
+        .chars()
+        .take_while(|c| c.is_ascii_digit() || *c == ',')
+        .filter(char::is_ascii_digit)
+        .collect();
+    digits
+        .parse()
+        .map_err(|error| format!("{row:?} {marker:?}: {error}"))
+}
+
+/// The RC01 limits equal the figures the published decision states, so a policy change must edit
+/// the decision and the one definition together; every consumer (task guard, store, app) reads it.
+#[test]
+fn rc01_limits_equal_the_published_decision() -> Result<(), String> {
+    let loop_row = "| Attempts and loop |";
+    assert_eq!(u64::from(MAX_ATTEMPTS), published(loop_row, "At most ")?);
+    assert_eq!(TASK_LIMIT.as_secs(), published(loop_row, "attempts and ")?);
+    assert_eq!(
+        CLEANUP_RESERVE.as_secs(),
+        published(loop_row, "Reserve final ")?
+    );
+    assert_eq!(
+        u64::from(MAX_NO_PROGRESS),
+        published("| No-progress stop |", "Stop after ")?
+    );
+    assert_eq!(
+        TASK_LIMIT.subsec_nanos() + CLEANUP_RESERVE.subsec_nanos(),
+        0
+    );
+    Ok(())
+}
 
 #[test]
 fn empty_decimal_has_its_own_refusal() {

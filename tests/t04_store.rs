@@ -883,6 +883,79 @@ fn conflicting_event_identity_rolls_back_new_task_and_reservations() {
     assert_eq!(count(&area, "events"), 1);
 }
 
+/// The frozen migration's own CHECK on `tasks.limit_ms` is a second door on RC01's task limit that
+/// cannot import it; pin it to the one definition at the boundary, on a real ledger row.
+#[test]
+fn frozen_limit_check_agrees_with_the_rc01_task_limit() {
+    let area = Area::new();
+    let mut store = area.open();
+    admit(&mut store);
+    drop(store);
+    let limit = u64::try_from(crate::contracts::rc01::TASK_LIMIT.as_millis()).unwrap();
+    let db = Connection::open_with_flags(
+        area.database(),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_NOFOLLOW,
+    )
+    .unwrap();
+    let set = |value: u64| {
+        db.execute(
+            "UPDATE tasks SET limit_ms=? WHERE id=?",
+            params![i64::try_from(value).unwrap(), TASK],
+        )
+    };
+    assert_eq!(set(limit).unwrap(), 1);
+    let over = set(limit + 1).unwrap_err();
+    assert!(matches!(Error::from(over), Error::Constraint));
+    let stored: i64 = db
+        .query_row("SELECT limit_ms FROM tasks", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(u64::try_from(stored).unwrap(), limit);
+}
+
+/// RC01's task bound is inclusive at the ledger's own door: exactly 1,200,000 ms (the published
+/// figure, written here as a literal) is admitted; one more is `Bound` (pinned below).
+#[test]
+fn admission_admits_exactly_the_published_task_limit() {
+    let area = Area::new();
+    let mut store = area.open();
+    let owner = principal();
+    let mut request = submission(&owner);
+    request.allocation = Allocation {
+        limit_ms: 1_200_000,
+        work_ms: 900_000,
+        verify_ms: 300_000,
+    };
+    assert_eq!(store.submit(request, deadline()).unwrap().sequence, 1);
+    assert_eq!(count(&area, "tasks"), 1);
+}
+
+/// An admission may reserve no work time (only verification); such a task is refused an attempt
+/// for lack of work budget, while its verification reservation alone does not open one.
+#[test]
+fn zero_work_reservation_refuses_an_attempt_on_budget() {
+    let area = Area::new();
+    let mut store = area.open();
+    let owner = principal();
+    let mut request = submission(&owner);
+    request.allocation = Allocation {
+        limit_ms: 1000,
+        work_ms: 0,
+        verify_ms: 200,
+    };
+    store.submit(request, deadline()).unwrap();
+    assert!(matches!(
+        store.begin_attempt(
+            uuid(TASK),
+            revision(1),
+            uuid(ATTEMPT),
+            uuid(STARTED),
+            deadline()
+        ),
+        Err(Error::Budget)
+    ));
+    assert_eq!(count(&area, "attempts"), 0);
+}
+
 #[test]
 fn admission_allocation_bounds_preserve_verification_reservation() {
     let area = Area::new();

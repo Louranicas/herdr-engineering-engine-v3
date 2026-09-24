@@ -333,11 +333,9 @@
 use crate::contracts::Generation;
 use std::{fmt, time::Duration};
 
-/// Fixed RC01 limits for `rust-library-change/1`.
-pub const TASK_LIMIT: Duration = Duration::from_mins(20);
-pub const CLEANUP_RESERVE: Duration = Duration::from_mins(5);
-pub const MAX_ATTEMPTS: u8 = 3;
-pub const MAX_NO_PROGRESS: u8 = 2;
+/// Fixed RC01 limits for `rust-library-change/1`: this guard's policy, defined in
+/// [`crate::contracts::rc01`] so the store can enforce the same values without importing task.
+pub use crate::contracts::rc01::{CLEANUP_RESERVE, MAX_ATTEMPTS, MAX_NO_PROGRESS, TASK_LIMIT};
 
 /// Pure pre-dispatch refusal; it does not report worker or effect settlement.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

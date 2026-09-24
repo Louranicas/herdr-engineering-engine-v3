@@ -320,6 +320,7 @@ pub use roster::{RequestSource, RosterAttempt, RosterSnapshot, RosterStart};
 pub use artifact::Object;
 pub use backup::{BackupReport, RestoreStatus};
 
+use crate::contracts::rc01::{MAX_ATTEMPTS, TASK_LIMIT};
 use crate::contracts::{Generation, Sha256Digest, UuidV4};
 use artifact::Directory;
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
@@ -501,7 +502,7 @@ pub struct Allocation {
 impl Allocation {
     fn valid(self) -> bool {
         self.limit_ms > 0
-            && self.limit_ms <= 1_200_000
+            && u128::from(self.limit_ms) <= TASK_LIMIT.as_millis()
             && self.verify_ms > 0
             && self
                 .work_ms
@@ -1340,7 +1341,7 @@ fn begin_attempt_in(
         [task.as_str()],
         |row| read_number(row, 0),
     )?;
-    if count >= 3 {
+    if count >= u64::from(MAX_ATTEMPTS) {
         return Err(Error::Bound);
     }
     let outstanding: bool = tx.query_row(

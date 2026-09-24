@@ -3,6 +3,7 @@
 use crate::app::workload::{self, Plan, Run};
 use crate::contracts::{Generation, ScalarError, UuidV4};
 use crate::store::{self, Principal, Store, TaskHead};
+use crate::task::TASK_LIMIT;
 use crate::worker::resources::Scope;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::Ordering;
@@ -12,7 +13,6 @@ use std::sync::mpsc::{
 use std::time::{Duration, Instant};
 
 const POLL: Duration = Duration::from_millis(100);
-const TASK_LIMIT: Duration = Duration::from_mins(20);
 const MAX_COMMANDS: usize = 12_001;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
