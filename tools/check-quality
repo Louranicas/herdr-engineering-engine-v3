@@ -450,6 +450,13 @@ def has_t05(root):
              for name in ("src/contracts/roster.rs", "src/store/roster.rs", "tests/t05_store.rs", "tests/t05_codec.rs", "tests/t05_roster.rs")))
 
 
+def validate_t05_features_at(metadata, root):
+    """The reviewed T05 tuple for the tree at `root`, with that tree's own feature flags: the one
+    call both this gate and check-store-mutations make, so the two cannot disagree about the flags
+    (A25: the mutation campaign had called the bare tuple since T06/IPC01 and refused before running)."""
+    validate_t05_features(metadata, t06=has_t06(root), t21=has_t21(root), ipc01=has_ipc01(root))
+
+
 def validate_t05_features(metadata, *, t06=False, t21=False, ipc01=False):
     """Compare resolved metadata with the reviewed T05 package/feature tuple."""
     raw_nodes = metadata["resolve"]["nodes"]
@@ -1218,8 +1225,7 @@ def main():
         cargo = str(binaries["cargo"])
         metadata = run("offline-dependency-resolution", [cargo, "metadata", "--locked", "--offline", "--format-version=1"])
         if test_expectations["has_t05"]:
-            validate_t05_features(json.loads(metadata["stdout"]), t06=has_t06(ROOT), t21=has_t21(ROOT),
-                                  ipc01=has_ipc01(ROOT))
+            validate_t05_features_at(json.loads(metadata["stdout"]), ROOT)
         if test_expectations["has_t04"]:
             sqlite_static.validate_features(json.loads(metadata["stdout"]))
             report["sqlite_static"] = {}

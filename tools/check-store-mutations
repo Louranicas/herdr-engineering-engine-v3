@@ -273,7 +273,7 @@ def main():
         cargo = str(binaries["cargo"])
         metadata = run("offline-dependency-resolution", [cargo, "metadata", "--locked", "--offline", "--format-version=1"])
         if profile["expectations"].get("has_t05"):
-            quality.validate_t05_features(json.loads(metadata["stdout"]))
+            quality.validate_t05_features_at(json.loads(metadata["stdout"]), ROOT)
         quality.sqlite_static.validate_features(json.loads(metadata["stdout"]))
         report["sqlite_static"] = {}
         environment.update(quality.sqlite_static.build(
