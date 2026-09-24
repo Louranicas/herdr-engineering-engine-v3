@@ -36,6 +36,11 @@ MAX_TOTAL_SECONDS = 86_400
 MAX_TOTAL_TOKENS = 10_000_000
 MAX_IDENTIFIER = 128
 MAX_TEXT = 4096
+# The command line reads at most this many bytes of a procedure file before parsing it. The
+# largest schema-valid procedure is about 1.1 MB unescaped (64 steps of notes and 32
+# dependencies, 64 criteria of two texts); \u-escaping can grow text sixfold, so 8 MiB admits
+# every valid procedure and still refuses a file before it is read whole.
+MAX_PROCEDURE_BYTES = 8 * 1024 * 1024
 
 STEP_STATES = (
     # `effect_unknown` is a state, not an error: a step whose service effect could not be
@@ -45,15 +50,19 @@ STEP_STATES = (
     "cancelled", "effect_unknown",
 )
 DISPOSITIONS = ("completion_candidate", "repair", "blocked")
+# Only reasons `join()` can emit. `dissent` and `stale_version` were declared here with no
+# input that could produce them: a join against another procedure version is REFUSED as
+# `stale_procedure_version`, not blocked, and this module takes no dissent input. A declared
+# reason nothing emits is a promise to the reader that nothing keeps (WF-02).
 BLOCK_REASONS = (
-    "missing_child", "unmet_acceptance", "dissent", "stale_version",
-    "resource_exhausted", "unreconciled_effect",
+    "missing_child", "unmet_acceptance", "resource_exhausted", "unreconciled_effect",
 )
 REFUSALS = (
     "cycle", "missing_step", "duplicate_step", "unknown_action",
     "unsupported_action_version", "stale_procedure_version", "fanout_exceeded",
     "dependency_limit", "retry_limit", "time_limit", "resource_limit",
-    "unreconciled_effect", "identity_mismatch",
+    "unreconciled_effect", "identity_mismatch", "duplicate_criterion",
+    "malformed_procedure",
 )
 
 
@@ -73,6 +82,29 @@ def catalogue_actions():
     )
 
 
+def catalogue_action_versions(actions):
+    """The version the catalogue serves of each admitted action, from its request definition.
+
+    Every request definition pins `action` and `action_version` as constants. The map is read
+    from those rather than assumed to be 1, and an admitted action with no pinned version, or
+    with two that disagree, stops the generator instead of being guessed.
+    """
+    schema = json.loads(CATALOGUE.read_text())
+    versions = {}
+    for definition in schema.get("$defs", {}).values():
+        properties = definition.get("properties", {}) if isinstance(definition, dict) else {}
+        action = properties.get("action", {}).get("const")
+        version = properties.get("action_version", {}).get("const")
+        if action is None or version is None:
+            continue
+        if versions.setdefault(action, version) != version:
+            raise SystemExit(f"{CATALOGUE} pins {action!r} at two versions")
+    missing = [action for action in actions if action not in versions]
+    if missing:
+        raise SystemExit(f"{CATALOGUE} pins no action_version for {missing}")
+    return {action: versions[action] for action in actions}
+
+
 def ident(description):
     return {
         "type": "string", "minLength": 1, "maxLength": MAX_IDENTIFIER,
@@ -90,6 +122,7 @@ def count(maximum, description):
 
 def build():
     actions = catalogue_actions()
+    versions = catalogue_action_versions(actions)
     return {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "$id": "https://hee3.local/schemas/workflows/procedure-v1.schema.json",
@@ -163,7 +196,15 @@ def build():
                             "not in the catalogue cannot be spelled here at all."
                         ),
                     },
-                    "action_version": {"type": "integer", "minimum": 1},
+                    "action_version": {
+                        "type": "integer", "minimum": 1,
+                        "description": (
+                            "Must equal the version the catalogue serves of this action, "
+                            "listed under `hee3.action_versions`; any other pin is "
+                            "`unsupported_action_version` here rather than a refusal at the "
+                            "receiver."
+                        ),
+                    },
                     "depends_on": {
                         "type": "array", "maxItems": MAX_DEPENDENCIES, "uniqueItems": True,
                         "items": ident("Another step_id in this procedure."),
@@ -176,7 +217,12 @@ def build():
                     },
                     "required": {
                         "type": "boolean", "default": True,
-                        "description": "Whether the join may close without this step's outcome.",
+                        "description": (
+                            "Whether the join may close without this step's outcome. An "
+                            "optional step may be absent or failed; one in `effect_unknown` "
+                            "still blocks the join, because optional means the parent can "
+                            "close without the effect, not over an unresolved one."
+                        ),
                     },
                     "retry": {
                         "type": "object", "additionalProperties": False,
@@ -227,7 +273,9 @@ def build():
                 "max_steps": MAX_STEPS, "max_fanout": MAX_FANOUT,
                 "max_dependencies": MAX_DEPENDENCIES, "max_retries": MAX_RETRIES,
                 "max_total_seconds": MAX_TOTAL_SECONDS, "max_total_tokens": MAX_TOTAL_TOKENS,
+                "max_procedure_bytes": MAX_PROCEDURE_BYTES,
             },
+            "action_versions": versions,
             "action_catalogue": {
                 "source": "schemas/actions/control-v1.schema.json",
                 "count": len(actions),
