@@ -16,6 +16,7 @@
 use super::{Generation, Sha256Digest, UuidV4, parse_u64_decimal};
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
+use std::collections::BTreeSet;
 use std::io::{self, Read};
 
 /// The largest frame payload, excluding its terminal LF (RC03 §3).
@@ -276,16 +277,17 @@ impl Scanner<'_> {
             self.at += 1;
             return Ok(());
         }
-        let mut names: Vec<String> = Vec::new();
+        // An ordered set, so one bound-sized frame of ~10^5 names costs n log n comparisons,
+        // not the n^2 a rescan per member would (CON-04; LRN03).
+        let mut names: BTreeSet<String> = BTreeSet::new();
         loop {
             if self.peek() != Some(b'"') {
                 return Err(self.stray());
             }
             let name = self.string()?;
-            if names.contains(&name) {
+            if !names.insert(name) {
                 return Err(FrameFault::DuplicateName);
             }
-            names.push(name);
             self.expect(b':')?;
             self.value(depth)?;
             match self.peek() {

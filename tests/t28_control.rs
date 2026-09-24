@@ -769,6 +769,53 @@ fn the_frame_rules_admit_their_boundaries_from_the_other_side() {
     );
 }
 
+/// One object filled to within one member of [`MAX_FRAME_BYTES`] with distinct four-letter names
+/// (`aaaa`, `aaab`, ...), closed by a member named `last`. Returns the payload and how many
+/// members it holds.
+fn wide_object(last: &str) -> (Vec<u8>, usize) {
+    let closing = format!("\"{last}\":0}}");
+    let mut payload = b"{".to_vec();
+    let mut members = 0_usize;
+    while payload.len() + 9 + closing.len() <= MAX_FRAME_BYTES {
+        let mut name = [b'a'; 4];
+        let mut rest = members;
+        for slot in name.iter_mut().rev() {
+            *slot = b"abcdefghijklmnopqrstuvwxyz"[rest % 26];
+            rest /= 26;
+        }
+        payload.push(b'"');
+        payload.extend_from_slice(&name);
+        payload.extend_from_slice(b"\":0,");
+        members += 1;
+    }
+    payload.extend_from_slice(closing.as_bytes());
+    (payload, members + 1)
+}
+
+#[test]
+fn a_bound_sized_object_is_judged_on_its_last_member_against_its_first() -> Outcome {
+    // CON-04: one frame of about 116 000 distinct names is admissible before any grant check,
+    // so duplicate detection must not rescan every earlier name per member. The duplicate is the
+    // last member repeating the first, so only a check over the whole object can see it, and the
+    // mirror differs only in that name. Both judge results only; there is no timing budget.
+    let (duplicate, members) = wide_object("aaaa");
+    assert!(
+        duplicate.len() > MAX_FRAME_BYTES - 9 && duplicate.len() <= MAX_FRAME_BYTES,
+        "frame {} bytes against a bound of {MAX_FRAME_BYTES}",
+        duplicate.len()
+    );
+    assert_eq!(
+        admit_object(&duplicate).err(),
+        Some(FrameFault::DuplicateName)
+    );
+    let (distinct, same) = wide_object("zzzz");
+    assert_eq!((distinct.len(), same), (duplicate.len(), members));
+    let admitted = admit_object(&distinct).map_err(|fault| format!("{fault:?}"))?;
+    assert_eq!(admitted.len(), members, "every distinct member admitted");
+    assert_eq!(admitted.get("zzzz"), Some(&json!(0)));
+    Ok(())
+}
+
 #[test]
 fn a_version_outside_its_domain_is_invalid_and_one_inside_it_is_unsupported() -> Outcome {
     // RC03 §2: a version is an integer in 1..=65535. Zero and 65536 are not versions at all;
