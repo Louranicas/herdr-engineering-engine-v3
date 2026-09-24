@@ -2411,6 +2411,16 @@ publish = false
 autobins = false
 autotests = false
 
+# Enforcement lives in the manifest, not only in the gate's command line (operator-delegated
+# decision #19, 2026-09-24): any `cargo build`/`clippy` of this package refuses warnings and
+# pedantic findings. `unsafe_code` is also forbidden by src/lib.rs.
+[lints.rust]
+warnings = "deny"
+unsafe_code = "forbid"
+
+[lints.clippy]
+pedantic = { level = "deny", priority = -1 }
+
 [lib]
 name = "habitat_engine"
 path = "src/lib.rs"
