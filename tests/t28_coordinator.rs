@@ -191,6 +191,7 @@ fn each_reconciliation_is_classified_and_the_pass_reports_what_it_left() {
         reason: Unknown::HistoryContradictory,
         process: ProcessCustody::Absent,
         cancellation_pending: false,
+        workspace: None,
     };
     let settled = [
         Reconciliation::StaleObservationRefused {

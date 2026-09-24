@@ -1168,6 +1168,17 @@ fn absent_worker_after_acknowledgement_is_acknowledged_worker_lost() {
         body(&r.records()[0])["handed"]["acknowledgement"],
         json!({"correlated": {"generation": 1}})
     );
+    // With no workspace refusal to carry, the record's decision is the pre-REC-G2 shape exactly:
+    // durable record bytes of every other retained decision are unchanged.
+    assert_eq!(
+        body(&r.records()[0])["decision"],
+        json!({
+            "decision": "retain_unknown",
+            "reason": {"reason": "acknowledged_worker_lost", "generation": 1},
+            "process": {"custody": "absent"},
+            "cancellation_pending": false,
+        })
+    );
 }
 
 /// `T07-AP-16` · no acknowledgement record at all → unrecorded, still unknown.
@@ -1186,21 +1197,20 @@ fn absent_worker_without_acknowledgement_record_is_unrecorded() {
 
 // ---- workspace reuse: lease expiry alone never licenses it -----------------------------------
 
+/// The absent worker's effect stays unknown (R08, acknowledgement unrecorded in these fixtures)
+/// and R09's refusal of its still-writable workspace rides beside it, never in its place.
 fn reuse_refused(entry: &Entry, reason: &ReuseRefusal) {
-    assert_eq!(entry.decision.rule, Rule::R09WorkspaceReuse, "{entry:#?}");
+    assert_eq!(entry.decision.rule, Rule::R08WorkerAbsent, "{entry:#?}");
     assert_eq!(
         entry.decision.reconciliation,
-        Reconciliation::WorkspaceReuseRefused {
-            reason: reason.clone(),
+        Reconciliation::RetainUnknown {
+            reason: Unknown::AcknowledgementUnrecorded,
             process: ProcessCustody::Absent,
+            cancellation_pending: false,
+            workspace: Some(reason.clone()),
         }
     );
-    assert_eq!(
-        entry.action,
-        Some(Action::ReuseRefused {
-            reason: reason.clone()
-        })
-    );
+    assert_eq!(entry.action, Some(Action::RetainedUnknown));
     assert_eq!(entry.records.len(), 1);
 }
 
@@ -1228,7 +1238,8 @@ fn literal_identity_is_unobserved_before_the_workspace_is_considered() {
 }
 
 /// `T07-AP-18` · absent worker, writable workspace, lease held by the roster,
-/// no clock at startup → refused as clock unavailable, by rule R09.
+/// no clock at startup → R08 keeps the effect unknown and carries R09's refusal as clock
+/// unavailable.
 #[test]
 fn leased_writable_workspace_without_clock_is_refused_clock_unavailable() {
     let mut r = Rig::rostered(IDENTITY, 60_000);
@@ -1238,7 +1249,7 @@ fn leased_writable_workspace_without_clock_is_refused_clock_unavailable() {
     reuse_refused(entry, &ReuseRefusal::ClockUnavailable);
     assert_eq!(entry.handed.clock_epoch, None);
     assert_eq!(
-        body(&r.records()[0])["decision"]["reason"]["reason"],
+        body(&r.records()[0])["decision"]["workspace"]["reason"],
         "clock_unavailable"
     );
 }
@@ -1321,6 +1332,57 @@ fn released_workspace_of_absent_worker_falls_to_the_acknowledgement_rule() {
         &Unknown::DispatchUnacknowledged,
         &ProcessCustody::Absent,
     );
+}
+
+/// `T07-AP-89` · REC-G2: a running attempt whose worker is gone, whose effect is still pending
+/// and whose workspace is still writable leaves an unknown outcome AND a refused workspace. The
+/// refusal must not hide the unknown: the decision keeps R08's acknowledgement class, carries
+/// the R09 refusal beside it, and `health` reports recovery pending, never complete.
+#[test]
+fn a_writable_workspace_does_not_hide_an_absent_workers_unknown_effect() {
+    let mut r = Rig::rostered(IDENTITY, 60_000);
+    assert_eq!(
+        r.area.attempt_row(),
+        ("running".into(), "pending".into(), "pending".into())
+    );
+    let mut world = World::new()
+        .with_workspace(WorkspaceReadback::Writable { bytes: 4096 })
+        .with_acknowledgement(Acknowledgement::Correlated { generation: 1 });
+    let pass = r.pass(&mut world);
+    let entry = only(&pass);
+    assert_eq!(
+        entry.decision,
+        habitat_engine::recovery::Decision {
+            rule: Rule::R08WorkerAbsent,
+            reconciliation: Reconciliation::RetainUnknown {
+                reason: Unknown::AcknowledgedWorkerLost { generation: 1 },
+                process: ProcessCustody::Absent,
+                cancellation_pending: false,
+                workspace: Some(ReuseRefusal::ClockUnavailable),
+            },
+        }
+    );
+    assert_eq!(entry.action, Some(Action::RetainedUnknown));
+    assert!(world.calls_of("clean").is_empty() && world.calls_of("attach").is_empty());
+    assert_eq!(
+        habitat_engine::app::coordinator::health_of(Ok(&pass), 1_234),
+        habitat_engine::contracts::control::Health {
+            recovery: habitat_engine::contracts::control::Recovery::Pending,
+            database: habitat_engine::contracts::control::Database::Ready,
+            socket: habitat_engine::contracts::control::Socket::Owned,
+            checked_unix_ms: 1_234,
+        }
+    );
+    let record = body(&r.records()[0]);
+    assert_eq!(
+        record["decision"]["reason"]["reason"],
+        "acknowledged_worker_lost"
+    );
+    assert_eq!(
+        record["decision"]["workspace"]["reason"],
+        "clock_unavailable"
+    );
+    assert_eq!(r.area.attempt_row().0, "running");
 }
 
 // ---- retained claims: stale epochs and generations ------------------------------------------

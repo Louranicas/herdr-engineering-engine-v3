@@ -1045,15 +1045,19 @@ fn unknown(
             reason,
             process,
             cancellation_pending,
+            workspace: None,
         },
     }
 }
-fn refused(rule: Rule, reason: ReuseRefusal) -> Decision {
+/// An absent worker's R08 unknown with R09's refusal of its still-writable workspace beside it.
+fn absent_and_refused(reason: Unknown, refusal: ReuseRefusal) -> Decision {
     Decision {
-        rule,
-        reconciliation: Reconciliation::WorkspaceReuseRefused {
+        rule: Rule::R08WorkerAbsent,
+        reconciliation: Reconciliation::RetainUnknown {
             reason,
             process: ProcessCustody::Absent,
+            cancellation_pending: false,
+            workspace: Some(refusal),
         },
     }
 }
@@ -1676,6 +1680,7 @@ fn released_workspace_does_not_alter_the_absent_worker_verdict() {
             reason: Unknown::AcknowledgedWorkerLost { generation: 1 },
             process: ProcessCustody::Absent,
             cancellation_pending: false,
+            workspace: None,
         }
     );
 }
@@ -1694,8 +1699,8 @@ fn expired_lease_with_writable_workspace_is_refused() {
     );
     assert_eq!(
         decision,
-        refused(
-            Rule::R09WorkspaceReuse,
+        absent_and_refused(
+            Unknown::AcknowledgedWorkerLost { generation: 1 },
             ReuseRefusal::LeaseExpiredWritable {
                 expired_by_ms: 250,
                 bytes: 41,
@@ -1714,8 +1719,8 @@ fn held_lease_with_writable_workspace_is_refused_with_remaining_time() {
     );
     assert_eq!(
         decision,
-        refused(
-            Rule::R09WorkspaceReuse,
+        absent_and_refused(
+            Unknown::DispatchUnacknowledged,
             ReuseRefusal::LeaseHeld { remaining_ms: 300 }
         )
     );
@@ -1731,8 +1736,8 @@ fn lease_at_exact_expiry_instant_is_still_held() {
     );
     assert_eq!(
         decision,
-        refused(
-            Rule::R09WorkspaceReuse,
+        absent_and_refused(
+            Unknown::DispatchUnacknowledged,
             ReuseRefusal::LeaseHeld { remaining_ms: 0 }
         )
     );
@@ -1749,8 +1754,8 @@ fn lease_from_another_receiver_epoch_is_not_comparable() {
     );
     assert_eq!(
         decision,
-        refused(
-            Rule::R09WorkspaceReuse,
+        absent_and_refused(
+            Unknown::DispatchUnacknowledged,
             ReuseRefusal::LeaseClockNotComparable {
                 lease_epoch: CLOCK.to_owned(),
                 clock_epoch: CLOCK2.to_owned(),
@@ -1769,7 +1774,10 @@ fn missing_clock_refuses_reuse_without_deciding_expiry() {
     );
     assert_eq!(
         decision,
-        refused(Rule::R09WorkspaceReuse, ReuseRefusal::ClockUnavailable)
+        absent_and_refused(
+            Unknown::DispatchUnacknowledged,
+            ReuseRefusal::ClockUnavailable
+        )
     );
 }
 /// T07-RC-34 · a writable workspace with no lease at all is refused too: absence of a lease is
@@ -1784,8 +1792,8 @@ fn writable_workspace_without_a_lease_is_refused() {
     );
     assert_eq!(
         decision,
-        refused(
-            Rule::R09WorkspaceReuse,
+        absent_and_refused(
+            Unknown::AcknowledgementUnrecorded,
             ReuseRefusal::NotLeasedWritable { bytes: 41 }
         )
     );
@@ -2345,6 +2353,7 @@ fn permits_execution_reads_the_carried_flags() {
             reason: Unknown::ProcessUnobserved,
             process: ProcessCustody::Unobserved,
             cancellation_pending: true,
+            workspace: None,
         }
         .permits_execution()
     );

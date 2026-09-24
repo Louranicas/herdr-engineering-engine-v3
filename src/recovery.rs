@@ -755,6 +755,10 @@ pub enum Reconciliation {
         reason: Unknown,
         process: ProcessCustody,
         cancellation_pending: bool,
+        /// Why the attempt's workspace may not be reused, when R09 also refuses it. The refusal
+        /// rides beside the unknown outcome; it never replaces it (REC-G2).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        workspace: Option<ReuseRefusal>,
     },
     ReattachObservationOnly {
         generation: u64,
@@ -930,10 +934,21 @@ pub fn reconcile(
 }
 
 fn retain(reason: Unknown, task: &TaskFacts<'_>, observed: &Observations<'_>) -> Reconciliation {
+    retain_refusing(reason, None, task, observed)
+}
+
+/// `retain` with R09's refusal of the attempt's workspace carried beside the unknown outcome.
+fn retain_refusing(
+    reason: Unknown,
+    workspace: Option<ReuseRefusal>,
+    task: &TaskFacts<'_>,
+    observed: &Observations<'_>,
+) -> Reconciliation {
     Reconciliation::RetainUnknown {
         reason,
         process: observed.process.clone(),
         cancellation_pending: cancellation_pending(task),
+        workspace,
     }
 }
 
@@ -1067,15 +1082,9 @@ fn running(
             unestablished_custody(Unknown::ProcessUnobserved, task, observed)
         }
         ProcessCustody::Absent => {
-            if let WorkspaceReadback::Writable { bytes } = observed.workspace {
-                return decide(
-                    Rule::R09WorkspaceReuse,
-                    Reconciliation::WorkspaceReuseRefused {
-                        reason: lease_refusal(attempt.lease, observed.clock, bytes),
-                        process: observed.process.clone(),
-                    },
-                );
-            }
+            // R08 precedes R09: a gone worker leaves its effect unknown whatever the workspace
+            // says. A still-writable workspace adds R09's refusal to that decision and never
+            // stands in for it, or the unknown outcome would read as settled (REC-G2).
             let reason = match attempt.acknowledgement {
                 Acknowledgement::NotSeen => Unknown::DispatchUnacknowledged,
                 Acknowledgement::Correlated { generation } => {
@@ -1083,7 +1092,16 @@ fn running(
                 }
                 Acknowledgement::Unrecorded => Unknown::AcknowledgementUnrecorded,
             };
-            decide(Rule::R08WorkerAbsent, retain(reason, task, observed))
+            let workspace = match observed.workspace {
+                WorkspaceReadback::Writable { bytes } => {
+                    Some(lease_refusal(attempt.lease, observed.clock, bytes))
+                }
+                WorkspaceReadback::NotRead | WorkspaceReadback::Released => None,
+            };
+            decide(
+                Rule::R08WorkerAbsent,
+                retain_refusing(reason, workspace, task, observed),
+            )
         }
     }
 }
