@@ -9,8 +9,8 @@
 use std::error::Error;
 
 use habitat_engine::notify::{
-    Commit, Committed, Cursor, Delivery, FailureCategory, MAX_BACKLOG, MAX_RECIPIENTS, MAX_REPLAY,
-    Outbox, Quiet, Refusal, SCHEMA_VERSION, Visibility, Wake, WakeMark,
+    Attempt, Commit, Committed, Cursor, Delivery, FailureCategory, MAX_BACKLOG, MAX_RECIPIENTS,
+    MAX_REPLAY, Outbox, Quiet, Refusal, SCHEMA_VERSION, Visibility, Wake, WakeMark,
 };
 
 type Outcome = Result<(), Box<dyn Error>>;
@@ -36,9 +36,10 @@ fn filled(count: usize) -> Result<Outbox, Box<dyn Error>> {
 
 // ------------------------------------------------------- commit before delivery
 
-/// T11-NT-01 · an event can only be enqueued once it carries a commit witness. There is no
-/// constructor from an uncommitted event, so pre-commit delivery is unrepresentable rather
-/// than refused; this case pins that the committed path works end to end.
+/// T11-NT-01 · an event can only be enqueued once it carries a commit witness. The witness
+/// constructor is public, so this is a narrowed door rather than an unrepresentable state;
+/// T11-NT-62 checks who may mint one. This case pins that the committed path works end to
+/// end.
 #[test]
 fn a_committed_event_is_enqueued_with_its_sequence() -> Outcome {
     let mut outbox = Outbox::new(1);
@@ -329,9 +330,7 @@ fn a_zero_limit_returns_nothing_and_holds_the_cursor() -> Outcome {
 fn a_cursor_behind_the_backlog_returns_a_gap_with_both_numbers() -> Outcome {
     let mut outbox = filled(6)?;
     for index in 1..=3 {
-        outbox
-            .record(&id(index), &id(900), Delivery::Delivered)
-            .ok();
+        outbox.record(&id(index), &id(900), Attempt::Delivered).ok();
     }
     assert_eq!(outbox.compact(3), 3);
     assert_eq!(outbox.retained_from(), 4);
@@ -388,9 +387,9 @@ fn a_repeated_acknowledgement_is_idempotent() -> Outcome {
         Committed::new(&event, Visibility::Public, Commit::witness(1, 1))?,
         &[&recipient],
     )?;
-    assert!(outbox.record(&event, &recipient, Delivery::Delivered)?);
+    assert!(outbox.record(&event, &recipient, Attempt::Delivered)?);
     assert!(
-        !outbox.record(&event, &recipient, Delivery::Delivered)?,
+        !outbox.record(&event, &recipient, Attempt::Delivered)?,
         "the retry changes nothing"
     );
     assert_eq!(outbox.obligation(&event, &recipient)?, Delivery::Delivered);
@@ -408,11 +407,11 @@ fn a_delivered_obligation_is_not_reopened_by_a_later_failure() -> Outcome {
         Committed::new(&event, Visibility::Public, Commit::witness(1, 1))?,
         &[&recipient],
     )?;
-    outbox.record(&event, &recipient, Delivery::Delivered)?;
+    outbox.record(&event, &recipient, Attempt::Delivered)?;
     assert!(!outbox.record(
         &event,
         &recipient,
-        Delivery::Pending(FailureCategory::Unreachable)
+        Attempt::Failed(FailureCategory::Unreachable)
     )?);
     assert_eq!(outbox.obligation(&event, &recipient)?, Delivery::Delivered);
     Ok(())
@@ -429,7 +428,7 @@ fn dedup_is_keyed_on_the_event_and_recipient_pair() -> Outcome {
         Committed::new(&event, Visibility::Public, Commit::witness(1, 1))?,
         &[&a, &b],
     )?;
-    outbox.record(&event, &a, Delivery::Delivered)?;
+    outbox.record(&event, &a, Attempt::Delivered)?;
     assert_eq!(outbox.obligation(&event, &a)?, Delivery::Delivered);
     assert_eq!(
         outbox.obligation(&event, &b)?,
@@ -466,12 +465,12 @@ fn an_indeterminate_failure_stays_an_open_obligation() -> Outcome {
     outbox.record(
         &event,
         &recipient,
-        Delivery::Pending(FailureCategory::Indeterminate),
+        Attempt::Failed(FailureCategory::Indeterminate),
     )?;
     let state = outbox.obligation(&event, &recipient)?;
     assert!(!state.is_settled());
     assert_eq!(state.name(), "pending");
-    assert_eq!(outbox.outstanding(MAX_REPLAY).len(), 1);
+    assert_eq!(outbox.outstanding(MAX_REPLAY).obligations.len(), 1);
     Ok(())
 }
 
@@ -486,7 +485,7 @@ fn recording_the_same_failure_twice_changes_nothing() -> Outcome {
         Committed::new(&event, Visibility::Public, Commit::witness(1, 1))?,
         &[&recipient],
     )?;
-    let pending = Delivery::Pending(FailureCategory::Unreachable);
+    let pending = Attempt::Failed(FailureCategory::Unreachable);
     assert!(outbox.record(&event, &recipient, pending)?);
     assert!(!outbox.record(&event, &recipient, pending)?);
     Ok(())
@@ -503,11 +502,11 @@ fn an_unknown_event_or_recipient_is_refused() -> Outcome {
         &[&recipient],
     )?;
     assert_eq!(
-        outbox.record(&id(2), &recipient, Delivery::Delivered),
+        outbox.record(&id(2), &recipient, Attempt::Delivered),
         Err(Refusal::UnknownEvent)
     );
     assert_eq!(
-        outbox.record(&event, &id(999), Delivery::Delivered),
+        outbox.record(&event, &id(999), Attempt::Delivered),
         Err(Refusal::UnknownEvent)
     );
     assert_eq!(
@@ -527,13 +526,17 @@ fn outstanding_lists_only_undischarged_obligations() -> Outcome {
         Committed::new(&event, Visibility::Public, Commit::witness(1, 1))?,
         &[&a, &b, &c],
     )?;
-    outbox.record(&event, &a, Delivery::Delivered)?;
-    let out = outbox.outstanding(MAX_REPLAY);
+    outbox.record(&event, &a, Attempt::Delivered)?;
+    let out = outbox.outstanding(MAX_REPLAY).obligations;
     assert_eq!(out.len(), 2);
     assert!(out.iter().all(|(_, recipient, _)| *recipient != a));
-    assert_eq!(outbox.outstanding(1).len(), 1, "the caller's bound holds");
     assert_eq!(
-        outbox.outstanding(usize::MAX).len(),
+        outbox.outstanding(1).obligations.len(),
+        1,
+        "the caller's bound holds"
+    );
+    assert_eq!(
+        outbox.outstanding(usize::MAX).obligations.len(),
         2,
         "and the module's own bound caps an unbounded ask"
     );
@@ -554,7 +557,9 @@ fn compaction_discards_settled_events() -> Outcome {
 }
 
 /// T11-NT-32 · an event with an outstanding obligation is KEPT through compaction, whatever
-/// the caller asked for — dropping it would discharge a delivery by forgetting it.
+/// the caller asked for — dropping it would discharge a delivery by forgetting it. The
+/// settled event behind it is kept too, so the retained window has no hole (NT-G02; this
+/// case previously pinned the holed window, 1 and 3 discarded around an open 2).
 #[test]
 fn compaction_keeps_events_with_outstanding_obligations() -> Outcome {
     let mut outbox = Outbox::new(1);
@@ -570,11 +575,12 @@ fn compaction_keeps_events_with_outstanding_obligations() -> Outcome {
             &[&recipient],
         )?;
     }
-    outbox.record(&id(1), &recipient, Delivery::Delivered)?;
-    outbox.record(&id(3), &recipient, Delivery::Delivered)?;
-    assert_eq!(outbox.compact(3), 2, "only the settled two go");
-    assert_eq!(outbox.retained(), 1);
+    outbox.record(&id(1), &recipient, Attempt::Delivered)?;
+    outbox.record(&id(3), &recipient, Attempt::Delivered)?;
+    assert_eq!(outbox.compact(3), 1, "only the settled prefix goes");
+    assert_eq!((outbox.retained(), outbox.retained_from()), (2, 2));
     assert_eq!(outbox.obligation(&id(2), &recipient)?, Delivery::Unknown);
+    assert_eq!(outbox.obligation(&id(3), &recipient)?, Delivery::Delivered);
     Ok(())
 }
 
@@ -720,7 +726,7 @@ fn duplicate_recipients_collapse_to_one_obligation() -> Outcome {
         Committed::new(&event, Visibility::Public, Commit::witness(1, 1))?,
         &[&recipient, &recipient, &recipient],
     )?;
-    assert_eq!(outbox.outstanding(MAX_REPLAY).len(), 1);
+    assert_eq!(outbox.outstanding(MAX_REPLAY).obligations.len(), 1);
     Ok(())
 }
 
@@ -772,7 +778,8 @@ fn refusal_display_shows_the_carried_error() {
     );
 }
 
-/// T11-NT-43 · delivery states name themselves and only `Delivered` is settled.
+/// T11-NT-43 · delivery states name themselves; `Delivered` and a non-retryable failure are
+/// settled, and an untried or retryable obligation is not (NT-G04).
 #[test]
 fn delivery_states_name_themselves() {
     assert_eq!(Delivery::Delivered.name(), "delivered");
@@ -783,7 +790,15 @@ fn delivery_states_name_themselves() {
     );
     assert!(Delivery::Delivered.is_settled());
     assert!(!Delivery::Unknown.is_settled());
-    assert!(!Delivery::Pending(FailureCategory::Rejected).is_settled());
+    let settled: Vec<bool> = FailureCategory::ALL
+        .into_iter()
+        .map(|category| Delivery::Pending(category).is_settled())
+        .collect();
+    assert_eq!(
+        settled,
+        vec![false, true, false],
+        "unreachable, rejected, indeterminate"
+    );
 }
 
 /// T11-NT-44 · an outbox reports its own bounds, so a caller can size its loop without
@@ -848,13 +863,15 @@ fn the_steady_state_loop_sees_exactly_the_new_event() -> Outcome {
 #[test]
 fn an_event_with_no_recipients_is_immediately_compactable() -> Outcome {
     let mut outbox = filled(2)?;
-    assert!(outbox.outstanding(MAX_REPLAY).is_empty());
+    assert!(outbox.outstanding(MAX_REPLAY).obligations.is_empty());
     assert_eq!(outbox.compact(2), 2);
     Ok(())
 }
 
 /// T11-NT-49 · obligations survive compaction attempts across several events and recipients,
 /// and the retained boundary tracks the oldest surviving event rather than the request.
+/// Compaction stops at the first open obligation, so delivered 4 stays retained between
+/// open 3 and 5 (NT-G02; this case previously pinned {3, 5} with 4 silently gone).
 #[test]
 fn the_retained_boundary_tracks_the_oldest_survivor() -> Outcome {
     let mut outbox = Outbox::new(1);
@@ -871,11 +888,11 @@ fn the_retained_boundary_tracks_the_oldest_survivor() -> Outcome {
         )?;
     }
     for index in [1, 2, 4] {
-        outbox.record(&id(index), &recipient, Delivery::Delivered)?;
+        outbox.record(&id(index), &recipient, Attempt::Delivered)?;
     }
-    assert_eq!(outbox.compact(5), 3);
+    assert_eq!(outbox.compact(5), 2);
     assert_eq!(outbox.retained_from(), 3, "event 3 is the oldest survivor");
-    assert_eq!(outbox.retained(), 2);
+    assert_eq!(outbox.retained(), 3);
     Ok(())
 }
 
@@ -895,19 +912,20 @@ fn a_full_delivery_lifecycle_holds_at_every_step() -> Outcome {
     outbox.record(
         &event,
         &recipient,
-        Delivery::Pending(FailureCategory::Unreachable),
+        Attempt::Failed(FailureCategory::Unreachable),
     )?;
-    assert_eq!(outbox.outstanding(MAX_REPLAY).len(), 1);
+    assert_eq!(outbox.outstanding(MAX_REPLAY).obligations.len(), 1);
     assert_eq!(outbox.compact(1), 0, "an open obligation pins the event");
-    outbox.record(&event, &recipient, Delivery::Delivered)?;
-    assert!(outbox.outstanding(MAX_REPLAY).is_empty());
+    outbox.record(&event, &recipient, Attempt::Delivered)?;
+    assert!(outbox.outstanding(MAX_REPLAY).obligations.is_empty());
     assert_eq!(outbox.compact(1), 1, "and a settled one releases it");
     assert_eq!(outbox.retained(), 0);
     Ok(())
 }
 
-/// T11-NT-51 · a rejected delivery is not retryable but is still an open obligation, so it
-/// stays visible for an operator rather than disappearing as "done".
+/// T11-NT-51 · a rejected delivery is not retryable, so it is settled and leaves the
+/// retry page (NT-G04: an obligation nothing can discharge once exhausted the backlog), but
+/// it stays visible through `obligation` as a rejection rather than reading as delivered.
 #[test]
 fn a_rejected_delivery_stays_visible_though_not_retryable() -> Outcome {
     let mut outbox = Outbox::new(1);
@@ -920,13 +938,17 @@ fn a_rejected_delivery_stays_visible_though_not_retryable() -> Outcome {
     outbox.record(
         &event,
         &recipient,
-        Delivery::Pending(FailureCategory::Rejected),
+        Attempt::Failed(FailureCategory::Rejected),
     )?;
     assert!(!FailureCategory::Rejected.retryable());
+    assert!(
+        outbox.outstanding(MAX_REPLAY).obligations.is_empty(),
+        "nothing to retry"
+    );
     assert_eq!(
-        outbox.outstanding(MAX_REPLAY).len(),
-        1,
-        "still an obligation"
+        outbox.obligation(&event, &recipient)?,
+        Delivery::Pending(FailureCategory::Rejected),
+        "still visible, and not as delivered"
     );
     Ok(())
 }
@@ -976,7 +998,7 @@ fn behaviour_does_not_depend_on_the_epoch_value() -> Outcome {
         Err(Refusal::EpochMismatch),
         "epoch 1 is just another epoch here"
     );
-    outbox.record(&event, &recipient, Delivery::Delivered)?;
+    outbox.record(&event, &recipient, Attempt::Delivered)?;
     assert_eq!(outbox.compact(1), 1);
     assert_eq!(outbox.restore(epoch + 1), Ok(0));
     assert_eq!(outbox.epoch(), epoch + 1);
@@ -1128,12 +1150,12 @@ fn a_new_event_after_a_wake_wakes_again_with_only_the_new_one() -> Outcome {
 fn a_settled_delivery_does_not_keep_waking() -> Outcome {
     let worker = recipient(1);
     let mut outbox = addressed(2, &worker)?;
-    outbox.record(&id(1), &worker, Delivery::Delivered)?;
+    outbox.record(&id(1), &worker, Attempt::Delivered)?;
     match outbox.wake(&worker, WakeMark::new(), 0) {
         Wake::Actionable { events, .. } => assert_eq!(events, vec![id(2)]),
         Wake::Quiet(ground) => return Err(format!("expected a wake, got {}", ground.name()).into()),
     }
-    outbox.record(&id(2), &worker, Delivery::Delivered)?;
+    outbox.record(&id(2), &worker, Attempt::Delivered)?;
     assert_eq!(
         outbox.wake(&worker, WakeMark::new(), 0),
         Wake::Quiet(Quiet::Idle)
@@ -1269,7 +1291,7 @@ fn a_pending_failure_still_wakes_because_it_is_not_settled() -> Outcome {
     outbox.record(
         &id(1),
         &worker,
-        Delivery::Pending(FailureCategory::Unreachable),
+        Attempt::Failed(FailureCategory::Unreachable),
     )?;
     assert!(outbox.wake(&worker, WakeMark::new(), 0).is_actionable());
     Ok(())
@@ -1323,7 +1345,7 @@ fn restore_carries_unsettled_obligations_into_the_new_epoch() -> Outcome {
             &recipients,
         )?;
     }
-    outbox.record(&delivered, &recipient, Delivery::Delivered)?;
+    outbox.record(&delivered, &recipient, Attempt::Delivered)?;
     assert_eq!(outbox.restore(2), Ok(1), "one event carried");
     assert_eq!(
         (outbox.epoch(), outbox.retained(), outbox.next_sequence()),
@@ -1339,11 +1361,212 @@ fn restore_carries_unsettled_obligations_into_the_new_epoch() -> Outcome {
         ),
         (open.as_str(), 1)
     );
-    outbox.record(&open, &recipient, Delivery::Delivered)?;
+    outbox.record(&open, &recipient, Attempt::Delivered)?;
     assert_eq!(
         outbox.compact(1),
         1,
         "the carried obligation settles in the new epoch"
+    );
+    Ok(())
+}
+
+// ------------------------------------------------- wave-1 hardening (NT-G02/G03/G04/G11)
+
+/// Five events, each addressed to `recipient`, with 1, 2 and 4 delivered and 3 and 5 open.
+fn holed(recipient: &str) -> Result<Outbox, Box<dyn Error>> {
+    let mut outbox = addressed(5, recipient)?;
+    for index in [1, 2, 4] {
+        outbox.record(&id(index), recipient, Attempt::Delivered)?;
+    }
+    Ok(outbox)
+}
+
+/// T11-NT-57 · compaction never leaves a hole the gap predicate cannot see (NT-G02). With
+/// 1, 2, 4 delivered and 3, 5 open, a subscriber positioned after 2 must receive 3, 4 and 5
+/// — or be told it missed something. Silently skipping 4 is the untruthful replay.
+#[test]
+fn compaction_leaves_no_hole_a_subscriber_cannot_see() -> Outcome {
+    let worker = recipient(1);
+    let mut outbox = holed(&worker)?;
+    outbox.compact(5);
+    let stream = outbox.subscribe(Visibility::Public, Cursor::after(1, 2), MAX_REPLAY)?;
+    let sequences: Vec<u64> = stream.events.iter().map(|e| e.sequence).collect();
+    assert_eq!(
+        (sequences, stream.gap),
+        (vec![3, 4, 5], None),
+        "every retained sequence after the cursor is served, contiguously"
+    );
+    Ok(())
+}
+
+/// T11-NT-58 · an attempted delivery cannot regress to "never tried" (NT-G03). `record`
+/// takes an [`Attempt`], which has no `Unknown` arm; this case pins the mapping over the
+/// whole domain, recorded over an already-attempted obligation, so a body that writes
+/// `Unknown` for any attempt is caught at runtime.
+#[test]
+fn an_attempted_delivery_does_not_regress_to_unknown() -> Outcome {
+    let worker = recipient(1);
+    let mut attempts = vec![(Attempt::Delivered, Delivery::Delivered)];
+    for category in FailureCategory::ALL {
+        attempts.push((Attempt::Failed(category), Delivery::Pending(category)));
+    }
+    for (attempt, expected) in attempts {
+        assert_eq!(attempt.delivery(), expected, "{attempt:?}");
+        let mut outbox = addressed(1, &worker)?;
+        outbox.record(
+            &id(1),
+            &worker,
+            Attempt::Failed(FailureCategory::Unreachable),
+        )?;
+        outbox.record(&id(1), &worker, attempt)?;
+        assert_eq!(outbox.obligation(&id(1), &worker)?, expected, "{attempt:?}");
+    }
+    Ok(())
+}
+
+/// T11-NT-59 · a rejected obligation is settled (NT-G04): it neither wakes its recipient nor
+/// pins compaction, yet still reads as `Pending(Rejected)` — never as delivered — until it
+/// is compacted.
+#[test]
+fn a_rejected_obligation_neither_wakes_nor_pins_compaction() -> Outcome {
+    let worker = recipient(1);
+    let mut outbox = addressed(2, &worker)?;
+    let rejected = Attempt::Failed(FailureCategory::Rejected);
+    outbox.record(&id(1), &worker, rejected)?;
+    outbox.record(&id(2), &worker, Attempt::Delivered)?;
+    assert_eq!(
+        outbox.obligation(&id(1), &worker)?,
+        Delivery::Pending(FailureCategory::Rejected)
+    );
+    assert_eq!(
+        outbox.wake(&worker, WakeMark::new(), 0),
+        Wake::Quiet(Quiet::Idle)
+    );
+    assert!(outbox.outstanding(MAX_REPLAY).obligations.is_empty());
+    assert_eq!(outbox.compact(2), 2);
+    assert_eq!(outbox.retained_from(), 3);
+    Ok(())
+}
+
+/// T11-NT-60 · rejected records do not consume the backlog bound (NT-G04). A full outbox of
+/// rejected obligations refuses by name, and once compacted it admits new events again —
+/// the bound is not permanently spent by one rejecting recipient.
+#[test]
+fn rejected_obligations_do_not_exhaust_the_backlog() -> Outcome {
+    let worker = recipient(1);
+    let mut outbox = addressed(MAX_BACKLOG, &worker)?;
+    for index in 1..=MAX_BACKLOG {
+        outbox.record(
+            &id(index),
+            &worker,
+            Attempt::Failed(FailureCategory::Rejected),
+        )?;
+    }
+    let next = id(MAX_BACKLOG + 1);
+    let late = Committed::new(&next, Visibility::Public, Commit::witness(1, 1))?;
+    assert_eq!(outbox.enqueue(late, &[&worker]), Err(Refusal::BacklogFull));
+    assert_eq!(outbox.compact(u64::try_from(MAX_BACKLOG)?), MAX_BACKLOG);
+    assert_eq!(
+        outbox.enqueue(late, &[&worker])?,
+        u64::try_from(MAX_BACKLOG + 1)?
+    );
+    Ok(())
+}
+
+/// T11-NT-61 · `outstanding` tells "exactly the limit" from "more remain" (NT-G11), on both
+/// sides of the boundary, and a settled obligation beyond the page is not "more".
+#[test]
+fn outstanding_tells_exactly_the_limit_from_more() -> Outcome {
+    let worker = recipient(1);
+    let one = addressed(1, &worker)?;
+    let page = one.outstanding(1);
+    assert_eq!(
+        (page.obligations.len(), page.more),
+        (1, false),
+        "exactly the limit"
+    );
+    let page = one.outstanding(0);
+    assert_eq!(
+        (page.obligations.len(), page.more),
+        (0, true),
+        "limit zero, one open"
+    );
+    let mut two = addressed(2, &worker)?;
+    let page = two.outstanding(1);
+    assert_eq!(
+        (page.obligations, page.more),
+        (
+            vec![(id(1).as_str(), worker.as_str(), Delivery::Unknown)],
+            true
+        ),
+        "limit + 1 open"
+    );
+    let page = two.outstanding(2);
+    assert_eq!((page.obligations.len(), page.more), (2, false));
+    two.record(&id(2), &worker, Attempt::Delivered)?;
+    let page = two.outstanding(1);
+    assert_eq!(
+        (page.obligations.len(), page.more),
+        (1, false),
+        "a settled obligation beyond the page is not more"
+    );
+    let wide = addressed(MAX_REPLAY + 1, &worker)?;
+    let page = wide.outstanding(usize::MAX);
+    assert_eq!(
+        (page.obligations.len(), page.more),
+        (MAX_REPLAY, true),
+        "the module's own bound also reports more"
+    );
+    Ok(())
+}
+
+/// T11-NT-62 · no engine source other than this module and the committing ledger mints a
+/// commit witness (NT-G01). `Commit::witness` is public, so this scan is the rule's only
+/// enforcement: it walks every `.rs` file under `src/`, and it must find the needle in
+/// `src/notify.rs` (the definition) or it has measured nothing.
+#[test]
+fn only_the_ledger_may_mint_a_commit_witness() -> Outcome {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let allowed = ["notify.rs", "store.rs"];
+    let mut pending = vec![root.clone()];
+    let mut scanned = 0_usize;
+    let mut definition_seen = false;
+    let mut offenders = Vec::new();
+    let budget = 4096_usize;
+    let mut visits = 0_usize;
+    while let Some(path) = pending.pop() {
+        visits += 1;
+        assert!(
+            visits <= budget,
+            "walk exceeded {budget} entries under {root:?}"
+        );
+        if path.is_dir() {
+            for entry in std::fs::read_dir(&path)? {
+                pending.push(entry?.path());
+            }
+            continue;
+        }
+        if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+            continue;
+        }
+        scanned += 1;
+        if !std::fs::read_to_string(&path)?.contains("witness(") {
+            continue;
+        }
+        let relative = path.strip_prefix(&root)?.to_string_lossy().into_owned();
+        if relative == "notify.rs" {
+            definition_seen = true;
+        } else if !allowed.contains(&relative.as_str()) {
+            offenders.push(relative);
+        }
+    }
+    assert!(
+        definition_seen,
+        "the scan did not find the definition; scanned={scanned}"
+    );
+    assert!(
+        offenders.is_empty(),
+        "witness minted outside the ledger: {offenders:?}"
     );
     Ok(())
 }

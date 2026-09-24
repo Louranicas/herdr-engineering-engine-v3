@@ -299,13 +299,18 @@
 //! task-state owner or redispatch engine effects."* Nothing here decides task state; every
 //! type reports delivery, and the only writes are to this module's own cursors and receipts.
 //!
-//! Two of the contract's required proofs are discharged by the type system rather than by a
-//! test that must remember to run:
+//! Two of the contract's required proofs are carried by signatures, and one of them rests on
+//! a trust assumption that is named here rather than hidden:
 //!
-//! * **Commit before delivery.** [`Outbox::enqueue`] takes a [`Committed`], and a
-//!   [`Committed`] can only be minted by [`Commit::witness`] — a token the ledger hands out
-//!   *after* it has committed. There is no constructor that turns an uncommitted event into
-//!   a deliverable one, so "pre-commit delivery" is unrepresentable rather than refused.
+//! * **Commit before delivery — a narrowed door, not an unrepresentable state.**
+//!   [`Outbox::enqueue`] takes a [`Committed`], and a [`Committed`] needs a [`Commit`], whose
+//!   only constructor is [`Commit::witness`]. That constructor is **public**: `store` owns the
+//!   ledger transaction and lives in this crate, but nothing in the type system confines the
+//!   call to it, so any code can mint a witness for an event that never committed. What
+//!   holds the line is that no engine source outside `src/store.rs` (the committing ledger)
+//!   calls it — a rule the T11 battery checks by scanning every file under `src/`. Making the
+//!   witness `pub(crate)` and minting it inside the store's commit transaction is the
+//!   structural fix; it is outside this module's files and is recorded as deferred.
 //! * **Dedup by durable identity.** A delivery is keyed on `(event, recipient)`, so a
 //!   retried delivery after a lost acknowledgement is idempotent even though the transport
 //!   cannot tell the two attempts apart.
@@ -486,12 +491,14 @@ impl fmt::Display for Refusal {
 
 impl std::error::Error for Refusal {}
 
-/// Proof that the ledger committed, handed out by `store` after its transaction closes.
+/// A claim that the ledger committed, to be handed out by `store` after its transaction
+/// closes.
 ///
-/// This type has no public constructor from thin air: [`Commit::witness`] is the only way to
-/// mint one, and the ledger is the only caller positioned to invoke it truthfully. It exists
-/// so that `Outbox::enqueue` can demand evidence of commit in its **signature** rather than
-/// documenting a rule someone must remember.
+/// [`Commit::witness`] is the only way to mint one, and the ledger is the only caller
+/// positioned to invoke it truthfully — but the constructor is public, so the type records a
+/// claim, not a proof. It exists so that `Outbox::enqueue` demands the claim in its
+/// **signature**; who may make the claim is enforced by the source scan described in the
+/// module documentation, not by the compiler.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Commit {
     epoch: u64,
@@ -501,8 +508,9 @@ pub struct Commit {
 impl Commit {
     /// Witness that the ledger committed `sequence` in `epoch`.
     ///
-    /// Callers other than the committing store must not invoke this; the engine has no way
-    /// to enforce that beyond keeping the outbox the only consumer of the result.
+    /// Callers other than the committing store must not invoke this. The compiler does not
+    /// enforce that; the T11 battery refuses any engine source file other than this one and
+    /// `src/store.rs` that names `witness(`.
     #[must_use]
     pub const fn witness(epoch: u64, sequence: u64) -> Self {
         Self { epoch, sequence }
@@ -642,11 +650,56 @@ impl Delivery {
         }
     }
 
-    /// Whether the obligation is discharged.
+    /// Whether nothing further is owed on this obligation: it was delivered, or its last
+    /// failure is one [`FailureCategory::retryable`] says another attempt cannot help.
+    ///
+    /// A settled obligation holds neither a wake nor the backlog. Without the second arm a
+    /// single rejecting recipient pins every event addressed to it forever, and enough of
+    /// them fill [`MAX_BACKLOG`] until the outbox refuses every event (NT-G04). A rejected
+    /// obligation still reads as `Pending(Rejected)` through [`Outbox::obligation`] until it
+    /// is compacted, so it never reads as delivered.
     #[must_use]
     pub const fn is_settled(self) -> bool {
-        matches!(self, Self::Delivered)
+        match self {
+            Self::Delivered => true,
+            Self::Pending(category) => !category.retryable(),
+            Self::Unknown => false,
+        }
     }
+}
+
+/// The outcome of one delivery attempt, as a caller may report it.
+///
+/// Narrower than [`Delivery`] on purpose: there is no `Unknown` arm, because an attempt that
+/// was made cannot report "no attempt has been recorded". Taking a [`Delivery`] here once let
+/// `Pending(Unreachable)` be overwritten with `Unknown` (NT-G03), collapsing the two facts
+/// [`Delivery::Unknown`] exists to keep apart.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Attempt {
+    /// The recipient acknowledged the event.
+    Delivered,
+    /// The attempt failed in the given category.
+    Failed(FailureCategory),
+}
+
+impl Attempt {
+    /// The delivery state this attempt records.
+    #[must_use]
+    pub const fn delivery(self) -> Delivery {
+        match self {
+            Self::Delivered => Delivery::Delivered,
+            Self::Failed(category) => Delivery::Pending(category),
+        }
+    }
+}
+
+/// A bounded page of undischarged obligations.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Outstanding<'a> {
+    /// `(event, recipient, state)`, oldest event first.
+    pub obligations: Vec<(&'a str, &'a str, Delivery)>,
+    /// Whether at least one further undischarged obligation exists beyond this page.
+    pub more: bool,
 }
 
 /// One retained event, with its per-recipient obligations.
@@ -835,8 +888,9 @@ impl Outbox {
 
     /// Enqueue a committed event for a set of recipients.
     ///
-    /// The event must already be [`Committed`], which is the whole of "commit before
-    /// delivery": there is no path from an uncommitted event to this call.
+    /// The event must already be [`Committed`], which carries the ledger's [`Commit`]
+    /// witness. The witness is trusted, not verified: see the module documentation for who
+    /// may mint one and how that is checked.
     ///
     /// # Errors
     ///
@@ -941,7 +995,8 @@ impl Outbox {
     /// returns `false` and changes nothing, which is what makes a retry after a lost
     /// acknowledgement safe. A `Delivered` obligation is terminal and a later failure does
     /// **not** reopen it — the recipient already has the event, and re-pending it would
-    /// invite a redelivery the contract forbids.
+    /// invite a redelivery the contract forbids. The outcome is an [`Attempt`], so an
+    /// attempted obligation cannot be recorded back to [`Delivery::Unknown`].
     ///
     /// # Errors
     ///
@@ -952,8 +1007,9 @@ impl Outbox {
         &mut self,
         event: &str,
         recipient: &str,
-        outcome: Delivery,
+        attempt: Attempt,
     ) -> Result<bool, Refusal> {
+        let outcome = attempt.delivery();
         let recipient = UuidV4::parse(recipient).map_err(Refusal::MalformedIdentity)?;
         let index = self.find(event).ok_or(Refusal::UnknownEvent)?;
         let slot = self.records[index]
@@ -987,23 +1043,32 @@ impl Outbox {
 
     /// Every obligation that is not yet discharged, oldest event first.
     ///
-    /// The result is bounded by [`MAX_REPLAY`] so a caller draining the outbox cannot ask it
-    /// to build an unbounded list; the returned count says whether more remain.
+    /// The page is bounded by `limit` and by [`MAX_REPLAY`], so a caller draining the outbox
+    /// cannot ask it to build an unbounded list. [`Outstanding::more`] says whether a further
+    /// undischarged obligation exists beyond the page, so a page of exactly `limit` items is
+    /// told apart from a truncated one.
     #[must_use]
-    pub fn outstanding(&self, limit: usize) -> Vec<(&str, &str, Delivery)> {
+    pub fn outstanding(&self, limit: usize) -> Outstanding<'_> {
         let limit = limit.min(MAX_REPLAY);
-        let mut out = Vec::new();
+        let mut obligations = Vec::new();
         for record in &self.records {
             for (recipient, delivery) in &record.deliveries {
-                if out.len() >= limit {
-                    return out;
+                if delivery.is_settled() {
+                    continue;
                 }
-                if !delivery.is_settled() {
-                    out.push((record.identity.as_str(), recipient.as_str(), *delivery));
+                if obligations.len() >= limit {
+                    return Outstanding {
+                        obligations,
+                        more: true,
+                    };
                 }
+                obligations.push((record.identity.as_str(), recipient.as_str(), *delivery));
             }
         }
-        out
+        Outstanding {
+            obligations,
+            more: false,
+        }
     }
 
     /// What `recipient` should be woken for now, batching every outstanding obligation into
@@ -1063,25 +1128,33 @@ impl Outbox {
         Wake::Actionable { events, through }
     }
 
-    /// Discard retained events up to and including `sequence`, keeping their obligations
-    /// only if every one is settled.
+    /// Discard the oldest retained events up to and including `through`, stopping at the
+    /// first event with an unsettled obligation.
     ///
     /// An event with an outstanding obligation is **kept**, whatever the caller asked for:
-    /// dropping it would discharge a delivery by forgetting it.
+    /// dropping it would discharge a delivery by forgetting it. And every event **after** it
+    /// is kept too, so the retained window stays contiguous: [`Outbox::retained_from`] is
+    /// then the one number that says what a subscriber can no longer be served, and a
+    /// cursor at or past it misses nothing. Discarding settled events behind an unsettled one
+    /// left holes that `subscribe` served as an unbroken stream (NT-G02). The cost is that
+    /// one stuck obligation holds the window open; the backlog bound then refuses by name
+    /// rather than losing an event silently.
     ///
     /// Returns the number discarded.
     pub fn compact(&mut self, through: u64) -> usize {
-        let before = self.records.len();
-        self.records.retain(|record| {
-            record.sequence > through || record.deliveries.values().any(|d| !d.is_settled())
-        });
-        self.retained_from = self
+        let discard = self
             .records
             .iter()
-            .map(|record| record.sequence)
-            .min()
-            .unwrap_or(self.next_sequence);
-        before - self.records.len()
+            .take_while(|record| {
+                record.sequence <= through && record.deliveries.values().all(|d| d.is_settled())
+            })
+            .count();
+        self.records.drain(..discard);
+        self.retained_from = self
+            .records
+            .first()
+            .map_or(self.next_sequence, |record| record.sequence);
+        discard
     }
 
     /// Begin a new epoch. Delivered history is discarded; an event with any unsettled delivery
