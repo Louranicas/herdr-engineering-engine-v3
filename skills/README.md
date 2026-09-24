@@ -119,6 +119,12 @@ Every refusal is a `SkillRefusal` whose `code` is one of `hee3.refusals`; a call
 the code, never the message. A packet is data, not a grant: a consumer acts only with the
 authority it already held.
 
+A packet's `actions_in_effect` is what `workflows/validate_procedure.py`'s `dispatch()` takes
+as `held`, so a skill narrows the procedure run under it: a step outside the packet is refused
+`authority_widening` before any request is built. The executed composition (T29) is
+`tests/fixtures/t29/compose.py`, run against the engine by `tests/t28_socket.rs`; its other end
+is `workflows/PROCEDURES.md` § Dispatch and readback.
+
 ## Gate dispositions
 
 - **G07 (recovery).** Inapplicable beyond explicit errors: the module holds no state, starts no

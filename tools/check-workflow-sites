@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Neuter each refusal site in workflows/validate_procedure.py and require a test to notice.
 
-A case per refusal CODE is not a case per SITE: this validator raises thirteen codes from
-seventeen places, so four codes have a neighbour that can answer for them. `refusal_sites()`
-counting thirteen would read as complete while four sites sat unpinned.
+A case per refusal CODE is not a case per SITE: this validator raises nineteen codes from
+thirty-three places (measured 2026-09-25, after WF-11's dispatch/observe), so eight codes have a
+neighbour that can answer for them. `refusal_sites()` counting nineteen would read as complete
+while fourteen sites sat unpinned.
 
 Each site is rewritten to a no-op in turn and `tests/procedure_schema.py` is re-run. A site
 whose neuter leaves the suite green is a survivor: behaviour nothing pins down.

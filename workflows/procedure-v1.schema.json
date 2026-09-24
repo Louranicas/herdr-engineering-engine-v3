@@ -261,7 +261,11 @@
       "unreconciled_effect",
       "identity_mismatch",
       "duplicate_criterion",
-      "malformed_procedure"
+      "malformed_procedure",
+      "not_ready",
+      "authority_widening",
+      "undispatchable_action",
+      "malformed_reply"
     ],
     "bounds": {
       "max_steps": 64,

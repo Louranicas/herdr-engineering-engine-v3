@@ -179,9 +179,11 @@ class SchemaShape(unittest.TestCase):
 
 
 class Refusals(unittest.TestCase):
-    def refused(self, body, code, committed=None, outcomes=None, verified=True):
+    def refused(self, body, code, committed=None, outcomes=None, verified=True, call=None):
         with self.assertRaises(VP.ProcedureRefusal) as caught:
-            if committed is not None:
+            if call is not None:
+                call()
+            elif committed is not None:
                 VP.resume(body, committed)
             elif outcomes is not None:
                 VP.join(body, outcomes, verified, False)
@@ -557,6 +559,143 @@ class CommandLine(unittest.TestCase):
         self.assertIn("usage:", result.stderr)
 
 
+def submit_and_read_back():
+    """The composition's procedure: admit a task, then read it back by the submit's own key."""
+    return procedure([step("submit", action="task.submit"),
+                      step("verify", action="task.get", depends_on=["submit"])],
+                     procedure_id="submit-and-read-back")
+
+
+HELD = {"task.submit", "task.get"}
+SPEC = {"task_class": "rust-library-change/1", "intent": "a spec with spaces, 'quotes' and $(x)"}
+
+
+def submitted(key, effect="committed"):
+    """A task.submit result as the engine answers one, carrying the readback by `key`."""
+    return {"kind": "result", "effect": effect, "replayed": False,
+            "readback": {"action": "task.get", "action_version": 1, "body": {
+                "selector": {"source_action": "task.submit", "idempotency_key": key},
+                "evidence": "none"}},
+            "body": {"task": {"task_id": "28f00000-0000-4000-8000-000000000001",
+                              "generation": "1", "state": "admitted"}}}
+
+
+class Dispatch(unittest.TestCase):
+    """WF-11: a ready step becomes a request; a reply becomes a committed record. No loop."""
+
+    def test_a_step_key_is_a_uuid4_fixed_by_procedure_version_step_and_parent(self):
+        body = submit_and_read_back()
+        key = VP.step_key(body, "submit", None)
+        self.assertRegex(key, r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
+        self.assertEqual(key, VP.step_key(copy.deepcopy(body), "submit", None))
+        other_version = copy.deepcopy(body)
+        other_version["procedure_version"] = 2
+        variants = {VP.step_key(body, "verify", None),
+                    VP.step_key(body, "submit", "28f00000-0000-4000-8000-0000000000aa"),
+                    VP.step_key(other_version, "submit", None)}
+        self.assertEqual(len(variants | {key}), 4, "each coordinate moves the key")
+
+    def test_a_ready_submit_step_is_the_wrapper_argv_with_its_key(self):
+        body = submit_and_read_back()
+        argv = VP.dispatch(body, record({}, "submit-and-read-back"), "submit", HELD, SPEC)
+        self.assertEqual(argv, ["task.submit",
+                                "@idempotency_key=" + VP.step_key(body, "submit", None),
+                                "spec:=" + json.dumps(SPEC, sort_keys=True, separators=(",", ":"))])
+
+    def test_a_read_step_reads_back_its_submit_dependency_by_key(self):
+        body = submit_and_read_back()
+        argv = VP.dispatch(body, record({"submit": "done"}, "submit-and-read-back"), "verify", HELD)
+        selector = {"idempotency_key": VP.step_key(body, "submit", None),
+                    "source_action": "task.submit"}
+        self.assertEqual(argv, ["task.get",
+                                "selector:=" + json.dumps(selector, sort_keys=True, separators=(",", ":")),
+                                "evidence=none"])
+
+    def test_a_step_resume_does_not_offer_is_not_dispatched(self):
+        body = submit_and_read_back()
+        detail = Refusals.refused(self, body, "not_ready", call=lambda: VP.dispatch(
+            body, record({}, "submit-and-read-back"), "verify", HELD))
+        self.assertIn("resume offers ['submit']", detail)
+
+    def test_a_step_outside_the_held_actions_is_not_dispatched(self):
+        body = submit_and_read_back()
+        detail = Refusals.refused(self, body, "authority_widening", call=lambda: VP.dispatch(
+            body, record({}, "submit-and-read-back"), "submit", {"task.get"}, SPEC))
+        self.assertIn("'task.submit'", detail)
+
+    def test_an_action_with_no_dispatch_arm_is_named(self):
+        body = procedure([step("probe", action="health")])
+        detail = Refusals.refused(self, body, "undispatchable_action", call=lambda: VP.dispatch(
+            body, record({}), "probe", {"health"}))
+        self.assertIn("no dispatch arm", detail)
+
+    def test_a_submit_step_without_a_spec_is_not_dispatched(self):
+        body = submit_and_read_back()
+        detail = Refusals.refused(self, body, "undispatchable_action", call=lambda: VP.dispatch(
+            body, record({}, "submit-and-read-back"), "submit", HELD))
+        self.assertIn("needs the caller's task spec", detail)
+
+    def test_a_read_step_needs_exactly_one_submit_dependency(self):
+        body = procedure([step("verify", action="task.get")])
+        detail = Refusals.refused(self, body, "undispatchable_action", call=lambda: VP.dispatch(
+            body, record({}), "verify", HELD))
+        self.assertIn("has 0", detail)
+
+    def test_observing_a_committed_submit_records_it_done(self):
+        body = submit_and_read_back()
+        key = VP.step_key(body, "submit", None)
+        after = VP.observe(body, record({}, "submit-and-read-back"), "submit", submitted(key))
+        self.assertEqual(after, record({"submit": "done"}, "submit-and-read-back"))
+
+    def test_an_uncertain_commit_is_recorded_effect_unknown_and_resume_stops(self):
+        body = submit_and_read_back()
+        key = VP.step_key(body, "submit", None)
+        lost = {"kind": "error", "code": "effect_unknown", "effect": "unknown",
+                "readback": submitted(key)["readback"]}
+        after = VP.observe(body, record({}, "submit-and-read-back"), "submit", lost)
+        self.assertEqual(after["steps"], {"submit": "effect_unknown"})
+        Refusals.refused(self, body, "unreconciled_effect", committed=after)
+
+    def test_a_refused_request_is_recorded_failed(self):
+        body = submit_and_read_back()
+        conflict = {"kind": "error", "code": "conflict", "effect": "none", "readback": None}
+        after = VP.observe(body, record({}, "submit-and-read-back"), "submit", conflict)
+        self.assertEqual(after["steps"], {"submit": "failed"})
+
+    def test_a_reply_for_another_steps_key_is_refused(self):
+        body = submit_and_read_back()
+        foreign = submitted(VP.step_key(body, "verify", None))
+        detail = Refusals.refused(self, body, "identity_mismatch", call=lambda: VP.observe(
+            body, record({}, "submit-and-read-back"), "submit", foreign))
+        self.assertIn("answers key", detail)
+
+    def test_a_reply_that_is_not_a_control_record_is_refused(self):
+        body = submit_and_read_back()
+        for reply in ([], {"kind": "result"}, {"kind": "error"}, {"kind": "other", "effect": "none"}):
+            with self.subTest(reply=reply):
+                Refusals.refused(self, body, "malformed_reply", call=lambda: VP.observe(
+                    body, record({}, "submit-and-read-back"), "submit", reply))
+
+    def test_a_reply_for_a_step_the_procedure_lacks_is_refused(self):
+        body = submit_and_read_back()
+        detail = Refusals.refused(self, body, "identity_mismatch", call=lambda: VP.observe(
+            body, record({}, "submit-and-read-back"), "ghost", submitted("x")))
+        self.assertIn("ghost is not a step of 'submit-and-read-back'", detail)
+
+    def test_a_step_already_committed_is_not_observed_again(self):
+        body = submit_and_read_back()
+        key = VP.step_key(body, "submit", None)
+        detail = Refusals.refused(self, body, "not_ready", call=lambda: VP.observe(
+            body, record({"submit": "done"}, "submit-and-read-back"), "submit", submitted(key)))
+        self.assertIn("already committed", detail)
+
+    def test_observing_does_not_change_the_record_it_was_given(self):
+        body = submit_and_read_back()
+        given = record({}, "submit-and-read-back")
+        VP.observe(body, given, "submit", submitted(VP.step_key(body, "submit", None)))
+        self.assertEqual(given, record({}, "submit-and-read-back"))
+
+
 class SiteCoverage(unittest.TestCase):
     def test_every_refusal_site_has_a_case(self):
         # The denominator comes from the validator's syntax tree; the numerator is what the
@@ -616,7 +755,7 @@ if __name__ == "__main__":
     loader.sortTestMethodsUsing = None
     suite = unittest.TestSuite(
         loader.loadTestsFromTestCase(cls)
-        for cls in (SchemaShape, Refusals, ResumeAndJoin, CommandLine, SiteCoverage)
+        for cls in (SchemaShape, Refusals, ResumeAndJoin, CommandLine, Dispatch, SiteCoverage)
     )
     result = unittest.TextTestRunner(verbosity=1).run(suite)
     print(f"procedure tests: run={result.testsRun} failures={len(result.failures)} "

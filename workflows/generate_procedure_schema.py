@@ -63,6 +63,8 @@ REFUSALS = (
     "dependency_limit", "retry_limit", "time_limit", "resource_limit",
     "unreconciled_effect", "identity_mismatch", "duplicate_criterion",
     "malformed_procedure",
+    # WF-11: dispatch() and observe(), the request builder and readback mapper.
+    "not_ready", "authority_widening", "undispatchable_action", "malformed_reply",
 )
 
 

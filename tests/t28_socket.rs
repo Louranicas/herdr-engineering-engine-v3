@@ -1053,6 +1053,190 @@ fn an_unwritable_ledger_leaves_task_actions_unavailable() -> Outcome {
     Ok(())
 }
 
+/// A skill package that needs `task.submit` and `task.get`, with one reviewed reference whose hash
+/// is computed here.
+fn skill_package(directory: &Path) -> Outcome {
+    let references = directory.join("references");
+    DirBuilder::new()
+        .mode(0o700)
+        .recursive(true)
+        .create(&references)?;
+    let notes = b"Read the task back by the key it was submitted under.\n";
+    fs::write(references.join("notes.md"), notes)?;
+    let sha = super::tasks::digest(Sha256::digest(notes));
+    let manifest = json!({
+        "schema": "hee3.skills.skill.v1", "skill_id": "submit-and-read-back", "skill_version": 1,
+        "lifecycle": "published", "purpose": "Admit a task and read it back by its own key.",
+        "supersedes": [], "requires_actions": ["task.submit", "task.get"], "requires_skills": [],
+        "entry": "Submit under the step's derived key; read back by that key before any retry.",
+        "references": [{"reference_id": "notes", "path": "references/notes.md",
+                        "scope": ["operator"], "depth": 1,
+                        "sha256": sha.strip_prefix("sha256:").ok_or("digest prefix")?}],
+    });
+    fs::write(directory.join("skill.json"), serde_json::to_vec(&manifest)?)?;
+    Ok(())
+}
+
+/// The composition's procedure: submit, then read back; `probe` adds a root `health` step.
+fn procedure_file(path: &Path, probe: bool) -> Outcome {
+    let step = |id: &str, action: &str, depends_on: &[&str]| {
+        json!({"step_id": id, "action": action, "action_version": 1, "depends_on": depends_on,
+               "required": true, "retry": {"max_attempts": 1, "retry_on": []}})
+    };
+    let mut steps = vec![
+        step("submit", "task.submit", &[]),
+        step("verify", "task.get", &["submit"]),
+    ];
+    if probe {
+        steps.push(step("probe", "health", &[]));
+    }
+    let procedure = json!({
+        "schema": "hee3.workflows.procedure.v1", "procedure_id": "submit-and-read-back",
+        "procedure_version": 1, "purpose": "Admit a task, then read it back by its own key.",
+        "budget": {"max_fanout": 2, "max_seconds": 60, "max_tokens": 1000}, "steps": steps,
+        "acceptance": [{"criterion_id": "read-back", "statement": "task.get finds the admission."}],
+    });
+    fs::write(path, serde_json::to_vec(&procedure)?)?;
+    Ok(())
+}
+
+/// A step's idempotency key, derived here from the same canonical tuple the workflow package
+/// hashes, with `sha2` rather than Python's `hashlib`: two implementations that must agree on the
+/// exact key the ledger holds.
+fn step_key(procedure: &str, version: u64, step: &str) -> Result<String, Box<dyn Error>> {
+    let material = serde_json::to_string(&json!([
+        "hee3.workflows.step-key/1",
+        procedure,
+        version,
+        step,
+        null
+    ]))?;
+    let mut raw: Vec<u8> = Sha256::digest(material.as_bytes())[..16].to_vec();
+    raw[6] = (raw[6] & 0x0F) | 0x40;
+    raw[8] = (raw[8] & 0x3F) | 0x80;
+    let digest = super::tasks::digest(&raw);
+    let hex = digest.strip_prefix("sha256:").ok_or("digest prefix")?;
+    Ok(format!(
+        "{}-{}-{}-{}-{}",
+        &hex[..8],
+        &hex[8..12],
+        &hex[12..16],
+        &hex[16..20],
+        &hex[20..]
+    ))
+}
+
+/// Run the T29 composition consumer against the engine in `world`.
+fn compose(
+    world: &World,
+    skill: &Path,
+    procedure: &Path,
+    held: &str,
+) -> Result<Output, Box<dyn Error>> {
+    let mut spec = super::tasks::spec();
+    spec["intent"] = json!("keep spaces, 'single', \"double\", $(touch x); and `ticks` as data");
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    Ok(Command::new("python3")
+        .args(["-W", "error"])
+        .arg(root.join("tests/fixtures/t29/compose.py"))
+        .arg(skill)
+        .arg(procedure)
+        .arg(held)
+        .arg(spec.to_string())
+        .env("XDG_RUNTIME_DIR", &world.run)
+        .env("HEE3_PRODUCER", env!("CARGO_BIN_EXE_habitat-engine"))
+        .env("HEE3_GRANT_ID", GRANT)
+        .env("HEE3_SCOPE_SHA256", &world.scope)
+        .env_remove("FORCE_COLOR")
+        .env_remove("HEE3_CATALOGUE")
+        .output()?)
+}
+
+#[test]
+fn a_skill_bounded_procedure_runs_through_the_engine_and_closes_its_join() -> Outcome {
+    let world = World::granting(&["task"], &["read", "durable admission"])?;
+    commission(&world.home)?;
+    let _engine = Engine::start(&world.run, &world.home)?;
+    let scratch = Scratch::new()?;
+    let skill = scratch.private("skill")?;
+    skill_package(&skill)?;
+    let procedure = scratch.0.join("procedure.json");
+    procedure_file(&procedure, false)?;
+
+    let composed = compose(&world, &skill, &procedure, "task.submit,task.get")?;
+    let document: Value = reply_of(&composed)?;
+    let submit_key = step_key("submit-and-read-back", 1, "submit")?;
+    let task = document["task_ids"]["submit"].clone();
+    UuidV4::parse(task.as_str().ok_or("task id")?)?;
+    assert_eq!(
+        document,
+        json!({
+            "skill": {"skill_id": "submit-and-read-back", "skill_version": 1,
+                      "actions_in_effect": ["task.get", "task.submit"], "complete": true,
+                      "omissions": []},
+            "order": ["submit", "verify"],
+            "record": {"procedure_id": "submit-and-read-back", "procedure_version": 1,
+                       "steps": {"submit": "done", "verify": "done"}},
+            "verified": true, "disposition": "completion_candidate", "reasons": [],
+            "keys": {"submit": submit_key, "verify": step_key("submit-and-read-back", 1, "verify")?},
+            "task_ids": {"submit": task, "verify": task},
+        })
+    );
+    // The ledger, read back under this test's own derivation of the key.
+    let found = get_through(&world.run, &world.scope, &key_selector(&submit_key))?;
+    assert_eq!(found["body"]["task"]["task_id"], task);
+    Ok(())
+}
+
+#[test]
+fn a_composition_outside_its_skills_actions_is_refused_before_any_request() -> Outcome {
+    let world = World::granting(&["task"], &["read", "durable admission"])?;
+    commission(&world.home)?;
+    let _engine = Engine::start(&world.run, &world.home)?;
+    let scratch = Scratch::new()?;
+    let skill = scratch.private("skill")?;
+    skill_package(&skill)?;
+    let plain = scratch.0.join("plain.json");
+    procedure_file(&plain, false)?;
+    let probing = scratch.0.join("probing.json");
+    procedure_file(&probing, true)?;
+    for (case, procedure, held, refusal) in [
+        // The caller does not hold what the skill needs: refused at load.
+        (
+            "skill",
+            &plain,
+            "task.get",
+            json!({"refused": "authority_widening",
+                   "detail": "submit-and-read-back requires 'task.submit', which the caller does not hold"}),
+        ),
+        // The caller holds `health`, the skill does not need it: the packet narrows the procedure,
+        // and the probe (first in order) is refused before the submit is ever sent.
+        (
+            "procedure",
+            &probing,
+            "task.submit,task.get,health",
+            json!({"refused": "authority_widening",
+                   "detail": "probe: 'health' is not among the actions the caller holds"}),
+        ),
+    ] {
+        let composed = compose(&world, &skill, procedure, held)?;
+        assert_eq!(composed.status.code(), Some(1), "{case}");
+        assert_eq!(
+            serde_json::from_slice::<Value>(&composed.stdout)?,
+            refusal,
+            "{case}"
+        );
+    }
+    // Nothing reached the ledger.
+    let absent = get_through(
+        &world.run,
+        &world.scope,
+        &key_selector(&step_key("submit-and-read-back", 1, "submit")?),
+    )?;
+    assert_eq!(absent["code"], json!("not_found"), "{absent}");
+    Ok(())
+}
+
 #[test]
 fn the_engine_serves_the_bash_wrapper_end_to_end() -> Outcome {
     let world = World::new()?;

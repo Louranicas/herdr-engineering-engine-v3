@@ -93,7 +93,10 @@ through to Kahn's remainder, which raises the same `cycle` code. Two sites keepi
 meant neither was pinned. The self-dependency check was **removed** rather than given a
 distinguishing message — a cycle of length one is a cycle, and one door needs no agreement.
 It read `sites=16 killed=16 survived=0` until the shape, version-binding and criterion
-refusals landed; it now reads `sites=22 killed=22 survived=0`.
+refusals landed; it then read `sites=22 killed=22 survived=0`. WF-11's `dispatch()` and
+`observe()` (2026-09-25) added eleven sites; the first sweep over them read
+`sites=33 killed=32 survived=1` -- `observe()` given a step the procedure lacks had no case --
+and it now reads `sites=33 killed=33 survived=0`.
 
 The sweep counts any failing run as a kill. The rules added with those refusals were also
 planted by hand, each counted killed only when its NAMED test failed (21 of 21). That harness
@@ -108,7 +111,30 @@ validator's syntax tree and its numerator from what the cases actually asserted 
 Counting refusal *names* would have read `13/13` while four of those names were raised from
 two places each.
 
+## Dispatch and readback (WF-11)
+
+`dispatch(procedure, committed, step_id, held, spec=None, parent=None)` returns the `hee3`
+wrapper arguments that start one step, and sends nothing. Only a step `resume()` offers may
+start (`not_ready`), and only under an action the caller already holds — a grant's actions or a
+skill packet's `actions_in_effect` (`authority_widening`); this narrows a procedure, never widens
+it. Two actions have a dispatch arm: `task.submit`, under the step's derived key with the
+caller's spec, and `task.get`, which reads back the one `task.submit` step it depends on by that
+key. Every other action is `undispatchable_action` (WF-13), not a request no arm composes.
+
+`step_key(procedure, step_id, parent)` is a UUIDv4 derived from SHA-256 over
+`["hee3.workflows.step-key/1", procedure_id, procedure_version, step_id, parent]`. Derived, never
+drawn: a composition that loses a reply and dispatches the step again sends the same key, so the
+ledger's replay/conflict rule is what stops a second effect.
+
+`observe(procedure, committed, step_id, reply)` returns a new record with the step's state read
+from the engine's reply: a result is `done`, `effect_unknown` stays `effect_unknown` (so
+`resume()` will not repeat it), any other refusal is `failed`. A reply whose readback names
+another step's key is `identity_mismatch`; anything that is not a control record is
+`malformed_reply`. The loop that alternates the two belongs to the caller — the executed T29
+composition is `tests/fixtures/t29/compose.py`, run against the engine by `tests/t28_socket.rs`.
+
 ## Scope
 
-Describes procedures. Starts no scheduler, grants no action, accepts no parent, admits no
+Describes procedures, and builds the request that would start a step and reads the reply the
+caller received; sends neither. Starts no scheduler, grants no action, accepts no parent, admits no
 module, and observes no running system.
