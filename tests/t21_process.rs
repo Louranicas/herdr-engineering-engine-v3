@@ -1,6 +1,6 @@
 //! Actual local Julia IPC controls. TH-DEV, not namespace/admission qualification.
 use habitat_engine::numerical::{
-    Dataset,
+    Dataset, JuliaCode,
     process::{self, Failure, JuliaProfile},
 };
 use habitat_engine::worker::process::Interruption;
@@ -563,4 +563,98 @@ fn unpinned_julia_project_manifest_and_preference_overrides_refuse() {
     let result = run(&profile, &dataset());
     settled(&result);
     assert!(result.outcome.is_ok());
+}
+
+// NUM-01: the fixed entrypoint's own error path, reached through process::analyze.
+// Rust refuses stale and malformed input before launch, so each case edits exactly
+// one expression of the real bin/analysis.jl and asserts that edit happened.
+type Checked = Result<(), Box<dyn std::error::Error>>;
+const RECEIVED: &str = "UInt64(floor(time() * 1000))";
+const FUTURE: &str = "UInt64(floor(time() * 1000)) + UInt64(86_400_000)";
+fn entrypoint(edits: &[(&str, &str)]) -> Result<String, Box<dyn std::error::Error>> {
+    let mut script =
+        fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("julia/bin/analysis.jl"))?;
+    for (from, to) in edits {
+        assert_eq!(script.matches(from).count(), 1, "edit anchor {from:?}");
+        script = script.replace(from, to);
+    }
+    Ok(script)
+}
+fn refused(
+    edits: &[(&str, &str)],
+) -> Result<(process::Exchange, Dataset), Box<dyn std::error::Error>> {
+    let a = Area::new();
+    let p = a.profile(Some(&entrypoint(edits)?));
+    let d = dataset();
+    let r = run(&p, &d);
+    settled(&r);
+    Ok((r, d))
+}
+#[test]
+fn real_julia_stale_refusal_is_typed_with_its_bound_digest() -> Checked {
+    let (r, d) = refused(&[(RECEIVED, FUTURE)])?;
+    assert_eq!(
+        r.outcome.as_ref().err(),
+        Some(&Failure::Refused(JuliaCode::Stale))
+    );
+    let observed = r.process.as_ref().ok_or("process")?;
+    assert_eq!(observed.exit_code, Some(2));
+    let error: serde_json::Value = serde_json::from_slice(&observed.stdout.bytes)?;
+    assert_eq!(error["request_sha256"], d.digest());
+    assert_eq!(error["binding"]["request_id"], d.request().request_id);
+    Ok(())
+}
+#[test]
+fn real_julia_encoding_refusal_is_typed() -> Checked {
+    let (r, _) = refused(&[("analyze(raw,", "analyze(UInt8[0x7b],")])?;
+    assert_eq!(
+        r.outcome.as_ref().err(),
+        Some(&Failure::Refused(JuliaCode::Encoding))
+    );
+    assert_eq!(r.process.as_ref().ok_or("process")?.exit_code, Some(2));
+    Ok(())
+}
+#[test]
+fn refusal_bound_to_another_request_digest_stays_nonzero() -> Checked {
+    let (r, _) = refused(&[
+        (RECEIVED, FUTURE),
+        (
+            "bytes2hex(sha256(raw))",
+            "bytes2hex(sha256(vcat(raw, UInt8[0x20])))",
+        ),
+    ])?;
+    assert_eq!(r.outcome.as_ref().err(), Some(&Failure::Nonzero));
+    assert_eq!(r.process.as_ref().ok_or("process")?.exit_code, Some(2));
+    Ok(())
+}
+#[test]
+fn exit_two_with_plausible_report_stays_nonzero() -> Checked {
+    let a = Area::new();
+    let p = a.profile(Some(&format!(
+        "using HabitatAnalysis; raw=read(stdin); write(stdout, analyze(raw, {RECEIVED})); exit(2)"
+    )));
+    let r = run(&p, &dataset());
+    settled(&r);
+    assert_eq!(r.outcome.as_ref().err(), Some(&Failure::Nonzero));
+    assert_eq!(r.process.as_ref().ok_or("process")?.exit_code, Some(2));
+    Ok(())
+}
+#[test]
+fn refusal_under_another_exit_status_stays_nonzero() -> Checked {
+    let (r, _) = refused(&[(RECEIVED, FUTURE), ("exit(2)", "exit(3)")])?;
+    assert_eq!(r.outcome.as_ref().err(), Some(&Failure::Nonzero));
+    assert_eq!(r.process.as_ref().ok_or("process")?.exit_code, Some(3));
+    Ok(())
+}
+#[test]
+fn refusal_with_stderr_diagnostic_stays_nonzero() -> Checked {
+    let (r, _) = refused(&[
+        (RECEIVED, FUTURE),
+        ("exit(2)", "write(stderr, \"diagnostic\"); exit(2)"),
+    ])?;
+    assert_eq!(r.outcome.as_ref().err(), Some(&Failure::Nonzero));
+    let observed = r.process.as_ref().ok_or("process")?;
+    assert_eq!(observed.exit_code, Some(2));
+    assert!(!observed.stderr.bytes.is_empty());
+    Ok(())
 }

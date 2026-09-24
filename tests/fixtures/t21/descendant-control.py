@@ -43,7 +43,7 @@ try:
         or result.get("timed_out") is not False or result.get("output_limit_exceeded") is not False
         or result.get("supervision_error") is not None or (output / "stderr").read_bytes()
         or raw.count("test " + case + " ... ok") != 1
-        or "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 15 filtered out;" not in raw):
+        or "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 21 filtered out;" not in raw):
         raise ValueError("Actual nested fault control or joined cleanup refused")
     record["accepted_control"] = True
 except BaseException as error:

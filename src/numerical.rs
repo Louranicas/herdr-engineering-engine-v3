@@ -325,123 +325,277 @@
 
 //! Pure HEE3-Analysis/1 validation. Results are advisory and cannot mutate owners.
 //! Process custody and application action integration are separate obligations.
+#![forbid(missing_docs)]
 
 use crate::contracts::{Sha256Digest, UuidV4, parse_u64_decimal};
 use serde::{Deserialize, Deserializer, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 
+/// Largest request body, in bytes, [`Dataset::decode`] accepts; refused before parsing.
 pub const MAX_REQUEST: usize = 1_048_576;
+/// Largest report or refusal body, in bytes, accepted from the evaluator; also the
+/// stream limit [`process::analyze`] gives the child.
 pub const MAX_REPORT: usize = 65_536;
+/// Largest number of observation rows one request may carry.
 pub const MAX_ROWS: usize = 4096;
 const HEX: &[u8; 16] = b"0123456789abcdef";
 
+/// Why a request, report or refusal body was refused. Every refusal is final for
+/// those bytes; none is a partial acceptance.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Invalid {
+    /// A size bound: an empty or over-limit body, nesting deeper than 32, or a row
+    /// count that is zero, above [`MAX_ROWS`] or different from `shape.rows`.
     Bound,
+    /// Not exactly one JSON object of the closed shape: malformed or trailing text,
+    /// a duplicate, unknown or missing key, a wrong type, or an unknown code.
     Encoding,
+    /// A request, task or attempt ID that is not a UUID v4, a malformed artifact
+    /// digest or generation, or two rows with one attempt ID.
     Identity,
+    /// A fixed value other than v1's: protocol, version, recipe, units, field
+    /// count, a non-decimal cutoff or expiry, or a refusal's envelope.
     Schema,
+    /// A row value outside its domain: a non-finite or out-of-range `elapsed_ms`,
+    /// `censored` disagreeing with `running`, or usage that is not a U32 decimal.
     Domain,
+    /// The cutoff is after, or the expiry at or before, the supplied time.
     Stale,
+    /// A report or refusal that names another request: a different digest, ID,
+    /// subject, recipe, cutoff, expiry or units.
     Binding,
+    /// A report whose counts differ from, or whose fraction or mean is non-finite or
+    /// outside the declared tolerance of, the independent Rust reference.
     Statistics,
 }
 
-fn nullable<'de, D: Deserializer<'de>>(d: D) -> Result<Option<String>, D::Error> {
+/// Requires the key to be present; `null` decodes to `None`, never a default.
+fn nullable<'de, D: Deserializer<'de>, T: Deserialize<'de>>(d: D) -> Result<Option<T>, D::Error> {
     Option::deserialize(d)
+}
+
+/// Stable refusal code the fixed Julia entrypoint (`julia/bin/analysis.jl`) writes
+/// before exiting with status 2. The set is closed: it is exactly the codes that
+/// the entrypoint and `analyze` in `julia/src/Evaluate.jl` can raise.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum JuliaCode {
+    /// Julia refused a size bound (input or output over its limit, or row bounds).
+    Bound,
+    /// Julia refused a row value outside its domain.
+    Domain,
+    /// Julia refused a duplicate decoded key.
+    Duplicate,
+    /// Julia refused the bytes as malformed JSON or number spelling.
+    Encoding,
+    /// Julia refused an identifier or digest.
+    Identity,
+    /// Julia refused a fixed protocol, recipe, unit or shape value.
+    Schema,
+    /// Julia refused the request as outside its cutoff/expiry window at receipt.
+    Stale,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
+/// The task attempt and artifact a dataset describes; echoed exactly by a report.
 pub struct Subject {
+    /// Task ID, a UUID v4.
     pub task_id: String,
+    /// Attempt ID, a UUID v4.
     pub attempt_id: String,
+    /// Attempt generation, a canonical U64 decimal string.
     pub generation: String,
+    /// Artifact digest, `sha256:` and 64 lowercase hex digits.
     pub artifact_sha256: String,
 }
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
+/// The evaluation recipe; v1 accepts only `descriptive` version 1.
 pub struct Recipe {
+    /// Recipe name; only `descriptive` is admitted.
     pub id: String,
+    /// Recipe version; only 1 is admitted.
     pub version: u32,
 }
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
+/// Units of the observation columns; v1 accepts only `ms` and `token`.
 pub struct Units {
+    /// Unit of `elapsed_ms`; only `ms`.
     pub elapsed: String,
+    /// Unit of `usage_tokens`; only `token`.
     pub usage: String,
 }
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
+/// Declared table shape, checked against the rows actually received.
 pub struct Shape {
+    /// Row count; must equal the number of observations.
     pub rows: u32,
+    /// Fields per row; only 5.
     pub fields: u32,
 }
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
+/// An attempt's outcome at the dataset cutoff.
 pub enum Outcome {
+    /// Finished and accepted.
     Accepted,
+    /// Finished and failed.
     Failed,
+    /// Cancelled before finishing.
     Cancelled,
+    /// Abandoned without a settled result.
     Abandoned,
+    /// Still running at the cutoff; the only right-censored outcome.
     Running,
 }
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
+/// One attempt row of a dataset.
 pub struct Observation {
+    /// Attempt ID, a UUID v4, unique within the dataset.
     pub attempt_id: String,
+    /// Outcome at the cutoff.
     pub outcome: Outcome,
+    /// Observed elapsed time, finite and within `[0, 86_400_000]` ms; for a
+    /// running attempt, exposure through the cutoff.
     pub elapsed_ms: f64,
+    /// Known token usage as a U32 decimal; `None` (JSON `null`, never omitted) is
+    /// unknown, which differs from a known `"0"`.
     #[serde(deserialize_with = "nullable")]
     pub usage_tokens: Option<String>,
+    /// True exactly when `outcome` is `Running`.
     pub censored: bool,
 }
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
+/// A decoded HEE3-Analysis/1 request, the closed wire shape of a dataset.
 pub struct Request {
+    /// Protocol name; only `hee3.analysis`.
     pub protocol: String,
+    /// Protocol version; only 1.
     pub version: u32,
+    /// Request ID, a UUID v4.
     pub request_id: String,
+    /// The attempt and artifact described.
     pub subject: Subject,
+    /// Immutable cutoff, U64 decimal Unix milliseconds; never in the future.
     pub cutoff_unix_ms: String,
+    /// Expiry, U64 decimal Unix milliseconds; must still be in the future.
     pub expires_unix_ms: String,
+    /// Evaluation recipe.
     pub recipe: Recipe,
+    /// Column units.
     pub units: Units,
+    /// Declared shape.
     pub shape: Shape,
+    /// Every attempt at the cutoff, in input order; 1 to [`MAX_ROWS`] rows.
     pub observations: Vec<Observation>,
 }
 /// Canonical decimal strings, including zero, distinguish unknown usage from zero.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Counts {
+    /// All rows.
     pub total: String,
+    /// Rows with outcome `accepted`.
     pub accepted: String,
+    /// Rows with outcome `failed`.
     pub failed: String,
+    /// Rows with outcome `cancelled`.
     pub cancelled: String,
+    /// Rows with outcome `abandoned`.
     pub abandoned: String,
+    /// Rows with outcome `running`.
     pub running: String,
+    /// Rows whose usage is unknown (`null`).
     pub unknown_usage: String,
+    /// Right-censored rows (equal to `running` in v1).
     pub censored: String,
+    /// Sum of all known usage values.
     pub known_usage_sum: String,
 }
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
+/// A descriptive/1 report: the request's identity echoed exactly, plus its
+/// statistics. Advisory only; accepting one grants no task or policy change.
 pub struct Report {
+    /// Echoed protocol name.
     pub protocol: String,
+    /// Echoed protocol version.
     pub version: u32,
+    /// Echoed request ID.
     pub request_id: String,
+    /// Digest of the exact request bytes, `sha256:` and 64 lowercase hex digits.
     pub request_sha256: String,
+    /// Echoed subject.
     pub subject: Subject,
+    /// Echoed cutoff.
     pub cutoff_unix_ms: String,
+    /// Echoed expiry.
     pub expires_unix_ms: String,
+    /// Echoed recipe.
     pub recipe: Recipe,
+    /// Echoed units.
     pub units: Units,
+    /// Exact outcome and usage counts.
     pub counts: Counts,
+    /// `accepted / total`; within `1e-12` of the Rust reference.
     pub acceptance_fraction: f64,
+    /// Compensated mean of `elapsed_ms` over input order; within
+    /// `8 * f64::EPSILON * max(|expected|, 1)` of the Rust reference.
     pub mean_observed_ms: f64,
 }
+/// Wire form written by `julia/bin/analysis.jl` before `exit(2)`; every key required.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct JuliaError {
+    protocol: String,
+    version: u32,
+    kind: String,
+    #[serde(deserialize_with = "nullable")]
+    request_sha256: Option<String>,
+    #[serde(deserialize_with = "nullable")]
+    binding: Option<Binding>,
+    code: JuliaCode,
+    diagnostic: String,
+}
+/// Request header Julia echoes when it could decode one.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Binding {
+    request_id: String,
+    subject: Subject,
+    recipe: Recipe,
+    cutoff_unix_ms: String,
+    expires_unix_ms: String,
+    units: Units,
+}
 /// Owns exact received bytes and validated fields without exposing mutable access.
+///
+/// ```
+/// use habitat_engine::numerical::{Dataset, Invalid};
+/// # fn main() -> Result<(), Invalid> {
+/// let raw = include_bytes!("../tests/fixtures/t21/J01.json");
+/// // Rows: accepted/10 ms/4 tokens, failed/20/unknown, cancelled/30/0,
+/// // abandoned/40/unknown, running/50/unknown; valid only inside its window.
+/// let dataset = Dataset::decode(raw, 1_769_999_995_000)?;
+/// let report = dataset.reference()?;
+/// assert_eq!(report.request_sha256, dataset.digest());
+/// assert_eq!(report.counts.total, "5");
+/// assert_eq!(report.counts.accepted, "1");
+/// assert_eq!(report.counts.unknown_usage, "3");
+/// assert_eq!(report.counts.known_usage_sum, "4");
+/// assert_eq!(report.acceptance_fraction.to_bits(), 0.2_f64.to_bits());
+/// assert_eq!(report.mean_observed_ms.to_bits(), 30.0_f64.to_bits());
+/// // At its expiry the same bytes are refused, so no report can be built.
+/// assert_eq!(Dataset::decode(raw, 1_770_000_000_000).err(), Some(Invalid::Stale));
+/// # Ok(())
+/// # }
+/// ```
 #[derive(Debug)]
 pub struct Dataset {
     raw: Vec<u8>,
@@ -467,14 +621,18 @@ impl Dataset {
             digest,
         })
     }
+    /// The exact bytes received, as sent to the evaluator; never re-serialized.
     #[must_use]
     pub fn raw(&self) -> &[u8] {
         &self.raw
     }
+    /// The validated decoded request.
     #[must_use]
     pub fn request(&self) -> &Request {
         &self.request
     }
+    /// Digest of [`Dataset::raw`], `sha256:` and 64 lowercase hex digits; the
+    /// binding every report and refusal must echo.
     #[must_use]
     pub fn digest(&self) -> &str {
         &self.digest
@@ -533,6 +691,41 @@ impl Dataset {
             acceptance_fraction: f64::from(counts[0]) / f64::from(q.shape.rows),
             mean_observed_ms: sum / f64::from(q.shape.rows),
         })
+    }
+
+    /// Decode the fixed Julia entrypoint's bounded error object as a refusal of
+    /// exactly this dataset. The digest must name these bytes; an echoed request
+    /// binding, when Julia could decode one, must equal this request's.
+    /// # Errors
+    /// `Bound` or `Encoding` for an oversize, malformed, unknown-field or
+    /// unknown-code body (including a success report); `Schema` for another
+    /// protocol, version, kind or diagnostic; `Binding` for an absent or other
+    /// request digest or a different echoed binding.
+    pub fn refusal(&self, raw: &[u8]) -> Result<JuliaCode, Invalid> {
+        let e: JuliaError = decode(raw, MAX_REPORT)?;
+        if e.protocol != "hee3.analysis"
+            || e.version != 1
+            || e.kind != "error"
+            || e.diagnostic != "analysis refusal"
+        {
+            return Err(Invalid::Schema);
+        }
+        if e.request_sha256.as_deref() != Some(self.digest.as_str()) {
+            return Err(Invalid::Binding);
+        }
+        if let Some(b) = e.binding {
+            let q = &self.request;
+            if b.request_id != q.request_id
+                || b.subject != q.subject
+                || b.recipe != q.recipe
+                || b.cutoff_unix_ms != q.cutoff_unix_ms
+                || b.expires_unix_ms != q.expires_unix_ms
+                || b.units != q.units
+            {
+                return Err(Invalid::Binding);
+            }
+        }
+        Ok(e.code)
     }
 
     /// Validate a received report independently against the original dataset.

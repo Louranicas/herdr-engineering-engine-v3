@@ -1,4 +1,4 @@
-use habitat_engine::numerical::{Dataset, Invalid, MAX_REPORT, MAX_REQUEST};
+use habitat_engine::numerical::{Dataset, Invalid, JuliaCode, MAX_REPORT, MAX_REQUEST};
 use serde_json::{Value, json};
 const NOW: u64 = 1_769_999_995_000;
 const RAW: &[u8] = include_bytes!("fixtures/t21/J01.json");
@@ -455,4 +455,187 @@ fn malformed_number_spellings() {
             .replacen("10.0", value, 1);
         assert!(Dataset::decode(raw.as_bytes(), NOW).is_err(), "{value}");
     }
+}
+
+// NUM-01: the fixed Julia entrypoint's bounded error object (julia/bin/analysis.jl).
+type Checked = Result<(), Box<dyn std::error::Error>>;
+fn julia_error(code: &str) -> Value {
+    let q = fixture();
+    json!({
+        "protocol": "hee3.analysis",
+        "version": 1,
+        "kind": "error",
+        "request_sha256": dataset().digest(),
+        "binding": {
+            "request_id": q["request_id"],
+            "subject": q["subject"],
+            "recipe": q["recipe"],
+            "cutoff_unix_ms": q["cutoff_unix_ms"],
+            "expires_unix_ms": q["expires_unix_ms"],
+            "units": q["units"],
+        },
+        "code": code,
+        "diagnostic": "analysis refusal",
+    })
+}
+/// Every code the entrypoint can write, read from the Julia source that raises it:
+/// `analyze` (Evaluate.jl) and the entrypoint's own bound. Cohesion.jl is not reachable.
+fn entrypoint_codes() -> Result<std::collections::BTreeSet<String>, Box<dyn std::error::Error>> {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("julia");
+    let mut codes = std::collections::BTreeSet::new();
+    for file in ["src/Evaluate.jl", "bin/analysis.jl"] {
+        let text = std::fs::read_to_string(root.join(file))?;
+        for opener in ["refuse(:", "AnalysisError(:"] {
+            for (at, _) in text.match_indices(opener) {
+                let rest = &text[at + opener.len()..];
+                let end = rest.find(')').ok_or("unterminated refusal site")?;
+                let symbol = &rest[..end];
+                assert!(
+                    !symbol.is_empty()
+                        && symbol.bytes().all(|b| b.is_ascii_lowercase() || b == b'_'),
+                    "unexpected refusal symbol in {file}: {symbol:?}"
+                );
+                codes.insert(symbol.to_owned());
+            }
+        }
+    }
+    Ok(codes)
+}
+#[test]
+fn julia_refusal_codes_are_exactly_the_entrypoint_world() -> Checked {
+    let codes = entrypoint_codes()?;
+    let expected = [
+        ("bound", JuliaCode::Bound),
+        ("domain", JuliaCode::Domain),
+        ("duplicate", JuliaCode::Duplicate),
+        ("encoding", JuliaCode::Encoding),
+        ("identity", JuliaCode::Identity),
+        ("schema", JuliaCode::Schema),
+        ("stale", JuliaCode::Stale),
+    ];
+    let named: std::collections::BTreeSet<String> = expected
+        .iter()
+        .map(|(name, _)| (*name).to_owned())
+        .collect();
+    assert_eq!(
+        codes, named,
+        "Julia entrypoint codes differ from the typed set"
+    );
+    for (name, code) in expected {
+        assert_eq!(
+            dataset().refusal(&encode(&julia_error(name))),
+            Ok(code),
+            "{name}"
+        );
+    }
+    Ok(())
+}
+#[test]
+fn refusal_code_outside_entrypoint_world_is_not_typed() {
+    // Cohesion-only codes and a spelling variant are not written by bin/analysis.jl.
+    for code in ["join", "conservation", "Stale", "", "unknown"] {
+        assert_eq!(
+            dataset().refusal(&encode(&julia_error(code))),
+            Err(Invalid::Encoding),
+            "{code}"
+        );
+    }
+}
+#[test]
+fn refusal_without_available_binding_is_typed() {
+    let mut e = julia_error("encoding");
+    e["binding"] = Value::Null;
+    assert_eq!(dataset().refusal(&encode(&e)), Ok(JuliaCode::Encoding));
+}
+#[test]
+fn refusal_for_another_request_digest_is_refused() {
+    for digest in [
+        json!("sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"),
+        Value::Null,
+    ] {
+        let mut e = julia_error("stale");
+        e["request_sha256"] = digest.clone();
+        assert_eq!(
+            dataset().refusal(&encode(&e)),
+            Err(Invalid::Binding),
+            "{digest}"
+        );
+    }
+}
+#[test]
+fn refusal_echoing_another_binding_is_refused() -> Checked {
+    for pointer in [
+        "/binding/request_id",
+        "/binding/subject/task_id",
+        "/binding/subject/attempt_id",
+        "/binding/subject/generation",
+        "/binding/subject/artifact_sha256",
+        "/binding/recipe/id",
+        "/binding/cutoff_unix_ms",
+        "/binding/expires_unix_ms",
+        "/binding/units/elapsed",
+        "/binding/units/usage",
+    ] {
+        let mut e = julia_error("stale");
+        *e.pointer_mut(pointer).ok_or(pointer)? = json!("wrong");
+        assert_eq!(
+            dataset().refusal(&encode(&e)),
+            Err(Invalid::Binding),
+            "{pointer}"
+        );
+    }
+    let mut e = julia_error("stale");
+    e["binding"]["recipe"]["version"] = json!(2);
+    assert_eq!(dataset().refusal(&encode(&e)), Err(Invalid::Binding));
+    Ok(())
+}
+#[test]
+fn refusal_envelope_is_fixed() {
+    for (key, value) in [
+        ("protocol", json!("hee3.control")),
+        ("version", json!(2)),
+        ("kind", json!("report")),
+        ("diagnostic", json!("other")),
+    ] {
+        let mut e = julia_error("stale");
+        e[key] = value;
+        assert_eq!(
+            dataset().refusal(&encode(&e)),
+            Err(Invalid::Schema),
+            "{key}"
+        );
+    }
+}
+#[test]
+fn refusal_fields_are_closed_and_required() {
+    let mut extra = julia_error("stale");
+    extra["detail"] = json!("x");
+    assert_eq!(dataset().refusal(&encode(&extra)), Err(Invalid::Encoding));
+    let mut extra = julia_error("stale");
+    extra["binding"]["shape"] = json!({"rows": 5, "fields": 5});
+    assert_eq!(dataset().refusal(&encode(&extra)), Err(Invalid::Encoding));
+    for key in ["request_sha256", "binding", "code", "diagnostic", "kind"] {
+        let mut e = julia_error("stale");
+        e.as_object_mut().map(|o| o.remove(key));
+        assert_eq!(
+            dataset().refusal(&encode(&e)),
+            Err(Invalid::Encoding),
+            "{key}"
+        );
+    }
+}
+#[test]
+fn success_report_is_not_a_refusal() {
+    assert_eq!(
+        dataset().refusal(&encode(&report_value())),
+        Err(Invalid::Encoding)
+    );
+}
+#[test]
+fn refusal_is_bounded_before_decoding() {
+    let mut raw = encode(&julia_error("stale"));
+    raw.resize(MAX_REPORT, b' ');
+    assert_eq!(dataset().refusal(&raw), Ok(JuliaCode::Stale));
+    raw.push(b' ');
+    assert_eq!(dataset().refusal(&raw), Err(Invalid::Bound));
 }

@@ -26,35 +26,66 @@ const CLEANUP_RESERVE: Duration = Duration::from_secs(10);
 /// Pins must originate from the admitted package owner. This value is no grant.
 #[derive(Debug)]
 pub struct JuliaProfile {
+    /// Absolute path of the Julia executable.
     pub executable: PathBuf,
+    /// Pinned digest of the executable, `sha256:` and 64 lowercase hex digits.
     pub executable_sha256: String,
+    /// Canonical absolute Julia project directory holding the pinned files.
     pub project: PathBuf,
+    /// Pinned digest of each of the six project files, keyed by relative path.
     pub project_files: BTreeMap<String, String>,
+    /// Canonical absolute scratch directory with mode 0700; the child's cwd,
+    /// `HOME`, `TMPDIR` and first depot.
     pub scratch: PathBuf,
+    /// Canonical absolute read-only package depot, searched after scratch.
     pub dependency_depot: PathBuf,
 }
+/// Why an exchange produced no accepted report. Only `Ok(Report)` is success.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Failure {
+    /// The profile was refused: a non-canonical or missing path, scratch mode
+    /// other than 0700, an unpinned override file, or a pin mismatch.
     Profile,
+    /// A filesystem operation failed, with its OS error number when known.
     Io(Option<i32>),
+    /// The system clock is before the Unix epoch or out of range.
     Clock,
+    /// The window was refused or ran out: start in the future, over 60 s, too
+    /// short for the cleanup reserve, or passed.
     Deadline,
+    /// The cancellation flag was observed.
     Cancelled,
+    /// The dataset no longer validates at launch (for example it went stale).
     Input(Invalid),
+    /// The process owner refused to start the child.
     Launch(Refusal),
+    /// The child was interrupted by the process owner.
     Interrupted(Interruption),
+    /// Custody did not settle: leader unreaped, group not settled, cleanup
+    /// pending, or a stream not at EOF, failed or truncated.
     Unsettled,
+    /// The child exited nonzero or by signal without a typed refusal of this
+    /// dataset; a crash and an unbound error body both land here.
     Nonzero,
+    /// The child exited 0 but wrote to stderr.
     Diagnostic,
+    /// The child exited 0 cleanly but its report was refused.
     Response(Invalid),
+    /// The Julia entrypoint refused this dataset: exit status 2, empty stderr
+    /// and an error object bound to [`super::Dataset::digest`].
+    Refused(super::JuliaCode),
 }
 /// Every started child returns its original custody, raw streams and signals,
 /// including `PendingChild` on unknown cleanup. Dropping it is not settlement.
 #[derive(Debug)]
 pub struct Exchange {
+    /// The accepted report, or the first reason there is none.
     pub outcome: Result<Report, Failure>,
+    /// The child's raw custody report, present whenever a child was started.
     pub process: Option<ProcessReport>,
+    /// The profile re-check after the child, when it failed.
     pub postflight: Option<Failure>,
+    /// Wall time from the caller's start.
     pub wall_elapsed: Duration,
     /// This process owner measures wall time, not CPU usage; unknown stays unknown.
     pub cpu_elapsed: Option<Duration>,
@@ -128,6 +159,14 @@ fn classify(
         || observed.stderr.truncated
     {
         return Err(Failure::Unsettled);
+    }
+    // Only the entrypoint's own refusal shape is typed: exit status 2, an empty
+    // stderr and an error bound to this dataset's digest. Anything else is Nonzero.
+    if observed.exit_code == Some(2)
+        && observed.stderr.bytes.is_empty()
+        && let Ok(code) = dataset.refusal(&observed.stdout.bytes)
+    {
+        return Err(Failure::Refused(code));
     }
     if observed.exit_code != Some(0) || observed.signal.is_some() {
         return Err(Failure::Nonzero);
