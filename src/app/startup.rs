@@ -21,9 +21,22 @@ use crate::recovery::{
 };
 use crate::store::{
     self, DurableAttempt, DurableTask, DurableVerification, EvidenceAvailability,
-    ReconciliationRecord, RecordKind, Recorded, RecoveryInventory, RecoveryLimits, Store,
-    TerminalOrdinals,
+    ReconciliationRecord, RecordKind, Recorded, RecoveryInventory, RecoveryLimits, StartupLimits,
+    Store, TerminalOrdinals,
 };
+
+/// The most effect-bearing open attempts one startup reconciles (B03b): every one must be
+/// reconciled before readiness, so above this the start is refused by name with both numbers
+/// (`store::Error::StartupBound`) rather than truncated. Settled, confirmed-clean history never
+/// counts. Sized so the selected attempts and their tasks, verifications, instances and pins stay
+/// inside the read budget (`Startup::limits`, 1,024 rows).
+pub const OPEN_ATTEMPT_LIMIT: usize = 128;
+
+/// How many terminal attempts not yet confirmed clean one startup takes, oldest first (B03b).
+/// They do not block readiness — a finished task's leftover workspace cannot affect a new attempt,
+/// which `worker::workspace::Snapshot::materialize` creates fresh and refuses over an existing
+/// path — and the remainder is reported as `Pass::cleanup_backlog`, drained over later boots.
+pub const CLEANUP_BATCH: usize = 32;
 use crate::worker::pi::{Binding, Command, Frame, Observation, Session, validate_record};
 use rustix::process::{Pid, PidfdFlags, pidfd_open};
 use serde::Serialize;
@@ -721,13 +734,21 @@ pub struct Pass {
     pub mode: Mode,
     pub event_high_water: u64,
     pub ledger: LedgerAccess,
+    /// Effect-bearing open attempts: these gate readiness (`coordinator::health_of`).
     pub attempts: Vec<Entry>,
+    /// This boot's batch of terminal attempts awaiting the engine's confirmed-clean readback
+    /// (B03b): decided and acted on like any attempt, but outside readiness — a finished task's
+    /// leftover workspace cannot affect a new attempt, which `materialize` creates fresh.
+    pub cleanup: Vec<Entry>,
     pub cursors: Vec<CursorEntry>,
     /// Journal rows this pass inserted (records found already present are not counted).
     pub writes: u64,
     /// Whether any decision permitted execution; the policy never does, and the
     /// pass reads the flag from every decision rather than assuming it.
     pub permits_execution: bool,
+    /// Terminal attempts still awaiting the engine's confirmed-clean readback after this pass's
+    /// batch (B03b): reported, never silent, and drained over later boots.
+    pub cleanup_backlog: usize,
 }
 
 #[derive(Debug)]
@@ -763,12 +784,24 @@ impl From<serde_json::Error> for Error {
 #[derive(PartialEq)]
 struct Inspected {
     inventory: RecoveryInventory,
+    cleanup_attempts: Vec<String>,
+    cleanup_backlog: usize,
     ordinals: BTreeMap<String, TerminalOrdinals>,
     evidence: BTreeMap<String, EvidenceAvailability>,
 }
 
 fn read(store: &mut Store, startup: &Startup<'_>) -> Result<Inspected, Error> {
-    let inventory = store.recovery_inventory(startup.epoch, startup.limits, startup.deadline)?;
+    let read = store.startup_inventory(
+        startup.epoch,
+        StartupLimits {
+            open: OPEN_ATTEMPT_LIMIT,
+            cleanup_batch: CLEANUP_BATCH,
+            read: startup.limits,
+        },
+        startup.deadline,
+    )?;
+    let (inventory, cleanup_attempts, cleanup_backlog) =
+        (read.inventory, read.cleanup_attempts, read.cleanup_backlog);
     let mut ordinals = BTreeMap::new();
     for task in &inventory.tasks {
         let id = UuidV4::parse(&task.head.id).map_err(|_| Error::Facts {
@@ -791,6 +824,8 @@ fn read(store: &mut Store, startup: &Startup<'_>) -> Result<Inspected, Error> {
     }
     Ok(Inspected {
         inventory,
+        cleanup_attempts,
+        cleanup_backlog,
         ordinals,
         evidence,
     })
@@ -876,9 +911,11 @@ pub fn run_and_hold(
             LedgerAccess::InspectionOnly
         },
         attempts: Vec::new(),
+        cleanup: Vec::new(),
         cursors: Vec::new(),
         writes: 0,
         permits_execution: false,
+        cleanup_backlog: inspected.cleanup_backlog,
     };
     for attempt in &inspected.inventory.attempts {
         let entry = reconcile_attempt(
@@ -896,7 +933,11 @@ pub fn run_and_hold(
                 pass.writes += 1;
             }
         }
-        pass.attempts.push(entry);
+        if inspected.cleanup_attempts.contains(&attempt.id) {
+            pass.cleanup.push(entry);
+        } else {
+            pass.attempts.push(entry);
+        }
     }
     for cursor in startup.cursors {
         let decision = policy::reconcile_cursor(

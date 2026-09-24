@@ -258,6 +258,156 @@ fn flag(row: &Row<'_>, index: usize) -> Result<bool> {
     }
 }
 
+const TASK_COLUMNS: &str = "SELECT id,generation,state,cancellation,accepted_event,criteria_digest,spent_ms,reserved_work_ms,reserved_verify_ms,principal_uid,principal_role,limit_ms FROM tasks";
+const ATTEMPT_COLUMNS: &str =
+    "SELECT id,task_id,generation,state,effect,cleanup,used_ms FROM attempts";
+const VERIFICATION_COLUMNS: &str = "SELECT attempt_id,event_id,subject_digest,evidence_digest,verdict,used_ms,cleanup_settled FROM verifications";
+const INSTANCE_COLUMNS: &str = "SELECT id,task_id,attempt_id,agent_record_id,agent_record_version,revision,body FROM roster_instances";
+const PIN_COLUMNS: &str = "SELECT attempt_id,record_id,record_version,body FROM roster_pins";
+
+/// One task row, validated: the one reader of `tasks` for both inventories.
+fn durable_task_row(row: &Row<'_>) -> Result<DurableTask> {
+    let head = task_row(row)?;
+    uuid(&head.id)?;
+    revision(&head.generation)?;
+    digest(&head.criteria)?;
+    flag(row, 3)?;
+    one_of(
+        &head.state,
+        &[
+            "admitted",
+            "queued",
+            "running",
+            "verifying",
+            "repair_pending",
+            "cancellation_requested",
+            "blocked",
+            "accepted",
+            "failed",
+            "cancelled",
+            "abandoned",
+            "effect_unknown",
+        ],
+    )?;
+    if let Some(event) = &head.accepted_event {
+        uuid(event)?;
+    }
+    if (head.state == "accepted") != head.accepted_event.is_some() {
+        return Err(Error::Corrupt);
+    }
+    let principal_uid = row.get(9)?;
+    let principal_role: String = row.get(10)?;
+    super::Principal::new(principal_uid, &principal_role).map_err(|_| Error::Corrupt)?;
+    let limit_ms = read_number(row, 11)?;
+    if limit_ms == 0
+        || head
+            .spent_ms
+            .checked_add(head.reserved_work_ms)
+            .and_then(|n| n.checked_add(head.reserved_verify_ms))
+            .is_none_or(|n| n > limit_ms)
+    {
+        return Err(Error::Corrupt);
+    }
+    Ok(DurableTask {
+        head,
+        principal_uid,
+        principal_role,
+        limit_ms,
+    })
+}
+
+/// One verification row, validated.
+fn verification_row(row: &Row<'_>) -> Result<DurableVerification> {
+    let r = DurableVerification {
+        attempt: row.get(0)?,
+        event: row.get(1)?,
+        subject: row.get(2)?,
+        evidence: row.get(3)?,
+        verdict: row.get(4)?,
+        used_ms: read_optional_number(row, 5)?,
+        cleanup_settled: flag(row, 6)?,
+    };
+    uuid(&r.attempt)?;
+    uuid(&r.event)?;
+    digest(&r.subject)?;
+    digest(&r.evidence)?;
+    one_of(
+        &r.verdict,
+        &[
+            "passed",
+            "failed",
+            "invalid",
+            "error",
+            "timeout",
+            "cancelled",
+        ],
+    )?;
+    Ok(r)
+}
+
+/// One roster instance row, validated against its own columns.
+fn instance_row(row: &Row<'_>) -> Result<Instance> {
+    let r: Instance =
+        serde_json::from_slice(row.get_ref(6)?.as_blob().map_err(|_| Error::Corrupt)?)?;
+    for id in [
+        &r.id,
+        &r.task_id,
+        &r.attempt_id,
+        &r.agent_record_id,
+        &r.session_id,
+        &r.workspace_ref,
+        &r.started.epoch,
+    ] {
+        uuid(id)?;
+    }
+    for v in [
+        &r.generation,
+        &r.revision,
+        &r.agent_record_version,
+        &r.attempt_generation,
+    ] {
+        revision(v)?;
+    }
+    for (index, value) in [
+        &r.id,
+        &r.task_id,
+        &r.attempt_id,
+        &r.agent_record_id,
+        &r.agent_record_version,
+        &r.revision,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        if row.get_ref(index)?.as_str().map_err(|_| Error::Corrupt)? != value {
+            return Err(Error::Corrupt);
+        }
+    }
+    Ok(r)
+}
+
+/// One roster pin row, validated against its own columns.
+fn pin_row(row: &Row<'_>) -> Result<Pin> {
+    let r: Pin = serde_json::from_slice(row.get_ref(3)?.as_blob().map_err(|_| Error::Corrupt)?)?;
+    uuid(&r.attempt_id)?;
+    uuid(&r.record.head.record_id)?;
+    revision(&r.record.head.record_version)?;
+    uuid(&r.selected_at.epoch)?;
+    for (index, value) in [
+        &r.attempt_id,
+        &r.record.head.record_id,
+        &r.record.head.record_version,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        if row.get_ref(index)?.as_str().map_err(|_| Error::Corrupt)? != value {
+            return Err(Error::Corrupt);
+        }
+    }
+    Ok(r)
+}
+
 /// One attempt row, validated. The one reader of `attempts`, for the inventory and a task's view.
 fn attempt_row(row: &Row<'_>) -> Result<DurableAttempt> {
     let r = DurableAttempt {
@@ -383,6 +533,218 @@ fn read_view(
     })
 }
 
+/// B03b · the ONE definition of a terminal attempt's confirmed-clean closure, as an SQL condition
+/// over an `attempts` row aliased `a`. Closed means a startup record for the attempt carries the
+/// ENGINE'S OWN physical readback showing it clean — never a worker's `cleanup_settled` claim
+/// (T07-AP-42 falsified that). Two record kinds can show it:
+///
+/// * `reconciliation_decided`: `handed` is what the shell observed and handed the policy; closed
+///   when its cleanup readback is `complete` AND its process custody is positively not a live
+///   holder. Custody is an allow-list — `absent` (nothing holds it), `pid_reused` (the PID is now
+///   another process: not ours, R07), `unobserved` (a settled attempt's observation was never a
+///   local process, RC-24). `live_same_identity`, `unreadable` and any other or future spelling
+///   keep the attempt open: unknown is never closed.
+/// * `reconciliation_readback` of the `cleanup` effect whose readback is `complete`.
+///
+/// The bodies are the engine's own serialized records (`app::startup`), an owned contract; a
+/// rename there fails `t07_startup`'s real-writer closure case rather than silently reopening all
+/// history.
+const CLOSED_BY_ENGINE_READBACK: &str = "EXISTS (SELECT 1 FROM events e WHERE e.task_id=a.task_id \
+    AND json_extract(CAST(e.body AS TEXT),'$.attempt')=a.id AND ( \
+    (e.kind='reconciliation_decided' \
+     AND json_extract(CAST(e.body AS TEXT),'$.handed.cleanup.cleanup_readback')='complete' \
+     AND json_extract(CAST(e.body AS TEXT),'$.handed.process.custody') IN ('absent','pid_reused','unobserved')) \
+    OR (e.kind='reconciliation_readback' \
+     AND json_extract(CAST(e.body AS TEXT),'$.effect')='cleanup' \
+     AND json_extract(CAST(e.body AS TEXT),'$.readback.cleanup_readback')='complete')))";
+
+/// The task states after which nothing more is dispatched for a task.
+const TERMINAL: &str = "('accepted','failed','cancelled','abandoned')";
+
+/// Startup's two bounds (B03b). `open` bounds the effect-bearing open attempts, which readiness
+/// requires reconciled, and refuses above it by name; `cleanup_batch` is how many terminal
+/// attempts not yet confirmed clean one boot takes, oldest first. Neither counts closed history.
+#[derive(Clone, Copy, Debug)]
+pub struct StartupLimits {
+    pub open: usize,
+    pub cleanup_batch: usize,
+    /// The row and byte budget for everything read about the selected attempts.
+    pub read: RecoveryLimits,
+}
+
+/// What startup reads (B03b): the selected attempts — every effect-bearing open attempt, plus
+/// this boot's batch of terminal attempts not yet confirmed clean — with ONLY their tasks,
+/// verifications, instances and pins. The `inventory` is therefore NOT the whole ledger's; its
+/// acceptances, stops and pending deliveries are empty because startup reads none of them.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StartupInventory {
+    pub inventory: RecoveryInventory,
+    /// Which of the inventory's attempts are this boot's terminal-cleanup batch rather than
+    /// effect-bearing open work: decided and acted on, but outside readiness.
+    pub cleanup_attempts: Vec<String>,
+    /// Terminal attempts still unconfirmed after this boot's batch: reported, never silent.
+    pub cleanup_backlog: usize,
+}
+
+impl Store {
+    /// Whether `attempt` is closed history by `CLOSED_BY_ENGINE_READBACK`: the one door.
+    /// # Errors
+    /// A poisoned store, an expired deadline or a read failure.
+    pub fn attempt_closed(&self, attempt: UuidV4<'_>, deadline: Instant) -> Result<bool> {
+        if self.poisoned {
+            return Err(Error::UncertainCommit);
+        }
+        schema::bound(&self.connection, deadline)?;
+        Ok(self.connection.query_row(
+            &format!("SELECT {CLOSED_BY_ENGINE_READBACK} FROM attempts a WHERE a.id=?"),
+            [attempt.as_str()],
+            |row| row.get::<_, bool>(0),
+        )?)
+    }
+
+    /// Startup's read (B03b): open obligations only, in one read snapshot.
+    /// # Errors
+    /// `StartupBound { open, limit }` above the open bound; otherwise as
+    /// [`Store::recovery_inventory`].
+    pub fn startup_inventory(
+        &mut self,
+        expected_epoch: UuidV4<'_>,
+        limits: StartupLimits,
+        deadline: Instant,
+    ) -> Result<StartupInventory> {
+        if self.poisoned {
+            return Err(Error::UncertainCommit);
+        }
+        if expected_epoch.as_str() != self.epoch {
+            return Err(Error::Conflict);
+        }
+        schema::bound(&self.connection, deadline)?;
+        let generation = self
+            .generation
+            .path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or(Error::Custody)?
+            .to_owned();
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Deferred)?;
+        let result = collect_open(&tx, expected_epoch.as_str(), &generation, limits, deadline);
+        match (result, super::roll_back(tx)) {
+            (result, Ok(())) => result,
+            (Err(original), Err(failure)) => {
+                self.poisoned = true;
+                Err(Error::Rollback {
+                    original: Box::new(original),
+                    failure,
+                })
+            }
+            (Ok(_), Err(failure)) => {
+                self.poisoned = true;
+                Err(Error::Sqlite(failure))
+            }
+        }
+    }
+}
+
+/// Effect-bearing open: an unsettled attempt, or any attempt of a task not yet terminal.
+fn open_attempts_predicate() -> String {
+    format!("(a.state!='settled' OR t.state NOT IN {TERMINAL})")
+}
+
+/// The terminal tail: a settled attempt of a terminal task not yet confirmed clean.
+fn tail_predicate() -> String {
+    format!("(a.state='settled' AND t.state IN {TERMINAL} AND NOT {CLOSED_BY_ENGINE_READBACK})")
+}
+
+fn collect_open(
+    db: &Connection,
+    epoch: &str,
+    generation: &str,
+    limits: StartupLimits,
+    deadline: Instant,
+) -> Result<StartupInventory> {
+    let open = db.query_row(
+        &format!(
+            "SELECT count(*) FROM attempts a JOIN tasks t ON t.id=a.task_id WHERE {}",
+            open_attempts_predicate()
+        ),
+        [],
+        |row| read_number(row, 0),
+    )?;
+    let limit = u64::try_from(limits.open).map_err(|_| Error::Bound)?;
+    if open > limit {
+        return Err(Error::StartupBound { open, limit });
+    }
+    let tail = db.query_row(
+        &format!(
+            "SELECT count(*) FROM attempts a JOIN tasks t ON t.id=a.task_id WHERE {}",
+            tail_predicate()
+        ),
+        [],
+        |row| read_number(row, 0),
+    )?;
+    let batch = u64::try_from(limits.cleanup_batch).map_err(|_| Error::Bound)?;
+    remaining(deadline)?;
+    // One definition of the selected set, prefixed to every read below.
+    let selected = format!(
+        "WITH selected(id) AS (SELECT a.id FROM attempts a JOIN tasks t ON t.id=a.task_id WHERE {open} \
+         UNION ALL SELECT id FROM (SELECT a.id AS id FROM attempts a JOIN tasks t ON t.id=a.task_id \
+         WHERE {tail} ORDER BY a.rowid LIMIT {batch})) ",
+        open = open_attempts_predicate(),
+        tail = tail_predicate(),
+    );
+    let mut budget = Budget {
+        limits: limits.read,
+        rows: 0,
+        bytes: 0,
+        deadline,
+    };
+    let mut metadata = budget.read(db, "SELECT epoch,generation,mode,(SELECT coalesce(max(sequence),0) FROM events) FROM ledger_meta WHERE singleton=1 LIMIT ?", |row| {
+        let e: String=row.get(0)?; let g: String=row.get(1)?; let mode: String=row.get(2)?;
+        uuid(&e)?; uuid(&g)?; one_of(&mode,&["normal","reconciliation"])?;
+        if e!=epoch || g!=generation { return Err(Error::Conflict); }
+        Ok((e,g,mode,read_number(row,3)?))
+    })?;
+    let (epoch, generation, mode, event_high_water) = metadata.pop().ok_or(Error::Corrupt)?;
+    let attempts = budget.read(db, &format!("{selected}{ATTEMPT_COLUMNS} WHERE id IN (SELECT id FROM selected) ORDER BY task_id,id LIMIT ?"), attempt_row)?;
+    let tasks = budget.read(db, &format!("{selected}{TASK_COLUMNS} WHERE id IN (SELECT a.task_id FROM attempts a WHERE a.id IN (SELECT id FROM selected)) ORDER BY id LIMIT ?"), durable_task_row)?;
+    let verifications = budget.read(db, &format!("{selected}{VERIFICATION_COLUMNS} WHERE attempt_id IN (SELECT id FROM selected) ORDER BY attempt_id LIMIT ?"), verification_row)?;
+    let instances = budget.read(db, &format!("{selected}{INSTANCE_COLUMNS} WHERE attempt_id IN (SELECT id FROM selected) ORDER BY id LIMIT ?"), instance_row)?;
+    let pins = budget.read(db, &format!("{selected}{PIN_COLUMNS} WHERE attempt_id IN (SELECT id FROM selected) ORDER BY attempt_id,record_id LIMIT ?"), pin_row)?;
+    validate_roster_bindings(&instances, &pins, &attempts, event_high_water, deadline)?;
+    let mut statement = db.prepare(&format!(
+        "SELECT a.id FROM attempts a JOIN tasks t ON t.id=a.task_id WHERE {} ORDER BY a.rowid LIMIT {batch}",
+        tail_predicate()
+    ))?;
+    let mut rows = statement.query([])?;
+    let mut cleanup_attempts = Vec::new();
+    while let Some(row) = rows.next()? {
+        cleanup_attempts.push(row.get::<_, String>(0)?);
+    }
+    remaining(deadline)?;
+    Ok(StartupInventory {
+        cleanup_attempts,
+        cleanup_backlog: usize::try_from(tail.saturating_sub(batch)).map_err(|_| Error::Bound)?,
+        inventory: RecoveryInventory {
+            epoch,
+            generation,
+            mode,
+            event_high_water,
+            tasks,
+            attempts,
+            verifications,
+            acceptances: Vec::new(),
+            stops: Vec::new(),
+            pending_delivery: Vec::new(),
+            instances,
+            pins,
+            rows: budget.rows,
+            payload_bytes: budget.bytes,
+        },
+    })
+}
+
 fn collect(
     db: &Connection,
     epoch: &str,
@@ -403,22 +765,21 @@ fn collect(
         Ok((e,g,mode,read_number(row,3)?))
     })?;
     let (epoch, generation, mode, event_high_water) = metadata.pop().ok_or(Error::Corrupt)?;
-    let tasks=budget.read(db,"SELECT id,generation,state,cancellation,accepted_event,criteria_digest,spent_ms,reserved_work_ms,reserved_verify_ms,principal_uid,principal_role,limit_ms FROM tasks ORDER BY id LIMIT ?",|row| {
-        let head=task_row(row)?; uuid(&head.id)?; revision(&head.generation)?; digest(&head.criteria)?; flag(row,3)?;
-        one_of(&head.state,&["admitted","queued","running","verifying","repair_pending","cancellation_requested","blocked","accepted","failed","cancelled","abandoned","effect_unknown"])?;
-        if let Some(event)=&head.accepted_event { uuid(event)?; }
-        if (head.state=="accepted") != head.accepted_event.is_some() { return Err(Error::Corrupt); }
-        let principal_uid=row.get(9)?; let principal_role:String=row.get(10)?;
-        super::Principal::new(principal_uid,&principal_role).map_err(|_| Error::Corrupt)?;
-        let limit_ms=read_number(row,11)?;
-        if limit_ms==0 || head.spent_ms.checked_add(head.reserved_work_ms).and_then(|n|n.checked_add(head.reserved_verify_ms)).is_none_or(|n|n>limit_ms) { return Err(Error::Corrupt); }
-        Ok(DurableTask{head,principal_uid,principal_role,limit_ms})
-    })?;
-    let attempts=budget.read(db,"SELECT id,task_id,generation,state,effect,cleanup,used_ms FROM attempts ORDER BY task_id,id LIMIT ?",attempt_row)?;
-    let verifications=budget.read(db,"SELECT attempt_id,event_id,subject_digest,evidence_digest,verdict,used_ms,cleanup_settled FROM verifications ORDER BY attempt_id LIMIT ?",|row| {
-        let r=DurableVerification{attempt:row.get(0)?,event:row.get(1)?,subject:row.get(2)?,evidence:row.get(3)?,verdict:row.get(4)?,used_ms:read_optional_number(row,5)?,cleanup_settled:flag(row,6)?};
-        uuid(&r.attempt)?;uuid(&r.event)?;digest(&r.subject)?;digest(&r.evidence)?;one_of(&r.verdict,&["passed","failed","invalid","error","timeout","cancelled"])?;Ok(r)
-    })?;
+    let tasks = budget.read(
+        db,
+        &format!("{TASK_COLUMNS} ORDER BY id LIMIT ?"),
+        durable_task_row,
+    )?;
+    let attempts = budget.read(
+        db,
+        &format!("{ATTEMPT_COLUMNS} ORDER BY task_id,id LIMIT ?"),
+        attempt_row,
+    )?;
+    let verifications = budget.read(
+        db,
+        &format!("{VERIFICATION_COLUMNS} ORDER BY attempt_id LIMIT ?"),
+        verification_row,
+    )?;
     let acceptances=budget.read(db,"SELECT event_id,task_id,attempt_id,generation,criteria_digest,manifest_digest FROM acceptances ORDER BY task_id LIMIT ?",|row| {
         let r=DurableAcceptance{event:row.get(0)?,task:row.get(1)?,attempt:row.get(2)?,generation:row.get(3)?,criteria:row.get(4)?,manifest:row.get(5)?};
         uuid(&r.event)?;uuid(&r.task)?;uuid(&r.attempt)?;revision(&r.generation)?;digest(&r.criteria)?;digest(&r.manifest)?;Ok(r)
@@ -433,19 +794,16 @@ fn collect(
         if r.task.is_some()==r.roster.is_some() || r.sequence==0 || r.sequence>event_high_water || r.recipient.is_empty() {return Err(Error::Corrupt);}
         Ok(r)
     })?;
-    let instances=budget.read(db,"SELECT id,task_id,attempt_id,agent_record_id,agent_record_version,revision,body FROM roster_instances ORDER BY id LIMIT ?",|row| {
-        let r:Instance=serde_json::from_slice(row.get_ref(6)?.as_blob().map_err(|_|Error::Corrupt)?)?;
-        for id in [&r.id,&r.task_id,&r.attempt_id,&r.agent_record_id,&r.session_id,&r.workspace_ref,&r.started.epoch]{uuid(id)?;}
-        for v in [&r.generation,&r.revision,&r.agent_record_version,&r.attempt_generation]{revision(v)?;}
-        for (index,value) in [&r.id,&r.task_id,&r.attempt_id,&r.agent_record_id,&r.agent_record_version,&r.revision].into_iter().enumerate(){if row.get_ref(index)?.as_str().map_err(|_|Error::Corrupt)?!=value {return Err(Error::Corrupt);}}
-        Ok(r)
-    })?;
-    let pins=budget.read(db,"SELECT attempt_id,record_id,record_version,body FROM roster_pins ORDER BY attempt_id,record_id LIMIT ?",|row| {
-        let r:Pin=serde_json::from_slice(row.get_ref(3)?.as_blob().map_err(|_|Error::Corrupt)?)?;
-        uuid(&r.attempt_id)?;uuid(&r.record.head.record_id)?;revision(&r.record.head.record_version)?;uuid(&r.selected_at.epoch)?;
-        for (index,value) in [&r.attempt_id,&r.record.head.record_id,&r.record.head.record_version].into_iter().enumerate(){if row.get_ref(index)?.as_str().map_err(|_|Error::Corrupt)?!=value {return Err(Error::Corrupt);}}
-        Ok(r)
-    })?;
+    let instances = budget.read(
+        db,
+        &format!("{INSTANCE_COLUMNS} ORDER BY id LIMIT ?"),
+        instance_row,
+    )?;
+    let pins = budget.read(
+        db,
+        &format!("{PIN_COLUMNS} ORDER BY attempt_id,record_id LIMIT ?"),
+        pin_row,
+    )?;
     validate_roster_bindings(&instances, &pins, &attempts, event_high_water, deadline)?;
     remaining(deadline)?;
     Ok(RecoveryInventory {

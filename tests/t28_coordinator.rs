@@ -282,6 +282,8 @@ fn each_reconciliation_is_classified_and_the_pass_reports_what_it_left() {
             .collect(),
         writes: 0,
         permits_execution: false,
+        cleanup: Vec::new(),
+        cleanup_backlog: 0,
     };
     let health = |p: &Pass| {
         let h = health_of(Ok(p), CHECKED);

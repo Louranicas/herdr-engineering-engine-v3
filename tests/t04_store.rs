@@ -710,6 +710,103 @@ fn task_view_refuses_a_poisoned_store_and_hides_another_principals_task() {
     );
 }
 
+/// One closure case: what it is, the record written (if any), and whether it closes.
+type ClosureCase = (&'static str, Option<(RecordKind, String)>, bool);
+
+/// B03b: whether a terminal task's settled attempt is closed is decided in ONE place, from the
+/// engine's own readback in a startup record, never from a worker's cleanup claim. Each record
+/// kind and each liveness classification is pinned: only a positively non-live holder with a
+/// complete cleanup readback closes an attempt, and unknown liveness never does.
+#[test]
+fn an_attempt_is_closed_only_by_the_engines_own_complete_readback() {
+    let decided = |cleanup: &str, custody: &str| {
+        format!(
+            r#"{{"kind":"hee3-reconciliation-decided/1","attempt":"{ATTEMPT}","task":"{TASK}","handed":{{"cleanup":{{"cleanup_readback":"{cleanup}"}},"process":{{"custody":"{custody}"}}}}}}"#
+        )
+    };
+    let readback = format!(
+        r#"{{"kind":"hee3-reconciliation-readback/1","attempt":"{ATTEMPT}","effect":"cleanup","readback":{{"cleanup_readback":"complete"}}}}"#
+    );
+    let cases: [ClosureCase; 7] = [
+        ("no record", None, false),
+        (
+            "decided, complete, absent",
+            Some((RecordKind::Decided, decided("complete", "absent"))),
+            true,
+        ),
+        (
+            "decided, complete, pid reused",
+            Some((RecordKind::Decided, decided("complete", "pid_reused"))),
+            true,
+        ),
+        (
+            "decided, complete, unobserved",
+            Some((RecordKind::Decided, decided("complete", "unobserved"))),
+            true,
+        ),
+        (
+            "decided, partial",
+            Some((RecordKind::Decided, decided("partial", "absent"))),
+            false,
+        ),
+        (
+            "decided, complete, live",
+            Some((
+                RecordKind::Decided,
+                decided("complete", "live_same_identity"),
+            )),
+            false,
+        ),
+        (
+            "decided, complete, unreadable",
+            Some((RecordKind::Decided, decided("complete", "unreadable"))),
+            false,
+        ),
+    ];
+    for (case, record, closed) in cases {
+        let area = Area::new();
+        let mut store = area.open();
+        accepted(&mut store);
+        if let Some((kind, body)) = &record {
+            store
+                .record_reconciliation(
+                    &ReconciliationRecord {
+                        attempt: uuid(ATTEMPT),
+                        kind: *kind,
+                        body: body.as_bytes(),
+                        settle_cleanup: false,
+                    },
+                    deadline(),
+                )
+                .unwrap();
+        }
+        assert_eq!(
+            store.attempt_closed(uuid(ATTEMPT), deadline()).unwrap(),
+            closed,
+            "{case}"
+        );
+    }
+    // The readback kind closes on its own cleanup effect.
+    let area = Area::new();
+    let mut store = area.open();
+    accepted(&mut store);
+    store
+        .record_reconciliation(
+            &ReconciliationRecord {
+                attempt: uuid(ATTEMPT),
+                kind: RecordKind::Readback,
+                body: readback.as_bytes(),
+                settle_cleanup: false,
+            },
+            deadline(),
+        )
+        .unwrap();
+    assert!(
+        store.attempt_closed(uuid(ATTEMPT), deadline()).unwrap(),
+        "readback, cleanup complete"
+    );
+}
+
 /// A transaction SQLite already rolled back (autocommit restored) needs no second rollback; an
 /// open one is rolled back for real.
 #[test]

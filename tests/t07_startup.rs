@@ -161,6 +161,14 @@ impl World {
         );
         self
     }
+    /// The obligations still remaining for one named attempt (the many-task B03b ledgers).
+    fn with_obligations_for(mut self, attempt: &str, remaining: &[&str]) -> Self {
+        self.obligations.insert(
+            attempt.to_owned(),
+            remaining.iter().map(|s| (*s).to_owned()).collect(),
+        );
+        self
+    }
     fn with_workspace(mut self, readback: WorkspaceReadback) -> Self {
         self.workspaces.insert(ATTEMPT.into(), readback);
         self
@@ -686,6 +694,17 @@ fn subject_value(generation: u64, rostered: bool) -> SubjectValue {
         workspace_ref: rostered.then(|| STAGE.to_owned()),
         session: rostered.then(|| KEY.to_owned()),
     }
+}
+
+/// The one entry of a pass whose only attempt is a terminal task's (B03b): it is decided in the
+/// cleanup batch, outside readiness, and nothing effect-bearing was reconciled.
+fn only_cleanup(pass: &Pass) -> &Entry {
+    assert!(pass.attempts.is_empty(), "{pass:#?}");
+    assert_eq!(pass.cleanup.len(), 1, "{pass:#?}");
+    assert_eq!(pass.ledger, LedgerAccess::Writable);
+    assert_eq!(pass.mode, Mode::Normal);
+    assert!(!pass.permits_execution);
+    &pass.cleanup[0]
 }
 
 fn only(pass: &Pass) -> &Entry {
@@ -1963,7 +1982,7 @@ fn failed_task_workspace_is_recorded_releasable_without_effect() {
     r.verify(VerificationVerdict::Error, true);
     let mut world = World::new().with_obligations(&[]);
     let pass = r.pass(&mut world);
-    let entry = only(&pass);
+    let entry = only_cleanup(&pass);
     assert_eq!(entry.decision.rule, Rule::R11CleanupReadback);
     assert_eq!(
         entry.decision.reconciliation,
@@ -1994,7 +2013,7 @@ fn stopped_task_with_remaining_obligation_is_cleaned() {
     let mut world = World::new().with_obligations(&["workspace"]);
     let pass = r.pass(&mut world);
     assert!(matches!(
-        only(&pass).action,
+        only_cleanup(&pass).action,
         Some(Action::CleanupPerformed {
             readback: CleanupReadback::Complete,
             ..
@@ -2015,7 +2034,7 @@ fn committed_acceptance_stands_with_its_ordinal_and_is_not_rewritten() {
     assert_eq!(before, ("accepted".into(), false, Some(ACCEPT.into())));
     let mut world = World::new().with_obligations(&["workspace"]);
     let pass = r.pass(&mut world);
-    let entry = only(&pass);
+    let entry = only_cleanup(&pass);
     assert_eq!(entry.decision.rule, Rule::R04AcceptanceStands);
     assert_eq!(
         entry.decision.reconciliation,
@@ -2066,7 +2085,7 @@ fn later_cancellation_cannot_rewrite_a_committed_acceptance() {
     let mut world = World::new();
     let pass = r.pass(&mut world);
     assert!(matches!(
-        only(&pass).decision.reconciliation,
+        only_cleanup(&pass).decision.reconciliation,
         Reconciliation::AcceptanceStands {
             later_cancellation: None,
             ..
@@ -2125,7 +2144,7 @@ fn a_ledger_holding_both_commits_is_ordered_by_its_journal() {
     );
     let mut world = World::new();
     let pass = r.pass(&mut world);
-    let entry = only(&pass);
+    let entry = only_cleanup(&pass);
     assert_eq!(entry.decision.rule, Rule::R03CommitOrdering);
     assert_eq!(
         entry.handed.history,
@@ -2331,7 +2350,7 @@ fn cancelled_and_stopped_task_reports_cancellation_standing() {
     let mut world = World::new().with_obligations(&[]);
     let pass = r.pass(&mut world);
     assert!(matches!(
-        only(&pass).decision.reconciliation,
+        only_cleanup(&pass).decision.reconciliation,
         Reconciliation::CancellationStands {
             ordinal: Some(5),
             rejected_acceptance: None,
@@ -3831,4 +3850,412 @@ fn the_workspace_entry_bound_admits_4096_entries_and_refuses_4097()
         "nothing was unlinked"
     );
     Ok(())
+}
+
+// ---- B03b: startup reads open obligations only ------------------------------------------------
+
+/// Distinct identities for the `index`th extra task in a many-task ledger: one prefix per role.
+fn nth(role: u16, index: u32) -> String {
+    format!("{role:08x}-0000-4000-8000-{index:012x}")
+}
+
+/// `n` more tasks on the rig's ledger, each failed after one settled attempt and a failed
+/// verification: settled attempts of terminal tasks, none yet confirmed clean by a startup.
+fn fail_tasks(r: &mut Rig, n: u32) {
+    let reason = Name::new("fixture-stop").unwrap();
+    let evidence = r.evidence.clone();
+    for index in 0..n {
+        let (key, task, admit, attempt, start, settle, check, stop) = (
+            nth(0x28b1, index),
+            nth(0x28b2, index),
+            nth(0x28b3, index),
+            nth(0x28b4, index),
+            nth(0x28b5, index),
+            nth(0x28b6, index),
+            nth(0x28b7, index),
+            nth(0x28b8, index),
+        );
+        let store = r.store();
+        store
+            .submit(
+                Submission {
+                    principal: &principal(),
+                    key: id(&key),
+                    task: id(&task),
+                    event: id(&admit),
+                    request_bytes: b"startup reconciliation fixture",
+                    criteria: Sha256Digest::parse(DIGEST).unwrap(),
+                    allocation: Allocation {
+                        limit_ms: 1_200_000,
+                        work_ms: 900_000,
+                        verify_ms: 300_000,
+                    },
+                },
+                deadline(),
+            )
+            .unwrap();
+        store
+            .begin_attempt(
+                id(&task),
+                generation("1"),
+                id(&attempt),
+                id(&start),
+                deadline(),
+            )
+            .unwrap();
+        let revision = |store: &mut Store| {
+            store
+                .get(&principal(), id(&task), deadline())
+                .unwrap()
+                .generation
+        };
+        let expected = |revision: &str| Expected {
+            task: id(&task),
+            task_generation: generation(revision),
+            attempt: id(&attempt),
+            attempt_generation: generation("1"),
+        };
+        let now = revision(store);
+        store
+            .settle_attempt(
+                &expected(&now),
+                Settlement {
+                    effect: Effect::None,
+                    used_ms: Some(10),
+                    cleanup_settled: true,
+                    ready_to_verify: true,
+                },
+                id(&settle),
+                deadline(),
+            )
+            .unwrap();
+        let now = revision(store);
+        store
+            .record_verification(
+                &expected(&now),
+                &habitat_engine::store::Verification {
+                    verdict: VerificationVerdict::Failed,
+                    subject: Sha256Digest::parse(DIGEST).unwrap(),
+                    evidence: evidence.clone(),
+                    used_ms: Some(20),
+                    cleanup_settled: true,
+                },
+                id(&check),
+                deadline(),
+            )
+            .unwrap();
+        let now = revision(store);
+        store
+            .finish_unaccepted(
+                &principal(),
+                Stop {
+                    task: id(&task),
+                    generation: generation(&now),
+                    reason: &reason,
+                    evidence: &evidence,
+                    event: id(&stop),
+                },
+                deadline(),
+            )
+            .unwrap();
+    }
+}
+
+/// A world in which each of the `n` extra tasks' attempts reads back clean.
+fn clean_world(n: u32) -> World {
+    (0..n).fold(World::new(), |world, index| {
+        world.with_obligations_for(&nth(0x28b4, index), &[])
+    })
+}
+
+/// B03b pin: a backlog of terminal attempts larger than one boot's batch does not block
+/// readiness, is reported, and drains oldest-first over successive boots. Only the ENGINE'S own
+/// decided records close them, so this is also the writer/predicate contract: were the record's
+/// field names to drift from `store::recovery`'s predicate, the second boot would re-read the
+/// same batch and the counts below would not move.
+#[test]
+fn a_cleanup_backlog_drains_over_boots_without_blocking_readiness() {
+    let mut r = Rig::admitted();
+    fail_tasks(&mut r, 40);
+    let mut world = clean_world(40);
+    let mut seen = Vec::new();
+    for boot in 0..3 {
+        let pass = r.pass(&mut world);
+        assert_eq!(pass.ledger, LedgerAccess::Writable, "boot {boot}");
+        assert!(!pass.permits_execution);
+        assert!(
+            pass.attempts.is_empty(),
+            "boot {boot}: the tail is not effect-bearing"
+        );
+        seen.push((pass.cleanup.len(), pass.cleanup_backlog));
+    }
+    assert_eq!(
+        seen,
+        [
+            (startup::CLEANUP_BATCH, 40 - startup::CLEANUP_BATCH),
+            (40 - startup::CLEANUP_BATCH, 0),
+            (0, 0)
+        ]
+    );
+}
+
+/// B03b pin, the measured wall: 1,025 terminal tasks once refused startup's whole-ledger read.
+/// With every one closed by an engine readback record, a restart is not refused and reads none
+/// of that history. (The records are written through the store's reconciliation door in the
+/// engine's decided shape; that the REAL writer's records satisfy the predicate is pinned by
+/// `a_cleanup_backlog_drains_over_boots_without_blocking_readiness`, which draining 1,025 through
+/// ~33 real boots would only repeat at forty times the cost.)
+#[test]
+fn a_ledger_past_the_old_inventory_wall_restarts_and_reads_no_closed_history() {
+    let mut r = Rig::admitted();
+    fail_tasks(&mut r, 1_025);
+    for index in 0..1_025 {
+        let attempt = nth(0x28b4, index);
+        let body = json!({
+            "kind": "hee3-reconciliation-decided/1", "attempt": attempt, "task": nth(0x28b2, index),
+            "handed": {"cleanup": {"cleanup_readback": "complete"}, "process": {"custody": "unobserved"}},
+        });
+        r.store()
+            .record_reconciliation(
+                &ReconciliationRecord {
+                    attempt: id(&attempt),
+                    kind: RecordKind::Decided,
+                    body: &serde_json::to_vec(&body).unwrap(),
+                    settle_cleanup: false,
+                },
+                deadline(),
+            )
+            .unwrap();
+    }
+    let restarted = r.pass(&mut World::new());
+    assert_eq!(
+        (
+            restarted.attempts.len() + restarted.cleanup.len(),
+            restarted.cleanup_backlog
+        ),
+        (0, 0)
+    );
+}
+
+/// B03b pin: effect-bearing open attempts are all reconciled before readiness, so more of them
+/// than the bound is refused by name with both numbers, never truncated.
+#[test]
+fn more_open_attempts_than_the_bound_are_refused_with_both_numbers() {
+    let mut r = Rig::admitted();
+    let created = u32::try_from(startup::OPEN_ATTEMPT_LIMIT).unwrap() + 1;
+    for index in 0..created {
+        let task = nth(0x28c2, index);
+        r.store()
+            .submit(
+                Submission {
+                    principal: &principal(),
+                    key: id(&nth(0x28c1, index)),
+                    task: id(&task),
+                    event: id(&nth(0x28c3, index)),
+                    request_bytes: b"startup reconciliation fixture",
+                    criteria: Sha256Digest::parse(DIGEST).unwrap(),
+                    allocation: Allocation {
+                        limit_ms: 1_200_000,
+                        work_ms: 900_000,
+                        verify_ms: 300_000,
+                    },
+                },
+                deadline(),
+            )
+            .unwrap();
+        r.store()
+            .begin_attempt(
+                id(&task),
+                generation("1"),
+                id(&nth(0x28c4, index)),
+                id(&nth(0x28c5, index)),
+                deadline(),
+            )
+            .unwrap();
+    }
+    r.close();
+    let refused = startup::run(
+        &Startup {
+            root: &r.area.store(),
+            generation: id(GEN),
+            epoch: id(EPOCH),
+            limits: limits(),
+            restored_from: None,
+            cursors: &[],
+            claims: &[],
+            deadline: deadline(),
+        },
+        &mut World::new(),
+    );
+    let expected_limit = u64::try_from(startup::OPEN_ATTEMPT_LIMIT).unwrap();
+    assert!(
+        matches!(
+            refused,
+            Err(startup::Error::Store(StoreError::StartupBound { open, limit }))
+                if open == u64::from(created) && limit == expected_limit
+        ),
+        "{refused:?}"
+    );
+}
+
+/// B03b pin: a standing decision on a clean workspace is decided once after termination and is
+/// then closed history — the second boot reads nothing. A committed acceptance and a committed
+/// cancellation are the two standing kinds.
+#[test]
+fn a_standing_decision_on_a_clean_workspace_is_not_read_again() {
+    for standing in ["accepted", "cancelled"] {
+        let mut r = Rig::ready();
+        if standing == "accepted" {
+            r.verify(VerificationVerdict::Passed, true);
+            r.accept();
+        } else {
+            r.verify(VerificationVerdict::Failed, true);
+            r.cancel();
+            r.stop();
+        }
+        assert_eq!(r.area.task_row().0, standing);
+        let mut world = World::new().with_obligations(&[]);
+        let first = r.pass(&mut world);
+        assert!(
+            matches!(
+                only_cleanup(&first).decision.rule,
+                Rule::R04AcceptanceStands | Rule::R05CancellationStands
+            ),
+            "{standing}: {first:#?}"
+        );
+        let second = r.pass(&mut world);
+        assert_eq!(
+            (
+                second.attempts.len() + second.cleanup.len(),
+                second.cleanup_backlog
+            ),
+            (0, 0),
+            "{standing}: closed history is read again"
+        );
+    }
+}
+
+/// B03b pin: T07-AP-42's cleanup still happens (the first boot cleans the stopped task's
+/// remaining workspace, as before) and its engine readback then closes the attempt: the next
+/// boot reads nothing. T07-AP-41's releasable record closes it the same way.
+#[test]
+fn ap41_and_ap42_keep_their_first_boot_and_are_closed_after_it() {
+    let mut r = Rig::ready();
+    r.verify(VerificationVerdict::Failed, true);
+    r.stop();
+    let mut world = World::new().with_obligations(&["workspace"]);
+    let first = r.pass(&mut world);
+    assert!(matches!(
+        only_cleanup(&first).action,
+        Some(Action::CleanupPerformed {
+            readback: CleanupReadback::Complete,
+            ..
+        })
+    ));
+    let second = r.pass(&mut world);
+    assert_eq!(
+        (
+            second.attempts.len() + second.cleanup.len(),
+            second.cleanup_backlog
+        ),
+        (0, 0),
+        "AP-42"
+    );
+
+    let mut r = Rig::ready();
+    r.verify(VerificationVerdict::Error, true);
+    let mut world = World::new().with_obligations(&[]);
+    let first = r.pass(&mut world);
+    assert!(matches!(
+        only_cleanup(&first).action,
+        Some(Action::ReleasableRecorded { .. })
+    ));
+    let second = r.pass(&mut world);
+    assert_eq!(
+        (
+            second.attempts.len() + second.cleanup.len(),
+            second.cleanup_backlog
+        ),
+        (0, 0),
+        "AP-41"
+    );
+}
+
+/// B03b pin, one clause alone: an UNSETTLED attempt of a TERMINAL task is effect-bearing open,
+/// read on every boot. No store API produces it — `finish_unaccepted` refuses outstanding work —
+/// but a restored or damaged ledger can, and it must never fall between the open predicate and
+/// the cleanup tail (the tail takes only settled attempts), which would skip it silently.
+#[test]
+fn an_unsettled_attempt_of_a_terminal_task_is_read_every_boot() {
+    let mut r = Rig::admitted();
+    fail_tasks(&mut r, 1);
+    r.close();
+    let attempt = nth(0x28b4, 0);
+    let db = Connection::open_with_flags(
+        r.area.db(),
+        OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NOFOLLOW,
+    )
+    .unwrap();
+    assert_eq!(
+        db.execute(
+            "UPDATE attempts SET state='unknown', effect='unknown', cleanup='unknown', used_ms=NULL WHERE id=?",
+            [&attempt]
+        )
+        .unwrap(),
+        1
+    );
+    drop(db);
+    let mut world = World::new().with_obligations_for(&attempt, &[]);
+    for boot in 0..2 {
+        let pass = r.pass(&mut world);
+        assert_eq!(
+            pass.attempts
+                .iter()
+                .map(|entry| entry.attempt.as_str())
+                .collect::<Vec<_>>(),
+            [attempt.as_str()],
+            "boot {boot}"
+        );
+    }
+}
+
+/// B03b pin, the other clause alone: a SETTLED attempt of a NON-TERMINAL task is open — read on
+/// every boot, even after a clean decision — because closure applies only to terminal tasks.
+#[test]
+fn a_settled_attempt_of_a_live_task_is_read_every_boot() {
+    let mut r = Rig::ready();
+    assert_eq!(r.area.task_row().0, "verifying");
+    let mut world = World::new().with_obligations(&[]);
+    for boot in 0..2 {
+        let pass = r.pass(&mut world);
+        assert_eq!(only(&pass).attempt, ATTEMPT, "boot {boot}");
+    }
+}
+
+/// B03b pin: the cleanup tail does not block readiness. A terminal attempt whose cleanup cannot
+/// be read is decided `RetainUnknown` (work outstanding) — which, among effect-bearing attempts,
+/// would hold recovery `Pending` — yet in the cleanup batch the coordinator's own `health_of`
+/// reports recovery `Complete`, and the attempt stays in the backlog to be read again.
+#[test]
+fn an_unconfirmed_cleanup_does_not_block_readiness() {
+    let mut r = Rig::admitted();
+    fail_tasks(&mut r, 1);
+    let mut world = World::new();
+    for boot in 0..2 {
+        let pass = r.pass(&mut world);
+        let entry = only_cleanup(&pass);
+        assert!(
+            habitat_engine::app::coordinator::leaves_work_outstanding(
+                &entry.decision.reconciliation
+            ),
+            "boot {boot}: {:?}",
+            entry.decision
+        );
+        let health = habitat_engine::app::coordinator::health_of(Ok(&pass), 0);
+        assert_eq!(
+            health.recovery,
+            habitat_engine::contracts::control::Recovery::Complete,
+            "boot {boot}"
+        );
+    }
 }
