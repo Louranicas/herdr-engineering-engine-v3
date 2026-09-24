@@ -7,6 +7,7 @@ use habitat_engine::contracts::rc01::{CLEANUP_RESERVE, MAX_ATTEMPTS, MAX_NO_PROG
 use habitat_engine::contracts::{
     Generation, ScalarError, Sha256Digest, U32Decimal, U64Decimal, UuidV4, parse_u64_decimal,
 };
+use habitat_engine::contracts::{Principal, PrincipalError};
 
 /// The published RC01 decision, read as text: the independent source for the limits' values.
 const DECISIONS: &str = include_str!("../docs/contract-decisions.md");
@@ -276,5 +277,32 @@ fn digest_refuses_wrong_length_prefix_and_alphabet() {
         format!("sha256:{}", "g".repeat(64)),
     ] {
         assert_eq!(Sha256Digest::parse(&text), Err(ScalarError::InvalidDigest));
+    }
+}
+
+/// A role is 1..=64 bytes of `[A-Za-z0-9_-]`; everything else is refused by name (A24 moved the
+/// type into contracts; its refusals were never pinned before).
+#[test]
+fn principal_roles_are_bounded_identifiers() {
+    for good in ["operator", "a", "reviewer_2", "x-y", &"r".repeat(64)] {
+        let principal = Principal::new(1000, good).map_err(|error| format!("{good:?}: {error:?}"));
+        assert!(
+            principal.is_ok_and(|p| p.is(1000, good) && !p.is(1001, good)),
+            "{good:?}"
+        );
+    }
+    for bad in [
+        "",
+        "two words",
+        "role.dot",
+        "rôle",
+        "tab\t",
+        &"r".repeat(65),
+    ] {
+        assert_eq!(
+            Principal::new(1000, bad).map(|_| ()),
+            Err(PrincipalError::InvalidRole),
+            "{bad:?}"
+        );
     }
 }

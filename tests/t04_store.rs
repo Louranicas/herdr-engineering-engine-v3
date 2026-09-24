@@ -1685,6 +1685,25 @@ fn manifest_publication_failure_retains_durable_unreferenced_bytes() {
     store.accept(&published, 20, deadline()).unwrap();
 }
 
+/// A stored role that no longer validates is a corrupt ledger: acceptance refuses instead of
+/// addressing the outbox to a principal built around `Principal::new`'s checks (A24).
+#[test]
+fn acceptance_refuses_a_stored_principal_role_that_no_longer_validates() {
+    let area = Area::new();
+    let mut store = area.open();
+    let active = verifying(&mut store);
+    let published = proof(&store, &active);
+    area.edit_closed(&format!(
+        "UPDATE tasks SET principal_role='bad role' WHERE id='{TASK}';"
+    ));
+    assert!(matches!(
+        store.accept(&published, 20, deadline()),
+        Err(Error::Corrupt)
+    ));
+    assert_eq!(count(&area, "acceptances"), 0);
+    assert_eq!(count(&area, "outbox"), 0);
+}
+
 #[test]
 fn acceptance_commits_objects_history_budget_and_outbox_as_one_unit() {
     let area = Area::new();

@@ -496,39 +496,7 @@ fn digest(bytes: &[u8]) -> String {
     digest_text(&Sha256::digest(bytes))
 }
 
-/// Stable principal supplied by the authenticated owner, never decoded from a body.
-#[derive(Clone, Debug)]
-pub struct Principal {
-    uid: u32,
-    role: String,
-}
-impl Principal {
-    /// # Errors
-    /// Refuses an empty, oversized or non-identifier configured role.
-    pub fn new(uid: u32, role: &str) -> Result<Self> {
-        if role.is_empty()
-            || role.len() > 64
-            || !role
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
-        {
-            return Err(Error::Invalid);
-        }
-        Ok(Self {
-            uid,
-            role: role.to_owned(),
-        })
-    }
-    /// Whether this is the principal with `uid` and the configured `role`: how a record naming
-    /// its principal (a grant) is matched without exposing either field.
-    #[must_use]
-    pub fn is(&self, uid: u32, role: &str) -> bool {
-        self.uid == uid && self.role == role
-    }
-    fn recipient(&self) -> String {
-        format!("{}:{}", self.uid, self.role)
-    }
-}
+pub use crate::contracts::{Principal, PrincipalError};
 
 /// Fixed offline allocation in milliseconds. Provider currency remains zero.
 #[derive(Clone, Copy, Debug)]
@@ -838,18 +806,18 @@ impl Store {
         self.transaction(deadline, |tx| {
             let prior: Option<(String, Vec<u8>)> = tx.query_row(
                 "SELECT request_digest,result FROM operations WHERE principal_uid=? AND principal_role=? AND action='task.submit' AND version=1 AND request_key=?",
-                params![input.principal.uid,input.principal.role,input.key.as_str()], |row| Ok((row.get(0)?,row.get(1)?))).optional()?;
+                params![input.principal.uid(),input.principal.role(),input.key.as_str()], |row| Ok((row.get(0)?,row.get(1)?))).optional()?;
             if let Some((prior_digest, result)) = prior {
                 if prior_digest != request_digest { return Err(Error::Conflict); }
                 return Ok(serde_json::from_slice(&result)?);
             }
             tx.execute("INSERT INTO tasks(id,principal_uid,principal_role,spec,criteria_digest,generation,state,limit_ms,reserved_work_ms,reserved_verify_ms) VALUES(?,?,?,?,?,'1','admitted',?,?,?)",
-                params![input.task.as_str(),input.principal.uid,input.principal.role,input.request_bytes,input.criteria.as_str(),number(input.allocation.limit_ms)?,number(input.allocation.work_ms)?,number(input.allocation.verify_ms)?])?;
+                params![input.task.as_str(),input.principal.uid(),input.principal.role(),input.request_bytes,input.criteria.as_str(),number(input.allocation.limit_ms)?,number(input.allocation.work_ms)?,number(input.allocation.verify_ms)?])?;
             cut_point!(fault, CutPoint::TaskWrite);
             let sequence = event(tx,input.event.as_str(),input.task.as_str(),"1","admitted")?;
             let result = Admission { task:input.task.as_str().to_owned(),generation:"1".to_owned(),epoch,sequence };
             tx.execute("INSERT INTO operations(principal_uid,principal_role,action,version,request_key,request_digest,resource_id,result) VALUES(?,?,'task.submit',1,?,?,?,?)",
-                params![input.principal.uid,input.principal.role,input.key.as_str(),request_digest,input.task.as_str(),serde_json::to_vec(&result)?])?;
+                params![input.principal.uid(),input.principal.role(),input.key.as_str(),request_digest,input.task.as_str(),serde_json::to_vec(&result)?])?;
             Ok(result)
         })
     }
@@ -865,7 +833,7 @@ impl Store {
     ) -> Result<TaskHead> {
         schema::bound(&self.connection, deadline)?;
         let id: String = self.connection.query_row("SELECT resource_id FROM operations WHERE principal_uid=? AND principal_role=? AND action='task.submit' AND version=1 AND request_key=?",
-            params![principal.uid,principal.role,key.as_str()], |row| row.get(0)).optional()?.ok_or(Error::NotFound)?;
+            params![principal.uid(),principal.role(),key.as_str()], |row| row.get(0)).optional()?.ok_or(Error::NotFound)?;
         self.get(
             principal,
             UuidV4::parse(&id).map_err(|_| Error::Corrupt)?,
@@ -883,7 +851,7 @@ impl Store {
     ) -> Result<TaskHead> {
         schema::bound(&self.connection, deadline)?;
         self.connection.query_row("SELECT id,generation,state,cancellation,accepted_event,criteria_digest,spent_ms,reserved_work_ms,reserved_verify_ms FROM tasks WHERE id=? AND principal_uid=? AND principal_role=?",
-            params![id.as_str(),principal.uid,principal.role], task_row).optional()?.ok_or(Error::NotFound)
+            params![id.as_str(),principal.uid(),principal.role()], task_row).optional()?.ok_or(Error::NotFound)
     }
 
     /// Reserve a unique attempt before dispatch. Previous uncertain attempts block reuse.
@@ -1133,7 +1101,9 @@ impl Store {
             for object in &data.objects {tx.execute("INSERT INTO acceptance_objects VALUES(?,?)",params![data.event,object.digest])?;}
             tx.execute("UPDATE tasks SET generation=?,state='accepted',accepted_event=?,spent_ms=spent_ms+?,reserved_work_ms=0,reserved_verify_ms=0 WHERE id=?",params![generation,data.event,number(verification_ms)?,data.task])?;
             cut_point!(fault,CutPoint::AcceptanceWrite);
-            let principal=tx.query_row("SELECT principal_uid,principal_role FROM tasks WHERE id=?",[&data.task],|row|Ok(Principal {uid:row.get(0)?,role:row.get(1)?}))?;
+            let (uid,role):(u32,String)=tx.query_row("SELECT principal_uid,principal_role FROM tasks WHERE id=?",[&data.task],|row|Ok((row.get(0)?,row.get(1)?)))?;
+            // A stored role that no longer validates is a corrupt ledger, not a principal.
+            let principal=Principal::new(uid,&role).map_err(|_| Error::Corrupt)?;
             tx.execute("INSERT INTO outbox(event_id,recipient) VALUES(?,?)",params![data.event,principal.recipient()])?;
             Ok(sequence)
         })

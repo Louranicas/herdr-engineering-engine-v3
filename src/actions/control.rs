@@ -20,12 +20,12 @@ use super::{
     Action, CATALOGUE_REVISION, Caller, Catalogue, ERROR_SCHEMA_SHA256, MAX_PAGE, PreconditionRule,
     Refusal,
 };
+use crate::contracts::Principal;
 use crate::contracts::control::{
     self as wire, Envelope, ErrorCode, Fault, FrameFault, Health, MAX_DEADLINE_AHEAD_MS,
     MAX_FRAME_BYTES, Outcome, Received, Retry, result_frame,
 };
 use crate::contracts::{Sha256Digest, parse_u64_decimal};
-use crate::store::Principal;
 use crate::task::control::{self as task_body, Selector, Spec};
 use serde_json::{Map, Value, json};
 

@@ -149,7 +149,7 @@ fn invalid(error: dto::Invalid) -> Error {
 }
 
 fn operator(principal: &Principal) -> Result<()> {
-    if principal.role == "operator" {
+    if principal.role() == "operator" {
         Ok(())
     } else {
         Err(Error::Forbidden)
@@ -173,7 +173,7 @@ fn capacity(connection: &Connection, table: &str, additional: usize, limit: usiz
 fn record(connection: &Connection, principal: &Principal, id: &str) -> Result<Record> {
     let data: Option<(String, Vec<u8>, bool, Option<String>)> = connection.query_row(
         "SELECT revision,definition,disabled,observation_id FROM roster_records WHERE id=? AND principal_uid=? AND principal_role=?",
-        params![id,principal.uid,principal.role], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?))).optional()?;
+        params![id,principal.uid(),principal.role()], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?))).optional()?;
     let (revision, definition, disabled, observation_id) = data.ok_or(Error::NotFound)?;
     dto::uuid(id)
         .and_then(|()| dto::generation(&revision))
@@ -251,7 +251,7 @@ fn prior(
     key: &str,
     request_digest: &str,
 ) -> Result<Option<Outcome>> {
-    let row: Option<(String, Vec<u8>)> = tx.query_row("SELECT request_digest,result FROM operations WHERE principal_uid=? AND principal_role=? AND action=? AND version=1 AND request_key=?", params![principal.uid,principal.role,action,key], |row| Ok((row.get(0)?,row.get(1)?))).optional()?;
+    let row: Option<(String, Vec<u8>)> = tx.query_row("SELECT request_digest,result FROM operations WHERE principal_uid=? AND principal_role=? AND action=? AND version=1 AND request_key=?", params![principal.uid(),principal.role(),action,key], |row| Ok((row.get(0)?,row.get(1)?))).optional()?;
     row.map(|(old_digest, bytes)| {
         if old_digest != request_digest {
             return Err(Error::Conflict);
@@ -276,7 +276,7 @@ fn retain_operation(
     outcome: &Outcome,
 ) -> Result<()> {
     register_source(tx, operation.source)?;
-    tx.execute("INSERT INTO operations(principal_uid,principal_role,action,version,request_key,request_digest,roster_id,request_object,request_row,result) VALUES(?,?,?,1,?,?,?,?,?,?)", params![operation.principal.uid,operation.principal.role,operation.action,operation.key,operation.request_digest,outcome.head.record_id,operation.source.digest(),operation.row,serde_json::to_vec(outcome)?])?;
+    tx.execute("INSERT INTO operations(principal_uid,principal_role,action,version,request_key,request_digest,roster_id,request_object,request_row,result) VALUES(?,?,?,1,?,?,?,?,?,?)", params![operation.principal.uid(),operation.principal.role(),operation.action,operation.key,operation.request_digest,outcome.head.record_id,operation.source.digest(),operation.row,serde_json::to_vec(outcome)?])?;
     Ok(())
 }
 
@@ -337,7 +337,7 @@ fn apply_update(
         }
     } else {
         capacity(tx, "roster_records", 1, MAX_RECORDS)?;
-        tx.execute("INSERT INTO roster_records(id,principal_uid,principal_role,revision,definition) VALUES(?,?,?,'1',?)", params![ids.0,operation.principal.uid,operation.principal.role,serde_json::to_vec(&update.definition)?])?;
+        tx.execute("INSERT INTO roster_records(id,principal_uid,principal_role,revision,definition) VALUES(?,?,?,'1',?)", params![ids.0,operation.principal.uid(),operation.principal.role(),serde_json::to_vec(&update.definition)?])?;
         RosterHeadV1 {
             record_id: ids.0.clone(),
             record_version: "1".to_owned(),
@@ -466,7 +466,7 @@ impl Store {
         deadline: Instant,
     ) -> Result<Observation> {
         schema::bound(&self.connection, deadline)?;
-        let visible:bool=self.connection.query_row("SELECT EXISTS(SELECT 1 FROM roster_observations o JOIN roster_records r ON r.id=o.record_id WHERE o.id=? AND r.principal_uid=? AND r.principal_role=?)",params![id.as_str(),principal.uid,principal.role],|row|row.get(0))?;
+        let visible:bool=self.connection.query_row("SELECT EXISTS(SELECT 1 FROM roster_observations o JOIN roster_records r ON r.id=o.record_id WHERE o.id=? AND r.principal_uid=? AND r.principal_role=?)",params![id.as_str(),principal.uid(),principal.role()],|row|row.get(0))?;
         if !visible {
             return Err(Error::NotFound);
         }
@@ -487,7 +487,7 @@ impl Store {
             return Err(Error::Invalid);
         }
         schema::bound(&self.connection, deadline)?;
-        let bytes:Vec<u8>=self.connection.query_row("SELECT result FROM operations WHERE principal_uid=? AND principal_role=? AND action=? AND version=1 AND request_key=?",params![principal.uid,principal.role,action,key.as_str()],|row|row.get(0)).optional()?.ok_or(Error::NotFound)?;
+        let bytes:Vec<u8>=self.connection.query_row("SELECT result FROM operations WHERE principal_uid=? AND principal_role=? AND action=? AND version=1 AND request_key=?",params![principal.uid(),principal.role(),action,key.as_str()],|row|row.get(0)).optional()?.ok_or(Error::NotFound)?;
         Ok(serde_json::from_slice(&bytes)?)
     }
 
@@ -509,7 +509,7 @@ impl Store {
         let ids = {
             let mut statement=tx.prepare("SELECT id FROM roster_records WHERE principal_uid=? AND principal_role=? ORDER BY id LIMIT 257")?;
             statement
-                .query_map(params![principal.uid, principal.role], |row| {
+                .query_map(params![principal.uid(), principal.role()], |row| {
                     row.get::<_, String>(0)
                 })?
                 .collect::<std::result::Result<Vec<_>, _>>()?

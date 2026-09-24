@@ -383,3 +383,7 @@ pub mod control;
 
 /// RC01 numeric limits; the task loop guard owns the policy and re-exports them.
 pub mod rc01;
+
+/// The authenticated principal a request acts as.
+pub mod principal;
+pub use principal::{Principal, PrincipalError};

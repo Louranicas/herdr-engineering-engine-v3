@@ -38,7 +38,7 @@ pub(super) fn instance(
     principal: &Principal,
     id: &str,
 ) -> Result<Instance> {
-    let bytes:Vec<u8>=connection.query_row("SELECT i.body FROM roster_instances i JOIN tasks t ON t.id=i.task_id WHERE i.id=? AND t.principal_uid=? AND t.principal_role=?",params![id,principal.uid,principal.role],|row|row.get(0)).optional()?.ok_or(Error::NotFound)?;
+    let bytes:Vec<u8>=connection.query_row("SELECT i.body FROM roster_instances i JOIN tasks t ON t.id=i.task_id WHERE i.id=? AND t.principal_uid=? AND t.principal_role=?",params![id,principal.uid(),principal.role()],|row|row.get(0)).optional()?.ok_or(Error::NotFound)?;
     let instance: Instance = serde_json::from_slice(&bytes)?;
     for id in [
         &instance.id,
@@ -215,7 +215,7 @@ impl Store {
         let clock = self.clock.clone();
         let fault = self.fault();
         self.transaction(deadline,|tx| {
-            let visible:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM tasks WHERE id=? AND principal_uid=? AND principal_role=?)",params![input.task.as_str(),input.principal.uid,input.principal.role],|row|row.get(0))?;
+            let visible:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM tasks WHERE id=? AND principal_uid=? AND principal_role=?)",params![input.task.as_str(),input.principal.uid(),input.principal.role()],|row|row.get(0))?;
             if !visible { return Err(Error::NotFound); }
             capacity(tx,"roster_instances",1,MAX_HISTORY)?;
             capacity(tx,"roster_instance_history",1,MAX_HISTORY)?;
@@ -332,7 +332,7 @@ impl Store {
         deadline: Instant,
     ) -> Result<Vec<Pin>> {
         schema::bound(&self.connection, deadline)?;
-        let visible:bool=self.connection.query_row("SELECT EXISTS(SELECT 1 FROM attempts a JOIN tasks t ON t.id=a.task_id WHERE a.id=? AND t.principal_uid=? AND t.principal_role=?)",params![attempt.as_str(),principal.uid,principal.role],|row|row.get(0))?;
+        let visible:bool=self.connection.query_row("SELECT EXISTS(SELECT 1 FROM attempts a JOIN tasks t ON t.id=a.task_id WHERE a.id=? AND t.principal_uid=? AND t.principal_role=?)",params![attempt.as_str(),principal.uid(),principal.role()],|row|row.get(0))?;
         if !visible {
             return Err(Error::NotFound);
         }
