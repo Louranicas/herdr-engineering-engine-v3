@@ -929,10 +929,18 @@ def rust_test_partitions(root):
     return [*partitions, *separate]
 
 
-def run_rust_test_partitions(root, run, cargo, common, label, expectations):
+def run_rust_test_partitions(root, run, cargo, common, label, expectations, main_env=None):
+    """`main_env`, when given, is the environment for tests-main only. Every other partition keeps the
+    gate's serial RUST_TEST_THREADS=1: the process, native, contract, recovery and inventory batteries
+    spawn and cancel children, and t06 publishes fsynced objects under the 180 s command bound.
+    Measured 2026-09-24 (e1bdb48): tests-main passed 1111/1111 in 3/3 parallel runs, 8 s vs 14 s serial."""
     outputs = []
     for suffix, targets in rust_test_partitions(root):
-        outputs.append(run(label + "-" + suffix, [cargo, "test", *common, *targets])["stdout"])
+        argv = [cargo, "test", *common, *targets]
+        if suffix == "tests-main" and main_env is not None:
+            outputs.append(run(label + "-" + suffix, argv, command_env=main_env)["stdout"])
+        else:
+            outputs.append(run(label + "-" + suffix, argv)["stdout"])
     # The original full-census and namespace oracle remains unchanged. Repetition,
     # omitted process output, transport-marker duplication and extra groups fail.
     require_rust_test_summaries("\n".join(outputs), expectations, label)
@@ -1124,7 +1132,7 @@ def main():
             return texts
 
         run("process-controls", [sys.executable, "-W", "error", "tests/t25_process.py"], required_text="17 tests")
-        run("quality-integration-controls", [sys.executable, "-W", "error", "tests/t25_quality.py"], required_text="Ran 99 tests" if has_t09(ROOT) else "Ran 93 tests" if has_t08_contract(ROOT) or has_recovery(ROOT) else ("Ran 83 tests" if has_t08(ROOT) else ("Ran 73 tests" if has_t07(ROOT) else ("Ran 66 tests" if has_t21(ROOT) or has_t13(ROOT) else ("Ran 47 tests" if has_t06(ROOT) else "Ran 43 tests")))), required_stream="stderr")
+        run("quality-integration-controls", [sys.executable, "-W", "error", "tests/t25_quality.py"], required_text="Ran 100 tests" if has_t09(ROOT) else "Ran 93 tests" if has_t08_contract(ROOT) or has_recovery(ROOT) else ("Ran 83 tests" if has_t08(ROOT) else ("Ran 73 tests" if has_t07(ROOT) else ("Ran 66 tests" if has_t21(ROOT) or has_t13(ROOT) else ("Ran 47 tests" if has_t06(ROOT) else "Ran 43 tests")))), required_stream="stderr")
         run("workflow-procedure-controls", [sys.executable, "-W", "error", "tests/procedure_schema.py"],
             required_text="run=75 failures=0 errors=0")
         run("workflow-site-sweep", [sys.executable, "tools/check-workflow-sites"],
@@ -1215,7 +1223,8 @@ def main():
                 label = features + "-" + profile
                 common = ["--workspace", "--locked", "--offline", *flags, *profile_flags]
                 run(label + "-clippy", [cargo, "clippy", *common, "--all-targets", "--", "-D", "warnings", "-D", "clippy::pedantic"])
-                run_rust_test_partitions(ROOT, run, cargo, common, label, test_expectations)
+                parallel_main = {key: value for key, value in env.items() if key != "RUST_TEST_THREADS"}
+                run_rust_test_partitions(ROOT, run, cargo, common, label, test_expectations, parallel_main)
                 doc_raw = run(label + "-doctests", [cargo, "test", *common, "--doc"])["stdout"]
                 require_rust_test_summaries(
                     doc_raw, {"test_counts": [test_expectations["doctest_count"]], "has_t02": False},

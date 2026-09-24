@@ -50,6 +50,25 @@ class QualityIntegrationControls(unittest.TestCase):
                          ["baseline", "assertion", "warning", "skip", "broken",
                           "bounds", "deprecation", "empty"])
 
+    def test_only_tests_main_runs_parallel_and_every_other_partition_stays_serial(self):
+        # A recording double: it stores the environment each partition was handed.
+        expected = quality.rust_test_expectations(ROOT)
+        serve = T06QualityInventoryControls.serve(expected, {})
+        handed = {}
+        def run(label, argv, command_env=None):
+            handed[label] = command_env
+            return serve(label, argv)
+        parallel = {"PATH": "/usr/bin:/bin", "T13_PROCESS_EVIDENCE": "/x"}
+        quality.run_rust_test_partitions(ROOT, run, "cargo", [], "fixture", expected, parallel)
+        self.assertEqual(handed.pop("fixture-tests-main"), parallel)
+        self.assertTrue(handed, "no other partition was run")
+        self.assertTrue(all(value is None for value in handed.values()), handed)
+        handed.clear()
+        quality.run_rust_test_partitions(ROOT, run, "cargo", [], "fixture", expected)
+        self.assertTrue(all(value is None for value in handed.values()), "no main_env, no override anywhere")
+        source = (ROOT / "tools/check-quality").read_text()
+        self.assertIn('parallel_main = {key: value for key, value in env.items() if key != "RUST_TEST_THREADS"}', source)
+
     def test_gate_build_parallelism_is_the_operator_decision_and_has_one_owner(self):
         # Operator decisions 2026-09-24: from 2 to 8, then the full capacity of the hardware. The rule
         # is "every CPU this process may run on"; the independent source is the kernel's affinity mask.
@@ -1741,8 +1760,8 @@ class T06QualityInventoryControls(unittest.TestCase):
         self.assertEqual(text.count("for name in ('python', 'native-client-interpreter', 'native-daemon-stand-in', 'contract-client-interpreter', 'contract-daemon-stand-in'):"), 1)
         # The recheck reads the pin's own path and digest, after the Rust commands.
         recheck = text.index("Pinned interpreter changed")
-        self.assertGreater(recheck, text.index("run_rust_test_partitions(ROOT, run, cargo, common, label, test_expectations)"))
-        self.assertIn("required_text='Ran 99 tests' if has_t09(ROOT) else", text)
+        self.assertGreater(recheck, text.index("run_rust_test_partitions(ROOT, run, cargo, common, label, test_expectations, parallel_main)"))
+        self.assertIn("required_text='Ran 100 tests' if has_t09(ROOT) else", text)
         self.assertIn("'Ran 93 tests' if has_t08_contract(ROOT) or has_recovery(ROOT) else", text)
 
     def test_t06_partition_holds_every_t06_target_once_and_nothing_else(self):
