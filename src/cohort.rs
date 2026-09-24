@@ -339,6 +339,17 @@ pub const MAX_CLAIMS: usize = 64;
 /// The most dependencies one thread may declare.
 pub const MAX_DEPENDENCIES: usize = 64;
 
+/// The most bytes of evidence one report may carry. Checked on the caller's slice before
+/// anything is copied, so the bound holds at the point of acquisition.
+pub const MAX_EVIDENCE_BYTES: usize = 65_536;
+
+/// The most bytes one thread's role name may carry.
+pub const MAX_ROLE_BYTES: usize = 64;
+
+/// The most times one thread may be rebriefed. Each rebrief is a retry of the thread's work,
+/// and retries are bounded by count, never by a clock.
+pub const MAX_REBRIEFS: u32 = 8;
+
 /// Schema version of the persisted cohort shape.
 pub const SCHEMA_VERSION: i64 = 1;
 
@@ -379,6 +390,20 @@ pub enum Refusal {
     /// A brief revision lower than the current one: a regression would re-admit work done
     /// against an older brief (review D5).
     BriefRegressed,
+    /// A report carried more than [`MAX_EVIDENCE_BYTES`] of evidence.
+    EvidenceLimit,
+    /// An empty role name was declared.
+    EmptyRole,
+    /// A role name longer than [`MAX_ROLE_BYTES`].
+    RoleLimit,
+    /// The thread has already been rebriefed [`MAX_REBRIEFS`] times.
+    RebriefLimit,
+    /// A rebrief of a thread whose current-brief dissent would be erased by it. A dissent is
+    /// answered by revising the brief, which makes the thread stale, not by clearing it in place.
+    DissentOutstanding,
+    /// A report carrying a generation other than the thread's current one: a callback from an
+    /// attempt that a rebrief has since superseded.
+    StaleGeneration,
 }
 
 impl Refusal {
@@ -402,6 +427,12 @@ impl Refusal {
             Self::EmptyClaim => "an empty resource claim",
             Self::NonCanonicalClaim => "a resource claim not in canonical form",
             Self::BriefRegressed => "a brief revision lower than the current one",
+            Self::EvidenceLimit => "evidence byte bound reached",
+            Self::EmptyRole => "an empty role",
+            Self::RoleLimit => "role byte bound reached",
+            Self::RebriefLimit => "rebrief count bound reached",
+            Self::DissentOutstanding => "a current dissent is not cleared by rebrief",
+            Self::StaleGeneration => "report generation is not the thread's current generation",
         }
     }
 }
@@ -518,11 +549,46 @@ impl Claim {
     }
 }
 
+/// A specialist thread's role: what it is briefed to do, in a bounded name.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Role {
+    name: String,
+}
+
+impl Role {
+    /// A role named `name`, of 1 to [`MAX_ROLE_BYTES`] bytes. The length is checked on the
+    /// caller's slice before it is copied.
+    ///
+    /// # Errors
+    ///
+    /// * [`Refusal::EmptyRole`] for an empty name;
+    /// * [`Refusal::RoleLimit`] for a name longer than [`MAX_ROLE_BYTES`].
+    pub fn new(name: &str) -> Result<Self, Refusal> {
+        if name.is_empty() {
+            return Err(Refusal::EmptyRole);
+        }
+        if name.len() > MAX_ROLE_BYTES {
+            return Err(Refusal::RoleLimit);
+        }
+        Ok(Self {
+            name: name.to_owned(),
+        })
+    }
+
+    /// The role name.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.name
+    }
+}
+
 /// One specialist thread's record.
 #[derive(Clone, Debug)]
 struct Thread {
     identity: String,
+    role: Role,
     brief: u64,
+    generation: u32,
     dependencies: Vec<String>,
     claims: Vec<Claim>,
     required: bool,
@@ -535,8 +601,14 @@ struct Thread {
 pub struct Assignment<'a> {
     /// The thread identity.
     pub identity: UuidV4<'a>,
+    /// Its role.
+    pub role: &'a Role,
     /// The brief revision it was assigned against.
     pub brief: u64,
+    /// Its attempt generation: 0 at assignment and one more per rebrief, so it is also the
+    /// thread's rework count. A report must carry it; one that does not is a superseded
+    /// attempt's callback.
+    pub generation: u32,
     /// The threads it depends on, in declaration order.
     pub dependencies: Vec<&'a str>,
     /// Its exclusive write claims.
@@ -671,6 +743,7 @@ impl Cohort {
     pub fn assign(
         &mut self,
         identity: &str,
+        role: Role,
         dependencies: &[&str],
         claims: Vec<Claim>,
         required: bool,
@@ -714,7 +787,9 @@ impl Cohort {
         }
         self.threads.push(Thread {
             identity: identity.as_str().to_owned(),
+            role,
             brief: self.brief,
+            generation: 0,
             dependencies: declared,
             claims,
             required,
@@ -753,22 +828,34 @@ impl Cohort {
     /// Record one thread's own outcome.
     ///
     /// A child reports; it does not accept. There is no argument here by which a thread can
-    /// speak for the parent or for a sibling.
+    /// speak for the parent or for a sibling. `generation` is the attempt generation the
+    /// thread was dispatched under ([`Assignment::generation`]), so a callback from an attempt
+    /// a rebrief has superseded cannot land as the new attempt's outcome.
     ///
     /// # Errors
     ///
+    /// * [`Refusal::EvidenceLimit`] when `evidence` exceeds [`MAX_EVIDENCE_BYTES`], refused
+    ///   before anything is parsed or copied;
     /// * [`Refusal::UnknownThread`], [`Refusal::MalformedIdentity`];
+    /// * [`Refusal::StaleGeneration`] when `generation` is not the thread's current one;
     /// * [`Refusal::AlreadyReported`] — an outcome is not revised in place, because a
     ///   silently rewritten conclusion is indistinguishable from the first one;
     /// * [`Refusal::StaleBrief`] when the cohort has been revised since the assignment.
     pub fn report(
         &mut self,
         thread: &str,
+        generation: u32,
         outcome: Outcome,
         evidence: &str,
     ) -> Result<(), Refusal> {
+        if evidence.len() > MAX_EVIDENCE_BYTES {
+            return Err(Refusal::EvidenceLimit);
+        }
         let thread = UuidV4::parse(thread).map_err(Refusal::MalformedIdentity)?;
         let index = self.find(thread.as_str()).ok_or(Refusal::UnknownThread)?;
+        if self.threads[index].generation != generation {
+            return Err(Refusal::StaleGeneration);
+        }
         if self.threads[index].outcome.is_some() {
             return Err(Refusal::AlreadyReported);
         }
@@ -780,20 +867,34 @@ impl Cohort {
         Ok(())
     }
 
-    /// Reassign a stale thread against the current brief, clearing its outcome.
+    /// Reassign a thread against the current brief as a new attempt, clearing its outcome.
     ///
     /// This is the repair path: a thread whose brief moved did different work, so its
-    /// conclusion is discarded rather than carried forward.
+    /// conclusion is discarded rather than carried forward. Each rebrief advances the thread's
+    /// generation, which retires the previous attempt's callbacks and counts as one retry.
     ///
     /// # Errors
     ///
-    /// [`Refusal::UnknownThread`], [`Refusal::MalformedIdentity`].
+    /// * [`Refusal::UnknownThread`], [`Refusal::MalformedIdentity`];
+    /// * [`Refusal::RebriefLimit`] once the thread has been rebriefed [`MAX_REBRIEFS`] times;
+    /// * [`Refusal::DissentOutstanding`] for a thread that dissented on the current brief:
+    ///   clearing it in place would erase the dissent and let a later `Met` join as though it
+    ///   never happened. Revise the brief first; the dissent then blocks as stale work.
     pub fn rebrief(&mut self, thread: &str) -> Result<(), Refusal> {
         let thread = UuidV4::parse(thread).map_err(Refusal::MalformedIdentity)?;
         let index = self.find(thread.as_str()).ok_or(Refusal::UnknownThread)?;
-        self.threads[index].brief = self.brief;
-        self.threads[index].outcome = None;
-        self.threads[index].evidence = None;
+        let current = &self.threads[index];
+        if current.generation >= MAX_REBRIEFS {
+            return Err(Refusal::RebriefLimit);
+        }
+        if current.brief >= self.brief && current.outcome == Some(Outcome::Dissent) {
+            return Err(Refusal::DissentOutstanding);
+        }
+        let current = &mut self.threads[index];
+        current.brief = self.brief;
+        current.generation += 1;
+        current.outcome = None;
+        current.evidence = None;
         Ok(())
     }
 
@@ -808,7 +909,9 @@ impl Cohort {
         Ok(Assignment {
             identity: UuidV4::parse(thread.identity.as_str())
                 .map_err(Refusal::MalformedIdentity)?,
+            role: &thread.role,
             brief: thread.brief,
+            generation: thread.generation,
             dependencies: thread.dependencies.iter().map(String::as_str).collect(),
             claims: &thread.claims,
             required: thread.required,

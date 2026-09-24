@@ -8,14 +8,18 @@
 use std::error::Error;
 
 use habitat_engine::cohort::{
-    Blocked, Claim, Cohort, Join, MAX_CLAIMS, MAX_DEPENDENCIES, MAX_THREADS, Outcome, Refusal,
-    SCHEMA_VERSION,
+    Blocked, Claim, Cohort, Join, MAX_CLAIMS, MAX_DEPENDENCIES, MAX_EVIDENCE_BYTES, MAX_REBRIEFS,
+    MAX_ROLE_BYTES, MAX_THREADS, Outcome, Refusal, Role, SCHEMA_VERSION,
 };
 
 type Outcome_ = Result<(), Box<dyn Error>>;
 
 fn id(index: usize) -> String {
     format!("{index:08x}-0000-4000-8000-000000000000")
+}
+
+fn role() -> Result<Role, Refusal> {
+    Role::new("specialist")
 }
 
 fn claim(path: &str) -> Result<Vec<Claim>, Box<dyn Error>> {
@@ -26,7 +30,13 @@ fn claim(path: &str) -> Result<Vec<Claim>, Box<dyn Error>> {
 fn cohort_of(count: usize) -> Result<Cohort, Box<dyn Error>> {
     let mut cohort = Cohort::new(1);
     for index in 1..=count {
-        cohort.assign(&id(index), &[], claim(&format!("src/m{index}"))?, true)?;
+        cohort.assign(
+            &id(index),
+            role()?,
+            &[],
+            claim(&format!("src/m{index}"))?,
+            true,
+        )?;
     }
     Ok(cohort)
 }
@@ -43,7 +53,7 @@ fn blocked_names(join: &Join) -> Vec<&'static str> {
 fn disjoint_valid_work_converges() -> Outcome_ {
     let mut cohort = cohort_of(3)?;
     for index in 1..=3 {
-        cohort.report(&id(index), Outcome::Met, "evidence")?;
+        cohort.report(&id(index), 0, Outcome::Met, "evidence")?;
     }
     let join = cohort.join();
     assert!(join.is_integrable());
@@ -61,8 +71,8 @@ fn disjoint_valid_work_converges() -> Outcome_ {
 #[test]
 fn an_integrable_join_names_its_threads_and_nothing_more() -> Outcome_ {
     let mut cohort = cohort_of(2)?;
-    cohort.report(&id(1), Outcome::Met, "a")?;
-    cohort.report(&id(2), Outcome::Met, "b")?;
+    cohort.report(&id(1), 0, Outcome::Met, "a")?;
+    cohort.report(&id(2), 0, Outcome::Met, "b")?;
     match cohort.join() {
         Join::Integrable { threads } => assert_eq!(threads, vec![id(1), id(2)]),
         other @ Join::Blocked(_) => {
@@ -87,10 +97,10 @@ fn an_empty_cohort_joins_with_no_threads() {
 #[test]
 fn an_optional_unmet_thread_does_not_block() -> Outcome_ {
     let mut cohort = Cohort::new(1);
-    cohort.assign(&id(1), &[], claim("src/a")?, true)?;
-    cohort.assign(&id(2), &[], claim("src/b")?, false)?;
-    cohort.report(&id(1), Outcome::Met, "ok")?;
-    cohort.report(&id(2), Outcome::Unmet, "did not reach it")?;
+    cohort.assign(&id(1), role()?, &[], claim("src/a")?, true)?;
+    cohort.assign(&id(2), role()?, &[], claim("src/b")?, false)?;
+    cohort.report(&id(1), 0, Outcome::Met, "ok")?;
+    cohort.report(&id(2), 0, Outcome::Unmet, "did not reach it")?;
     let join = cohort.join();
     assert!(join.is_integrable());
     assert_eq!(
@@ -107,9 +117,9 @@ fn an_optional_unmet_thread_does_not_block() -> Outcome_ {
 #[test]
 fn an_optional_silent_thread_does_not_block() -> Outcome_ {
     let mut cohort = Cohort::new(1);
-    cohort.assign(&id(1), &[], claim("src/a")?, true)?;
-    cohort.assign(&id(2), &[], claim("src/b")?, false)?;
-    cohort.report(&id(1), Outcome::Met, "ok")?;
+    cohort.assign(&id(1), role()?, &[], claim("src/a")?, true)?;
+    cohort.assign(&id(2), role()?, &[], claim("src/b")?, false)?;
+    cohort.report(&id(1), 0, Outcome::Met, "ok")?;
     assert!(cohort.join().is_integrable());
     Ok(())
 }
@@ -135,7 +145,7 @@ fn only_met_permits_integration() {
 #[test]
 fn a_missing_required_child_blocks_and_is_named() -> Outcome_ {
     let mut cohort = cohort_of(3)?;
-    cohort.report(&id(1), Outcome::Met, "a")?;
+    cohort.report(&id(1), 0, Outcome::Met, "a")?;
     let join = cohort.join();
     assert!(!join.is_integrable());
     assert_eq!(blocked_names(&join), vec!["missing-child"]);
@@ -147,8 +157,8 @@ fn a_missing_required_child_blocks_and_is_named() -> Outcome_ {
 #[test]
 fn an_unmet_required_child_blocks_distinctly() -> Outcome_ {
     let mut cohort = cohort_of(2)?;
-    cohort.report(&id(1), Outcome::Met, "a")?;
-    cohort.report(&id(2), Outcome::Unmet, "b")?;
+    cohort.report(&id(1), 0, Outcome::Met, "a")?;
+    cohort.report(&id(2), 0, Outcome::Unmet, "b")?;
     let join = cohort.join();
     assert_eq!(blocked_names(&join), vec!["unmet"]);
     assert_eq!(join.reasons()[0], Blocked::Unmet(vec![id(2)]));
@@ -160,7 +170,7 @@ fn an_unmet_required_child_blocks_distinctly() -> Outcome_ {
 #[test]
 fn an_indeterminate_required_child_blocks() -> Outcome_ {
     let mut cohort = cohort_of(1)?;
-    cohort.report(&id(1), Outcome::Indeterminate, "could not tell")?;
+    cohort.report(&id(1), 0, Outcome::Indeterminate, "could not tell")?;
     assert_eq!(blocked_names(&cohort.join()), vec!["unmet"]);
     Ok(())
 }
@@ -171,10 +181,16 @@ fn an_indeterminate_required_child_blocks() -> Outcome_ {
 fn every_blocking_reason_is_reported() -> Outcome_ {
     let mut cohort = Cohort::new(1);
     for index in 1..=3 {
-        cohort.assign(&id(index), &[], claim(&format!("src/m{index}"))?, true)?;
+        cohort.assign(
+            &id(index),
+            role()?,
+            &[],
+            claim(&format!("src/m{index}"))?,
+            true,
+        )?;
     }
-    cohort.report(&id(1), Outcome::Unmet, "no")?;
-    cohort.report(&id(2), Outcome::Dissent, "I disagree")?;
+    cohort.report(&id(1), 0, Outcome::Unmet, "no")?;
+    cohort.report(&id(2), 0, Outcome::Dissent, "I disagree")?;
     let join = cohort.join();
     assert_eq!(
         blocked_names(&join),
@@ -192,10 +208,11 @@ fn every_blocking_reason_is_reported() -> Outcome_ {
 fn dissent_blocks_and_is_preserved_with_its_reason() -> Outcome_ {
     let mut cohort = cohort_of(5)?;
     for index in 1..=4 {
-        cohort.report(&id(index), Outcome::Met, "agree")?;
+        cohort.report(&id(index), 0, Outcome::Met, "agree")?;
     }
     cohort.report(
         &id(5),
+        0,
         Outcome::Dissent,
         "the fixture contradicts the brief",
     )?;
@@ -216,10 +233,10 @@ fn dissent_blocks_and_is_preserved_with_its_reason() -> Outcome_ {
 #[test]
 fn an_optional_threads_dissent_still_blocks() -> Outcome_ {
     let mut cohort = Cohort::new(1);
-    cohort.assign(&id(1), &[], claim("src/a")?, true)?;
-    cohort.assign(&id(2), &[], claim("src/b")?, false)?;
-    cohort.report(&id(1), Outcome::Met, "ok")?;
-    cohort.report(&id(2), Outcome::Dissent, "contradictory evidence")?;
+    cohort.assign(&id(1), role()?, &[], claim("src/a")?, true)?;
+    cohort.assign(&id(2), role()?, &[], claim("src/b")?, false)?;
+    cohort.report(&id(1), 0, Outcome::Met, "ok")?;
+    cohort.report(&id(2), 0, Outcome::Dissent, "contradictory evidence")?;
     assert_eq!(blocked_names(&cohort.join()), vec!["dissent"]);
     Ok(())
 }
@@ -228,9 +245,9 @@ fn an_optional_threads_dissent_still_blocks() -> Outcome_ {
 #[test]
 fn several_dissents_are_all_preserved() -> Outcome_ {
     let mut cohort = cohort_of(3)?;
-    cohort.report(&id(1), Outcome::Met, "ok")?;
-    cohort.report(&id(2), Outcome::Dissent, "reason two")?;
-    cohort.report(&id(3), Outcome::Dissent, "reason three")?;
+    cohort.report(&id(1), 0, Outcome::Met, "ok")?;
+    cohort.report(&id(2), 0, Outcome::Dissent, "reason two")?;
+    cohort.report(&id(3), 0, Outcome::Dissent, "reason three")?;
     let join = cohort.join();
     assert_eq!(
         join.reasons()[0],
@@ -247,7 +264,7 @@ fn several_dissents_are_all_preserved() -> Outcome_ {
 fn evidence_is_readable_and_absent_before_reporting() -> Outcome_ {
     let mut cohort = cohort_of(2)?;
     assert_eq!(cohort.evidence(&id(1))?, None);
-    cohort.report(&id(1), Outcome::Dissent, "the store disagrees")?;
+    cohort.report(&id(1), 0, Outcome::Dissent, "the store disagrees")?;
     assert_eq!(cohort.evidence(&id(1))?, Some("the store disagrees"));
     Ok(())
 }
@@ -259,9 +276,9 @@ fn evidence_is_readable_and_absent_before_reporting() -> Outcome_ {
 #[test]
 fn an_identical_claim_is_refused_at_assignment() -> Outcome_ {
     let mut cohort = Cohort::new(1);
-    cohort.assign(&id(1), &[], claim("src/store.rs")?, true)?;
+    cohort.assign(&id(1), role()?, &[], claim("src/store.rs")?, true)?;
     assert_eq!(
-        cohort.assign(&id(2), &[], claim("src/store.rs")?, true),
+        cohort.assign(&id(2), role()?, &[], claim("src/store.rs")?, true),
         Err(Refusal::OverlappingClaim)
     );
     assert_eq!(cohort.len(), 1, "the refused thread was not assigned");
@@ -273,15 +290,27 @@ fn an_identical_claim_is_refused_at_assignment() -> Outcome_ {
 #[test]
 fn a_nested_claim_overlaps_in_both_directions() -> Outcome_ {
     let mut wide_first = Cohort::new(1);
-    wide_first.assign(&id(1), &[], claim("src/store")?, true)?;
+    wide_first.assign(&id(1), role()?, &[], claim("src/store")?, true)?;
     assert_eq!(
-        wide_first.assign(&id(2), &[], claim("src/store/reconciliation.rs")?, true),
+        wide_first.assign(
+            &id(2),
+            role()?,
+            &[],
+            claim("src/store/reconciliation.rs")?,
+            true
+        ),
         Err(Refusal::OverlappingClaim)
     );
     let mut narrow_first = Cohort::new(1);
-    narrow_first.assign(&id(1), &[], claim("src/store/reconciliation.rs")?, true)?;
+    narrow_first.assign(
+        &id(1),
+        role()?,
+        &[],
+        claim("src/store/reconciliation.rs")?,
+        true,
+    )?;
     assert_eq!(
-        narrow_first.assign(&id(2), &[], claim("src/store")?, true),
+        narrow_first.assign(&id(2), role()?, &[], claim("src/store")?, true),
         Err(Refusal::OverlappingClaim)
     );
     Ok(())
@@ -293,8 +322,8 @@ fn a_nested_claim_overlaps_in_both_directions() -> Outcome_ {
 #[test]
 fn a_shared_text_prefix_is_not_an_overlap() -> Outcome_ {
     let mut cohort = Cohort::new(1);
-    cohort.assign(&id(1), &[], claim("src/store")?, true)?;
-    cohort.assign(&id(2), &[], claim("src/storefront")?, true)?;
+    cohort.assign(&id(1), role()?, &[], claim("src/store")?, true)?;
+    cohort.assign(&id(2), role()?, &[], claim("src/storefront")?, true)?;
     assert_eq!(cohort.len(), 2);
     assert!(cohort.claims_are_disjoint());
     Ok(())
@@ -319,8 +348,8 @@ fn the_conflict_predicate_agrees_with_assignment() -> Outcome_ {
             "{left} vs {right}"
         );
         let mut cohort = Cohort::new(1);
-        cohort.assign(&id(1), &[], claim(left)?, true)?;
-        let outcome = cohort.assign(&id(2), &[], claim(right)?, true);
+        cohort.assign(&id(1), role()?, &[], claim(left)?, true)?;
+        let outcome = cohort.assign(&id(2), role()?, &[], claim(right)?, true);
         assert_eq!(
             outcome.is_err(),
             conflicts,
@@ -335,10 +364,10 @@ fn the_conflict_predicate_agrees_with_assignment() -> Outcome_ {
 #[test]
 fn any_one_conflicting_claim_refuses_the_whole_assignment() -> Outcome_ {
     let mut cohort = Cohort::new(1);
-    cohort.assign(&id(1), &[], claim("src/a")?, true)?;
+    cohort.assign(&id(1), role()?, &[], claim("src/a")?, true)?;
     let mixed = vec![Claim::new("src/b")?, Claim::new("src/a/deep")?];
     assert_eq!(
-        cohort.assign(&id(2), &[], mixed, true),
+        cohort.assign(&id(2), role()?, &[], mixed, true),
         Err(Refusal::OverlappingClaim)
     );
     assert_eq!(cohort.len(), 1);
@@ -359,8 +388,8 @@ fn an_empty_claim_is_refused() {
 #[test]
 fn a_thread_may_hold_no_claims() -> Outcome_ {
     let mut cohort = Cohort::new(1);
-    cohort.assign(&id(1), &[], vec![], true)?;
-    cohort.assign(&id(2), &[], vec![], true)?;
+    cohort.assign(&id(1), role()?, &[], vec![], true)?;
+    cohort.assign(&id(2), role()?, &[], vec![], true)?;
     assert!(cohort.claims_are_disjoint());
     assert_eq!(cohort.len(), 2);
     Ok(())
@@ -382,8 +411,8 @@ fn disjointness_holds_across_the_whole_cohort() -> Outcome_ {
 #[test]
 fn revising_the_brief_makes_reported_work_stale() -> Outcome_ {
     let mut cohort = cohort_of(2)?;
-    cohort.report(&id(1), Outcome::Met, "a")?;
-    cohort.report(&id(2), Outcome::Met, "b")?;
+    cohort.report(&id(1), 0, Outcome::Met, "a")?;
+    cohort.report(&id(2), 0, Outcome::Met, "b")?;
     assert!(cohort.join().is_integrable());
     cohort.revise(2)?;
     let join = cohort.join();
@@ -402,7 +431,7 @@ fn reporting_against_a_stale_brief_is_refused() -> Outcome_ {
     let mut cohort = cohort_of(1)?;
     cohort.revise(2)?;
     assert_eq!(
-        cohort.report(&id(1), Outcome::Met, "against the old brief"),
+        cohort.report(&id(1), 0, Outcome::Met, "against the old brief"),
         Err(Refusal::StaleBrief)
     );
     Ok(())
@@ -413,8 +442,8 @@ fn reporting_against_a_stale_brief_is_refused() -> Outcome_ {
 #[test]
 fn rebriefing_repairs_a_stale_thread() -> Outcome_ {
     let mut cohort = cohort_of(2)?;
-    cohort.report(&id(1), Outcome::Met, "a")?;
-    cohort.report(&id(2), Outcome::Met, "b")?;
+    cohort.report(&id(1), 0, Outcome::Met, "a")?;
+    cohort.report(&id(2), 0, Outcome::Met, "b")?;
     cohort.revise(2)?;
     assert!(!cohort.join().is_integrable());
     for index in 1..=2 {
@@ -424,7 +453,7 @@ fn rebriefing_repairs_a_stale_thread() -> Outcome_ {
             None,
             "the old conclusion is discarded, not carried forward"
         );
-        cohort.report(&id(index), Outcome::Met, "redone")?;
+        cohort.report(&id(index), 1, Outcome::Met, "redone")?;
     }
     assert!(cohort.join().is_integrable());
     Ok(())
@@ -435,9 +464,9 @@ fn rebriefing_repairs_a_stale_thread() -> Outcome_ {
 #[test]
 fn the_brief_travels_with_the_assignment() -> Outcome_ {
     let mut cohort = Cohort::new(1);
-    cohort.assign(&id(1), &[], claim("src/a")?, true)?;
+    cohort.assign(&id(1), role()?, &[], claim("src/a")?, true)?;
     cohort.revise(5)?;
-    cohort.assign(&id(2), &[], claim("src/b")?, true)?;
+    cohort.assign(&id(2), role()?, &[], claim("src/b")?, true)?;
     assert_eq!(cohort.thread(&id(1))?.brief, 1);
     assert_eq!(cohort.thread(&id(2))?.brief, 5);
     assert_eq!(cohort.brief(), 5);
@@ -460,9 +489,9 @@ fn a_stale_thread_is_stale_rather_than_missing() -> Outcome_ {
 #[test]
 fn a_second_report_is_refused() -> Outcome_ {
     let mut cohort = cohort_of(1)?;
-    cohort.report(&id(1), Outcome::Met, "first")?;
+    cohort.report(&id(1), 0, Outcome::Met, "first")?;
     assert_eq!(
-        cohort.report(&id(1), Outcome::Unmet, "second"),
+        cohort.report(&id(1), 0, Outcome::Unmet, "second"),
         Err(Refusal::AlreadyReported)
     );
     assert_eq!(cohort.evidence(&id(1))?, Some("first"));
@@ -476,9 +505,9 @@ fn a_second_report_is_refused() -> Outcome_ {
 #[test]
 fn dependencies_are_recorded_in_declaration_order() -> Outcome_ {
     let mut cohort = Cohort::new(1);
-    cohort.assign(&id(1), &[], claim("src/a")?, true)?;
-    cohort.assign(&id(2), &[], claim("src/b")?, true)?;
-    cohort.assign(&id(3), &[&id(2), &id(1)], claim("src/c")?, true)?;
+    cohort.assign(&id(1), role()?, &[], claim("src/a")?, true)?;
+    cohort.assign(&id(2), role()?, &[], claim("src/b")?, true)?;
+    cohort.assign(&id(3), role()?, &[&id(2), &id(1)], claim("src/c")?, true)?;
     assert_eq!(cohort.thread(&id(3))?.dependencies, vec![id(2), id(1)]);
     Ok(())
 }
@@ -488,7 +517,7 @@ fn dependencies_are_recorded_in_declaration_order() -> Outcome_ {
 fn a_thread_cannot_depend_on_itself() -> Outcome_ {
     let mut cohort = Cohort::new(1);
     assert_eq!(
-        cohort.assign(&id(1), &[&id(1)], claim("src/a")?, true),
+        cohort.assign(&id(1), role()?, &[&id(1)], claim("src/a")?, true),
         Err(Refusal::SelfDependency)
     );
     assert!(cohort.is_empty());
@@ -501,7 +530,7 @@ fn a_thread_cannot_depend_on_itself() -> Outcome_ {
 fn a_dependency_on_an_unassigned_thread_is_refused() -> Outcome_ {
     let mut cohort = Cohort::new(1);
     assert_eq!(
-        cohort.assign(&id(1), &[&id(9)], claim("src/a")?, true),
+        cohort.assign(&id(1), role()?, &[&id(9)], claim("src/a")?, true),
         Err(Refusal::UnknownDependency)
     );
     Ok(())
@@ -512,11 +541,12 @@ fn a_dependency_on_an_unassigned_thread_is_refused() -> Outcome_ {
 #[test]
 fn a_dependency_chain_is_admissible() -> Outcome_ {
     let mut cohort = Cohort::new(1);
-    cohort.assign(&id(1), &[], claim("src/m1")?, true)?;
+    cohort.assign(&id(1), role()?, &[], claim("src/m1")?, true)?;
     for index in 2..=6 {
         let previous = id(index - 1);
         cohort.assign(
             &id(index),
+            role()?,
             &[&previous],
             claim(&format!("src/m{index}"))?,
             true,
@@ -530,10 +560,10 @@ fn a_dependency_chain_is_admissible() -> Outcome_ {
 #[test]
 fn a_diamond_of_dependencies_is_admissible() -> Outcome_ {
     let mut cohort = Cohort::new(1);
-    cohort.assign(&id(1), &[], claim("src/m1")?, true)?;
-    cohort.assign(&id(2), &[&id(1)], claim("src/m2")?, true)?;
-    cohort.assign(&id(3), &[&id(1)], claim("src/m3")?, true)?;
-    cohort.assign(&id(4), &[&id(2), &id(3)], claim("src/m4")?, true)?;
+    cohort.assign(&id(1), role()?, &[], claim("src/m1")?, true)?;
+    cohort.assign(&id(2), role()?, &[&id(1)], claim("src/m2")?, true)?;
+    cohort.assign(&id(3), role()?, &[&id(1)], claim("src/m3")?, true)?;
+    cohort.assign(&id(4), role()?, &[&id(2), &id(3)], claim("src/m4")?, true)?;
     assert_eq!(cohort.threads()?.len(), 4);
     Ok(())
 }
@@ -542,9 +572,9 @@ fn a_diamond_of_dependencies_is_admissible() -> Outcome_ {
 #[test]
 fn a_duplicate_thread_identity_is_refused() -> Outcome_ {
     let mut cohort = Cohort::new(1);
-    cohort.assign(&id(1), &[], claim("src/a")?, true)?;
+    cohort.assign(&id(1), role()?, &[], claim("src/a")?, true)?;
     assert_eq!(
-        cohort.assign(&id(1), &[], claim("src/b")?, true),
+        cohort.assign(&id(1), role()?, &[], claim("src/b")?, true),
         Err(Refusal::DuplicateThread)
     );
     Ok(())
@@ -556,12 +586,12 @@ fn malformed_identities_are_refused() -> Outcome_ {
     use habitat_engine::contracts::ScalarError;
     let mut cohort = Cohort::new(1);
     assert_eq!(
-        cohort.assign("nope", &[], vec![], true),
+        cohort.assign("nope", role()?, &[], vec![], true),
         Err(Refusal::MalformedIdentity(ScalarError::InvalidUuid))
     );
-    cohort.assign(&id(1), &[], vec![], true)?;
+    cohort.assign(&id(1), role()?, &[], vec![], true)?;
     assert_eq!(
-        cohort.assign(&id(2), &["nope"], vec![], true),
+        cohort.assign(&id(2), role()?, &["nope"], vec![], true),
         Err(Refusal::MalformedIdentity(ScalarError::InvalidUuid))
     );
     Ok(())
@@ -572,7 +602,7 @@ fn malformed_identities_are_refused() -> Outcome_ {
 fn an_unknown_thread_is_refused_everywhere() {
     let mut cohort = Cohort::new(1);
     assert_eq!(
-        cohort.report(&id(9), Outcome::Met, "x"),
+        cohort.report(&id(9), 0, Outcome::Met, "x"),
         Err(Refusal::UnknownThread)
     );
     assert_eq!(cohort.rebrief(&id(9)), Err(Refusal::UnknownThread));
@@ -590,11 +620,11 @@ fn an_unknown_thread_is_refused_everywhere() {
 fn the_thread_bound_refuses_before_building() -> Outcome_ {
     let mut cohort = Cohort::new(1);
     for index in 1..=MAX_THREADS {
-        cohort.assign(&id(index), &[], vec![], true)?;
+        cohort.assign(&id(index), role()?, &[], vec![], true)?;
     }
     assert_eq!(cohort.len(), MAX_THREADS);
     assert_eq!(
-        cohort.assign(&id(MAX_THREADS + 1), &[], vec![], true),
+        cohort.assign(&id(MAX_THREADS + 1), role()?, &[], vec![], true),
         Err(Refusal::ThreadLimit)
     );
     assert_eq!(cohort.len(), MAX_THREADS);
@@ -612,10 +642,10 @@ fn the_claim_bound_admits_exactly_its_limit() -> Outcome_ {
         .collect::<Result<_, _>>()?;
     let mut cohort = Cohort::new(1);
     assert_eq!(
-        cohort.assign(&id(1), &[], too_many, true),
+        cohort.assign(&id(1), role()?, &[], too_many, true),
         Err(Refusal::ClaimLimit)
     );
-    cohort.assign(&id(1), &[], exact, true)?;
+    cohort.assign(&id(1), role()?, &[], exact, true)?;
     Ok(())
 }
 
@@ -629,17 +659,17 @@ fn the_claim_bound_admits_exactly_its_limit() -> Outcome_ {
 #[test]
 fn the_dependency_bound_refuses_before_resolving_any_entry() -> Outcome_ {
     let mut cohort = Cohort::new(1);
-    cohort.assign(&id(1), &[], vec![], true)?;
+    cohort.assign(&id(1), role()?, &[], vec![], true)?;
     // None of these resolve to a thread; the bound must fire before that is discovered.
     let owned: Vec<String> = (900..=900 + MAX_DEPENDENCIES).map(id).collect();
     let refs: Vec<&str> = owned.iter().map(String::as_str).collect();
     assert_eq!(refs.len(), MAX_DEPENDENCIES + 1);
     assert_eq!(
-        cohort.assign(&id(2), &refs, vec![], true),
+        cohort.assign(&id(2), role()?, &refs, vec![], true),
         Err(Refusal::DependencyLimit)
     );
     assert_eq!(
-        cohort.assign(&id(2), &refs[..MAX_DEPENDENCIES], vec![], true),
+        cohort.assign(&id(2), role()?, &refs[..MAX_DEPENDENCIES], vec![], true),
         Err(Refusal::UnknownDependency),
         "exactly the bound is admitted, and then the entries are resolved"
     );
@@ -662,7 +692,7 @@ fn declared_bounds_are_the_enforced_bounds() {
 #[test]
 fn the_thread_list_returns_every_thread_in_order() -> Outcome_ {
     let mut cohort = cohort_of(4)?;
-    cohort.report(&id(2), Outcome::Met, "b")?;
+    cohort.report(&id(2), 0, Outcome::Met, "b")?;
     let threads = cohort.threads()?;
     assert_eq!(threads.len(), 4);
     let identities: Vec<&str> = threads.iter().map(|t| t.identity.as_str()).collect();
@@ -679,6 +709,7 @@ fn an_assignment_reports_its_claims() -> Outcome_ {
     let mut cohort = Cohort::new(1);
     cohort.assign(
         &id(1),
+        role()?,
         &[],
         vec![Claim::new("src/a")?, Claim::new("docs/a.md")?],
         true,
@@ -709,6 +740,14 @@ fn refusal_names_are_distinct_and_non_overlapping() {
         Refusal::AlreadyReported,
         Refusal::ChildOutstanding,
         Refusal::EmptyClaim,
+        Refusal::NonCanonicalClaim,
+        Refusal::BriefRegressed,
+        Refusal::EvidenceLimit,
+        Refusal::EmptyRole,
+        Refusal::RoleLimit,
+        Refusal::RebriefLimit,
+        Refusal::DissentOutstanding,
+        Refusal::StaleGeneration,
     ];
     for (i, a) in all.iter().enumerate() {
         assert!(!a.name().is_empty());
@@ -752,11 +791,11 @@ fn blocked_reasons_name_themselves() {
 #[test]
 fn integrable_and_blocked_are_exclusive() -> Outcome_ {
     let mut cohort = cohort_of(1)?;
-    cohort.report(&id(1), Outcome::Met, "ok")?;
+    cohort.report(&id(1), 0, Outcome::Met, "ok")?;
     let good = cohort.join();
     assert!(good.is_integrable() && good.reasons().is_empty());
     let mut bad = cohort_of(1)?;
-    bad.report(&id(1), Outcome::Unmet, "no")?;
+    bad.report(&id(1), 0, Outcome::Unmet, "no")?;
     let blocked = bad.join();
     assert!(!blocked.is_integrable() && !blocked.reasons().is_empty());
     Ok(())
@@ -767,12 +806,12 @@ fn integrable_and_blocked_are_exclusive() -> Outcome_ {
 #[test]
 fn the_integrated_list_excludes_unmet_optional_work() -> Outcome_ {
     let mut cohort = Cohort::new(1);
-    cohort.assign(&id(1), &[], claim("src/a")?, true)?;
-    cohort.assign(&id(2), &[], claim("src/b")?, false)?;
-    cohort.assign(&id(3), &[], claim("src/c")?, false)?;
-    cohort.report(&id(1), Outcome::Met, "a")?;
-    cohort.report(&id(2), Outcome::Met, "b")?;
-    cohort.report(&id(3), Outcome::Unmet, "c")?;
+    cohort.assign(&id(1), role()?, &[], claim("src/a")?, true)?;
+    cohort.assign(&id(2), role()?, &[], claim("src/b")?, false)?;
+    cohort.assign(&id(3), role()?, &[], claim("src/c")?, false)?;
+    cohort.report(&id(1), 0, Outcome::Met, "a")?;
+    cohort.report(&id(2), 0, Outcome::Met, "b")?;
+    cohort.report(&id(3), 0, Outcome::Unmet, "c")?;
     assert_eq!(
         cohort.join(),
         Join::Integrable {
@@ -787,14 +826,20 @@ fn the_integrated_list_excludes_unmet_optional_work() -> Outcome_ {
 #[test]
 fn the_integrated_scenario_splits_fails_repairs_and_reverifies() -> Outcome_ {
     let mut cohort = Cohort::new(1);
-    cohort.assign(&id(1), &[], claim("src/store")?, true)?;
-    cohort.assign(&id(2), &[], claim("src/route")?, true)?;
-    cohort.assign(&id(3), &[&id(1), &id(2)], claim("docs/contract.md")?, true)?;
+    cohort.assign(&id(1), role()?, &[], claim("src/store")?, true)?;
+    cohort.assign(&id(2), role()?, &[], claim("src/route")?, true)?;
+    cohort.assign(
+        &id(3),
+        role()?,
+        &[&id(1), &id(2)],
+        claim("docs/contract.md")?,
+        true,
+    )?;
     assert!(cohort.claims_are_disjoint());
 
-    cohort.report(&id(1), Outcome::Met, "store done")?;
-    cohort.report(&id(2), Outcome::Met, "route done")?;
-    cohort.report(&id(3), Outcome::Dissent, "the two contracts disagree")?;
+    cohort.report(&id(1), 0, Outcome::Met, "store done")?;
+    cohort.report(&id(2), 0, Outcome::Met, "route done")?;
+    cohort.report(&id(3), 0, Outcome::Dissent, "the two contracts disagree")?;
     let failed = cohort.join();
     assert_eq!(blocked_names(&failed), vec!["dissent"]);
 
@@ -802,7 +847,7 @@ fn the_integrated_scenario_splits_fails_repairs_and_reverifies() -> Outcome_ {
     cohort.revise(2)?;
     for index in 1..=3 {
         cohort.rebrief(&id(index))?;
-        cohort.report(&id(index), Outcome::Met, "reconciled")?;
+        cohort.report(&id(index), 1, Outcome::Met, "reconciled")?;
     }
     let repaired = cohort.join();
     assert!(repaired.is_integrable());
@@ -821,11 +866,11 @@ fn the_integrated_scenario_splits_fails_repairs_and_reverifies() -> Outcome_ {
 #[test]
 fn rebriefing_a_current_thread_clears_its_outcome() -> Outcome_ {
     let mut cohort = cohort_of(1)?;
-    cohort.report(&id(1), Outcome::Unmet, "wrong")?;
+    cohort.report(&id(1), 0, Outcome::Unmet, "wrong")?;
     cohort.rebrief(&id(1))?;
     assert_eq!(cohort.thread(&id(1))?.outcome, None);
     assert_eq!(cohort.evidence(&id(1))?, None);
-    cohort.report(&id(1), Outcome::Met, "right")?;
+    cohort.report(&id(1), 1, Outcome::Met, "right")?;
     assert!(cohort.join().is_integrable());
     Ok(())
 }
@@ -836,7 +881,7 @@ fn rebriefing_a_current_thread_clears_its_outcome() -> Outcome_ {
 fn unanimous_dissent_is_still_dissent() -> Outcome_ {
     let mut cohort = cohort_of(3)?;
     for index in 1..=3 {
-        cohort.report(&id(index), Outcome::Dissent, "no")?;
+        cohort.report(&id(index), 0, Outcome::Dissent, "no")?;
     }
     let join = cohort.join();
     assert_eq!(blocked_names(&join), vec!["dissent"]);
@@ -850,7 +895,7 @@ fn unanimous_dissent_is_still_dissent() -> Outcome_ {
 fn ownership_survives_reporting_and_rebriefing() -> Outcome_ {
     let mut cohort = cohort_of(4)?;
     for index in 1..=4 {
-        cohort.report(&id(index), Outcome::Met, "x")?;
+        cohort.report(&id(index), 0, Outcome::Met, "x")?;
         assert!(cohort.claims_are_disjoint(), "after report {index}");
     }
     cohort.revise(2)?;
@@ -859,7 +904,7 @@ fn ownership_survives_reporting_and_rebriefing() -> Outcome_ {
         assert!(cohort.claims_are_disjoint(), "after rebrief {index}");
     }
     assert_eq!(
-        cohort.assign(&id(99), &[], claim("src/m1")?, true),
+        cohort.assign(&id(99), role()?, &[], claim("src/m1")?, true),
         Err(Refusal::OverlappingClaim),
         "a rebriefed thread still owns its path"
     );
@@ -870,11 +915,11 @@ fn ownership_survives_reporting_and_rebriefing() -> Outcome_ {
 #[test]
 fn stale_and_dissent_block_together() -> Outcome_ {
     let mut cohort = Cohort::new(1);
-    cohort.assign(&id(1), &[], claim("src/a")?, true)?;
-    cohort.report(&id(1), Outcome::Dissent, "disagree")?;
+    cohort.assign(&id(1), role()?, &[], claim("src/a")?, true)?;
+    cohort.report(&id(1), 0, Outcome::Dissent, "disagree")?;
     cohort.revise(2)?;
-    cohort.assign(&id(2), &[], claim("src/b")?, true)?;
-    cohort.report(&id(2), Outcome::Met, "ok")?;
+    cohort.assign(&id(2), role()?, &[], claim("src/b")?, true)?;
+    cohort.report(&id(2), 0, Outcome::Met, "ok")?;
     let join = cohort.join();
     assert_eq!(blocked_names(&join), vec!["stale-brief"]);
     Ok(())
@@ -888,7 +933,13 @@ fn cohort_emptiness_and_count_are_pinned_in_both_directions() -> Outcome_ {
     assert!(cohort.is_empty());
     assert_eq!(cohort.len(), 0);
     for index in 1..=4 {
-        cohort.assign(&id(index), &[], claim(&format!("src/m{index}"))?, true)?;
+        cohort.assign(
+            &id(index),
+            role()?,
+            &[],
+            claim(&format!("src/m{index}"))?,
+            true,
+        )?;
         assert!(!cohort.is_empty(), "after assigning {index}");
         assert_eq!(cohort.len(), index);
     }
@@ -909,7 +960,7 @@ fn disjointness_holds_and_cannot_be_violated_through_the_api() -> Outcome_ {
     assert!(cohort.claims_are_disjoint());
     let mut attempted = cohort_of(2)?;
     assert_eq!(
-        attempted.assign(&id(99), &[], claim("src/m1")?, true),
+        attempted.assign(&id(99), role()?, &[], claim("src/m1")?, true),
         Err(Refusal::OverlappingClaim),
         "the only route to a non-disjoint cohort is refused"
     );
@@ -920,7 +971,7 @@ fn disjointness_holds_and_cannot_be_violated_through_the_api() -> Outcome_ {
 /// T22-CO-55 · the dependency bound's comparison is pinned at its exact boundary in both
 /// directions, so `>` cannot be weakened to `>=` or inverted without a case failing.
 #[test]
-fn the_dependency_bound_comparison_is_pinned_at_the_boundary() {
+fn the_dependency_bound_comparison_is_pinned_at_the_boundary() -> Outcome_ {
     let owned: Vec<String> = (900..=900 + MAX_DEPENDENCIES).map(id).collect();
     let refs: Vec<&str> = owned.iter().map(String::as_str).collect();
     for (count, refused_by_bound) in [
@@ -929,7 +980,7 @@ fn the_dependency_bound_comparison_is_pinned_at_the_boundary() {
         (MAX_DEPENDENCIES + 1, true),
     ] {
         let mut cohort = Cohort::new(1);
-        let outcome = cohort.assign(&id(1), &refs[..count], vec![], true);
+        let outcome = cohort.assign(&id(1), role()?, &refs[..count], vec![], true);
         if refused_by_bound {
             assert_eq!(
                 outcome,
@@ -944,6 +995,7 @@ fn the_dependency_bound_comparison_is_pinned_at_the_boundary() {
             );
         }
     }
+    Ok(())
 }
 
 /// T22-CO-56 · the cycle guard is unreachable through the public API, recorded with its
@@ -958,17 +1010,17 @@ fn the_dependency_bound_comparison_is_pinned_at_the_boundary() {
 #[test]
 fn the_cycle_guard_is_unreachable_and_that_is_the_point() -> Outcome_ {
     let mut cohort = Cohort::new(1);
-    cohort.assign(&id(1), &[], vec![], true)?;
-    cohort.assign(&id(2), &[&id(1)], vec![], true)?;
-    cohort.assign(&id(3), &[&id(2), &id(1)], vec![], true)?;
+    cohort.assign(&id(1), role()?, &[], vec![], true)?;
+    cohort.assign(&id(2), role()?, &[&id(1)], vec![], true)?;
+    cohort.assign(&id(3), role()?, &[&id(2), &id(1)], vec![], true)?;
     // The only way to name a thread that could close a cycle is to name one that is not yet
     // assigned, and that is refused first.
     assert_eq!(
-        cohort.assign(&id(4), &[&id(5)], vec![], true),
+        cohort.assign(&id(4), role()?, &[&id(5)], vec![], true),
         Err(Refusal::UnknownDependency)
     );
     assert_eq!(
-        cohort.assign(&id(4), &[&id(4)], vec![], true),
+        cohort.assign(&id(4), role()?, &[&id(4)], vec![], true),
         Err(Refusal::SelfDependency)
     );
     assert_eq!(cohort.len(), 3);
@@ -1073,13 +1125,19 @@ fn replay(fixture: &serde_json::Value) -> Result<Join, Box<dyn Error>> {
         cohort.revise(brief)?;
         let identity = row["thread_id"].as_str().ok_or("row without identity")?;
         let required = row["required"].as_bool().ok_or("row without required")?;
-        cohort.assign(identity, &[], claim(&format!("fixture/{index}"))?, required)?;
+        cohort.assign(
+            identity,
+            role()?,
+            &[],
+            claim(&format!("fixture/{index}"))?,
+            required,
+        )?;
         let name = row["outcome"].as_str().ok_or("row without outcome")?;
         let outcome = Outcome::ALL
             .into_iter()
             .find(|outcome| outcome.name() == name)
             .ok_or("row with an unknown outcome")?;
-        cohort.report(identity, outcome, "fixture")?;
+        cohort.report(identity, 0, outcome, "fixture")?;
     }
     cohort.revise(current)?;
     Ok(cohort.join())
@@ -1158,8 +1216,8 @@ fn a_non_canonical_claim_is_refused_at_construction() {
 #[test]
 fn a_brief_revision_cannot_move_backwards() -> Result<(), Box<dyn Error>> {
     let mut cohort = Cohort::new(3);
-    cohort.assign(&id(1), &[], claim("src/a")?, true)?;
-    cohort.report(&id(1), Outcome::Met, "on brief 3")?;
+    cohort.assign(&id(1), role()?, &[], claim("src/a")?, true)?;
+    cohort.report(&id(1), 0, Outcome::Met, "on brief 3")?;
     assert_eq!(cohort.revise(2), Err(Refusal::BriefRegressed));
     assert_eq!(
         cohort.revise(3),
@@ -1172,4 +1230,177 @@ fn a_brief_revision_cannot_move_backwards() -> Result<(), Box<dyn Error>> {
         "the brief-3 work is still current"
     );
     Ok(())
+}
+
+// ------------------------------------------------------- wave 1 gaps COH-01..COH-05
+
+/// T22-CO-57 · COH-01: a current dissent cannot be erased by rebriefing. Before this refusal
+/// `report(Dissent) -> rebrief -> report(Met)` joined integrably with no trace of the dissent —
+/// a false parent join built from the repair path.
+#[test]
+fn a_current_dissent_is_not_erased_by_rebrief() -> Outcome_ {
+    let mut cohort = cohort_of(2)?;
+    cohort.report(&id(1), 0, Outcome::Met, "ok")?;
+    cohort.report(
+        &id(2),
+        0,
+        Outcome::Dissent,
+        "the brief contradicts the fixture",
+    )?;
+    assert_eq!(cohort.rebrief(&id(2)), Err(Refusal::DissentOutstanding));
+    // Nothing moved: the dissent, its reason and the generation are all where they were.
+    let thread = cohort.thread(&id(2))?;
+    assert_eq!(thread.outcome, Some(Outcome::Dissent));
+    assert_eq!(thread.generation, 0);
+    assert_eq!(
+        cohort.evidence(&id(2))?,
+        Some("the brief contradicts the fixture")
+    );
+    assert_eq!(
+        cohort.report(&id(2), 1, Outcome::Met, "overwrite"),
+        Err(Refusal::StaleGeneration),
+        "no later generation exists to report a Met under"
+    );
+    assert_eq!(
+        cohort.join(),
+        Join::Blocked(vec![Blocked::Dissent(vec![(
+            id(2),
+            "the brief contradicts the fixture".to_owned()
+        )])])
+    );
+    Ok(())
+}
+
+/// T22-CO-58 · COH-01's repair path stays open: revising the brief makes the dissent stale,
+/// a stale dissent may be rebriefed, and the join is blocked as stale until it is redone. A
+/// current Unmet or Indeterminate thread is still rebriefable in place (T22-CO-49).
+#[test]
+fn a_dissent_is_repaired_by_revising_the_brief() -> Outcome_ {
+    let mut cohort = cohort_of(1)?;
+    cohort.report(&id(1), 0, Outcome::Dissent, "disagree")?;
+    cohort.revise(2)?;
+    assert_eq!(blocked_names(&cohort.join()), vec!["stale-brief"]);
+    cohort.rebrief(&id(1))?;
+    cohort.report(&id(1), 1, Outcome::Met, "on the revised brief")?;
+    assert!(cohort.join().is_integrable());
+
+    let mut current = cohort_of(2)?;
+    current.report(&id(1), 0, Outcome::Indeterminate, "no conclusion")?;
+    current.report(&id(2), 0, Outcome::Unmet, "not reached")?;
+    current.rebrief(&id(1))?;
+    current.rebrief(&id(2))?;
+    assert_eq!(current.thread(&id(1))?.generation, 1);
+    assert_eq!(current.thread(&id(2))?.generation, 1);
+    Ok(())
+}
+
+/// T22-CO-59 · COH-02: evidence is bounded at acquisition — exactly `MAX_EVIDENCE_BYTES` is
+/// recorded, one byte more is refused before anything is parsed, and a refused report leaves
+/// the thread unreported.
+#[test]
+fn evidence_is_bounded_at_acquisition() -> Outcome_ {
+    let mut cohort = cohort_of(2)?;
+    let exact = "e".repeat(MAX_EVIDENCE_BYTES);
+    let over = "e".repeat(MAX_EVIDENCE_BYTES + 1);
+    assert_eq!(
+        cohort.report(&id(1), 0, Outcome::Met, &over),
+        Err(Refusal::EvidenceLimit)
+    );
+    assert_eq!(cohort.thread(&id(1))?.outcome, None);
+    assert_eq!(cohort.evidence(&id(1))?, None);
+    // The bound fires before the identity is read: a malformed identity with over-long
+    // evidence names the bound, not the identity.
+    assert_eq!(
+        cohort.report("nope", 0, Outcome::Met, &over),
+        Err(Refusal::EvidenceLimit)
+    );
+    cohort.report(&id(1), 0, Outcome::Met, &exact)?;
+    assert_eq!(
+        cohort.evidence(&id(1))?.map(str::len),
+        Some(MAX_EVIDENCE_BYTES)
+    );
+    // Multi-byte text is bounded in bytes, not characters.
+    let wide = "\u{e9}".repeat(MAX_EVIDENCE_BYTES / 2 + 1);
+    assert_eq!(
+        cohort.report(&id(2), 0, Outcome::Met, &wide),
+        Err(Refusal::EvidenceLimit)
+    );
+    Ok(())
+}
+
+/// T22-CO-60 · COH-03: a thread carries a bounded role, reported back on its assignment.
+/// Empty and over-long names are refused at construction; exactly the bound is admitted.
+#[test]
+fn a_thread_carries_a_bounded_role() -> Outcome_ {
+    assert_eq!(Role::new(""), Err(Refusal::EmptyRole));
+    assert_eq!(
+        Role::new(&"r".repeat(MAX_ROLE_BYTES + 1)),
+        Err(Refusal::RoleLimit)
+    );
+    let widest = Role::new(&"r".repeat(MAX_ROLE_BYTES))?;
+    assert_eq!(widest.as_str().len(), MAX_ROLE_BYTES);
+    let mut cohort = Cohort::new(1);
+    cohort.assign(&id(1), Role::new("reviewer")?, &[], claim("src/a")?, true)?;
+    cohort.assign(&id(2), widest, &[], claim("src/b")?, false)?;
+    let roles: Vec<&str> = cohort
+        .threads()?
+        .iter()
+        .map(|thread| thread.role.as_str())
+        .collect();
+    assert_eq!(roles, vec!["reviewer", "r".repeat(MAX_ROLE_BYTES).as_str()]);
+    Ok(())
+}
+
+/// T22-CO-61 · COH-04: rebriefs are a bounded retry count. Exactly `MAX_REBRIEFS` are
+/// admitted, the next is refused and leaves the thread as it was, and the count is visible on
+/// the assignment as its generation.
+#[test]
+fn rebriefs_are_bounded_by_count() -> Outcome_ {
+    let mut cohort = cohort_of(1)?;
+    for attempt in 1..=MAX_REBRIEFS {
+        cohort.rebrief(&id(1))?;
+        assert_eq!(cohort.thread(&id(1))?.generation, attempt);
+    }
+    cohort.report(&id(1), MAX_REBRIEFS, Outcome::Unmet, "last attempt")?;
+    assert_eq!(cohort.rebrief(&id(1)), Err(Refusal::RebriefLimit));
+    let thread = cohort.thread(&id(1))?;
+    assert_eq!(thread.generation, MAX_REBRIEFS);
+    assert_eq!(thread.outcome, Some(Outcome::Unmet));
+    Ok(())
+}
+
+/// T22-CO-62 · COH-05: a callback from a superseded attempt is refused. After a rebrief of a
+/// CURRENT thread the brief is unchanged, so the brief check alone cannot tell the two
+/// attempts apart; the generation does.
+#[test]
+fn a_superseded_generation_callback_is_refused() -> Outcome_ {
+    let mut cohort = cohort_of(1)?;
+    cohort.report(&id(1), 0, Outcome::Unmet, "first attempt")?;
+    cohort.rebrief(&id(1))?;
+    cohort.rebrief(&id(1))?;
+    for late in [0, 1] {
+        assert_eq!(
+            cohort.report(&id(1), late, Outcome::Met, "late callback"),
+            Err(Refusal::StaleGeneration),
+            "generation {late}"
+        );
+    }
+    assert_eq!(
+        cohort.report(&id(1), 3, Outcome::Met, "from the future"),
+        Err(Refusal::StaleGeneration)
+    );
+    assert_eq!(cohort.thread(&id(1))?.outcome, None);
+    cohort.report(&id(1), 2, Outcome::Met, "current attempt")?;
+    assert_eq!(cohort.evidence(&id(1))?, Some("current attempt"));
+    assert!(cohort.join().is_integrable());
+    Ok(())
+}
+
+/// T22-CO-63 · the new bounds are the values declared, asserted against the literal so a
+/// planted change to a constant is seen (F122).
+#[test]
+fn the_wave_one_bounds_are_the_declared_values() {
+    assert_eq!(MAX_EVIDENCE_BYTES, 65_536);
+    assert_eq!(MAX_ROLE_BYTES, 64);
+    assert_eq!(MAX_REBRIEFS, 8);
 }
