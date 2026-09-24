@@ -236,12 +236,18 @@ impl Grants for Open {
 }
 
 fn listing(request: u8) -> Vec<u8> {
+    listing_under(request, &format!("sha256:{}", "3".repeat(64)))
+}
+
+/// A `tools.list` frame whose authority names `scope`, so a grant store that records what it was
+/// asked can say which frame reached it.
+fn listing_under(request: u8, scope: &str) -> Vec<u8> {
     serde_json::to_vec(&json!({
         "protocol": "hee3.control", "version": 1, "kind": "request",
         "request_id": format!("123e4567-e89b-42d3-a456-0000000000{request:02x}"),
         "action": "tools.list", "action_version": 1, "idempotency_key": null,
         "deadline_unix_ms": (NOW + 1_000).to_string(),
-        "authority": {"grant_id": GRANT, "scope_sha256": format!("sha256:{}", "3".repeat(64))},
+        "authority": {"grant_id": GRANT, "scope_sha256": scope},
         "precondition": null,
         "body": {"query": null, "page": {"limit": 1, "cursor": null}},
     }))
@@ -275,6 +281,7 @@ fn a_connection_is_answered_in_order_and_closed_at_its_first_unanswerable_frame(
         ended,
         Ended::Closed {
             served: 2,
+            exhausted: 0,
             fault: FrameFault::Whitespace
         }
     );
@@ -308,7 +315,10 @@ fn a_connection_is_answered_in_order_and_closed_at_its_first_unanswerable_frame(
             &control_socket::Admission::new(),
             &|| NOW
         )?,
-        Ended::Clean { served: 1 }
+        Ended::Clean {
+            served: 1,
+            exhausted: 0
+        }
     );
     Ok(())
 }
@@ -1948,7 +1958,7 @@ impl Peer {
             Ok(None) => Ok(None),
             Err(ReadError::Fault(fault)) => Err(fault.name().into()),
             Err(ReadError::Io(error)) => {
-                Err(format!("no reply within {REPLY_BUDGET:?}: {error}").into())
+                Err(format!("no reply (budget {REPLY_BUDGET:?}): {error}").into())
             }
         }
     }
@@ -2034,6 +2044,17 @@ fn a_ninth_connection_is_refused_whole_and_the_eight_admitted_are_untouched() ->
         exhausted(&frame, "at most 8 simultaneous connections")?
     );
     assert!(ninth.reply()?.is_none(), "the refused connection is closed");
+    // The refusal's own place is given back: over-capacity peers one after another are each
+    // answered whole, never closed unread because an earlier refusal kept its place.
+    for later in 0..2 {
+        let mut over = Peer::connect(&world.run)?;
+        assert_eq!(
+            over.ask(&frame)?,
+            exhausted(&frame, "at most 8 simultaneous connections")?,
+            "over-capacity peer {later} after the ninth"
+        );
+        assert!(over.reply()?.is_none(), "and then closed");
+    }
     for peer in &mut admitted {
         assert_eq!(
             peer.ask(&frame)?["kind"],
@@ -2162,6 +2183,11 @@ fn a_principals_burst_refills_at_one_token_per_ten_milliseconds_on_the_given_clo
     );
     assert!(admission.admit(&operator, t0 + 20));
     assert!(!admission.admit(&operator, t0 + 20));
+    // A tenth of a second earns ten tokens exactly: the rate itself, not only one token's step.
+    let tenth = (0..20)
+        .filter(|_| admission.admit(&operator, t0 + 120))
+        .count();
+    assert_eq!(tenth, 10, "100 ms at 100 per second");
     // A long silence refills the burst and no more.
     let later = t0 + 10_000;
     let admitted = (0..100)
@@ -2220,21 +2246,78 @@ fn records(written: &[u8]) -> Result<Vec<Value>, Box<dyn Error>> {
         .collect::<Result<_, _>>()?)
 }
 
+/// The scope a frame of [`scoped`] names: its own request number, so each is told apart.
+fn scope_of(request: u8) -> String {
+    format!("sha256:{}", format!("{request:02x}").repeat(32))
+}
+
+/// A `tools.list` frame whose scope is [`scope_of`] its request number.
+fn scoped(request: u8) -> Vec<u8> {
+    listing_under(request, &scope_of(request))
+}
+
+/// One grant resolution: whether the principal was the operator, the grant, the scope and the
+/// instant it was judged.
+type Asked = (bool, String, String, u64);
+
+/// Grants what [`Open`] grants, and records every resolution it was asked for. `serve_composed`
+/// resolves the grant of every admitted envelope before any owner runs, so a frame this double
+/// never saw is a frame that was never dispatched.
+#[derive(Default)]
+struct Recording {
+    asked: std::sync::Mutex<Vec<Asked>>,
+}
+
+impl Recording {
+    fn asked(&self) -> Vec<Asked> {
+        self.asked
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+}
+
+impl Grants for Recording {
+    fn resolve(
+        &self,
+        principal: &Principal,
+        grant_id: &str,
+        scope_sha256: &str,
+        now_unix_ms: u64,
+    ) -> Option<habitat_engine::actions::Caller> {
+        self.asked
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push((
+                principal.is(euid(), OPERATOR_ROLE),
+                grant_id.to_owned(),
+                scope_sha256.to_owned(),
+                now_unix_ms,
+            ));
+        Open.resolve(principal, grant_id, scope_sha256, now_unix_ms)
+    }
+}
+
 #[test]
 fn a_frame_past_the_burst_is_answered_resource_exhausted_and_never_dispatched() -> Outcome {
     let admission = control_socket::Admission::new();
+    let grants = Recording::default();
     let composed = Composed {
-        grants: &Open,
+        grants: &grants,
         health: None,
         tasks: None,
     };
     let frames = |ids: std::ops::Range<u8>| {
         ids.flat_map(|id| {
-            let mut frame = listing(id);
+            let mut frame = scoped(id);
             frame.push(b'\n');
             frame
         })
         .collect::<Vec<u8>>()
+    };
+    let asked = |ids: std::ops::Range<u8>, at: u64| -> Vec<Asked> {
+        ids.map(|id| (true, GRANT.to_owned(), scope_of(id), at))
+            .collect()
     };
     // Two connections of one principal share one burst: 20 then 20 frames at one instant.
     let mut first = Vec::new();
@@ -2246,7 +2329,13 @@ fn a_frame_past_the_burst_is_answered_resource_exhausted_and_never_dispatched() 
         &admission,
         &|| NOW,
     )?;
-    assert_eq!(ended, Ended::Clean { served: 20 });
+    assert_eq!(
+        ended,
+        Ended::Clean {
+            served: 20,
+            exhausted: 0
+        }
+    );
     assert!(
         records(&first)?
             .iter()
@@ -2263,8 +2352,11 @@ fn a_frame_past_the_burst_is_answered_resource_exhausted_and_never_dispatched() 
     )?;
     assert_eq!(
         ended,
-        Ended::Clean { served: 20 },
-        "a refusal does not close the connection"
+        Ended::Clean {
+            served: 20,
+            exhausted: 8
+        },
+        "a refusal does not close the connection, and is counted apart"
     );
     let replies = records(&second)?;
     assert!(
@@ -2275,44 +2367,193 @@ fn a_frame_past_the_burst_is_answered_resource_exhausted_and_never_dispatched() 
     for (id, reply) in (32..40).zip(&replies[12..]) {
         assert_eq!(
             reply,
-            &exhausted(&listing(id), "100 requests/second, burst 32")?
+            &exhausted(&scoped(id), "100 requests/second, burst 32")?
         );
     }
+    // Frames 32..40 never reached the grant store: refused before dispatch, not after it.
+    assert_eq!(grants.asked(), asked(0..32, NOW));
     // The clock the caller passes is the one judged: ten milliseconds later, one more is served.
+    // A refused frame no reply can be correlated to closes the connection, and is not counted
+    // among the replies refused.
     let mut third = Vec::new();
-    serve_connection(
-        frames(40..42).as_slice(),
+    let ended = serve_connection(
+        [frames(40..42).as_slice(), b"{ }\n"].concat().as_slice(),
         &mut third,
         &operator()?,
         composed,
         &admission,
         &|| NOW + 10,
     )?;
+    assert_eq!(
+        ended,
+        Ended::Closed {
+            served: 2,
+            exhausted: 1,
+            fault: FrameFault::Whitespace
+        }
+    );
     let kinds: Vec<Value> = records(&third)?
         .iter()
         .map(|reply| reply["kind"].clone())
         .collect();
     assert_eq!(kinds, [json!("result"), json!("error")]);
+    assert_eq!(
+        grants.asked(),
+        [asked(0..32, NOW), asked(40..41, NOW + 10)].concat(),
+        "only the frame the refill admitted was dispatched"
+    );
+    Ok(())
+}
+
+#[test]
+fn a_clock_advancing_a_tokens_worth_per_frame_is_never_refused() -> Outcome {
+    let frames = (0..40_u8)
+        .flat_map(|id| {
+            let mut frame = scoped(id);
+            frame.push(b'\n');
+            frame
+        })
+        .collect::<Vec<u8>>();
     // A clock that advances a token's worth per frame refills as fast as a connection spends.
     let clock = std::cell::Cell::new(NOW);
     let advancing = || {
         clock.set(clock.get() + 10);
         clock.get()
     };
-    let mut fourth = Vec::new();
+    let mut written = Vec::new();
     serve_connection(
-        frames(0..40).as_slice(),
-        &mut fourth,
+        frames.as_slice(),
+        &mut written,
         &operator()?,
-        composed,
+        Composed {
+            grants: &Open,
+            health: None,
+            tasks: None,
+        },
         &control_socket::Admission::new(),
         &advancing,
     )?;
     assert!(
-        records(&fourth)?
+        records(&written)?
             .iter()
             .all(|reply| reply["kind"] == json!("result"))
     );
-    assert_eq!(records(&fourth)?.len(), 40);
+    assert_eq!(records(&written)?.len(), 40);
+    Ok(())
+}
+
+/// Every line `run` reported, kept for the case to read.
+#[derive(Default)]
+struct Lines(std::sync::Mutex<Vec<String>>);
+
+impl Lines {
+    fn push(&self, line: &str) {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(line.to_owned());
+    }
+
+    fn sorted(&self) -> Vec<String> {
+        let mut lines = self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        lines.sort();
+        lines
+    }
+}
+
+#[test]
+fn an_accept_failure_returns_while_a_silent_peer_holds_the_refusal_place() -> Outcome {
+    let scratch = Scratch::new()?;
+    let path = scratch.0.join("control.sock");
+    let listener = std::os::unix::net::UnixListener::bind(&path)?;
+    let lines = Lines::default();
+    let report = |line: &str| lines.push(line);
+    let shared = control_socket::Shared {
+        grants: &Open,
+        health: None,
+        tasks: None,
+    };
+    let (done, finished) = std::sync::mpsc::channel();
+    std::thread::scope(|scope| -> Outcome {
+        scope.spawn(|| {
+            let returned = control_socket::run(&listener, shared, &|| NOW, &report);
+            let _ = done.send(returned.map_err(|error| error.kind()));
+        });
+        let mut frame = listing(0);
+        frame.push(b'\n');
+        // A peer answered twice and then closed for an unanswerable frame gives its place back.
+        // The unanswerable frame was received, so it spent a token too: three are spent.
+        let mut faulty = UnixStream::connect(&path)?;
+        faulty.set_read_timeout(Some(REPLY_BUDGET))?;
+        faulty.write_all(&[frame.as_slice(), frame.as_slice(), b"{ }\n"].concat())?;
+        let mut reader = FrameReader::new(&mut faulty);
+        for reply in 0..2 {
+            assert!(
+                matches!(reader.next_frame(), Ok(Some(_))),
+                "the faulty peer's reply {reply}"
+            );
+        }
+        assert!(matches!(reader.next_frame(), Ok(None)), "then its close");
+        // Eight peers are admitted and each sends five frames at one instant, sharing the one
+        // principal's burst: 29 tokens remain, so the sixth is answered four times and refused
+        // once, the seventh and eighth refused five times. Every serving place is held.
+        let mut admitted = Vec::new();
+        for id in 0..8 {
+            let mut peer = UnixStream::connect(&path)?;
+            peer.set_read_timeout(Some(REPLY_BUDGET))?;
+            peer.write_all(&frame.repeat(5))?;
+            let mut reader = FrameReader::new(peer.try_clone()?);
+            for reply in 0..5 {
+                assert!(
+                    matches!(reader.next_frame(), Ok(Some(_))),
+                    "peer {id} reply {reply}"
+                );
+            }
+            admitted.push(peer);
+        }
+        // A ninth is over capacity and sends nothing: it holds the one refusal place, unread.
+        let silent = UnixStream::connect(&path)?;
+        // A tenth is closed unread, which it sees as an end of file: proof the place is held.
+        let mut tenth = UnixStream::connect(&path)?;
+        tenth.set_read_timeout(Some(REPLY_BUDGET))?;
+        assert!(
+            matches!(FrameReader::new(&mut tenth).next_frame(), Ok(None)),
+            "the tenth peer is closed unread"
+        );
+        // Accept then fails, whether or not the loop is already waiting in it: the listener's
+        // receive side is shut down, which an accept reports as an invalid argument.
+        rustix::net::shutdown(&listener, rustix::net::Shutdown::Read)?;
+        drop(admitted);
+        let in_time = finished.recv_timeout(REPLY_BUDGET).ok();
+        let reported = lines.sorted();
+        // Release the silent peer whatever happened, so the scope can end.
+        drop(silent);
+        if in_time.is_none() {
+            // Only now can a run that waited on the silent peer return; the scope joins it.
+            let _ = finished.recv_timeout(REPLY_BUDGET);
+        }
+        assert_eq!(
+            in_time,
+            Some(Err(std::io::ErrorKind::InvalidInput)),
+            "run must return within {REPLY_BUDGET:?} of the accept failure, silent peer or not; \
+             reported by then: {reported:?}"
+        );
+        Ok(())
+    })?;
+    let mut expected = vec!["connection ended: served=5 exhausted=0".to_owned(); 5];
+    expected.extend([
+        "connection closed: served=2 exhausted=0 fault=whitespace outside a string".to_owned(),
+        "connection ended: served=5 exhausted=1".to_owned(),
+        "connection ended: served=5 exhausted=5".to_owned(),
+        "connection ended: served=5 exhausted=5".to_owned(),
+        "connection refused: over capacity; closed before a frame".to_owned(),
+        "connection refused: over capacity; closed unread".to_owned(),
+    ]);
+    expected.sort();
+    assert_eq!(lines.sorted(), expected);
     Ok(())
 }

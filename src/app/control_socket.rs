@@ -25,7 +25,8 @@
 //!   scoped thread with one request in flight; a peer over the cap is answered
 //!   `resource_exhausted` for its first frame and closed, and no admitted peer is disturbed. That
 //!   read carries no timer of its own (no new time limit is created here): [`REFUSALS_AT_ONCE`]
-//!   such peers are answered at a time, and one more over capacity is closed unread. Each
+//!   such peers are answered at a time, one more over capacity is closed unread, and a failed
+//!   `accept` shuts a refusal still reading down rather than waiting on its peer. Each
 //!   principal's requests pass a token bucket of [`BURST`] refilled at [`RATE_PER_SECOND`], judged
 //!   on the injected clock; a request past it is answered `resource_exhausted` before any effect.
 
@@ -37,11 +38,12 @@ use crate::store::Principal;
 use rustix::fs::{Mode, OFlags};
 use std::fs::{self, DirBuilder, File};
 use std::io::{self, Read, Write};
+use std::net::Shutdown;
 use std::os::unix::fs::{DirBuilderExt, FileTypeExt, MetadataExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Mutex, PoisonError};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 /// The engine's directory under the runtime root.
@@ -373,10 +375,15 @@ fn exhausted(payload: &[u8], now_unix_ms: u64, rule: &'static str) -> Reply {
 /// How one connection ended.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Ended {
-    /// The peer closed cleanly after `served` replies.
-    Clean { served: usize },
+    /// The peer closed cleanly after `served` replies, `exhausted` of them the admission's
+    /// `resource_exhausted`: answered, never dispatched.
+    Clean { served: usize, exhausted: usize },
     /// The receiver closed it: a frame no reply may be written for (RC03 §3).
-    Closed { served: usize, fault: FrameFault },
+    Closed {
+        served: usize,
+        exhausted: usize,
+        fault: FrameFault,
+    },
 }
 
 /// Serve one connection's frames in order until it ends. `now_unix_ms` is read once per frame,
@@ -396,15 +403,28 @@ pub fn serve_connection(
 ) -> io::Result<Ended> {
     let mut reader = FrameReader::new(input);
     let mut served = 0;
+    let mut exhausted_by_rate = 0;
     loop {
         let frame = match reader.next_frame() {
             Ok(Some(frame)) => frame,
-            Ok(None) => return Ok(Ended::Clean { served }),
-            Err(ReadError::Fault(fault)) => return Ok(Ended::Closed { served, fault }),
+            Ok(None) => {
+                return Ok(Ended::Clean {
+                    served,
+                    exhausted: exhausted_by_rate,
+                });
+            }
+            Err(ReadError::Fault(fault)) => {
+                return Ok(Ended::Closed {
+                    served,
+                    exhausted: exhausted_by_rate,
+                    fault,
+                });
+            }
             Err(ReadError::Io(error)) => return Err(error),
         };
         let now = now_unix_ms();
-        let reply = if admission.admit(principal, now) {
+        let admitted = admission.admit(principal, now);
+        let reply = if admitted {
             serve_composed(&frame, now, principal, composed)
         } else {
             exhausted(&frame, now, RATE_RULE)
@@ -414,8 +434,15 @@ pub fn serve_connection(
                 output.write_all(&bytes)?;
                 output.flush()?;
                 served += 1;
+                exhausted_by_rate += usize::from(!admitted);
             }
-            Reply::Close(fault) => return Ok(Ended::Closed { served, fault }),
+            Reply::Close(fault) => {
+                return Ok(Ended::Closed {
+                    served,
+                    exhausted: exhausted_by_rate,
+                    fault,
+                });
+            }
         }
     }
 }
@@ -462,6 +489,53 @@ impl Drop for Place<'_> {
     }
 }
 
+/// Over-capacity connections being answered, each with a handle the accept loop can shut down.
+/// A refusal's read has no timer of its own, so when `accept` fails the loop ends each refusal
+/// this way rather than waiting on a peer that may never send.
+#[derive(Default)]
+struct Refusals {
+    open: Mutex<Vec<(u64, UnixStream)>>,
+    next: AtomicU64,
+}
+
+/// One refusal's handle in [`Refusals`], removed when dropped: by the refusing thread, by a spawn
+/// that failed, or by an unwinding thread.
+struct Registered<'a> {
+    refusals: &'a Refusals,
+    id: u64,
+}
+
+impl Refusals {
+    fn open(&self) -> MutexGuard<'_, Vec<(u64, UnixStream)>> {
+        self.open.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Hold a handle to `stream` until the returned value is dropped.
+    fn register(&self, stream: &UnixStream) -> io::Result<Registered<'_>> {
+        let handle = stream.try_clone()?;
+        let id = self.next.fetch_add(1, Ordering::Relaxed);
+        self.open().push((id, handle));
+        Ok(Registered { refusals: self, id })
+    }
+
+    /// End every refusal still reading: its peer sees the close, its thread an end of file.
+    fn shut_down(&self, report: &dyn Fn(&str)) {
+        for (_, stream) in self.open().iter() {
+            if let Err(error) = stream.shutdown(Shutdown::Both) {
+                report(&format!(
+                    "connection refused: over capacity; shutdown failed ({error})"
+                ));
+            }
+        }
+    }
+}
+
+impl Drop for Registered<'_> {
+    fn drop(&mut self) {
+        self.refusals.open().retain(|(id, _)| *id != self.id);
+    }
+}
+
 /// Accept connections forever, serving each admitted one on its own thread under
 /// [`CONNECTION_CAP`]. A peer that is not the operator is closed unread; a peer over the cap is
 /// refused whole without disturbing an admitted one. Each connection's outcome is reported through
@@ -469,8 +543,9 @@ impl Drop for Place<'_> {
 ///
 /// # Errors
 ///
-/// Only a failure of `accept` itself, returned once every connection already admitted has ended; a
-/// failed connection is reported and the loop continues.
+/// Only a failure of `accept` itself, returned once every connection already admitted has ended;
+/// an over-capacity peer still being refused is shut down first, never waited on. A failed
+/// connection is reported and the loop continues.
 pub fn run(
     listener: &UnixListener,
     shared: Shared<'_>,
@@ -481,9 +556,16 @@ pub fn run(
     let admission = Admission::new();
     let serving = AtomicUsize::new(0);
     let refusing = AtomicUsize::new(0);
+    let refusals = Refusals::default();
     std::thread::scope(|scope| {
         loop {
-            let (stream, _) = listener.accept()?;
+            let (stream, _) = match listener.accept() {
+                Ok(accepted) => accepted,
+                Err(error) => {
+                    refusals.shut_down(report);
+                    return Err(error);
+                }
+            };
             let principal = match peer_of(&stream, operator) {
                 Ok(principal) => principal,
                 Err(refusal) => {
@@ -500,8 +582,18 @@ pub fn run(
                     report(&outcome);
                 })
             } else if let Some(place) = Place::take(&refusing, REFUSALS_AT_ONCE) {
+                let registered = match refusals.register(&stream) {
+                    Ok(registered) => registered,
+                    Err(error) => {
+                        report(&format!(
+                            "connection refused: over capacity; closed unread ({error})"
+                        ));
+                        continue;
+                    }
+                };
                 std::thread::Builder::new().spawn_scoped(scope, move || {
                     let outcome = refuse_over_capacity(&stream, now_unix_ms);
+                    drop(registered);
                     drop(place);
                     report(&outcome);
                 })
@@ -545,10 +637,17 @@ fn serve_admitted(
         admission,
         now_unix_ms,
     ) {
-        Ok(Ended::Clean { served }) => format!("connection ended: served={served}"),
-        Ok(Ended::Closed { served, fault }) => {
-            format!("connection closed: served={served} fault={}", fault.name())
+        Ok(Ended::Clean { served, exhausted }) => {
+            format!("connection ended: served={served} exhausted={exhausted}")
         }
+        Ok(Ended::Closed {
+            served,
+            exhausted,
+            fault,
+        }) => format!(
+            "connection closed: served={served} exhausted={exhausted} fault={}",
+            fault.name()
+        ),
         Err(error) => format!("connection failed: {error}"),
     }
 }
