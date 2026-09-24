@@ -20,6 +20,7 @@ fn id(index: usize) -> String {
 
 const EPOCH_1: &str = "00000001-eeee-4eee-9eee-eeeeeeeeeeee";
 const EPOCH_2: &str = "00000002-eeee-4eee-9eee-eeeeeeeeeeee";
+const EPOCH_3: &str = "00000003-eeee-4eee-9eee-eeeeeeeeeeee";
 const EPOCH_9999: &str = "0000270f-eeee-4eee-9eee-eeeeeeeeeeee";
 
 /// The wire text of an engine epoch (a `UUIDv4`, distinct in form from task identities).
@@ -1246,10 +1247,13 @@ fn rendered(view: &View, task: &str) -> Result<String, Box<dyn Error>> {
 }
 
 /// T16-HD-68 · the renderer is asserted whole over two fixtures that differ in every field:
-/// status and settledness, freshness, epoch, sequence, route, evidence and gaps.
+/// status and settledness, freshness, epoch, sequence, route, evidence and gaps. The two
+/// fixtures live in two views attached to two different epochs, so a renderer that writes
+/// a constant epoch (or sequence) cannot match both.
 #[test]
 fn render_is_whole_over_two_fixtures_differing_in_every_field() -> Result<(), Box<dyn Error>> {
     let (a, b) = (id(0xa), id(0xb));
+    let mut other = view(3)?;
     let mut view = view(2)?;
     view.present(Snapshot {
         task: a.clone(),
@@ -1260,15 +1264,16 @@ fn render_is_whole_over_two_fixtures_differing_in_every_field() -> Result<(), Bo
         gaps: vec!["cost unmeasured".to_owned()],
         sequence: 17,
     })?;
-    view.present(Snapshot {
+    other.present(Snapshot {
         task: b.clone(),
-        epoch: ep(2)?,
+        epoch: ep(3)?,
         status: Status::EffectUnknown,
         route_explanation: None,
         evidence: Vec::new(),
         gaps: Vec::new(),
         sequence: 4,
     })?;
+    other.reconnect(ep(3)?, 9)?;
     view.reconnect(ep(2)?, 17)?;
     view.present(Snapshot {
         task: a.clone(),
@@ -1288,11 +1293,11 @@ fn render_is_whole_over_two_fixtures_differing_in_every_field() -> Result<(), Bo
         )
     );
     assert_eq!(
-        rendered(&view, &b)?,
+        rendered(&other, &b)?,
         format!(
             "task {b}\nstatus effect-unknown (not settled)\n\
              freshness stale: held from before the last reconnect\n\
-             as of epoch {EPOCH_2} sequence 4\nroute none supplied\nevidence none retained\n"
+             as of epoch {EPOCH_3} sequence 4\nroute none supplied\nevidence none retained\n"
         )
     );
     Ok(())

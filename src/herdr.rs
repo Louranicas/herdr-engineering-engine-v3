@@ -630,7 +630,10 @@ pub struct Snapshot {
     pub evidence: Vec<String>,
     /// What the engine could not tell the client, preserved rather than omitted.
     pub gaps: Vec<String>,
-    /// The engine sequence this snapshot reflects.
+    /// The engine sequence this snapshot reflects: the engine's read point (its high-water
+    /// sequence when the snapshot was taken), NOT the sequence at which this task last
+    /// changed. Freshness compares it with the reconnect cursor, so a last-changed sequence
+    /// here would hold an unchanged task stale forever after a reconnect.
     pub sequence: u64,
 }
 
