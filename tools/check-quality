@@ -91,6 +91,8 @@ T06_INPUTS = (
     "evaluation/tasks/WL-U64-PARSE-001/v1/reference/src/lib.rs",
     "evaluation/tasks/WL-U64-PARSE-001/v1/oracle/cases.json",
     "evaluation/harnesses/u64-public-wrapper.rs",
+    # t06_collector include_str!s the task manifest (review CHK-G4: Prepared in src).
+    "evaluation/tasks/WL-U64-PARSE-001/v1/manifest.json",
 )
 T06_UNIT_COUNTS = {
     "store::staging_tests::": 13, "check::u64_oracle::tests::": 22,
