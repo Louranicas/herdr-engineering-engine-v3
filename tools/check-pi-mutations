@@ -130,7 +130,7 @@ def main():
             vendor, cargo_home, deadline)
         environment = {"PATH": str(compiler) + ":/usr/bin:/bin", "LC_ALL": "C",
                        "TMPDIR": str(workspace), "CARGO_HOME": str(cargo_home),
-                       "CARGO_TARGET_DIR": str(workspace / "target"), "CARGO_BUILD_JOBS": "2",
+                       "CARGO_TARGET_DIR": str(workspace / "target"), "CARGO_BUILD_JOBS": quality.BUILD_JOBS,
                        "CARGO_NET_OFFLINE": "true", "RUSTUP_TOOLCHAIN": "1.98.0",
                        "RUSTC": str(binaries["rustc"]), "RUSTDOC": str(binaries["rustdoc"]),
                        "RUSTFLAGS": "-Dwarnings", "RUSTDOCFLAGS": "-Dwarnings"}

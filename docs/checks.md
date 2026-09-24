@@ -3165,6 +3165,11 @@ or parallelizing commands. The 300-second cleanup reserve, the 180-second comman
 8 MiB stream limit are unchanged. The 1,500-second derivation above is retained as the record of its
 time.
 
+**Build parallelism raised, 2026-09-24 (operator decision): `CARGO_BUILD_JOBS` 2 → 8**, the host's
+8 physical cores, owned by `tools/check-quality` `BUILD_JOBS` and read by the store and pi mutation
+tools. `tools/check-t01` keeps its own 2 for its dependency-free oracle build. The ADV-BWRAP/1 worker
+profile's `CARGO_BUILD_JOBS=2` (docs/contract-decisions.md) is a separate contract and is unchanged.
+
 Open finding QC-F3b, assigned by root to the native adapter's owner: the debug
 `tests-t08-native` command costs 95.9 / 92.8 seconds (run 1) and 95.5 / 91.2
 seconds (run 2) against 9.8 / 10.6 and 9.9 / 9.7 seconds in the release

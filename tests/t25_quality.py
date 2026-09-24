@@ -49,6 +49,13 @@ class QualityIntegrationControls(unittest.TestCase):
                          ["baseline", "assertion", "warning", "skip", "broken",
                           "bounds", "deprecation", "empty"])
 
+    def test_gate_build_parallelism_is_the_operator_decision_and_has_one_owner(self):
+        # Operator decision 2026-09-24: 8 (the host's physical cores), raised from 2.
+        self.assertEqual(quality.BUILD_JOBS, "8")
+        for tool in ("tools/check-quality", "tools/check-store-mutations", "tools/check-pi-mutations"):
+            text = (ROOT / tool).read_text()
+            self.assertNotIn('"CARGO_BUILD_JOBS": "', text, tool + " restates the build parallelism")
+
     def test_reviewed_engineering_clock_preserves_other_custody_bounds(self):
         # Independent declared policy for the expanded full regression, not an
         # engine task allocation. The 1200 s window could not fit the measured

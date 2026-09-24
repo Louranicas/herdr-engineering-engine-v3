@@ -61,6 +61,10 @@ T04_IMPLEMENTATION_PATHS = ("src/store.rs", "src/store/artifact.rs", "src/store/
 # Reviewed independent T04 unit suite: 79 cases (68 + store-lane A01-A03, 2026-09-24). Source discovery or emitted
 # counts cannot lower this gate; None remains an explicit pending-state refusal.
 T04_TEST_COUNT = 79
+# Cargo build parallelism for every gate build (operator decision 2026-09-24: the 8 physical
+# cores of this host, raised from 2). One owner: the store and pi mutation tools read it here.
+# Build output does not depend on it (release pins codegen-units = 1).
+BUILD_JOBS = "8"
 T05_IMPLEMENTATION_PATHS = (
     "src/contracts/roster.rs", "src/roster.rs", "src/store/roster.rs", "src/store/roster/attempts.rs",
     "tests/t05_roster.rs", "tests/t05_codec.rs", "tests/t05_store.rs",
@@ -1061,7 +1065,7 @@ def main():
         env = {
             "PATH": str(compiler.parent) + ":/usr/bin:/bin", "LC_ALL": "C",
             "TMPDIR": str(work), "CARGO_HOME": str(work / "cargo-home"),
-            "CARGO_TARGET_DIR": str(work / "target"), "CARGO_BUILD_JOBS": "2",
+            "CARGO_TARGET_DIR": str(work / "target"), "CARGO_BUILD_JOBS": BUILD_JOBS,
             "CARGO_NET_OFFLINE": "true", "RUSTUP_TOOLCHAIN": TOOLCHAIN,
             "RUSTC": str(binaries["rustc"]), "RUSTDOC": str(binaries["rustdoc"]),
             "RUSTFMT": str(binaries["rustfmt"]), "RUSTFLAGS": "-Dwarnings",
