@@ -8,8 +8,8 @@
 use std::error::Error;
 
 use habitat_engine::herdr::{
-    Admitted, EngineReceipt, IntentKey, MAX_BUFFERED_EVENTS, MAX_RECONNECTS, Refusal,
-    SCHEMA_VERSION, Snapshot, Status, View,
+    Admitted, EngineReceipt, Epoch, Freshness, IntentKey, MAX_BUFFERED_EVENTS, MAX_RECONNECTS,
+    Refusal, Snapshot, Status, View, render,
 };
 
 type Outcome = Result<(), Box<dyn Error>>;
@@ -18,15 +18,39 @@ fn id(index: usize) -> String {
     format!("{index:08x}-0000-4000-8000-000000000000")
 }
 
-fn snapshot(task: &str, status: Status, sequence: u64) -> Snapshot {
-    Snapshot {
+const EPOCH_1: &str = "00000001-eeee-4eee-9eee-eeeeeeeeeeee";
+const EPOCH_2: &str = "00000002-eeee-4eee-9eee-eeeeeeeeeeee";
+const EPOCH_9999: &str = "0000270f-eeee-4eee-9eee-eeeeeeeeeeee";
+
+/// The wire text of an engine epoch (a `UUIDv4`, distinct in form from task identities).
+fn epoch_text(index: usize) -> String {
+    format!("{index:08x}-eeee-4eee-9eee-eeeeeeeeeeee")
+}
+
+fn ep(index: usize) -> Result<Epoch, Refusal> {
+    Epoch::parse(&epoch_text(index))
+}
+
+/// An intent key in the engine's `idempotency_key` form.
+fn key(index: usize) -> Result<IntentKey, Refusal> {
+    IntentKey::new(&format!("{index:08x}-1111-4111-a111-111111111111"))
+}
+
+fn view(epoch: usize) -> Result<View, Refusal> {
+    Ok(View::new(ep(epoch)?))
+}
+
+/// A snapshot read in epoch 1.
+fn snapshot(task: &str, status: Status, sequence: u64) -> Result<Snapshot, Refusal> {
+    Ok(Snapshot {
         task: task.to_owned(),
+        epoch: ep(1)?,
         status,
         route_explanation: None,
         evidence: Vec::new(),
         gaps: Vec::new(),
         sequence,
-    }
+    })
 }
 
 // ------------------------------------------- acceptance cannot be minted by a client
@@ -36,12 +60,12 @@ fn snapshot(task: &str, status: Status, sequence: u64) -> Snapshot {
 #[test]
 fn acceptance_comes_only_from_an_engine_receipt() -> Outcome {
     let task = id(1);
-    let receipt = EngineReceipt::issue(&task, 1, 7)?;
+    let receipt = EngineReceipt::issue(&task, EPOCH_1, "7")?;
     let admitted = Admitted::from_engine(receipt);
     let acceptance = admitted.acceptance().ok_or("expected an acceptance")?;
     assert_eq!(acceptance.task().as_str(), task);
     assert_eq!(acceptance.receipt().sequence(), 7);
-    assert_eq!(acceptance.receipt().epoch(), 1);
+    assert_eq!(acceptance.receipt().epoch().as_str(), epoch_text(1));
     assert!(admitted.is_durable());
     Ok(())
 }
@@ -61,23 +85,23 @@ fn a_denial_carries_no_acceptance() {
 fn a_malformed_task_identity_is_refused_at_issue() {
     use habitat_engine::contracts::ScalarError;
     assert_eq!(
-        EngineReceipt::issue("not-a-uuid", 1, 1).map(|_| ()),
+        EngineReceipt::issue("not-a-uuid", EPOCH_1, "1").map(|_| ()),
         Err(Refusal::MalformedIdentity(ScalarError::InvalidUuid))
     );
 }
 
-/// T16-HD-04 · the four presented statuses that are not settled cannot be read as settled.
-/// `Unknown` and `CancellationPending` are explicitly unsettled: a client that renders either
-/// as an outcome is inventing one.
+/// T16-HD-04 · only the engine's own terminal verdicts are settled. `Unknown`,
+/// `EffectUnknown`, `Blocked` and `CancellationPending` are explicitly unsettled: a client that
+/// renders any of them as an outcome is inventing one.
 #[test]
-fn only_passed_and_failed_are_settled() {
-    assert_eq!(Status::ALL.len(), 5);
+fn only_terminal_engine_verdicts_are_settled() {
+    assert_eq!(Status::ALL.len(), 9);
     let settled: Vec<&str> = Status::ALL
         .into_iter()
         .filter(|status| status.is_settled())
         .map(Status::name)
         .collect();
-    assert_eq!(settled, vec!["passed", "failed"]);
+    assert_eq!(settled, vec!["passed", "failed", "cancelled", "abandoned"]);
     for status in Status::ALL {
         assert_eq!(status.to_string(), status.name());
     }
@@ -87,9 +111,9 @@ fn only_passed_and_failed_are_settled() {
 #[test]
 fn an_unknown_status_presents_as_unknown() -> Outcome {
     let task = id(1);
-    let mut view = View::new(1);
-    view.present(snapshot(&task, Status::Unknown, 1))?;
-    let presented = view.task(&task)?;
+    let mut view = view(1)?;
+    view.present(snapshot(&task, Status::Unknown, 1)?)?;
+    let presented = view.task(&task)?.snapshot();
     assert_eq!(presented.status, Status::Unknown);
     assert!(!presented.status.is_settled());
     Ok(())
@@ -102,16 +126,16 @@ fn an_unknown_status_presents_as_unknown() -> Outcome {
 #[test]
 fn a_repeated_submission_is_a_duplicate_not_a_second_task() -> Outcome {
     let task = id(1);
-    let mut view = View::new(1);
-    let key = IntentKey::new("operator-enter-1");
+    let mut view = view(1)?;
+    let key = key(7)?;
     let first = view.submit(
         &key,
-        Admitted::from_engine(EngineReceipt::issue(&task, 1, 1)?),
+        Admitted::from_engine(EngineReceipt::issue(&task, EPOCH_1, "1")?),
     )?;
     assert!(matches!(first, Admitted::Accepted(_)));
     let second = view.submit(
         &key,
-        Admitted::from_engine(EngineReceipt::issue(&task, 1, 2)?),
+        Admitted::from_engine(EngineReceipt::issue(&task, EPOCH_1, "2")?),
     )?;
     assert!(matches!(second, Admitted::Duplicate(_)));
     assert!(
@@ -125,15 +149,15 @@ fn a_repeated_submission_is_a_duplicate_not_a_second_task() -> Outcome {
 /// T16-HD-07 · two different intent keys are two submissions, even for the same task text.
 #[test]
 fn different_intent_keys_are_different_submissions() -> Outcome {
-    let mut view = View::new(1);
+    let mut view = view(1)?;
     let (first, second) = (id(1), id(2));
     let a = view.submit(
-        &IntentKey::new("first"),
-        Admitted::from_engine(EngineReceipt::issue(&first, 1, 1)?),
+        &key(1)?,
+        Admitted::from_engine(EngineReceipt::issue(&first, EPOCH_1, "1")?),
     )?;
     let b = view.submit(
-        &IntentKey::new("second"),
-        Admitted::from_engine(EngineReceipt::issue(&second, 1, 2)?),
+        &key(2)?,
+        Admitted::from_engine(EngineReceipt::issue(&second, EPOCH_1, "2")?),
     )?;
     assert!(matches!(a, Admitted::Accepted(_)));
     assert!(matches!(b, Admitted::Accepted(_)));
@@ -144,15 +168,15 @@ fn different_intent_keys_are_different_submissions() -> Outcome {
 /// fresh attempt rather than a duplicate.
 #[test]
 fn a_denial_does_not_register_the_key() -> Outcome {
-    let mut view = View::new(1);
-    let key = IntentKey::new("k");
+    let mut view = view(1)?;
+    let key = key(1)?;
     let denied = view.submit(&key, Admitted::Denied)?;
     assert!(matches!(denied, Admitted::Denied));
     assert_eq!(view.submitted(&key), None);
     let task = id(1);
     let retried = view.submit(
         &key,
-        Admitted::from_engine(EngineReceipt::issue(&task, 1, 1)?),
+        Admitted::from_engine(EngineReceipt::issue(&task, EPOCH_1, "1")?),
     )?;
     assert!(
         matches!(retried, Admitted::Accepted(_)),
@@ -165,11 +189,11 @@ fn a_denial_does_not_register_the_key() -> Outcome {
 /// an acceptance that belongs to a world it is not attached to.
 #[test]
 fn a_receipt_from_another_epoch_is_refused() -> Outcome {
-    let mut view = View::new(1);
+    let mut view = view(1)?;
     assert_eq!(
         view.submit(
-            &IntentKey::new("k"),
-            Admitted::from_engine(EngineReceipt::issue(&id(1), 2, 1)?)
+            &key(1)?,
+            Admitted::from_engine(EngineReceipt::issue(&id(1), EPOCH_2, "1")?)
         )
         .map(|_| ()),
         Err(Refusal::EpochMismatch)
@@ -177,13 +201,14 @@ fn a_receipt_from_another_epoch_is_refused() -> Outcome {
     Ok(())
 }
 
-/// T16-HD-10 · an intent key round-trips its text.
+/// T16-HD-10 · an intent key round-trips its text, and equality is by that text.
 #[test]
-fn an_intent_key_round_trips() {
-    let key = IntentKey::new("pane-3:enter:1712");
-    assert_eq!(key.as_str(), "pane-3:enter:1712");
-    assert_eq!(IntentKey::new("a"), IntentKey::new("a"));
-    assert_ne!(IntentKey::new("a"), IntentKey::new("b"));
+fn an_intent_key_round_trips() -> Outcome {
+    let text = "0badcafe-1234-4abc-b123-0123456789ab";
+    assert_eq!(IntentKey::new(text)?.as_str(), text);
+    assert_eq!(key(1)?, key(1)?);
+    assert_ne!(key(1)?, key(2)?);
+    Ok(())
 }
 
 // ------------------------------------------- stale events
@@ -192,11 +217,17 @@ fn an_intent_key_round_trips() {
 /// not rendered as new.
 #[test]
 fn an_event_at_or_before_the_cursor_is_stale() -> Outcome {
-    let mut view = View::new(1);
-    view.observe(1, 5, "five")?;
+    let mut view = view(1)?;
+    view.observe(&ep(1)?, 5, 0, "five")?;
     assert_eq!(view.cursor(), 5);
-    assert_eq!(view.observe(1, 5, "five again"), Err(Refusal::StaleEvent));
-    assert_eq!(view.observe(1, 4, "four"), Err(Refusal::StaleEvent));
+    assert_eq!(
+        view.observe(&ep(1)?, 5, 5, "five again"),
+        Err(Refusal::StaleEvent)
+    );
+    assert_eq!(
+        view.observe(&ep(1)?, 4, 5, "four"),
+        Err(Refusal::StaleEvent)
+    );
     assert_eq!(view.buffered(), 1, "neither stale event was buffered");
     Ok(())
 }
@@ -204,9 +235,9 @@ fn an_event_at_or_before_the_cursor_is_stale() -> Outcome {
 /// T16-HD-12 · the staleness boundary is asserted from both sides: cursor + 1 is accepted.
 #[test]
 fn the_staleness_boundary_admits_the_next_sequence() -> Outcome {
-    let mut view = View::new(1);
-    view.observe(1, 5, "five")?;
-    view.observe(1, 6, "six")?;
+    let mut view = view(1)?;
+    view.observe(&ep(1)?, 5, 0, "five")?;
+    view.observe(&ep(1)?, 6, 5, "six")?;
     assert_eq!(view.cursor(), 6);
     assert_eq!(view.buffered(), 2);
     Ok(())
@@ -214,19 +245,23 @@ fn the_staleness_boundary_admits_the_next_sequence() -> Outcome {
 
 /// T16-HD-13 · an event from another epoch is refused; the client must reconnect.
 #[test]
-fn an_event_from_another_epoch_is_refused() {
-    let mut view = View::new(1);
-    assert_eq!(view.observe(2, 1, "x"), Err(Refusal::EpochMismatch));
+fn an_event_from_another_epoch_is_refused() -> Outcome {
+    let mut view = view(1)?;
+    assert_eq!(
+        view.observe(&ep(2)?, 1, 0, "x"),
+        Err(Refusal::EpochMismatch)
+    );
     assert_eq!(view.buffered(), 0);
+    Ok(())
 }
 
 /// T16-HD-14 · draining takes the buffer and leaves it empty, without moving the cursor —
 /// rendering is not acknowledgement.
 #[test]
 fn draining_empties_the_buffer_without_moving_the_cursor() -> Outcome {
-    let mut view = View::new(1);
-    view.observe(1, 1, "a")?;
-    view.observe(1, 2, "b")?;
+    let mut view = view(1)?;
+    view.observe(&ep(1)?, 1, 0, "a")?;
+    view.observe(&ep(1)?, 2, 1, "b")?;
     let drained = view.drain();
     assert_eq!(drained, vec![(1, "a".to_owned()), (2, "b".to_owned())]);
     assert_eq!(view.buffered(), 0);
@@ -238,13 +273,23 @@ fn draining_empties_the_buffer_without_moving_the_cursor() -> Outcome {
 /// cannot make the client grow without bound.
 #[test]
 fn the_buffer_bound_refuses_before_storing() -> Outcome {
-    let mut view = View::new(1);
+    let mut view = view(1)?;
     for index in 1..=MAX_BUFFERED_EVENTS {
-        view.observe(1, u64::try_from(index)?, "x")?;
+        view.observe(
+            &ep(1)?,
+            u64::try_from(index)?,
+            u64::try_from(index - 1)?,
+            "x",
+        )?;
     }
     assert_eq!(view.buffered(), MAX_BUFFERED_EVENTS);
     assert_eq!(
-        view.observe(1, u64::try_from(MAX_BUFFERED_EVENTS + 1)?, "one too many"),
+        view.observe(
+            &ep(1)?,
+            u64::try_from(MAX_BUFFERED_EVENTS + 1)?,
+            u64::try_from(MAX_BUFFERED_EVENTS)?,
+            "one too many",
+        ),
         Err(Refusal::BufferFull)
     );
     assert_eq!(view.buffered(), MAX_BUFFERED_EVENTS);
@@ -262,27 +307,30 @@ fn the_buffer_bound_refuses_before_storing() -> Outcome {
 /// buffer: anything the client retained across the loss is what it cannot vouch for.
 #[test]
 fn reconnecting_takes_the_engine_cursor_and_drops_the_buffer() -> Outcome {
-    let mut view = View::new(1);
-    view.observe(1, 1, "a")?;
-    view.observe(1, 2, "b")?;
+    let mut view = view(1)?;
+    view.observe(&ep(1)?, 1, 0, "a")?;
+    view.observe(&ep(1)?, 2, 1, "b")?;
     assert_eq!(view.buffered(), 2);
-    view.reconnect(1, 7)?;
+    view.reconnect(ep(1)?, 7)?;
     assert_eq!(view.cursor(), 7, "the engine decides where we are");
     assert_eq!(view.buffered(), 0);
     assert_eq!(view.reconnects(), 1);
     Ok(())
 }
 
-/// T16-HD-17 · reconnecting in the same epoch keeps presented snapshots: the tasks did not
-/// stop existing because the pane did.
+/// T16-HD-17 · reconnecting in the same epoch keeps presented snapshots — the tasks did not
+/// stop existing because the pane did — but marks them stale: what the client held across the
+/// loss is the last thing it heard, not the engine's current state (HERDR-G06).
 #[test]
-fn reconnecting_in_epoch_keeps_presented_tasks() -> Outcome {
+fn reconnecting_in_epoch_keeps_presented_tasks_as_stale() -> Outcome {
     let task = id(1);
-    let mut view = View::new(1);
-    view.present(snapshot(&task, Status::Running, 1))?;
-    view.reconnect(1, 5)?;
+    let mut view = view(1)?;
+    view.present(snapshot(&task, Status::Running, 1)?)?;
+    assert_eq!(view.task(&task)?.freshness(), Freshness::Current);
+    view.reconnect(ep(1)?, 5)?;
     assert_eq!(view.tasks(), 1);
-    assert_eq!(view.task(&task)?.status, Status::Running);
+    assert_eq!(view.task(&task)?.snapshot().status, Status::Running);
+    assert_eq!(view.task(&task)?.freshness(), Freshness::Stale);
     Ok(())
 }
 
@@ -291,16 +339,16 @@ fn reconnecting_in_epoch_keeps_presented_tasks() -> Outcome {
 #[test]
 fn reconnecting_into_a_new_epoch_clears_the_view() -> Outcome {
     let task = id(1);
-    let mut view = View::new(1);
-    view.present(snapshot(&task, Status::Passed, 1))?;
+    let mut view = view(1)?;
+    view.present(snapshot(&task, Status::Passed, 1)?)?;
     view.submit(
-        &IntentKey::new("k"),
-        Admitted::from_engine(EngineReceipt::issue(&task, 1, 1)?),
+        &key(1)?,
+        Admitted::from_engine(EngineReceipt::issue(&task, EPOCH_1, "1")?),
     )?;
-    view.reconnect(2, 0)?;
-    assert_eq!(view.epoch(), 2);
+    view.reconnect(ep(2)?, 0)?;
+    assert_eq!(view.epoch().as_str(), epoch_text(2));
     assert_eq!(view.tasks(), 0);
-    assert_eq!(view.submitted(&IntentKey::new("k")), None);
+    assert_eq!(view.submitted(&key(1)?), None);
     assert_eq!(view.task(&task).map(|_| ()), Err(Refusal::UnknownTask));
     Ok(())
 }
@@ -309,9 +357,9 @@ fn reconnecting_into_a_new_epoch_clears_the_view() -> Outcome {
 /// would have seen something the engine never emitted.
 #[test]
 fn a_backwards_reconnect_is_refused() -> Outcome {
-    let mut view = View::new(1);
-    view.observe(1, 9, "nine")?;
-    assert_eq!(view.reconnect(1, 8), Err(Refusal::CursorAhead));
+    let mut view = view(1)?;
+    view.observe(&ep(1)?, 9, 0, "nine")?;
+    assert_eq!(view.reconnect(ep(1)?, 8), Err(Refusal::CursorAhead));
     assert_eq!(view.cursor(), 9, "and the view did not move");
     assert_eq!(view.reconnects(), 0);
     Ok(())
@@ -321,9 +369,9 @@ fn a_backwards_reconnect_is_refused() -> Outcome {
 /// asserted from both sides.
 #[test]
 fn reconnecting_at_the_same_cursor_is_admitted() -> Outcome {
-    let mut view = View::new(1);
-    view.observe(1, 9, "nine")?;
-    view.reconnect(1, 9)?;
+    let mut view = view(1)?;
+    view.observe(&ep(1)?, 9, 0, "nine")?;
+    view.reconnect(ep(1)?, 9)?;
     assert_eq!(view.cursor(), 9);
     assert_eq!(view.reconnects(), 1);
     Ok(())
@@ -333,23 +381,23 @@ fn reconnecting_at_the_same_cursor_is_admitted() -> Outcome {
 /// comparison only applies within one epoch.
 #[test]
 fn a_backwards_cursor_in_a_new_epoch_is_admitted() -> Outcome {
-    let mut view = View::new(1);
-    view.observe(1, 100, "hundred")?;
-    view.reconnect(2, 0)?;
+    let mut view = view(1)?;
+    view.observe(&ep(1)?, 100, 0, "hundred")?;
+    view.reconnect(ep(2)?, 0)?;
     assert_eq!(view.cursor(), 0);
-    assert_eq!(view.epoch(), 2);
+    assert_eq!(view.epoch().as_str(), epoch_text(2));
     Ok(())
 }
 
 /// T16-HD-22 · the reconnect bound refuses at its limit.
 #[test]
 fn the_reconnect_bound_refuses_at_its_limit() -> Outcome {
-    let mut view = View::new(1);
+    let mut view = view(1)?;
     for _ in 0..MAX_RECONNECTS {
-        view.reconnect(1, 0)?;
+        view.reconnect(ep(1)?, 0)?;
     }
     assert_eq!(view.reconnects(), MAX_RECONNECTS);
-    assert_eq!(view.reconnect(1, 0), Err(Refusal::ReconnectLimit));
+    assert_eq!(view.reconnect(ep(1)?, 0), Err(Refusal::ReconnectLimit));
     Ok(())
 }
 
@@ -359,27 +407,27 @@ fn the_reconnect_bound_refuses_at_its_limit() -> Outcome {
 #[test]
 fn the_loss_and_recover_cycle_preserves_the_durable_task() -> Outcome {
     let task = id(1);
-    let key = IntentKey::new("operator-intent");
-    let mut view = View::new(1);
+    let key = key(3)?;
+    let mut view = view(1)?;
     let admitted = view.submit(
         &key,
-        Admitted::from_engine(EngineReceipt::issue(&task, 1, 1)?),
+        Admitted::from_engine(EngineReceipt::issue(&task, EPOCH_1, "1")?),
     )?;
     assert!(admitted.is_durable());
-    view.observe(1, 1, "dispatched")?;
-    view.present(snapshot(&task, Status::Running, 1))?;
+    view.observe(&ep(1)?, 1, 0, "dispatched")?;
+    view.present(snapshot(&task, Status::Running, 1)?)?;
 
     // the pane is lost; the client keeps nothing it cannot vouch for
-    view.reconnect(1, 4)?;
+    view.reconnect(ep(1)?, 4)?;
     assert_eq!(view.buffered(), 0);
 
     // the engine re-presents, and the view carries the outcome it was told
     view.present(Snapshot {
         route_explanation: Some("chose the local adapter on the cost ceiling".to_owned()),
         evidence: vec!["evidence/release/T16-01.json".to_owned()],
-        ..snapshot(&task, Status::Passed, 5)
+        ..snapshot(&task, Status::Passed, 5)?
     })?;
-    let presented = view.task(&task)?;
+    let presented = view.task(&task)?.snapshot();
     assert_eq!(presented.status, Status::Passed);
     assert!(presented.status.is_settled());
     assert_eq!(presented.evidence.len(), 1, "proof stays navigable");
@@ -393,13 +441,13 @@ fn the_loss_and_recover_cycle_preserves_the_durable_task() -> Outcome {
 #[test]
 fn an_out_of_order_snapshot_is_ignored() -> Outcome {
     let task = id(1);
-    let mut view = View::new(1);
-    assert!(view.present(snapshot(&task, Status::Passed, 5))?);
+    let mut view = view(1)?;
+    assert!(view.present(snapshot(&task, Status::Passed, 5)?)?);
     assert!(
-        !view.present(snapshot(&task, Status::Running, 3))?,
+        !view.present(snapshot(&task, Status::Running, 3)?)?,
         "an older snapshot is not applied"
     );
-    assert_eq!(view.task(&task)?.status, Status::Passed);
+    assert_eq!(view.task(&task)?.snapshot().status, Status::Passed);
     Ok(())
 }
 
@@ -408,10 +456,10 @@ fn an_out_of_order_snapshot_is_ignored() -> Outcome {
 #[test]
 fn a_same_sequence_snapshot_is_ignored() -> Outcome {
     let task = id(1);
-    let mut view = View::new(1);
-    view.present(snapshot(&task, Status::Passed, 5))?;
-    assert!(!view.present(snapshot(&task, Status::Failed, 5))?);
-    assert_eq!(view.task(&task)?.status, Status::Passed);
+    let mut view = view(1)?;
+    view.present(snapshot(&task, Status::Passed, 5)?)?;
+    assert!(!view.present(snapshot(&task, Status::Failed, 5)?)?);
+    assert_eq!(view.task(&task)?.snapshot().status, Status::Passed);
     Ok(())
 }
 
@@ -419,10 +467,10 @@ fn a_same_sequence_snapshot_is_ignored() -> Outcome {
 #[test]
 fn a_newer_snapshot_is_applied() -> Outcome {
     let task = id(1);
-    let mut view = View::new(1);
-    view.present(snapshot(&task, Status::Running, 1))?;
-    assert!(view.present(snapshot(&task, Status::Failed, 2))?);
-    assert_eq!(view.task(&task)?.status, Status::Failed);
+    let mut view = view(1)?;
+    view.present(snapshot(&task, Status::Running, 1)?)?;
+    assert!(view.present(snapshot(&task, Status::Failed, 2)?)?);
+    assert_eq!(view.task(&task)?.snapshot().status, Status::Failed);
     Ok(())
 }
 
@@ -431,15 +479,15 @@ fn a_newer_snapshot_is_applied() -> Outcome {
 #[test]
 fn reported_gaps_are_preserved() -> Outcome {
     let task = id(1);
-    let mut view = View::new(1);
+    let mut view = view(1)?;
     view.present(Snapshot {
         gaps: vec![
             "worker cleanup unread".to_owned(),
             "cost unmeasured".to_owned(),
         ],
-        ..snapshot(&task, Status::Unknown, 1)
+        ..snapshot(&task, Status::Unknown, 1)?
     })?;
-    assert_eq!(view.task(&task)?.gaps.len(), 2);
+    assert_eq!(view.task(&task)?.snapshot().gaps.len(), 2);
     Ok(())
 }
 
@@ -448,17 +496,17 @@ fn reported_gaps_are_preserved() -> Outcome {
 #[test]
 fn a_route_explanation_is_verbatim_or_absent() -> Outcome {
     let (a, b) = (id(1), id(2));
-    let mut view = View::new(1);
+    let mut view = view(1)?;
     view.present(Snapshot {
         route_explanation: Some("excluded remote: privacy local_only".to_owned()),
-        ..snapshot(&a, Status::Running, 1)
+        ..snapshot(&a, Status::Running, 1)?
     })?;
-    view.present(snapshot(&b, Status::Running, 1))?;
+    view.present(snapshot(&b, Status::Running, 1)?)?;
     assert_eq!(
-        view.task(&a)?.route_explanation.as_deref(),
+        view.task(&a)?.snapshot().route_explanation.as_deref(),
         Some("excluded remote: privacy local_only")
     );
-    assert_eq!(view.task(&b)?.route_explanation, None);
+    assert_eq!(view.task(&b)?.snapshot().route_explanation, None);
     Ok(())
 }
 
@@ -467,9 +515,9 @@ fn a_route_explanation_is_verbatim_or_absent() -> Outcome {
 #[test]
 fn cancellation_presents_as_pending_not_settled() -> Outcome {
     let task = id(1);
-    let mut view = View::new(1);
-    view.present(snapshot(&task, Status::CancellationPending, 1))?;
-    let presented = view.task(&task)?;
+    let mut view = view(1)?;
+    view.present(snapshot(&task, Status::CancellationPending, 1)?)?;
+    let presented = view.task(&task)?.snapshot();
     assert_eq!(presented.status, Status::CancellationPending);
     assert!(!presented.status.is_settled());
     assert_eq!(presented.status.name(), "cancellation-pending");
@@ -479,46 +527,49 @@ fn cancellation_presents_as_pending_not_settled() -> Outcome {
 /// T16-HD-30 · a malformed task in a snapshot is refused, so a view cannot present a task
 /// whose identity it could not parse.
 #[test]
-fn a_malformed_snapshot_task_is_refused() {
+fn a_malformed_snapshot_task_is_refused() -> Outcome {
     use habitat_engine::contracts::ScalarError;
-    let mut view = View::new(1);
+    let mut view = view(1)?;
     assert_eq!(
-        view.present(snapshot("not-a-uuid", Status::Running, 1)),
+        view.present(snapshot("not-a-uuid", Status::Running, 1)?),
         Err(Refusal::MalformedIdentity(ScalarError::InvalidUuid))
     );
     assert_eq!(view.tasks(), 0);
+    Ok(())
 }
 
 /// T16-HD-31 · an unknown task is refused by name rather than returning an empty snapshot.
 #[test]
-fn an_unknown_task_is_refused() {
-    let view = View::new(1);
+fn an_unknown_task_is_refused() -> Outcome {
+    let view = view(1)?;
     assert_eq!(view.task(&id(9)).map(|_| ()), Err(Refusal::UnknownTask));
+    Ok(())
 }
 
 /// T16-HD-32 · several tasks are presented independently.
 #[test]
 fn several_tasks_are_presented_independently() -> Outcome {
-    let mut view = View::new(1);
+    let mut view = view(1)?;
     for index in 1..=4 {
-        view.present(snapshot(&id(index), Status::Running, 1))?;
+        view.present(snapshot(&id(index), Status::Running, 1)?)?;
     }
     assert_eq!(view.tasks(), 4);
-    view.present(snapshot(&id(2), Status::Failed, 2))?;
-    assert_eq!(view.task(&id(2))?.status, Status::Failed);
-    assert_eq!(view.task(&id(3))?.status, Status::Running);
+    view.present(snapshot(&id(2), Status::Failed, 2)?)?;
+    assert_eq!(view.task(&id(2))?.snapshot().status, Status::Failed);
+    assert_eq!(view.task(&id(3))?.snapshot().status, Status::Running);
     Ok(())
 }
 
 /// T16-HD-33 · a fresh view holds nothing and sits at genesis.
 #[test]
-fn a_fresh_view_holds_nothing() {
-    let view = View::new(3);
-    assert_eq!(view.epoch(), 3);
+fn a_fresh_view_holds_nothing() -> Outcome {
+    let view = view(3)?;
+    assert_eq!(view.epoch().as_str(), epoch_text(3));
     assert_eq!(view.cursor(), 0);
     assert_eq!(view.buffered(), 0);
     assert_eq!(view.tasks(), 0);
     assert_eq!(view.reconnects(), 0);
+    Ok(())
 }
 
 /// T16-HD-34 · every refusal has a distinct name and none is a substring of another.
@@ -533,6 +584,10 @@ fn refusal_names_are_distinct_and_non_overlapping() {
         Refusal::ReconnectLimit,
         Refusal::UnknownTask,
         Refusal::CursorAhead,
+        Refusal::IntentConflict,
+        Refusal::MalformedSequence(ScalarError::LeadingZero),
+        Refusal::ContinuityBroken,
+        Refusal::UnknownTaskState,
     ];
     for (i, a) in all.iter().enumerate() {
         assert!(!a.name().is_empty());
@@ -568,7 +623,6 @@ fn refusal_display_shows_the_carried_error() {
 fn declared_bounds_are_the_enforced_bounds() {
     assert_eq!(MAX_BUFFERED_EVENTS, 1024);
     assert_eq!(MAX_RECONNECTS, 1024);
-    assert_eq!(SCHEMA_VERSION, 1);
 }
 
 // ------------------------------------------- the client owns no task state
@@ -579,11 +633,11 @@ fn declared_bounds_are_the_enforced_bounds() {
 #[test]
 fn only_the_engine_changes_a_status() -> Outcome {
     let task = id(1);
-    let mut view = View::new(1);
-    view.present(snapshot(&task, Status::Failed, 1))?;
-    assert_eq!(view.task(&task)?.status, Status::Failed);
-    view.present(snapshot(&task, Status::Passed, 2))?;
-    assert_eq!(view.task(&task)?.status, Status::Passed);
+    let mut view = view(1)?;
+    view.present(snapshot(&task, Status::Failed, 1)?)?;
+    assert_eq!(view.task(&task)?.snapshot().status, Status::Failed);
+    view.present(snapshot(&task, Status::Passed, 2)?)?;
+    assert_eq!(view.task(&task)?.snapshot().status, Status::Passed);
     Ok(())
 }
 
@@ -591,13 +645,13 @@ fn only_the_engine_changes_a_status() -> Outcome {
 /// every presented status exactly as the engine last reported it.
 #[test]
 fn client_loss_leaves_engine_state_untouched() -> Outcome {
-    let mut view = View::new(1);
+    let mut view = view(1)?;
     for index in 1..=3 {
-        view.present(snapshot(&id(index), Status::Running, 1))?;
+        view.present(snapshot(&id(index), Status::Running, 1)?)?;
     }
-    view.reconnect(1, 99)?;
+    view.reconnect(ep(1)?, 99)?;
     for index in 1..=3 {
-        assert_eq!(view.task(&id(index))?.status, Status::Running);
+        assert_eq!(view.task(&id(index))?.snapshot().status, Status::Running);
     }
     Ok(())
 }
@@ -607,10 +661,10 @@ fn client_loss_leaves_engine_state_untouched() -> Outcome {
 #[test]
 fn presentation_does_not_depend_on_the_event_stream() -> Outcome {
     let task = id(1);
-    let mut view = View::new(1);
-    view.present(snapshot(&task, Status::Passed, 9))?;
+    let mut view = view(1)?;
+    view.present(snapshot(&task, Status::Passed, 9)?)?;
     assert_eq!(view.cursor(), 0, "no events were observed");
-    assert_eq!(view.task(&task)?.status, Status::Passed);
+    assert_eq!(view.task(&task)?.snapshot().status, Status::Passed);
     Ok(())
 }
 
@@ -619,16 +673,16 @@ fn presentation_does_not_depend_on_the_event_stream() -> Outcome {
 #[test]
 fn evidence_references_are_carried_verbatim() -> Outcome {
     let task = id(1);
-    let mut view = View::new(1);
+    let mut view = view(1)?;
     let refs = vec![
         "evidence/release/a.json".to_owned(),
         "; rm -rf / # not a command, just text".to_owned(),
     ];
     view.present(Snapshot {
         evidence: refs.clone(),
-        ..snapshot(&task, Status::Passed, 1)
+        ..snapshot(&task, Status::Passed, 1)?
     })?;
-    assert_eq!(view.task(&task)?.evidence, refs);
+    assert_eq!(view.task(&task)?.snapshot().evidence, refs);
     Ok(())
 }
 
@@ -637,10 +691,10 @@ fn evidence_references_are_carried_verbatim() -> Outcome {
 #[test]
 fn absent_evidence_is_an_empty_list() -> Outcome {
     let task = id(1);
-    let mut view = View::new(1);
-    view.present(snapshot(&task, Status::Passed, 1))?;
-    assert!(view.task(&task)?.evidence.is_empty());
-    assert!(view.task(&task)?.gaps.is_empty());
+    let mut view = view(1)?;
+    view.present(snapshot(&task, Status::Passed, 1)?)?;
+    assert!(view.task(&task)?.snapshot().evidence.is_empty());
+    assert!(view.task(&task)?.snapshot().gaps.is_empty());
     Ok(())
 }
 
@@ -649,17 +703,17 @@ fn absent_evidence_is_an_empty_list() -> Outcome {
 #[test]
 fn the_submission_record_survives_an_in_epoch_reconnect() -> Outcome {
     let task = id(1);
-    let key = IntentKey::new("k");
-    let mut view = View::new(1);
+    let key = key(1)?;
+    let mut view = view(1)?;
     view.submit(
         &key,
-        Admitted::from_engine(EngineReceipt::issue(&task, 1, 1)?),
+        Admitted::from_engine(EngineReceipt::issue(&task, EPOCH_1, "1")?),
     )?;
-    view.reconnect(1, 3)?;
+    view.reconnect(ep(1)?, 3)?;
     assert_eq!(view.submitted(&key), Some(task.as_str()));
     let again = view.submit(
         &key,
-        Admitted::from_engine(EngineReceipt::issue(&task, 1, 4)?),
+        Admitted::from_engine(EngineReceipt::issue(&task, EPOCH_1, "4")?),
     )?;
     assert!(matches!(again, Admitted::Duplicate(_)));
     Ok(())
@@ -670,16 +724,16 @@ fn the_submission_record_survives_an_in_epoch_reconnect() -> Outcome {
 #[test]
 fn an_epoch_change_releases_the_submission_record() -> Outcome {
     let task = id(1);
-    let key = IntentKey::new("k");
-    let mut view = View::new(1);
+    let key = key(1)?;
+    let mut view = view(1)?;
     view.submit(
         &key,
-        Admitted::from_engine(EngineReceipt::issue(&task, 1, 1)?),
+        Admitted::from_engine(EngineReceipt::issue(&task, EPOCH_1, "1")?),
     )?;
-    view.reconnect(2, 0)?;
+    view.reconnect(ep(2)?, 0)?;
     let fresh = view.submit(
         &key,
-        Admitted::from_engine(EngineReceipt::issue(&task, 2, 1)?),
+        Admitted::from_engine(EngineReceipt::issue(&task, EPOCH_2, "1")?),
     )?;
     assert!(matches!(fresh, Admitted::Accepted(_)));
     Ok(())
@@ -689,10 +743,10 @@ fn an_epoch_change_releases_the_submission_record() -> Outcome {
 /// order, across the drain boundary.
 #[test]
 fn events_survive_a_drain_boundary_exactly_once() -> Outcome {
-    let mut view = View::new(1);
+    let mut view = view(1)?;
     let mut seen = Vec::new();
     for index in 1..=6_u64 {
-        view.observe(1, index, &format!("e{index}"))?;
+        view.observe(&ep(1)?, index, index - 1, &format!("e{index}"))?;
         if index % 3 == 0 {
             seen.extend(view.drain());
         }
@@ -703,13 +757,15 @@ fn events_survive_a_drain_boundary_exactly_once() -> Outcome {
     Ok(())
 }
 
-/// T16-HD-45 · a gap in the engine's sequence is accepted, because the client is not the
-/// authority on what the engine emitted; the cursor jumps to what it was told.
+/// T16-HD-45 · a NUMERICAL gap is accepted when the event continues the cursor: `sequence` is
+/// the global store sequence and filtering permits gaps, so continuity is `previous_sequence ==
+/// cursor`, never `+1` (contract-decisions §4). A gap that breaks continuity is refused by
+/// T16-HD-66 (HERDR-G05).
 #[test]
-fn a_sequence_gap_is_accepted_and_moves_the_cursor() -> Outcome {
-    let mut view = View::new(1);
-    view.observe(1, 1, "a")?;
-    view.observe(1, 50, "later")?;
+fn a_numerical_gap_that_continues_the_cursor_is_accepted() -> Outcome {
+    let mut view = view(1)?;
+    view.observe(&ep(1)?, 1, 0, "a")?;
+    view.observe(&ep(1)?, 50, 1, "later")?;
     assert_eq!(view.cursor(), 50);
     assert_eq!(view.buffered(), 2);
     Ok(())
@@ -718,9 +774,9 @@ fn a_sequence_gap_is_accepted_and_moves_the_cursor() -> Outcome {
 /// T16-HD-46 · reconnecting twice counts twice, so an operator can see a flapping client.
 #[test]
 fn reconnects_are_counted() -> Outcome {
-    let mut view = View::new(1);
+    let mut view = view(1)?;
     for expected in 1..=5 {
-        view.reconnect(1, 0)?;
+        view.reconnect(ep(1)?, 0)?;
         assert_eq!(view.reconnects(), expected);
     }
     Ok(())
@@ -731,10 +787,10 @@ fn reconnects_are_counted() -> Outcome {
 #[test]
 fn the_durable_identity_comes_from_the_engine() -> Outcome {
     let engine_task = id(42);
-    let mut view = View::new(1);
+    let mut view = view(1)?;
     let admitted = view.submit(
-        &IntentKey::new("client-guessed-something-else"),
-        Admitted::from_engine(EngineReceipt::issue(&engine_task, 1, 1)?),
+        &key(5)?,
+        Admitted::from_engine(EngineReceipt::issue(&engine_task, EPOCH_1, "1")?),
     )?;
     let acceptance = admitted.acceptance().ok_or("expected acceptance")?;
     assert_eq!(acceptance.task().as_str(), engine_task);
@@ -746,15 +802,15 @@ fn the_durable_identity_comes_from_the_engine() -> Outcome {
 #[test]
 fn a_duplicate_still_carries_an_acceptance() -> Outcome {
     let task = id(1);
-    let key = IntentKey::new("k");
-    let mut view = View::new(1);
+    let key = key(1)?;
+    let mut view = view(1)?;
     view.submit(
         &key,
-        Admitted::from_engine(EngineReceipt::issue(&task, 1, 1)?),
+        Admitted::from_engine(EngineReceipt::issue(&task, EPOCH_1, "1")?),
     )?;
     let duplicate = view.submit(
         &key,
-        Admitted::from_engine(EngineReceipt::issue(&task, 1, 2)?),
+        Admitted::from_engine(EngineReceipt::issue(&task, EPOCH_1, "2")?),
     )?;
     let acceptance = duplicate.acceptance().ok_or("expected acceptance")?;
     assert_eq!(acceptance.task().as_str(), task);
@@ -766,11 +822,11 @@ fn a_duplicate_still_carries_an_acceptance() -> Outcome {
 #[test]
 fn a_denial_after_a_success_reports_the_denial() -> Outcome {
     let task = id(1);
-    let key = IntentKey::new("k");
-    let mut view = View::new(1);
+    let key = key(1)?;
+    let mut view = view(1)?;
     view.submit(
         &key,
-        Admitted::from_engine(EngineReceipt::issue(&task, 1, 1)?),
+        Admitted::from_engine(EngineReceipt::issue(&task, EPOCH_1, "1")?),
     )?;
     let denied = view.submit(&key, Admitted::Denied)?;
     assert!(matches!(denied, Admitted::Denied));
@@ -794,18 +850,21 @@ fn status_names_are_stable() {
 #[test]
 fn behaviour_does_not_depend_on_the_epoch_value() -> Outcome {
     let task = id(1);
-    let mut view = View::new(9_999);
+    let mut view = view(9_999)?;
     view.submit(
-        &IntentKey::new("k"),
-        Admitted::from_engine(EngineReceipt::issue(&task, 9_999, 1)?),
+        &key(1)?,
+        Admitted::from_engine(EngineReceipt::issue(&task, EPOCH_9999, "1")?),
     )?;
-    view.observe(9_999, 1, "a")?;
-    view.present(snapshot(&task, Status::Running, 1))?;
-    assert_eq!(view.epoch(), 9_999);
+    view.observe(&ep(9_999)?, 1, 0, "a")?;
+    view.present(Snapshot {
+        epoch: ep(9_999)?,
+        ..snapshot(&task, Status::Running, 1)?
+    })?;
+    assert_eq!(view.epoch().as_str(), epoch_text(9_999));
     assert_eq!(view.cursor(), 1);
     assert_eq!(view.tasks(), 1);
     assert_eq!(
-        view.observe(1, 2, "wrong epoch"),
+        view.observe(&ep(1)?, 2, 1, "wrong epoch"),
         Err(Refusal::EpochMismatch)
     );
     Ok(())
@@ -818,26 +877,29 @@ fn behaviour_does_not_depend_on_the_epoch_value() -> Outcome {
 fn the_cycle_across_an_epoch_boundary_carries_nothing_stale() -> Outcome {
     let old_task = id(1);
     let new_task = id(2);
-    let mut view = View::new(1);
+    let mut view = view(1)?;
     view.submit(
-        &IntentKey::new("first"),
-        Admitted::from_engine(EngineReceipt::issue(&old_task, 1, 1)?),
+        &key(1)?,
+        Admitted::from_engine(EngineReceipt::issue(&old_task, EPOCH_1, "1")?),
     )?;
-    view.observe(1, 1, "old")?;
-    view.present(snapshot(&old_task, Status::Passed, 1))?;
+    view.observe(&ep(1)?, 1, 0, "old")?;
+    view.present(snapshot(&old_task, Status::Passed, 1)?)?;
 
-    view.reconnect(2, 0)?;
+    view.reconnect(ep(2)?, 0)?;
     assert_eq!(view.tasks(), 0);
     assert_eq!(view.buffered(), 0);
     assert_eq!(view.cursor(), 0);
 
     view.submit(
-        &IntentKey::new("second"),
-        Admitted::from_engine(EngineReceipt::issue(&new_task, 2, 1)?),
+        &key(2)?,
+        Admitted::from_engine(EngineReceipt::issue(&new_task, EPOCH_2, "1")?),
     )?;
-    view.present(snapshot(&new_task, Status::Running, 1))?;
+    view.present(Snapshot {
+        epoch: ep(2)?,
+        ..snapshot(&new_task, Status::Running, 1)?
+    })?;
     assert_eq!(view.tasks(), 1);
-    assert_eq!(view.task(&new_task)?.status, Status::Running);
+    assert_eq!(view.task(&new_task)?.snapshot().status, Status::Running);
     assert_eq!(view.task(&old_task).map(|_| ()), Err(Refusal::UnknownTask));
     Ok(())
 }
@@ -849,15 +911,15 @@ fn the_cycle_across_an_epoch_boundary_carries_nothing_stale() -> Outcome {
 #[test]
 fn a_different_task_under_a_submitted_key_is_refused_and_the_first_stands() -> Outcome {
     let (first_task, second_task) = (id(1), id(2));
-    let mut view = View::new(1);
-    let key = IntentKey::new("operator-enter-1");
+    let mut view = view(1)?;
+    let key = key(7)?;
     view.submit(
         &key,
-        Admitted::from_engine(EngineReceipt::issue(&first_task, 1, 1)?),
+        Admitted::from_engine(EngineReceipt::issue(&first_task, EPOCH_1, "1")?),
     )?;
     let second = view.submit(
         &key,
-        Admitted::from_engine(EngineReceipt::issue(&second_task, 1, 2)?),
+        Admitted::from_engine(EngineReceipt::issue(&second_task, EPOCH_1, "2")?),
     );
     assert_eq!(second, Err(Refusal::IntentConflict));
     assert_eq!(view.submitted(&key), Some(first_task.as_str()));
@@ -889,5 +951,483 @@ fn no_engine_module_takes_an_engine_receipt_as_authority() -> Outcome {
     }
     assert!(scanned > 20, "only {scanned} source files found under src/");
     assert_eq!(naming, ["herdr.rs"], "EngineReceipt named outside the view");
+    Ok(())
+}
+
+// ------------------------------------------- engine-shaped identities (HERDR-G01)
+
+/// T16-HD-55 · an intent key is the engine's `idempotency_key`, a `UUIDv4`
+/// (contract-decisions §3 `idempotency_key: UuidV4`; the engine's readback parses it as one).
+/// Free text, upper case and a nil-version UUID are refused before any submission exists.
+#[test]
+fn an_intent_key_must_be_a_uuidv4() {
+    use habitat_engine::contracts::ScalarError;
+    for text in [
+        "operator-enter-1",
+        "",
+        "0BADCAFE-1234-4ABC-B123-0123456789AB",
+        "0badcafe-1234-1abc-b123-0123456789ab",
+    ] {
+        assert_eq!(
+            IntentKey::new(text),
+            Err(Refusal::MalformedIdentity(ScalarError::InvalidUuid)),
+            "{text:?} was accepted as an intent key"
+        );
+    }
+}
+
+/// T16-HD-56 · a receipt carries the wire's epoch identity and its decimal sequence, asserted
+/// whole over two fixtures that differ in every field.
+#[test]
+fn a_receipt_carries_the_wire_epoch_and_decimal_sequence() -> Outcome {
+    let (task_a, task_b) = (id(3), id(0xbeef));
+    let a = EngineReceipt::issue(&task_a, EPOCH_2, "41")?;
+    let b = EngineReceipt::issue(&task_b, EPOCH_9999, "18446744073709551615")?;
+    assert_eq!(
+        (a.task().as_str(), a.epoch().as_str(), a.sequence()),
+        (task_a.as_str(), EPOCH_2, 41)
+    );
+    assert_eq!(
+        (b.task().as_str(), b.epoch().as_str(), b.sequence()),
+        (task_b.as_str(), EPOCH_9999, u64::MAX)
+    );
+    Ok(())
+}
+
+/// T16-HD-57 · a receipt whose epoch is not a `UUIDv4` or whose sequence is not the wire's
+/// canonical decimal is refused, naming which part failed.
+#[test]
+fn a_malformed_receipt_epoch_or_sequence_is_refused() {
+    use habitat_engine::contracts::ScalarError;
+    let task = id(1);
+    assert_eq!(
+        EngineReceipt::issue(&task, "1", "1").map(|_| ()),
+        Err(Refusal::MalformedIdentity(ScalarError::InvalidUuid))
+    );
+    for (sequence, error) in [
+        ("", ScalarError::Empty),
+        ("-1", ScalarError::InvalidCharacter),
+        ("07", ScalarError::LeadingZero),
+        ("18446744073709551616", ScalarError::Overflow),
+    ] {
+        assert_eq!(
+            EngineReceipt::issue(&task, EPOCH_1, sequence).map(|_| ()),
+            Err(Refusal::MalformedSequence(error)),
+            "sequence {sequence:?}"
+        );
+    }
+    assert_eq!(
+        Refusal::MalformedSequence(ScalarError::LeadingZero).to_string(),
+        "malformed engine sequence: noncanonical leading zero"
+    );
+}
+
+/// T16-HD-58 · an epoch is the ledger's `UUIDv4` and nothing else; its text round-trips.
+#[test]
+fn an_epoch_is_a_uuidv4() -> Outcome {
+    use habitat_engine::contracts::ScalarError;
+    assert_eq!(Epoch::parse(EPOCH_9999)?.as_str(), EPOCH_9999);
+    for text in ["1", "", "0000270F-EEEE-4EEE-9EEE-EEEEEEEEEEEE"] {
+        assert_eq!(
+            Epoch::parse(text),
+            Err(Refusal::MalformedIdentity(ScalarError::InvalidUuid)),
+            "{text:?}"
+        );
+    }
+    assert_ne!(ep(1)?, ep(2)?);
+    Ok(())
+}
+
+// ------------------------------------------- engine task state -> presented status (HERDR-G02)
+
+/// The engine's `TaskStateV1` vocabulary as the published wire contract declares it — read from
+/// `docs/contract-decisions.md`, not typed here from the same reading that wrote the mapping.
+fn published_task_states() -> Result<Vec<String>, Box<dyn Error>> {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("docs/contract-decisions.md");
+    let text = std::fs::read_to_string(path)?;
+    let marker = "`TaskStateV1` is exactly `";
+    let start = text
+        .find(marker)
+        .ok_or("TaskStateV1 declaration not found")?
+        + marker.len();
+    let rest = text.get(start..).ok_or("declaration truncated")?;
+    let end = rest.find('`').ok_or("declaration unterminated")?;
+    let list = rest.get(..end).ok_or("declaration truncated")?;
+    Ok(list.split(" | ").map(str::to_owned).collect())
+}
+
+/// T16-HD-59 · the mapping is total over the engine's vocabulary. The denominator is the
+/// published `TaskStateV1` list, cross-checked against the ledger's compiled parser, and each
+/// spelling's presentation is asserted against a table stated here.
+#[test]
+fn every_engine_task_state_has_a_truthful_status() -> Result<(), Box<dyn Error>> {
+    use habitat_engine::recovery::TaskState;
+    let expected = [
+        ("admitted", Status::Running),
+        ("queued", Status::Running),
+        ("running", Status::Running),
+        ("verifying", Status::Running),
+        ("repair_pending", Status::Running),
+        ("cancellation_requested", Status::CancellationPending),
+        ("blocked", Status::Blocked),
+        ("accepted", Status::Passed),
+        ("failed", Status::Failed),
+        ("cancelled", Status::Cancelled),
+        ("abandoned", Status::Abandoned),
+        ("effect_unknown", Status::EffectUnknown),
+    ];
+    let published = published_task_states()?;
+    assert_eq!(published.len(), 12, "published vocabulary: {published:?}");
+    let table: Vec<&str> = expected.iter().map(|(state, _)| *state).collect();
+    assert_eq!(
+        published, table,
+        "the table must cover the published list, in order"
+    );
+    for (state, status) in expected {
+        let ledger = TaskState::parse(state).ok_or("the ledger does not spell this state")?;
+        assert_eq!(ledger.name(), state);
+        assert_eq!(Status::from_engine(state), Ok(status), "{state}");
+    }
+    Ok(())
+}
+
+/// T16-HD-60 · a spelling outside the vocabulary is refused rather than defaulted — including
+/// the client's own word `passed`, which the engine never sends.
+#[test]
+fn an_unknown_engine_state_is_refused() {
+    for text in [
+        "passed",
+        "Accepted",
+        "accepted ",
+        "",
+        "unknown",
+        "cancellation-pending",
+    ] {
+        assert_eq!(
+            Status::from_engine(text),
+            Err(Refusal::UnknownTaskState),
+            "{text:?}"
+        );
+    }
+}
+
+/// T16-HD-61 · each new status has its own stable name, and the engine's terminal
+/// `cancelled` and `abandoned` present as settled while `effect_unknown` and `blocked` do not.
+#[test]
+fn terminal_states_settle_and_unknown_effects_do_not() -> Outcome {
+    for (state, name, settled) in [
+        ("cancelled", "cancelled", true),
+        ("abandoned", "abandoned", true),
+        ("blocked", "blocked", false),
+        ("effect_unknown", "effect-unknown", false),
+    ] {
+        let status = Status::from_engine(state)?;
+        assert_eq!(
+            (status.name(), status.is_settled()),
+            (name, settled),
+            "{state}"
+        );
+    }
+    Ok(())
+}
+
+// ------------------------------------------- stale state is first-class (HERDR-G06)
+
+/// T16-HD-62 · a late snapshot from the old epoch after a reconnect into a new one is refused:
+/// it describes a world that no longer exists and must not present as current.
+#[test]
+fn an_old_epoch_snapshot_after_reconnect_is_refused() -> Outcome {
+    let task = id(1);
+    let mut view = view(1)?;
+    view.reconnect(ep(2)?, 0)?;
+    assert_eq!(
+        view.present(snapshot(&task, Status::Passed, 9)?),
+        Err(Refusal::EpochMismatch)
+    );
+    assert_eq!(view.tasks(), 0);
+    Ok(())
+}
+
+/// T16-HD-63 · after an in-epoch reconnect a held snapshot stays stale until the engine
+/// presents one read at or after the resynchronisation cursor: a newer snapshot read BEFORE
+/// that cursor is applied but is still stale.
+#[test]
+fn a_stale_snapshot_is_cleared_only_from_the_resync_cursor() -> Outcome {
+    let task = id(4);
+    let mut view = view(1)?;
+    view.present(snapshot(&task, Status::Running, 3)?)?;
+    view.reconnect(ep(1)?, 10)?;
+    assert!(view.present(snapshot(&task, Status::Running, 5)?)?);
+    let presented = view.task(&task)?;
+    assert_eq!(
+        (presented.snapshot().sequence, presented.freshness()),
+        (5, Freshness::Stale)
+    );
+    assert!(view.present(snapshot(&task, Status::Failed, 10)?)?);
+    let presented = view.task(&task)?;
+    assert_eq!(
+        (presented.snapshot().status, presented.freshness()),
+        (Status::Failed, Freshness::Current)
+    );
+    Ok(())
+}
+
+/// T16-HD-64 · a stale task re-presented at its held sequence from the resynchronisation cursor
+/// is current again: nothing changed in the ledger, and the engine has now said so. A current
+/// task at the same sequence is still ignored (T16-HD-25).
+#[test]
+fn a_stale_task_reconfirmed_at_its_sequence_is_current() -> Outcome {
+    let task = id(6);
+    let mut view = view(1)?;
+    view.present(snapshot(&task, Status::Running, 8)?)?;
+    view.reconnect(ep(1)?, 8)?;
+    assert_eq!(view.task(&task)?.freshness(), Freshness::Stale);
+    assert!(view.present(snapshot(&task, Status::Running, 8)?)?);
+    assert_eq!(view.task(&task)?.freshness(), Freshness::Current);
+    assert!(!view.present(snapshot(&task, Status::Running, 8)?)?);
+    Ok(())
+}
+
+/// T16-HD-65 · a snapshot of a task the view first sees after a reconnect, read before the
+/// resynchronisation cursor, is stale on arrival.
+#[test]
+fn a_new_snapshot_read_before_the_resync_cursor_is_stale() -> Outcome {
+    let task = id(7);
+    let mut view = view(1)?;
+    view.reconnect(ep(1)?, 20)?;
+    view.present(snapshot(&task, Status::Running, 19)?)?;
+    assert_eq!(view.task(&task)?.freshness(), Freshness::Stale);
+    Ok(())
+}
+
+// ------------------------------------------- event continuity (HERDR-G05)
+
+/// T16-HD-66 · an event whose `previous_sequence` is not the client's cursor is refused: the
+/// subscription delivered something the client never saw, so it must resynchronise rather
+/// than present a history with a hole in it. Nothing is buffered and the cursor stays.
+#[test]
+fn an_event_that_does_not_continue_the_cursor_is_refused() -> Outcome {
+    let mut view = view(1)?;
+    view.observe(&ep(1)?, 3, 0, "a")?;
+    assert_eq!(
+        view.observe(&ep(1)?, 9, 5, "after a lost event"),
+        Err(Refusal::ContinuityBroken)
+    );
+    assert_eq!(
+        view.observe(&ep(1)?, 9, 2, "previous behind the cursor"),
+        Err(Refusal::ContinuityBroken)
+    );
+    assert_eq!((view.cursor(), view.buffered()), (3, 1));
+    Ok(())
+}
+
+/// T16-HD-67 · after a reconnect the first event continues from the engine's cursor (the
+/// snapshot high-water), and continuity is enforced from there.
+#[test]
+fn continuity_resumes_from_the_reconnect_cursor() -> Outcome {
+    let mut view = view(1)?;
+    view.observe(&ep(1)?, 2, 0, "a")?;
+    view.reconnect(ep(1)?, 40)?;
+    assert_eq!(
+        view.observe(&ep(1)?, 45, 2, "continues the pre-loss cursor"),
+        Err(Refusal::ContinuityBroken)
+    );
+    view.observe(&ep(1)?, 45, 40, "first after resync")?;
+    assert_eq!(view.cursor(), 45);
+    Ok(())
+}
+
+// ------------------------------------------- display failure (HERDR-G09)
+
+fn rendered(view: &View, task: &str) -> Result<String, Box<dyn Error>> {
+    let mut out = String::new();
+    render(view.task(task)?, &mut out)?;
+    Ok(out)
+}
+
+/// T16-HD-68 · the renderer is asserted whole over two fixtures that differ in every field:
+/// status and settledness, freshness, epoch, sequence, route, evidence and gaps.
+#[test]
+fn render_is_whole_over_two_fixtures_differing_in_every_field() -> Result<(), Box<dyn Error>> {
+    let (a, b) = (id(0xa), id(0xb));
+    let mut view = view(2)?;
+    view.present(Snapshot {
+        task: a.clone(),
+        epoch: ep(2)?,
+        status: Status::Failed,
+        route_explanation: Some("excluded remote: privacy local_only".to_owned()),
+        evidence: vec!["evidence/a.json".to_owned(), "evidence/b.json".to_owned()],
+        gaps: vec!["cost unmeasured".to_owned()],
+        sequence: 17,
+    })?;
+    view.present(Snapshot {
+        task: b.clone(),
+        epoch: ep(2)?,
+        status: Status::EffectUnknown,
+        route_explanation: None,
+        evidence: Vec::new(),
+        gaps: Vec::new(),
+        sequence: 4,
+    })?;
+    view.reconnect(ep(2)?, 17)?;
+    view.present(Snapshot {
+        task: a.clone(),
+        epoch: ep(2)?,
+        status: Status::Failed,
+        route_explanation: Some("excluded remote: privacy local_only".to_owned()),
+        evidence: vec!["evidence/a.json".to_owned(), "evidence/b.json".to_owned()],
+        gaps: vec!["cost unmeasured".to_owned()],
+        sequence: 17,
+    })?;
+    assert_eq!(
+        rendered(&view, &a)?,
+        format!(
+            "task {a}\nstatus failed (settled)\nfreshness current\nas of epoch {EPOCH_2} sequence 17\n\
+             route \"excluded remote: privacy local_only\"\nevidence \"evidence/a.json\"\n\
+             evidence \"evidence/b.json\"\ngap \"cost unmeasured\"\n"
+        )
+    );
+    assert_eq!(
+        rendered(&view, &b)?,
+        format!(
+            "task {b}\nstatus effect-unknown (not settled)\n\
+             freshness stale: held from before the last reconnect\n\
+             as of epoch {EPOCH_2} sequence 4\nroute none supplied\nevidence none retained\n"
+        )
+    );
+    Ok(())
+}
+
+/// A writer that accepts `budget` bytes and then fails, recording what it was given.
+struct FailingWriter {
+    budget: usize,
+    written: String,
+}
+
+impl std::fmt::Write for FailingWriter {
+    fn write_str(&mut self, text: &str) -> std::fmt::Result {
+        if self.written.len() + text.len() > self.budget {
+            return Err(std::fmt::Error);
+        }
+        self.written.push_str(text);
+        Ok(())
+    }
+}
+
+/// A writer whose `fail_at`-th write fails once; every other write succeeds and is recorded.
+struct FlakyWriter {
+    fail_at: usize,
+    calls: usize,
+    written: String,
+}
+
+impl std::fmt::Write for FlakyWriter {
+    fn write_str(&mut self, text: &str) -> std::fmt::Result {
+        self.calls += 1;
+        if self.calls == self.fail_at {
+            return Err(std::fmt::Error);
+        }
+        self.written.push_str(text);
+        Ok(())
+    }
+}
+
+/// T16-HD-69 · a display failure invents nothing: the render reports the failure, the view's
+/// presentation is unchanged, and the next render presents the same state in full. Every cut
+/// point through the output is tried, so no line boundary is special; and a writer that fails
+/// ONCE and then recovers still yields an error, never an `Ok` card with a line missing.
+#[test]
+fn a_failed_render_leaves_the_view_unchanged() -> Result<(), Box<dyn Error>> {
+    let task = id(0x51);
+    let mut view = view(1)?;
+    view.present(Snapshot {
+        route_explanation: Some("local adapter".to_owned()),
+        evidence: vec!["evidence/release/T16.json".to_owned()],
+        ..snapshot(&task, Status::Running, 3)?
+    })?;
+    let before = rendered(&view, &task)?;
+    for budget in 0..before.len() {
+        let mut writer = FailingWriter {
+            budget,
+            written: String::new(),
+        };
+        assert!(
+            render(view.task(&task)?, &mut writer).is_err(),
+            "budget {budget}"
+        );
+        assert!(before.starts_with(&writer.written), "budget {budget}");
+        let presented = view.task(&task)?;
+        assert_eq!(
+            (presented.snapshot().status, presented.freshness()),
+            (Status::Running, Freshness::Current)
+        );
+        assert_eq!(rendered(&view, &task)?, before, "budget {budget}");
+    }
+    let mut calls = 0;
+    for fail_at in 1..=before.len() {
+        let mut writer = FlakyWriter {
+            fail_at,
+            calls: 0,
+            written: String::new(),
+        };
+        let result = render(view.task(&task)?, &mut writer);
+        if writer.calls < fail_at {
+            break;
+        }
+        calls = fail_at;
+        assert!(
+            result.is_err(),
+            "write {fail_at} failed and render returned Ok"
+        );
+        assert!(before.starts_with(&writer.written), "write {fail_at}");
+    }
+    assert!(calls > 7, "only {calls} writes were exercised");
+    assert_eq!(rendered(&view, &task)?, before);
+    Ok(())
+}
+
+/// T16-HD-70 · engine-supplied text cannot forge a line: a gap, route or evidence reference
+/// carrying a newline and a fake settled status renders escaped on its own line, so the only
+/// `status` line is the one computed from the engine's status.
+#[test]
+fn engine_text_cannot_forge_a_rendered_status() -> Result<(), Box<dyn Error>> {
+    let task = id(0x70);
+    let forged = "x\nstatus passed (settled)\nfreshness current";
+    let mut view = view(1)?;
+    view.present(Snapshot {
+        route_explanation: Some(forged.to_owned()),
+        evidence: vec![forged.to_owned()],
+        gaps: vec![forged.to_owned()],
+        ..snapshot(&task, Status::Unknown, 2)?
+    })?;
+    let out = rendered(&view, &task)?;
+    let status_lines: Vec<&str> = out
+        .lines()
+        .filter(|line| line.starts_with("status"))
+        .collect();
+    assert_eq!(status_lines, ["status unknown (not settled)"]);
+    assert_eq!(out.lines().count(), 7, "{out}");
+    assert!(out.contains("gap \"x\\nstatus passed (settled)\\nfreshness current\""));
+    Ok(())
+}
+
+/// T16-HD-71 · a stale accepted task never renders as a current verdict: its freshness line
+/// says stale, even though its status is settled.
+#[test]
+fn a_stale_passed_task_renders_as_stale() -> Result<(), Box<dyn Error>> {
+    let task = id(0x71);
+    let mut view = view(1)?;
+    view.present(snapshot(&task, Status::from_engine("accepted")?, 5)?)?;
+    view.reconnect(ep(1)?, 6)?;
+    let out = rendered(&view, &task)?;
+    let lines: Vec<&str> = out.lines().take(3).collect();
+    assert_eq!(
+        lines,
+        [
+            format!("task {task}").as_str(),
+            "status passed (settled)",
+            "freshness stale: held from before the last reconnect",
+        ]
+    );
     Ok(())
 }

@@ -295,13 +295,29 @@
 //!   method that transitions a task, and reconnecting rebuilds from the engine's
 //!   [`Snapshot`] rather than from anything the client retained.
 //!
-//! Submission is idempotent by the caller's own [`IntentKey`], so a duplicate click, a
-//! replayed keystroke or a reconnect that resends does not admit two tasks.
+//! Submission is idempotent by the caller's own [`IntentKey`] — the engine's `UUIDv4`
+//! `idempotency_key` — so a duplicate click, a replayed keystroke or a reconnect that resends
+//! does not admit two tasks.
+//!
+//! **Identities are the engine's wire identities** (HEE3-Control/1, `docs/contract-decisions.md`
+//! §4): an [`Epoch`] is the ledger epoch `UUIDv4`, a receipt's sequence is parsed from the
+//! wire's canonical decimal string, and an [`IntentKey`] is a `UUIDv4`. A client therefore
+//! carries an engine reply into a view without inventing a mapping.
+//!
+//! **Stale is first-class.** A reconnect marks every held snapshot [`Freshness::Stale`] until
+//! the engine re-presents it from at or after the resynchronisation cursor, and an event whose
+//! `previous_sequence` does not continue the client's cursor is refused as
+//! [`Refusal::ContinuityBroken`]: the client resynchronises rather than claiming gap-free
+//! history. Numerical gaps in `sequence` alone are not losses — filtering permits them (§4).
+//!
+//! **Nothing here is persisted** (completion standard G08: the migration subcheck is
+//! inapplicable). A [`View`] lives only as long as its client and is rebuilt from the engine's
+//! snapshots after any loss, so there is no stored shape to version or migrate.
 
 use std::collections::BTreeMap;
 use std::fmt;
 
-use crate::contracts::{ScalarError, UuidV4};
+use crate::contracts::{ScalarError, UuidV4, parse_u64_decimal};
 
 /// The most events one client buffers before it must reconnect by cursor.
 pub const MAX_BUFFERED_EVENTS: usize = 1024;
@@ -309,18 +325,20 @@ pub const MAX_BUFFERED_EVENTS: usize = 1024;
 /// The most reconnect attempts recorded for one client.
 pub const MAX_RECONNECTS: u32 = 1024;
 
-/// Schema version of the persisted client view shape.
-pub const SCHEMA_VERSION: i64 = 1;
-
 /// A reason this module refused.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Refusal {
     /// An identity that is not a lowercase hyphenated `UUIDv4`.
     MalformedIdentity(ScalarError),
+    /// A sequence that is not the wire's canonical `u64` decimal.
+    MalformedSequence(ScalarError),
     /// The client's epoch is not the engine's; the view must be rebuilt.
     EpochMismatch,
     /// An event older than the client's cursor was offered.
     StaleEvent,
+    /// An event whose `previous_sequence` is not the client's cursor: something this
+    /// subscription should have delivered was not, so the client must resynchronise.
+    ContinuityBroken,
     /// The event buffer is full; the client must reconnect by cursor.
     BufferFull,
     /// The reconnect bound was reached.
@@ -332,6 +350,8 @@ pub enum Refusal {
     /// A second, different task was reported under an intent key already submitted. The
     /// earlier outcome stands; the view does not relabel the new one as a duplicate.
     IntentConflict,
+    /// A task state outside the engine's `TaskStateV1` vocabulary.
+    UnknownTaskState,
 }
 
 impl Refusal {
@@ -340,13 +360,16 @@ impl Refusal {
     pub const fn name(self) -> &'static str {
         match self {
             Self::MalformedIdentity(_) => "malformed client identity",
+            Self::MalformedSequence(_) => "malformed engine sequence",
             Self::EpochMismatch => "client epoch differs from the engine",
             Self::StaleEvent => "event precedes the client cursor",
+            Self::ContinuityBroken => "event does not continue the client cursor; resync",
             Self::BufferFull => "client event buffer bound reached",
             Self::ReconnectLimit => "reconnect bound reached",
             Self::UnknownTask => "unknown task in this view",
             Self::CursorAhead => "cursor follows the engine sequence",
             Self::IntentConflict => "a different task under an intent key already submitted",
+            Self::UnknownTaskState => "task state outside the engine vocabulary",
         }
     }
 }
@@ -354,13 +377,37 @@ impl Refusal {
 impl fmt::Display for Refusal {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::MalformedIdentity(error) => write!(f, "{}: {error}", self.name()),
+            Self::MalformedIdentity(error) | Self::MalformedSequence(error) => {
+                write!(f, "{}: {error}", self.name())
+            }
             other => f.write_str(other.name()),
         }
     }
 }
 
 impl std::error::Error for Refusal {}
+
+/// The engine's ledger epoch: an owned, validated `UUIDv4` (the wire's `epoch`).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Epoch(String);
+
+impl Epoch {
+    /// Parse the wire's epoch.
+    ///
+    /// # Errors
+    ///
+    /// [`Refusal::MalformedIdentity`] when `text` is not a `UUIDv4`.
+    pub fn parse(text: &str) -> Result<Self, Refusal> {
+        let epoch = UuidV4::parse(text).map_err(Refusal::MalformedIdentity)?;
+        Ok(Self(epoch.as_str().to_owned()))
+    }
+
+    /// The epoch's text.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
 
 /// A receipt the engine issued. The client cannot construct one from an observation.
 ///
@@ -369,13 +416,13 @@ impl std::error::Error for Refusal {}
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct EngineReceipt<'a> {
     task: UuidV4<'a>,
-    epoch: u64,
+    epoch: UuidV4<'a>,
     sequence: u64,
 }
 
 impl<'a> EngineReceipt<'a> {
-    /// The view's rendering of an engine admission: the task, epoch and sequence the engine
-    /// reported after durable admission.
+    /// The view's rendering of an engine admission, from the wire values of a `task.submit`
+    /// reply: `task.task_id`, `engine_cursor.epoch` and `engine_cursor.sequence`.
     ///
     /// This is **not** authority, and no type could make it so: a client parses receipts from
     /// engine responses, and a client can always fabricate a response. Acceptance is decided by
@@ -385,12 +432,13 @@ impl<'a> EngineReceipt<'a> {
     ///
     /// # Errors
     ///
-    /// [`Refusal::MalformedIdentity`] when `task` is not a `UUIDv4`.
-    pub fn issue(task: &'a str, epoch: u64, sequence: u64) -> Result<Self, Refusal> {
+    /// * [`Refusal::MalformedIdentity`] when `task` or `epoch` is not a `UUIDv4`;
+    /// * [`Refusal::MalformedSequence`] when `sequence` is not a canonical `u64` decimal.
+    pub fn issue(task: &'a str, epoch: &'a str, sequence: &str) -> Result<Self, Refusal> {
         Ok(Self {
             task: UuidV4::parse(task).map_err(Refusal::MalformedIdentity)?,
-            epoch,
-            sequence,
+            epoch: UuidV4::parse(epoch).map_err(Refusal::MalformedIdentity)?,
+            sequence: parse_u64_decimal(sequence).map_err(Refusal::MalformedSequence)?,
         })
     }
 
@@ -402,7 +450,7 @@ impl<'a> EngineReceipt<'a> {
 
     /// The epoch the admission belongs to.
     #[must_use]
-    pub const fn epoch(self) -> u64 {
+    pub const fn epoch(self) -> UuidV4<'a> {
         self.epoch
     }
 
@@ -477,12 +525,22 @@ impl<'a> Admitted<'a> {
 pub enum Status {
     /// Admitted and not yet finished.
     Running,
-    /// Finished, by the engine's own account.
+    /// Accepted, by the engine's own account (the ledger's `accepted`).
     Passed,
     /// Failed, by the engine's own account.
     Failed,
     /// Cancellation is recorded as an obligation, not yet settled.
     CancellationPending,
+    /// Cancelled, by the engine's own account.
+    Cancelled,
+    /// Abandoned, by the engine's own account.
+    Abandoned,
+    /// Blocked by an unresolved authority or effect boundary. No artefact declares it
+    /// terminal, so it is not presented as settled.
+    Blocked,
+    /// The engine reported that an effect's outcome is unknown. That is an engine report,
+    /// not silence, and it is never presented as settled.
+    EffectUnknown,
     /// The engine has not reported. Never rendered as success or failure.
     Unknown,
 }
@@ -496,26 +554,58 @@ impl Status {
             Self::Passed => "passed",
             Self::Failed => "failed",
             Self::CancellationPending => "cancellation-pending",
+            Self::Cancelled => "cancelled",
+            Self::Abandoned => "abandoned",
+            Self::Blocked => "blocked",
+            Self::EffectUnknown => "effect-unknown",
             Self::Unknown => "unknown",
         }
     }
 
     /// Every status.
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 9] = [
         Self::Running,
         Self::Passed,
         Self::Failed,
         Self::CancellationPending,
+        Self::Cancelled,
+        Self::Abandoned,
+        Self::Blocked,
+        Self::EffectUnknown,
         Self::Unknown,
     ];
 
+    /// The presented status of an engine `TaskStateV1` spelling (`task.get`'s
+    /// `task.state`), total over that vocabulary.
+    ///
+    /// # Errors
+    ///
+    /// [`Refusal::UnknownTaskState`] for any other text — never a default, because a default
+    /// is the client inventing a state.
+    pub fn from_engine(state: &str) -> Result<Self, Refusal> {
+        Ok(match state {
+            "admitted" | "queued" | "running" | "verifying" | "repair_pending" => Self::Running,
+            "cancellation_requested" => Self::CancellationPending,
+            "blocked" => Self::Blocked,
+            "accepted" => Self::Passed,
+            "failed" => Self::Failed,
+            "cancelled" => Self::Cancelled,
+            "abandoned" => Self::Abandoned,
+            "effect_unknown" => Self::EffectUnknown,
+            _ => return Err(Refusal::UnknownTaskState),
+        })
+    }
+
     /// Whether this status is a settled engine verdict.
     ///
-    /// `Unknown` and `CancellationPending` are not: presenting either as settled would be
-    /// the client inventing an outcome.
+    /// `Unknown`, `EffectUnknown`, `Blocked` and `CancellationPending` are not: presenting
+    /// any of them as settled would be the client inventing an outcome.
     #[must_use]
     pub const fn is_settled(self) -> bool {
-        matches!(self, Self::Passed | Self::Failed)
+        matches!(
+            self,
+            Self::Passed | Self::Failed | Self::Cancelled | Self::Abandoned
+        )
     }
 }
 
@@ -530,6 +620,8 @@ impl fmt::Display for Status {
 pub struct Snapshot {
     /// The durable task identity.
     pub task: String,
+    /// The engine epoch this snapshot was read in.
+    pub epoch: Epoch,
     /// The engine's current status.
     pub status: Status,
     /// The route explanation, when the engine supplied one.
@@ -542,19 +634,100 @@ pub struct Snapshot {
     pub sequence: u64,
 }
 
-/// A caller-chosen key that makes submission idempotent.
+/// Whether a presented snapshot is known to reflect the engine since the last reconnect.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Freshness {
+    /// Read at or after the client's last resynchronisation cursor.
+    Current,
+    /// Held from before the last reconnect and not yet re-presented by the engine.
+    Stale,
+}
+
+/// One task as a view presents it: the engine's snapshot and whether it is current.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Presented<'a> {
+    snapshot: &'a Snapshot,
+    freshness: Freshness,
+}
+
+impl<'a> Presented<'a> {
+    /// The engine's snapshot.
+    #[must_use]
+    pub const fn snapshot(self) -> &'a Snapshot {
+        self.snapshot
+    }
+
+    /// Whether the snapshot is current.
+    #[must_use]
+    pub const fn freshness(self) -> Freshness {
+        self.freshness
+    }
+}
+
+/// Render one presented task as text.
+///
+/// Pure: it reads the presentation and writes to `out`, so a failed write changes no state.
+/// Settledness comes from [`Status::is_settled`] and staleness from [`Freshness`], each on its
+/// own line, so a stale or unsettled card cannot read as a current verdict. Engine-supplied
+/// text (route, evidence, gaps) is written escaped and quoted, so it cannot forge a line.
+///
+/// # Errors
+///
+/// Whatever `out` returns.
+pub fn render(presented: Presented<'_>, out: &mut impl fmt::Write) -> fmt::Result {
+    let snapshot = presented.snapshot();
+    writeln!(out, "task {}", snapshot.task)?;
+    let settled = if snapshot.status.is_settled() {
+        "settled"
+    } else {
+        "not settled"
+    };
+    writeln!(out, "status {} ({settled})", snapshot.status)?;
+    let freshness = match presented.freshness() {
+        Freshness::Current => "current",
+        Freshness::Stale => "stale: held from before the last reconnect",
+    };
+    writeln!(out, "freshness {freshness}")?;
+    writeln!(
+        out,
+        "as of epoch {} sequence {}",
+        snapshot.epoch.as_str(),
+        snapshot.sequence
+    )?;
+    match &snapshot.route_explanation {
+        Some(route) => writeln!(out, "route {route:?}")?,
+        None => writeln!(out, "route none supplied")?,
+    }
+    if snapshot.evidence.is_empty() {
+        writeln!(out, "evidence none retained")?;
+    }
+    for reference in &snapshot.evidence {
+        writeln!(out, "evidence {reference:?}")?;
+    }
+    for gap in &snapshot.gaps {
+        writeln!(out, "gap {gap:?}")?;
+    }
+    Ok(())
+}
+
+/// The engine's idempotency key for one operator intent: a `UUIDv4`.
 ///
 /// A duplicate click, a replayed keystroke and a reconnect that resends all carry the same
 /// key, so the engine admits one task. The key is the client's, because only the client
-/// knows that two keystrokes were one intent.
+/// knows that two keystrokes were one intent; its form is the engine's, because the engine's
+/// `task.get` readback finds the admission by it.
 #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
 pub struct IntentKey(String);
 
 impl IntentKey {
     /// A key for one operator intent.
-    #[must_use]
-    pub fn new(key: &str) -> Self {
-        Self(key.to_owned())
+    ///
+    /// # Errors
+    ///
+    /// [`Refusal::MalformedIdentity`] when `key` is not a `UUIDv4`.
+    pub fn new(key: &str) -> Result<Self, Refusal> {
+        let key = UuidV4::parse(key).map_err(Refusal::MalformedIdentity)?;
+        Ok(Self(key.as_str().to_owned()))
     }
 
     /// The underlying key.
@@ -564,24 +737,32 @@ impl IntentKey {
     }
 }
 
+#[derive(Clone, Debug)]
+struct Held {
+    snapshot: Snapshot,
+    freshness: Freshness,
+}
+
 /// A client view: a presentation of engine state, owning none of it.
 #[derive(Clone, Debug)]
 pub struct View {
-    epoch: u64,
+    epoch: Epoch,
     cursor: u64,
+    resynced_at: u64,
     reconnects: u32,
     buffered: Vec<(u64, String)>,
-    snapshots: BTreeMap<String, Snapshot>,
+    snapshots: BTreeMap<String, Held>,
     submitted: BTreeMap<String, String>,
 }
 
 impl View {
     /// An empty view attached to `epoch`.
     #[must_use]
-    pub fn new(epoch: u64) -> Self {
+    pub fn new(epoch: Epoch) -> Self {
         Self {
             epoch,
             cursor: 0,
+            resynced_at: 0,
             reconnects: 0,
             buffered: Vec::new(),
             snapshots: BTreeMap::new(),
@@ -591,8 +772,8 @@ impl View {
 
     /// The epoch this view is attached to.
     #[must_use]
-    pub const fn epoch(&self) -> u64 {
-        self.epoch
+    pub const fn epoch(&self) -> &Epoch {
+        &self.epoch
     }
 
     /// Where the client has read to.
@@ -634,7 +815,7 @@ impl View {
         outcome: Admitted<'a>,
     ) -> Result<Admitted<'a>, Refusal> {
         if let Some(acceptance) = outcome.acceptance()
-            && acceptance.receipt().epoch() != self.epoch
+            && acceptance.receipt().epoch().as_str() != self.epoch.as_str()
         {
             return Err(Refusal::EpochMismatch);
         }
@@ -666,19 +847,35 @@ impl View {
 
     /// Accept one engine event, advancing the cursor.
     ///
+    /// `previous` is the event's `previous_sequence`: the sequence of the last event this
+    /// subscription delivered, or the snapshot high-water for the first. Filtering permits
+    /// numerical gaps in `sequence`, so continuity is `previous == cursor`, never `+1`.
+    ///
     /// # Errors
     ///
     /// * [`Refusal::EpochMismatch`] when the event belongs to another epoch;
     /// * [`Refusal::StaleEvent`] for a sequence at or before the cursor — a replayed event
     ///   must not be rendered as new;
+    /// * [`Refusal::ContinuityBroken`] when `previous` is not the cursor — the client must
+    ///   resynchronise rather than present a history with a hole in it. (`sequence >
+    ///   previous` then follows from the stale check, so it needs no clause of its own.)
     /// * [`Refusal::BufferFull`] at [`MAX_BUFFERED_EVENTS`], refused before the event is
     ///   stored so a slow renderer cannot make the client grow without bound.
-    pub fn observe(&mut self, epoch: u64, sequence: u64, text: &str) -> Result<(), Refusal> {
-        if epoch != self.epoch {
+    pub fn observe(
+        &mut self,
+        epoch: &Epoch,
+        sequence: u64,
+        previous: u64,
+        text: &str,
+    ) -> Result<(), Refusal> {
+        if *epoch != self.epoch {
             return Err(Refusal::EpochMismatch);
         }
         if sequence <= self.cursor {
             return Err(Refusal::StaleEvent);
+        }
+        if previous != self.cursor {
+            return Err(Refusal::ContinuityBroken);
         }
         if self.buffered.len() >= MAX_BUFFERED_EVENTS {
             return Err(Refusal::BufferFull);
@@ -697,20 +894,42 @@ impl View {
     /// Apply an engine snapshot.
     ///
     /// A snapshot older than one already held is ignored, so an out-of-order arrival cannot
-    /// move a task's presentation backwards.
+    /// move a task's presentation backwards. A snapshot read before the last reconnect's
+    /// cursor is held as [`Freshness::Stale`]; one read at or after it is current, and
+    /// re-presenting a stale task at its held sequence from at or after that cursor clears
+    /// the mark.
     ///
     /// # Errors
     ///
-    /// [`Refusal::MalformedIdentity`] when the snapshot's task is not a `UUIDv4`.
+    /// * [`Refusal::MalformedIdentity`] when the snapshot's task is not a `UUIDv4`;
+    /// * [`Refusal::EpochMismatch`] when the snapshot was read in another epoch — a late
+    ///   snapshot from before an epoch change describes a world that no longer exists.
     pub fn present(&mut self, snapshot: Snapshot) -> Result<bool, Refusal> {
         let task = UuidV4::parse(snapshot.task.as_str()).map_err(Refusal::MalformedIdentity)?;
-        let key = task.as_str().to_owned();
-        if let Some(existing) = self.snapshots.get(&key)
-            && existing.sequence >= snapshot.sequence
-        {
-            return Ok(false);
+        if snapshot.epoch != self.epoch {
+            return Err(Refusal::EpochMismatch);
         }
-        self.snapshots.insert(key, snapshot);
+        let freshness = if snapshot.sequence >= self.resynced_at {
+            Freshness::Current
+        } else {
+            Freshness::Stale
+        };
+        let key = task.as_str().to_owned();
+        if let Some(existing) = self.snapshots.get(&key) {
+            let held = existing.snapshot.sequence;
+            let refreshes =
+                existing.freshness == Freshness::Stale && freshness == Freshness::Current;
+            if snapshot.sequence < held || (snapshot.sequence == held && !refreshes) {
+                return Ok(false);
+            }
+        }
+        self.snapshots.insert(
+            key,
+            Held {
+                snapshot,
+                freshness,
+            },
+        );
         Ok(true)
     }
 
@@ -719,35 +938,47 @@ impl View {
     /// # Errors
     ///
     /// [`Refusal::UnknownTask`] when this view is not presenting it.
-    pub fn task(&self, task: &str) -> Result<&Snapshot, Refusal> {
-        self.snapshots.get(task).ok_or(Refusal::UnknownTask)
+    pub fn task(&self, task: &str) -> Result<Presented<'_>, Refusal> {
+        self.snapshots
+            .get(task)
+            .map(|held| Presented {
+                snapshot: &held.snapshot,
+                freshness: held.freshness,
+            })
+            .ok_or(Refusal::UnknownTask)
     }
 
     /// Rebuild after losing the client, from the engine's own state.
     ///
     /// The buffer is discarded and the cursor is taken from the engine, because anything the
-    /// client retained across the loss is exactly what it cannot vouch for. Engine
-    /// obligations are unaffected: this method does not touch task state, and there is none
-    /// here to touch.
+    /// client retained across the loss is exactly what it cannot vouch for. In the same
+    /// epoch every held snapshot is kept but marked [`Freshness::Stale`] until the engine
+    /// re-presents it; into a new epoch the view is cleared. Engine obligations are
+    /// unaffected: this method does not touch task state, and there is none here to touch.
     ///
     /// # Errors
     ///
     /// * [`Refusal::ReconnectLimit`] at [`MAX_RECONNECTS`];
     /// * [`Refusal::CursorAhead`] when the engine reports a cursor behind the client's,
     ///   which means the client saw something the engine did not emit.
-    pub fn reconnect(&mut self, epoch: u64, engine_cursor: u64) -> Result<(), Refusal> {
+    pub fn reconnect(&mut self, epoch: Epoch, engine_cursor: u64) -> Result<(), Refusal> {
         if self.reconnects >= MAX_RECONNECTS {
             return Err(Refusal::ReconnectLimit);
         }
         if epoch == self.epoch && engine_cursor < self.cursor {
             return Err(Refusal::CursorAhead);
         }
-        if epoch != self.epoch {
+        if epoch == self.epoch {
+            for held in self.snapshots.values_mut() {
+                held.freshness = Freshness::Stale;
+            }
+        } else {
             self.snapshots.clear();
             self.submitted.clear();
         }
         self.epoch = epoch;
         self.cursor = engine_cursor;
+        self.resynced_at = engine_cursor;
         self.buffered.clear();
         self.reconnects += 1;
         Ok(())
