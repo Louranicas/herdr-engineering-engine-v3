@@ -3165,8 +3165,9 @@ or parallelizing commands. The 300-second cleanup reserve, the 180-second comman
 8 MiB stream limit are unchanged. The 1,500-second derivation above is retained as the record of its
 time.
 
-**Build parallelism raised, 2026-09-24 (operator decision): `CARGO_BUILD_JOBS` 2 → 8**, the host's
-8 physical cores, owned by `tools/check-quality` `BUILD_JOBS` and read by the store and pi mutation
+**Build parallelism raised, 2026-09-24 (operator decisions): `CARGO_BUILD_JOBS` 2 → 8 → every available CPU**
+(the affinity mask; 16 threads on this host). Measured: the full gate took 1,203.8 s at 8 jobs on b96c901 against
+~1,490 s at 2. Owned by `tools/check-quality` `BUILD_JOBS` and read by the store and pi mutation
 tools. `tools/check-t01` keeps its own 2 for its dependency-free oracle build. The ADV-BWRAP/1 worker
 profile's `CARGO_BUILD_JOBS=2` (docs/contract-decisions.md) is a separate contract and is unchanged.
 

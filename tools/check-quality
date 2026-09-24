@@ -61,10 +61,11 @@ T04_IMPLEMENTATION_PATHS = ("src/store.rs", "src/store/artifact.rs", "src/store/
 # Reviewed independent T04 unit suite: 79 cases (68 + store-lane A01-A03, 2026-09-24). Source discovery or emitted
 # counts cannot lower this gate; None remains an explicit pending-state refusal.
 T04_TEST_COUNT = 79
-# Cargo build parallelism for every gate build (operator decision 2026-09-24: the 8 physical
-# cores of this host, raised from 2). One owner: the store and pi mutation tools read it here.
-# Build output does not depend on it (release pins codegen-units = 1).
-BUILD_JOBS = "8"
+# Cargo build parallelism for every gate build (operator decisions 2026-09-24: raised from 2 to 8,
+# then "utilise the full capacity of all hardware"): every CPU this process may run on, taken from
+# the affinity mask so a pinned or containerised habitat is respected. One owner: the store and pi
+# mutation tools read it here. Build output does not depend on it (release pins codegen-units = 1).
+BUILD_JOBS = str(len(os.sched_getaffinity(0)))
 T05_IMPLEMENTATION_PATHS = (
     "src/contracts/roster.rs", "src/roster.rs", "src/store/roster.rs", "src/store/roster/attempts.rs",
     "tests/t05_roster.rs", "tests/t05_codec.rs", "tests/t05_store.rs",

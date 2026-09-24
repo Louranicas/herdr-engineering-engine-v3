@@ -5,6 +5,7 @@ from importlib.machinery import SourceFileLoader
 from importlib.util import module_from_spec, spec_from_loader
 from pathlib import Path
 import gzip
+import os
 import ast
 import inspect
 import copy
@@ -50,8 +51,10 @@ class QualityIntegrationControls(unittest.TestCase):
                           "bounds", "deprecation", "empty"])
 
     def test_gate_build_parallelism_is_the_operator_decision_and_has_one_owner(self):
-        # Operator decision 2026-09-24: 8 (the host's physical cores), raised from 2.
-        self.assertEqual(quality.BUILD_JOBS, "8")
+        # Operator decisions 2026-09-24: from 2 to 8, then the full capacity of the hardware. The rule
+        # is "every CPU this process may run on"; the independent source is the kernel's affinity mask.
+        self.assertEqual(quality.BUILD_JOBS, str(len(os.sched_getaffinity(0))))
+        self.assertGreaterEqual(int(quality.BUILD_JOBS), 8, "fewer than this host's physical cores")
         # check-quality and check-store-mutations are always gate subjects; check-pi-mutations is
         # copied only with its battery, so it is checked wherever it is present.
         examined = []
