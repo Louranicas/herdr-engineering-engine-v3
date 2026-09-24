@@ -238,7 +238,7 @@ fn admit(
         match refusal {
             // A hidden action reads as absent: the refusal must not confirm what the caller
             // may not see.
-            Refusal::UnknownAction | Refusal::NotVisible => unknown_action(),
+            Refusal::UnknownAction => unknown_action(),
             Refusal::UngrantedEffect => Fault::of(
                 ErrorCode::Forbidden,
                 Retry::AfterCondition,

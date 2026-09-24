@@ -789,14 +789,11 @@ pub const CATALOGUE: [Action; DECLARED_ACTIONS] = [
 /// A reason this module refused.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Refusal {
-    /// No action carries that identity.
+    /// No action carries that identity, or none this caller can see: [`Catalogue::inspect`]
+    /// reports a hidden action this way so visibility is not leaked by the error.
     UnknownAction,
     /// The action exists but not at the requested version.
     UnknownVersion,
-    /// The action exists but this caller cannot see it. Deliberately distinct from
-    /// [`Refusal::UnknownAction`] only at the API boundary: [`Catalogue::inspect`] reports
-    /// `UnknownAction` for a hidden action so visibility is not leaked by the error.
-    NotVisible,
     /// The caller does not hold a grant for the action's effect.
     UngrantedEffect,
     /// A page larger than [`MAX_PAGE`] was requested.
@@ -812,7 +809,6 @@ impl Refusal {
         match self {
             Self::UnknownAction => "unknown action",
             Self::UnknownVersion => "action version is not declared",
-            Self::NotVisible => "action is not visible to this caller",
             Self::UngrantedEffect => "caller holds no grant for this effect",
             Self::PageTooWide => "page bound exceeded",
             Self::PageOutOfRange => "page token beyond the visible catalogue",
@@ -981,8 +977,8 @@ impl Catalogue {
 
     /// Inspect one visible action at a requested version.
     ///
-    /// A hidden action reports [`Refusal::UnknownAction`], not [`Refusal::NotVisible`]: the
-    /// error must not tell a caller that something it may not see exists.
+    /// A hidden action reports [`Refusal::UnknownAction`], exactly as an undeclared one does:
+    /// the error must not tell a caller that something it may not see exists.
     ///
     /// # Errors
     ///

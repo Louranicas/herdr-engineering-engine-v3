@@ -285,8 +285,8 @@ fn visibility_is_per_owner() -> Outcome {
     Ok(())
 }
 
-/// T28-AC-13 · a hidden action reports `UnknownAction`, not `NotVisible`: the error must not
-/// tell a caller that something it may not see exists.
+/// T28-AC-13 · a hidden action reports `UnknownAction`, as an undeclared one does: the error
+/// must not tell a caller that something it may not see exists.
 #[test]
 fn a_hidden_action_is_reported_as_unknown() -> Outcome {
     let caller = Caller::new().seeing(Owner::Task);
@@ -571,17 +571,30 @@ fn paging_is_dense_over_the_visible_catalogue() -> Outcome {
     Ok(())
 }
 
+/// Every refusal the module declares. [`declared_position`] is an exhaustive match, so a
+/// variant added to `Refusal` without a row here does not compile.
+const REFUSALS: [Refusal; 5] = [
+    Refusal::UnknownAction,
+    Refusal::UnknownVersion,
+    Refusal::UngrantedEffect,
+    Refusal::PageTooWide,
+    Refusal::PageOutOfRange,
+];
+
+const fn declared_position(refusal: Refusal) -> usize {
+    match refusal {
+        Refusal::UnknownAction => 0,
+        Refusal::UnknownVersion => 1,
+        Refusal::UngrantedEffect => 2,
+        Refusal::PageTooWide => 3,
+        Refusal::PageOutOfRange => 4,
+    }
+}
+
 /// T28-AC-30 · every refusal has a distinct name and none is a substring of another.
 #[test]
 fn refusal_names_are_distinct_and_non_overlapping() {
-    let all = [
-        Refusal::UnknownAction,
-        Refusal::UnknownVersion,
-        Refusal::NotVisible,
-        Refusal::UngrantedEffect,
-        Refusal::PageTooWide,
-        Refusal::PageOutOfRange,
-    ];
+    let all = REFUSALS;
     for (i, a) in all.iter().enumerate() {
         assert!(!a.name().is_empty());
         assert_eq!(a.to_string(), a.name());
@@ -596,6 +609,64 @@ fn refusal_names_are_distinct_and_non_overlapping() {
             }
         }
     }
+}
+
+/// Completion standard G10 (dead paths removed): every declared refusal is one the public
+/// catalogue operations can actually produce. The probe is a grid over the world, not one
+/// hand-picked input per refusal: every caller shape (sees nothing; sees every owner without
+/// grants; sees and holds everything), every declared action plus an undeclared identity, the
+/// declared and an undeclared version, and page bounds on both sides of each edge. A variant
+/// nothing constructs is absent from the produced set and fails here by name.
+#[test]
+fn every_declared_refusal_is_produced_by_a_catalogue_operation() {
+    for (at, refusal) in REFUSALS.iter().enumerate() {
+        assert_eq!(declared_position(*refusal), at, "{refusal:?} out of place");
+    }
+    let blind = Caller::new();
+    let seeing = Owner::ALL.into_iter().fold(Caller::new(), Caller::seeing);
+    let holding = Effect::ALL
+        .into_iter()
+        .fold(seeing.clone(), Caller::granted);
+    let mut produced = std::collections::BTreeSet::new();
+    let mut probes = 0_usize;
+    let mut note = |result: Result<(), Refusal>| {
+        probes += 1;
+        if let Err(refusal) = result {
+            produced.insert(declared_position(refusal));
+        }
+    };
+    let ids: Vec<&str> = Catalogue::all()
+        .iter()
+        .map(|action| action.id)
+        .chain(["no.such.action"])
+        .collect();
+    let past_end = Catalogue::all().len() + 1;
+    for caller in [&blind, &seeing, &holding] {
+        for id in &ids {
+            let declared = Catalogue::find(id).map_or("1", |action| action.version);
+            for version in [declared, "0 (never declared)"] {
+                note(Catalogue::inspect(caller, id, version).map(|_| ()));
+                note(Catalogue::validate(caller, id, version).map(|_| ()));
+            }
+            note(Catalogue::find(id).map(|_| ()));
+            note(Catalogue::search(caller, None, Some(id), 1).map(|_| ()));
+        }
+        for from in [0, past_end] {
+            for limit in [1, MAX_PAGE, MAX_PAGE + 1] {
+                note(Catalogue::list(caller, from, limit).map(|_| ()));
+            }
+        }
+    }
+    let expected_probes = 3 * (ids.len() * 6 + 6);
+    assert_eq!(probes, expected_probes, "the grid ran every probe");
+    let missing: Vec<Refusal> = REFUSALS
+        .into_iter()
+        .filter(|refusal| !produced.contains(&declared_position(*refusal)))
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "declared but never produced by any of {probes} probes: {missing:?}"
+    );
 }
 
 /// T28-AC-31 · `find` ignores visibility and is the only read that does, so an operator tool
@@ -1219,6 +1290,29 @@ fn the_catalogue_projects_exactly_onto_the_control_schema() -> Result<(), Box<dy
             action.version
         );
     }
+    Ok(())
+}
+
+/// ACT-G02 · the reverse pin: the control-v1 schema's `ActionId` enum names exactly the
+/// catalogue's actions, each once. The projection test above walks the catalogue into the
+/// schema, so an identity the schema admits that no Rust action serves passed it; this one
+/// walks the schema back. Compared as sorted lists so a duplicate enum entry is also caught.
+#[test]
+fn the_schema_action_ids_are_exactly_the_catalogue() -> Outcome {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("schemas/actions/control-v1.schema.json");
+    let schema: Value = serde_json::from_str(&fs::read_to_string(&path)?)?;
+    let enumerated = schema["$defs"]["ActionId"]["enum"]
+        .as_array()
+        .ok_or("ActionId has no enum")?;
+    let mut wire = enumerated
+        .iter()
+        .map(|id| id.as_str().ok_or("ActionId entry is not a string"))
+        .collect::<Result<Vec<&str>, _>>()?;
+    let mut declared: Vec<&str> = Catalogue::all().iter().map(|action| action.id).collect();
+    wire.sort_unstable();
+    declared.sort_unstable();
+    assert_eq!(wire, declared, "schema ActionId enum vs Catalogue::all()");
     Ok(())
 }
 
