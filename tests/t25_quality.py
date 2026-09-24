@@ -52,9 +52,10 @@ class QualityIntegrationControls(unittest.TestCase):
     def test_reviewed_engineering_clock_preserves_other_custody_bounds(self):
         # Independent declared policy for the expanded full regression, not an
         # engine task allocation. The 1200 s window could not fit the measured
-        # 1042-control four-profile matrix (two runs killed at 1205 s).
-        self.assertEqual(quality.TASK_LIMIT, 1800)
-        self.assertEqual(quality.TASK_LIMIT - quality.CLEANUP_RESERVE, 1500)
+        # 1042-control four-profile matrix (two runs killed at 1205 s); the 1500 s
+        # window then ran out at 1497.6 s of 1500 (operator decision 2026-09-24: 3000 s).
+        self.assertEqual(quality.TASK_LIMIT, 3300)
+        self.assertEqual(quality.TASK_LIMIT - quality.CLEANUP_RESERVE, 3000)
         self.assertEqual(quality.CLEANUP_RESERVE, 300)
         self.assertEqual(quality.STREAM_LIMIT, 8 * 1024 * 1024)
         source = ast.parse((ROOT / "tools/check-quality").read_text())

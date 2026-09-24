@@ -35,12 +35,12 @@ sqlite_static = module_from_spec(_sqlite_spec)
 _sqlite_loader.exec_module(sqlite_static)
 TOOLCHAIN = "1.98.0"
 STREAM_LIMIT = 8 * 1024 * 1024
-# Active window 1500 s (TASK_LIMIT - CLEANUP_RESERVE): the two retained full runs
-# of the 1042-control matrix on 2026-09-21 (quality-full001/002-tmpfs) summed
-# 1203.7 s and 1203.4 s of command time and were killed at the former 1200 s
-# window with every command inside its own 180 s bound. Derivation in
-# docs/checks.md; per-command, stream and cleanup bounds are unchanged.
-TASK_LIMIT = 1800
+# Active window 3000 s (TASK_LIMIT - CLEANUP_RESERVE), raised from 1500 s on 2026-09-24 by the
+# operator's decision: six consecutive full runs took 1464.6-1497.6 s of the 1500 s window, the
+# last with 2.4 s to spare, so the window no longer fit the regression it bounds. (1500 s itself
+# replaced 1200 s on 2026-09-21, when two full runs were killed at 1203.7 s / 1203.4 s.)
+# Derivation in docs/checks.md; per-command, stream and cleanup bounds are unchanged.
+TASK_LIMIT = 3300
 CLEANUP_RESERVE = 300
 INVENTORY_FILE_LIMIT = 4096
 INVENTORY_BYTE_LIMIT = 512 * 1024 * 1024

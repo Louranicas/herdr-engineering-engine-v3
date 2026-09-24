@@ -3116,8 +3116,9 @@ sandbox even when re-resolution is disabled. Five selected runtime package
 trees are pinned and copied offline, and a fresh J01 report is produced before
 Rust tests. Package-test hooks remain candidate code.
 
-One monotonic origin bounds the full engineering regression to 1,800 seconds.
-New active work ends at 1,500 seconds, reserving 300 seconds for cleanup. Each command has a 180-second
+One monotonic origin bounds the full engineering regression to 3,300 seconds.
+New active work ends at 3,000 seconds, reserving 300 seconds for cleanup (raised from 1,800/1,500 on
+2026-09-24; derivation below). Each command has a 180-second
 ceiling and each stream retains at most 8 MiB. Timeout, excess output, surviving
 descendants, missing results, wrong control observations and incomplete cleanup
 refuse success. On incomplete cleanup, the workspace and cleanup obligation are
@@ -3154,6 +3155,15 @@ so the active window is raised to 1,500 seconds and the total bound to 1,800
 seconds, with the 300-second cleanup reserve, the 180-second command ceiling
 and the 8 MiB stream limit unchanged. The two killed runs remain counterevidence
 and are not combined into a passing run.
+
+**Raised again, 2026-09-24 (operator decision): active window 3,000 seconds, total 3,300.** Six
+consecutive full runs of the grown matrix, each passing 67/67 commands, took 1,464.6, 1,472.6,
+1,486.1, 1,491.1, 1,485.6 and 1,497.6 seconds of the 1,500-second window; the last left 2.4 seconds,
+inside run-to-run noise, so the next slice adding controls would have been killed by the window rather
+than refused by a check. The operator chose to widen the window over raising `CARGO_BUILD_JOBS` (2)
+or parallelizing commands. The 300-second cleanup reserve, the 180-second command ceiling and the
+8 MiB stream limit are unchanged. The 1,500-second derivation above is retained as the record of its
+time.
 
 Open finding QC-F3b, assigned by root to the native adapter's owner: the debug
 `tests-t08-native` command costs 95.9 / 92.8 seconds (run 1) and 95.5 / 91.2
@@ -3317,7 +3327,7 @@ The numerical process target runs in its own bounded command after the other
 fixed Rust targets. The two raw outputs pass the unchanged complete summary
 checker together. This split preserves every target once, the 180-second
 command limit and the cleanup reserve; the engineering active-work budget is
-the 1,500-second allocation justified above;
+the active-work allocation justified above (1,500 seconds then; 3,000 since 2026-09-24);
 it does not create additional case credit. The original combined release
 command timeout remains failed evidence.
 
@@ -3457,7 +3467,7 @@ and +23 (contract), two new summary groups, and the 161 library-unit controls
 unchanged because neither target adds a unit namespace. Subjects without one of
 the two keep 35 groups and 1065 (no recovery) or 1100 (no contract) controls. A
 removed or renamed registration is still refused with the differing names
-printed. Every bound is as derived above: 1,800-second total, 1,500-second
+printed. Every bound is as derived above: 3,300-second total (1,800 before 2026-09-24), 3,000-second
 active window, 300-second cleanup reserve, 180-second command ceiling, 8 MiB
 streams.
 
