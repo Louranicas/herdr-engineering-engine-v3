@@ -121,6 +121,12 @@ fn store_fault(error: &StoreError) -> Fault {
         StoreError::Locked | StoreError::InspectionOnly | StoreError::RecoveryRequired => {
             unavailable("the ledger is not open for this operation")
         }
+        // After an uncertain commit the store refuses every later use of that connection; the
+        // readback `effect_unknown` prescribed waits on the ledger being reopened. Never
+        // `internal`, whose `retry: never` would forbid that read.
+        StoreError::UncertainCommit => {
+            unavailable("the ledger's last commit is uncertain; it must be reopened")
+        }
         _ => internal(),
     }
 }
@@ -314,3 +320,7 @@ pub fn delivery_of(state: &str, pending: usize) -> &'static str {
         _ => "none",
     }
 }
+
+#[cfg(test)]
+#[path = "../../tests/t28_uncertain.rs"]
+mod uncertain;

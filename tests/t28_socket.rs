@@ -5,15 +5,18 @@
 //! socket path is limited to 108 bytes, which a deep target directory can exceed) and removes it.
 use habitat_engine::actions::Effect;
 use habitat_engine::actions::Owner;
-use habitat_engine::actions::control::{Composed, Grants};
+use habitat_engine::actions::control::{self, Composed, Grants, Reply};
 use habitat_engine::app::control_socket::{
     self, Ended, Error as SocketError, OPERATOR_ROLE, RUNTIME_DIRECTORY, SOCKET_NAME,
     serve_connection,
 };
 use habitat_engine::app::grants::{Error as GrantError, FileGrants, GRANT_SCHEMA, MAX_GRANT_BYTES};
+use habitat_engine::app::tasks::{StoreTasks, submit_readback};
+use habitat_engine::contracts::UuidV4;
 use habitat_engine::contracts::control::{FrameFault, request_sha256};
-use habitat_engine::store::Principal;
+use habitat_engine::store::{Principal, Store};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use std::error::Error;
 use std::fs::{self, DirBuilder};
 use std::io::Write;
@@ -62,6 +65,14 @@ impl Drop for Scratch {
 
 fn euid() -> u32 {
     rustix::process::geteuid().as_raw()
+}
+
+fn now_unix_ms() -> Result<u64, Box<dyn Error>> {
+    Ok(u64::try_from(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_millis(),
+    )?)
 }
 
 fn operator() -> Result<Principal, Box<dyn Error>> {
@@ -494,13 +505,23 @@ struct Engine {
 
 impl Engine {
     fn start(run: &Path, home: &Path) -> Result<Self, Box<dyn Error>> {
+        Self::start_with(run, home, Stdio::null())
+    }
+
+    /// Start with standard error written to `log`, which the case reads once the socket accepts:
+    /// every line `serve` writes before it binds is there by then.
+    fn start_logged(run: &Path, home: &Path, log: &Path) -> Result<Self, Box<dyn Error>> {
+        Self::start_with(run, home, Stdio::from(fs::File::create_new(log)?))
+    }
+
+    fn start_with(run: &Path, home: &Path, stderr: Stdio) -> Result<Self, Box<dyn Error>> {
         let child = Command::new(env!("CARGO_BIN_EXE_habitat-engine"))
             .arg("serve")
             .env("XDG_RUNTIME_DIR", run)
             .env("HOME", home)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
+            .stderr(stderr)
             .spawn()?;
         let socket = run.join(RUNTIME_DIRECTORY).join(SOCKET_NAME);
         let started = Instant::now();
@@ -564,6 +585,11 @@ impl World {
     }
 
     fn seeing(owners: &[&str]) -> Result<Self, Box<dyn Error>> {
+        Self::granting(owners, &["read"])
+    }
+
+    /// A world whose one grant sees `owners` and holds `effects` (their plan-spine names).
+    fn granting(owners: &[&str], effects: &[&str]) -> Result<Self, Box<dyn Error>> {
         let scratch = Scratch::new()?;
         let run = scratch.private("run")?;
         let home = scratch.private("home")?;
@@ -573,7 +599,7 @@ impl World {
                 .duration_since(std::time::UNIX_EPOCH)?
                 .as_millis(),
         )?;
-        let bytes = record(euid(), OPERATOR_ROLE, owners, &["read"], now + 600_000);
+        let bytes = record(euid(), OPERATOR_ROLE, owners, effects, now + 600_000);
         write_grant(&grants, &format!("{GRANT}.json"), &bytes, 0o600)?;
         let scope = request_sha256(&bytes);
         Ok(Self {
@@ -583,6 +609,448 @@ impl World {
             scope,
         })
     }
+}
+
+/// The generation and epoch every commissioned scratch ledger here is created with.
+const GENERATION: &str = "28c00000-0000-4000-8000-0000000000a1";
+const EPOCH: &str = "28c00000-0000-4000-8000-0000000000a2";
+
+/// Commission an empty ledger and its active-generation manifest under `home`'s state root, as the
+/// operator's commissioning would (RC02); a scratch home, never the operator's own. Returns the
+/// ledger file.
+fn commission(home: &Path) -> Result<PathBuf, Box<dyn Error>> {
+    let state = home.join(".local/state/herdr-engineering-engine-v3");
+    DirBuilder::new()
+        .mode(0o700)
+        .recursive(true)
+        .create(&state)?;
+    drop(ledger(&state)?);
+    let body = serde_json::to_vec(
+        &json!({"schema": "hee3.active-generation/1", "generation": GENERATION, "epoch": EPOCH}),
+    )?;
+    write_grant(&state, "active.json", &body, 0o600)?;
+    Ok(state
+        .join("generations")
+        .join(GENERATION)
+        .join("ledger.sqlite3"))
+}
+
+/// The ledger at `root` for [`GENERATION`] and [`EPOCH`], created when absent.
+fn ledger(root: &Path) -> Result<Store, Box<dyn Error>> {
+    Store::open(
+        root,
+        UuidV4::parse(GENERATION)?,
+        UuidV4::parse(EPOCH)?,
+        true,
+        Instant::now() + Duration::from_secs(10),
+    )
+    .map_err(|error| format!("{error:?}").into())
+}
+
+/// The producer door the wrapper execs: `habitat-engine <action> < request`, sending `request`'s
+/// exact bytes as one frame, with its standard output going to `stdout`.
+fn producer(
+    run: &Path,
+    action: &str,
+    request: &[u8],
+    stdout: Stdio,
+) -> Result<Output, Box<dyn Error>> {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_habitat-engine"))
+        .arg(action)
+        .env("XDG_RUNTIME_DIR", run)
+        .stdin(Stdio::piped())
+        .stdout(stdout)
+        .stderr(Stdio::piped())
+        .spawn()?;
+    child.stdin.take().ok_or("stdin")?.write_all(request)?;
+    exits_within(child, Duration::from_secs(20))
+}
+
+/// The request the wrapper would send, built once so its exact bytes can be sent again (RC03 §3:
+/// senders serialise once and retain the bytes; a replay is a byte-exact resend).
+fn built(run: &Path, scope: &str, argv: &[&str]) -> Result<Vec<u8>, Box<dyn Error>> {
+    let checked = wrapper(run, scope, &[&["--check"], argv].concat())?;
+    assert!(
+        checked.status.success(),
+        "{}",
+        String::from_utf8_lossy(&checked.stderr)
+    );
+    Ok(checked.stdout)
+}
+
+/// One reply record from a door's output, which must have exited 0.
+fn reply_of(output: &Output) -> Result<Value, Box<dyn Error>> {
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    Ok(serde_json::from_slice(&output.stdout)?)
+}
+
+/// `reply` with the values at `pointers` set to null; every pointer must name a value, so a mask
+/// can never pass because what it masks is missing.
+fn without(mut reply: Value, pointers: &[&str]) -> Result<Value, Box<dyn Error>> {
+    for pointer in pointers {
+        *reply
+            .pointer_mut(pointer)
+            .ok_or_else(|| format!("{pointer} is absent"))? = Value::Null;
+    }
+    Ok(reply)
+}
+
+/// What the receiver's own clock stamps on a submit's result: the cursor's issue and expiry.
+const CLOCK: [&str; 2] = [
+    "/body/engine_cursor/issued_unix_ms",
+    "/body/engine_cursor/expires_unix_ms",
+];
+
+fn submitting(key: &str, intent: &str) -> Vec<String> {
+    let mut spec = super::tasks::spec();
+    spec["intent"] = json!(intent);
+    vec![
+        "task.submit".to_owned(),
+        format!("@idempotency_key={key}"),
+        format!("spec:={spec}"),
+    ]
+}
+
+fn getting(selector: &Value) -> Vec<String> {
+    vec![
+        "task.get".to_owned(),
+        format!("selector:={selector}"),
+        "evidence=none".to_owned(),
+    ]
+}
+
+fn strs(argv: &[String]) -> Vec<&str> {
+    argv.iter().map(String::as_str).collect()
+}
+
+/// `task.get` through the wrapper for `selector`.
+fn get_through(run: &Path, scope: &str, selector: &Value) -> Result<Value, Box<dyn Error>> {
+    reply_of(&wrapper(run, scope, &strs(&getting(selector)))?)
+}
+
+/// The selector a caller holds before sending: the submit's own idempotency key (RC03 §6).
+fn key_selector(key: &str) -> Value {
+    json!({"source_action": "task.submit", "idempotency_key": key})
+}
+
+#[test]
+fn the_engine_admits_and_reads_back_a_task_through_the_wrapper() -> Outcome {
+    const KEY: &str = "28c00000-0000-4000-8000-0000000000b1";
+    let world = World::granting(&["task"], &["read", "durable admission"])?;
+    let (run, scope) = (&world.run, &world.scope);
+    commission(&world.home)?;
+    let _engine = Engine::start(run, &world.home)?;
+
+    let submitted = reply_of(&wrapper(
+        run,
+        scope,
+        &strs(&submitting(KEY, "Add a strict decimal parser.")),
+    )?)?;
+    assert_eq!(
+        (
+            &submitted["kind"],
+            &submitted["effect"],
+            &submitted["replayed"],
+            &submitted["observed_generation"]
+        ),
+        (
+            &json!("result"),
+            &json!("committed"),
+            &json!(false),
+            &json!("1")
+        ),
+        "{submitted}"
+    );
+    assert_eq!(submitted["readback"], submit_readback(KEY));
+    let task = submitted["body"]["task"]["task_id"]
+        .as_str()
+        .ok_or("task id")?
+        .to_owned();
+    UuidV4::parse(&task)?;
+    assert_eq!(
+        submitted["body"]["task"],
+        json!({"task_id": task, "generation": "1", "state": "admitted", "current_attempt_id": null, "unresolved_obligations": 0})
+    );
+    let filter = format!("{{\"resource_ids\":[\"{task}\"],\"topics\":[\"task\"]}}");
+    assert_eq!(
+        (
+            &submitted["body"]["engine_cursor"]["epoch"],
+            &submitted["body"]["engine_cursor"]["filter_sha256"]
+        ),
+        (
+            &json!(EPOCH),
+            &json!(super::tasks::digest(Sha256::digest(filter.as_bytes())))
+        )
+    );
+
+    // Read back by the key the caller held before sending, and by the identity it was given.
+    let by_key = get_through(run, scope, &key_selector(KEY))?;
+    let by_id = get_through(run, scope, &json!({"task_id": task}))?;
+    assert_eq!(by_key["body"]["task"], submitted["body"]["task"]);
+    assert_eq!(by_id["body"]["task"], submitted["body"]["task"]);
+    let criteria = super::tasks::digest(Sha256::digest(
+        br#"["rejects a leading zero","round-trips the maximum"]"#,
+    ));
+    for read in [&by_key, &by_id] {
+        assert_eq!(
+            (
+                &read["effect"],
+                &read["observed_generation"],
+                &read["body"]["criteria_sha256"],
+                &read["body"]["attempts"],
+                &read["body"]["cleanup"],
+                &read["body"]["delivery"],
+                &read["body"]["evidence"]
+            ),
+            (
+                &json!("none"),
+                &json!("1"),
+                &json!(criteria),
+                &json!([]),
+                &json!("none"),
+                &json!("none"),
+                &json!([])
+            ),
+            "{read}"
+        );
+    }
+
+    // Calling the wrapper again builds a new request (its own request_id and deadline), and a
+    // replay is byte-exact (RC03 §3): the key conflicts, and nothing new is admitted.
+    let retried = reply_of(&wrapper(
+        run,
+        scope,
+        &strs(&submitting(KEY, "Add a strict decimal parser.")),
+    )?)?;
+    assert_eq!(
+        (
+            &retried["code"],
+            &retried["effect"],
+            &retried["details"]["field"]
+        ),
+        (
+            &json!("conflict"),
+            &json!("none"),
+            &json!("/idempotency_key")
+        ),
+        "{retried}"
+    );
+    let after = get_through(run, scope, &key_selector(KEY))?;
+    assert_eq!(after["body"]["task"], submitted["body"]["task"]);
+    Ok(())
+}
+
+#[test]
+fn an_admission_survives_a_kill_after_commit_and_its_exact_bytes_replay() -> Outcome {
+    const KEY: &str = "28c00000-0000-4000-8000-0000000000b2";
+    let world = World::granting(&["task"], &["read", "durable admission"])?;
+    let (run, home, scope) = (&world.run, &world.home, &world.scope);
+    commission(home)?;
+    let request = built(
+        run,
+        scope,
+        &strs(&submitting(KEY, "Add a strict decimal parser.")),
+    )?;
+    let engine = Engine::start(run, home)?;
+    let first = reply_of(&producer(run, "task.submit", &request, Stdio::piped())?)?;
+    assert_eq!(
+        (&first["effect"], &first["replayed"]),
+        (&json!("committed"), &json!(false)),
+        "{first}"
+    );
+    assert_eq!(
+        first["request_sha256"],
+        json!(request_sha256(request.strip_suffix(b"\n").ok_or("LF")?))
+    );
+    let task = first["body"]["task"]["task_id"].clone();
+
+    // CLI/UDS parity: the same bytes through the library receiver, over a ledger of the same
+    // generation and epoch, answer the same record but for what each ledger draws or stamps
+    // for itself: the task identity, the filter digest over it, and the receiver's clock.
+    let scratch = Scratch::new()?;
+    let local = StoreTasks::new(ledger(&scratch.private("state")?)?, EPOCH.to_owned());
+    let Reply::Frame(bytes) = control::serve_composed(
+        request.strip_suffix(b"\n").ok_or("LF")?,
+        now_unix_ms()?,
+        &operator()?,
+        Composed {
+            grants: &Open,
+            health: None,
+            tasks: Some(&local),
+        },
+    ) else {
+        return Err("the library receiver closed the connection".into());
+    };
+    let drawn = [
+        "/body/task/task_id",
+        "/body/engine_cursor/filter_sha256",
+        CLOCK[0],
+        CLOCK[1],
+    ];
+    assert_eq!(
+        without(serde_json::from_slice(&bytes)?, &drawn)?,
+        without(first.clone(), &drawn)?
+    );
+
+    // Killed after the commit was acknowledged (SIGKILL: nothing runs on the way down).
+    drop(engine);
+    let _restarted = Engine::start(run, home)?;
+    let found = get_through(run, scope, &key_selector(KEY))?;
+    assert_eq!(found["body"]["task"], first["body"]["task"]);
+
+    // The retained bytes, resent: the stored admission, identical but for `replayed` and the
+    // receiver's clock.
+    let again = reply_of(&producer(run, "task.submit", &request, Stdio::piped())?)?;
+    assert_eq!(again["replayed"], json!(true), "{again}");
+    let mut expected = without(first.clone(), &CLOCK)?;
+    expected["replayed"] = json!(true);
+    assert_eq!(without(again, &CLOCK)?, expected);
+
+    // The same key under one changed field: a conflict, and the admission is untouched.
+    let changed = built(
+        run,
+        scope,
+        &strs(&submitting(KEY, "Add a strict decimal parser!")),
+    )?;
+    let conflict = reply_of(&producer(run, "task.submit", &changed, Stdio::piped())?)?;
+    assert_eq!(
+        (&conflict["code"], &conflict["details"]["field"]),
+        (&json!("conflict"), &json!("/idempotency_key")),
+        "{conflict}"
+    );
+    let still = get_through(run, scope, &json!({"task_id": task}))?;
+    assert_eq!(still["body"]["task"], first["body"]["task"]);
+    Ok(())
+}
+
+#[test]
+fn a_producer_that_cannot_write_its_reply_says_so() -> Outcome {
+    let world = World::new()?;
+    let (run, scope) = (&world.run, &world.scope);
+    let _engine = Engine::start(run, &world.home)?;
+    let request = built(
+        run,
+        scope,
+        &[
+            "tools.list",
+            "query:=null",
+            r#"page:={"limit":1,"cursor":null}"#,
+        ],
+    )?;
+    // Someone reads the reply: it is written, and the producer succeeds.
+    let read = producer(run, "tools.list", &request, Stdio::piped())?;
+    assert_eq!(reply_of(&read)?["kind"], json!("result"));
+    // Nobody can: the producer fails with the wrapper's contract code, and says which step failed.
+    let (reader, writer) = std::io::pipe()?;
+    drop(reader);
+    let closed = producer(run, "tools.list", &request, Stdio::from(writer))?;
+    assert_eq!(
+        (
+            closed.status.code(),
+            String::from_utf8_lossy(&closed.stderr).as_ref()
+        ),
+        (
+            Some(6),
+            "habitat-engine: the reply could not be written: Broken pipe (os error 32)\n"
+        )
+    );
+    Ok(())
+}
+
+#[test]
+fn without_a_grant_directory_the_engine_serves_and_refuses_every_request() -> Outcome {
+    let world = World::seeing(&["app"])?;
+    let (run, scope) = (&world.run, &world.scope);
+    let grants = world
+        .home
+        .join(".config/herdr-engineering-engine-v3/grants");
+    fs::remove_dir_all(&grants)?;
+    let log = world.home.join("engine.log");
+    let _engine = Engine::start_logged(run, &world.home, &log)?;
+    for argv in [
+        vec!["health"],
+        vec![
+            "tools.list",
+            "query:=null",
+            r#"page:={"limit":1,"cursor":null}"#,
+        ],
+    ] {
+        let refused = reply_of(&wrapper(run, scope, &argv)?)?;
+        assert_eq!(
+            (
+                &refused["code"],
+                &refused["effect"],
+                &refused["details"]["field"]
+            ),
+            (
+                &json!("forbidden"),
+                &json!("none"),
+                &json!("/authority/grant_id")
+            ),
+            "{argv:?}: {refused}"
+        );
+    }
+    let first = fs::read_to_string(&log)?
+        .lines()
+        .next()
+        .map(str::to_owned)
+        .ok_or("no line")?;
+    assert_eq!(
+        first,
+        format!(
+            "habitat-engine: no grant directory at {}; every request is refused forbidden",
+            grants.display()
+        )
+    );
+    Ok(())
+}
+
+#[test]
+fn an_unwritable_ledger_leaves_task_actions_unavailable() -> Outcome {
+    let world = World::granting(&["app", "task"], &["read", "durable admission"])?;
+    let (run, scope) = (&world.run, &world.scope);
+    let file = commission(&world.home)?;
+    fs::set_permissions(&file, fs::Permissions::from_mode(0o400))?;
+    let log = world.home.join("engine.log");
+    let _engine = Engine::start_logged(run, &world.home, &log)?;
+    let health = reply_of(&wrapper(run, scope, &["health"])?)?;
+    let refused = reply_of(&wrapper(
+        run,
+        scope,
+        &strs(&submitting(
+            "28c00000-0000-4000-8000-0000000000b3",
+            "Add a strict decimal parser.",
+        )),
+    )?)?;
+    let log = fs::read_to_string(&log)?;
+    assert_eq!(
+        (
+            &health["body"]["ready"],
+            &health["body"]["database"],
+            &refused["code"],
+            &refused["retry"]
+        ),
+        (
+            &json!(false),
+            &json!("unavailable"),
+            &json!("unavailable"),
+            &json!("after_condition")
+        ),
+        "{health}\n{refused}\n{log}"
+    );
+    // The operator reads why, in the engine's first two lines.
+    assert_eq!(
+        log.lines().take(2).collect::<Vec<_>>(),
+        [
+            "habitat-engine: startup refused: Store(NotWritable)",
+            "habitat-engine: task actions unavailable: no generation was reconciled",
+        ]
+    );
+    Ok(())
 }
 
 #[test]
@@ -716,29 +1184,7 @@ fn the_engine_serves_the_health_its_start_left() -> Outcome {
     );
     drop(engine);
     // A commissioned, empty ledger: reconciled at start, ready.
-    let state = home.join(".local/state/herdr-engineering-engine-v3");
-    DirBuilder::new()
-        .mode(0o700)
-        .recursive(true)
-        .create(&state)?;
-    let (generation, epoch) = (
-        "28c00000-0000-4000-8000-0000000000a1",
-        "28c00000-0000-4000-8000-0000000000a2",
-    );
-    drop(
-        habitat_engine::store::Store::open(
-            &state,
-            habitat_engine::contracts::UuidV4::parse(generation)?,
-            habitat_engine::contracts::UuidV4::parse(epoch)?,
-            true,
-            Instant::now() + Duration::from_secs(10),
-        )
-        .map_err(|error| format!("{error:?}"))?,
-    );
-    let body = serde_json::to_vec(
-        &json!({"schema": "hee3.active-generation/1", "generation": generation, "epoch": epoch}),
-    )?;
-    write_grant(&state, "active.json", &body, 0o600)?;
+    commission(home)?;
     let _engine = Engine::start(run, home)?;
     let ready: Value = serde_json::from_slice(&wrapper(run, scope, &["health"])?.stdout)?;
     assert_eq!(ready["kind"], json!("result"), "{ready}");

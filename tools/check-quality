@@ -58,9 +58,10 @@ UNTRACKED_BY_DESIGN = (
 T03_IMPLEMENTATION_PATHS = ("src/worker/mod.rs", "src/worker/inference.rs")
 T04_IMPLEMENTATION_PATHS = ("src/store.rs", "src/store/artifact.rs", "src/store/backup.rs",
                             "src/store/schema.rs", "migrations/001.sql", "tests/t04_store.rs")
-# Reviewed independent T04 unit suite: 80 cases (68 + store-lane A01-A03 and A24, 2026-09-24). Source discovery or emitted
+# Reviewed independent T04 unit suite: 81 cases (68 + store-lane A01-A03 and A24, 2026-09-24; B02's
+# unwritable-ledger read-back, 2026-09-25). Source discovery or emitted
 # counts cannot lower this gate; None remains an explicit pending-state refusal.
-T04_TEST_COUNT = 80
+T04_TEST_COUNT = 81
 # Cargo build parallelism for every gate build (operator decisions 2026-09-24: raised from 2 to 8,
 # then "utilise the full capacity of all hardware"): every CPU this process may run on, taken from
 # the affinity mask so a pinned or containerised habitat is respected. One owner: the store and pi
@@ -181,7 +182,7 @@ CONTEXT_INPUTS = ("src/context.rs",)
 COHORT_TARGET_COUNTS = {"t22_cohort": 67}
 COHORT_INPUTS = ("src/cohort.rs", "evaluation/cohorts/claim-overlap-v1.json",
                  "tests/fixtures/t22/C01.json", "tests/fixtures/t22/C02.json")
-ACTIONS_TARGET_COUNTS = {"t28_actions": 121}
+ACTIONS_TARGET_COUNTS = {"t28_actions": 126}
 # The control receiver (review coordinator step 1) is served from the catalogue: its wire half in
 # contracts, its catalogue half in actions, and the independent Python oracle its cases run.
 ACTIONS_INPUTS = ("src/actions.rs", "src/worker/tools.rs", "src/actions/control.rs",
@@ -192,6 +193,8 @@ ACTIONS_INPUTS = ("src/actions.rs", "src/worker/tools.rs", "src/actions/control.
                   "src/app/coordinator.rs", "tests/t28_coordinator.rs",
                   # The task owner: task.submit / task.get through the ledger.
                   "src/app/tasks.rs", "src/task/control.rs", "tests/t28_tasks.rs",
+                  # APP-07: a lost commit through the real store's cut point, a unit of app::tasks.
+                  "tests/t28_uncertain.rs",
                   "tests/fixtures/native/control-v1/receiver-oracle.py",
                   # RC03's published C01 example: the receiver's known-answer digest.
                   "tests/fixtures/native/control-v1/C01-control-valid-cancel.jsonl",
@@ -805,7 +808,7 @@ def rust_test_expectations(root):
         for path in T06_INPUTS:
             if not (root / path).is_file() or (root / path).is_symlink():
                 raise ValueError("Missing or substituted required T06 fixture: " + path)
-        counts = [172, 0, 0, 26, 27, 60, 34, 29, 12, *T06_TARGET_COUNTS.values()]
+        counts = [173, 0, 0, 26, 27, 60, 34, 29, 12, *T06_TARGET_COUNTS.values()]
         unit_counts.update(T06_UNIT_COUNTS)
         if has_t07(root):
             counts.extend(T07_TARGET_COUNTS.values())
@@ -837,6 +840,10 @@ def rust_test_expectations(root):
             counts.extend(COHORT_TARGET_COUNTS.values())
         if has_actions_battery(root):
             counts.extend(ACTIONS_TARGET_COUNTS.values())
+            # APP-07 drives the store's AfterCommit cut point, which exists only in this crate's
+            # test build, so its case is a library unit of app::tasks (tests/t28_uncertain.rs).
+            counts[0] += 1
+            unit_counts["app::tasks::uncertain::"] = 1
         if has_herdr_battery(root):
             counts.extend(HERDR_TARGET_COUNTS.values())
         if has_t08_contract(root):

@@ -367,6 +367,9 @@ pub enum Error {
     Deadline,
     Locked,
     Custody,
+    /// A writable open could not take the ledger's write lock: SQLite opened the ledger, or its
+    /// WAL index, read-only whatever the flags asked for (see `require_write_lock`).
+    NotWritable,
     Corrupt,
     UnsupportedSchema,
     Runtime,
@@ -480,6 +483,29 @@ fn check_point(fault: Fault, point: CutPoint) -> Result<()> {
         return Err(Error::Injected(format!("{point:?}")));
     }
     Ok(())
+}
+
+/// Read back that a writable open got a writable ledger; the flags asked for one, and SQLite does
+/// not refuse when it cannot give it. Two states, each measured on this store's SQLite
+/// (`unwritable_ledger_refuses_a_writable_open_and_still_inspects`), and neither check sees the
+/// other's: a database file it cannot write is opened read-only, while the write lock is still
+/// taken in the WAL index; and a WAL index an earlier read-only open created unwritable (SQLite
+/// gives its sidecars the database file's mode) refuses the write lock however the file itself
+/// is later repaired. Both surface here, by name, not as an unexplained failure at the first
+/// admission.
+fn require_write_lock(connection: &Connection) -> Result<()> {
+    if connection.is_readonly(rusqlite::MAIN_DB)? {
+        return Err(Error::NotWritable);
+    }
+    match connection.execute_batch("BEGIN IMMEDIATE; ROLLBACK;") {
+        Ok(()) => Ok(()),
+        Err(rusqlite::Error::SqliteFailure(error, _))
+            if error.code == rusqlite::ErrorCode::ReadOnly =>
+        {
+            Err(Error::NotWritable)
+        }
+        Err(error) => Err(error.into()),
+    }
 }
 
 /// Roll back unless SQLite already did. It does so by itself on some failures (`SQLITE_FULL`
@@ -622,6 +648,20 @@ impl Store {
         Self::open_inner(root, generation, epoch, create, deadline, NO_FAULT)
     }
 
+    /// Open as [`Store::open`] does, with `point` injected: the door by which another module's
+    /// test build drives this store through a cut point it cannot otherwise reach.
+    #[cfg(test)]
+    pub(crate) fn open_faulted(
+        root: &Path,
+        generation: UuidV4<'_>,
+        epoch: UuidV4<'_>,
+        create: bool,
+        deadline: Instant,
+        point: CutPoint,
+    ) -> Result<Self> {
+        Self::open_inner(root, generation, epoch, create, deadline, Some(point))
+    }
+
     fn open_inner(
         root: &Path,
         generation: UuidV4<'_>,
@@ -683,6 +723,9 @@ impl Store {
                 | rusqlite::OpenFlags::SQLITE_OPEN_NOFOLLOW,
         )?;
         connection.busy_timeout(remaining(deadline)?.min(Duration::from_secs(5)))?;
+        if !inspection_only {
+            require_write_lock(&connection)?;
+        }
         schema::initialize(
             &mut connection,
             created,

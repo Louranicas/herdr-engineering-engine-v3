@@ -388,6 +388,54 @@ fn hardlinked_mutable_ledger_is_not_admitted() {
     drop(area.reopen());
 }
 
+/// SQLite opens a file it cannot write read-only, silently, whatever the open flags asked for.
+/// A writable open reads back whether it can take the write lock: a ledger that cannot take a
+/// write is refused by name at open, not discovered as an unexplained write failure at the first
+/// admission. An inspection open is read-only by design and still opens and reads.
+#[test]
+fn unwritable_ledger_refuses_a_writable_open_and_still_inspects() {
+    let area = Area::new();
+    drop(area.open());
+    fs::set_permissions(area.database(), Permissions::from_mode(0o400)).unwrap();
+    let refused = Store::open(&area.path, uuid(GEN), uuid(EPOCH), false, deadline());
+    assert!(
+        matches!(refused, Err(Error::NotWritable)),
+        "{:?}",
+        refused.err()
+    );
+    // The benign mirror: inspection is read-only by design, opens, and reads the ledger back.
+    let mut inspected =
+        Store::open_inspection(&area.path, uuid(GEN), uuid(EPOCH), deadline()).unwrap();
+    let inventory = inspected
+        .recovery_inventory(
+            uuid(EPOCH),
+            crate::app::coordinator::START_LIMITS,
+            deadline(),
+        )
+        .unwrap();
+    assert_eq!(
+        (inventory.mode.as_str(), inventory.generation.as_str()),
+        ("normal", GEN)
+    );
+    drop(inspected);
+    // SQLite gave the WAL index the inspection created the file's mode: repairing the file alone
+    // leaves a ledger that cannot take a write, and it is refused by the same name.
+    let shm = area.database().with_extension("sqlite3-shm");
+    assert_eq!(
+        fs::metadata(&shm).unwrap().permissions().mode() & 0o777,
+        0o400
+    );
+    fs::set_permissions(area.database(), Permissions::from_mode(0o600)).unwrap();
+    let refused = Store::open(&area.path, uuid(GEN), uuid(EPOCH), false, deadline());
+    assert!(
+        matches!(refused, Err(Error::NotWritable)),
+        "{:?}",
+        refused.err()
+    );
+    fs::set_permissions(&shm, Permissions::from_mode(0o600)).unwrap();
+    assert_eq!(admit(&mut area.reopen()).sequence, 1);
+}
+
 #[test]
 fn symlink_lock_cannot_transfer_writer_custody() {
     let area = Area::new();

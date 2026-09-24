@@ -391,7 +391,8 @@ fn request(action: &str) -> ExitCode {
     match FrameReader::new(&stream).next_frame() {
         Ok(Some(mut record)) => {
             record.push(b'\n');
-            if io::stdout().write_all(&record).is_err() {
+            if let Err(error) = io::stdout().write_all(&record) {
+                eprintln!("habitat-engine: the reply could not be written: {error}");
                 return ExitCode::from(EXIT_CONTRACT);
             }
             ExitCode::SUCCESS

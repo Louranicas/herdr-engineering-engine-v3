@@ -28,7 +28,7 @@ pub(super) const KEY: &str = "28d00000-0000-4000-8000-0000000000aa";
 const NOW: u64 = 1_790_000_000_000;
 
 /// `sha256:` hex of a digest, computed here from `sha2` directly, not through the engine.
-fn digest(bytes: impl AsRef<[u8]>) -> String {
+pub(super) fn digest(bytes: impl AsRef<[u8]>) -> String {
     bytes
         .as_ref()
         .iter()
