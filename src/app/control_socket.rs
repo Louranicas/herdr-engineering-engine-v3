@@ -17,7 +17,7 @@
 //! * **Every wait is bounded.** Reads time out after [`IDLE_TIMEOUT`], writes after
 //!   [`WRITE_TIMEOUT`]; a stalled peer costs one bounded wait, not the engine.
 
-use crate::actions::control::{Grants, Reply, serve};
+use crate::actions::control::{Composed, Reply, serve_composed};
 use crate::contracts::control::{FrameFault, FrameReader, ReadError};
 use crate::store::Principal;
 use rustix::fs::{Mode, OFlags};
@@ -198,11 +198,11 @@ pub enum Ended {
 /// # Errors
 ///
 /// A read or write the operating system refused, including a timeout.
-pub fn serve_connection<G: Grants + ?Sized>(
+pub fn serve_connection(
     input: impl Read,
     mut output: impl Write,
     principal: &Principal,
-    grants: &G,
+    composed: Composed<'_>,
     now_unix_ms: &dyn Fn() -> u64,
 ) -> io::Result<Ended> {
     let mut reader = FrameReader::new(input);
@@ -214,7 +214,7 @@ pub fn serve_connection<G: Grants + ?Sized>(
             Err(ReadError::Fault(fault)) => return Ok(Ended::Closed { served, fault }),
             Err(ReadError::Io(error)) => return Err(error),
         };
-        match serve(&frame, now_unix_ms(), principal, grants) {
+        match serve_composed(&frame, now_unix_ms(), principal, composed) {
             Reply::Frame(bytes) => {
                 output.write_all(&bytes)?;
                 output.flush()?;
@@ -232,24 +232,24 @@ pub fn serve_connection<G: Grants + ?Sized>(
 /// # Errors
 ///
 /// Only a failure of `accept` itself; a failed connection is reported and the loop continues.
-pub fn run<G: Grants + ?Sized>(
+pub fn run(
     listener: &UnixListener,
-    grants: &G,
+    composed: Composed<'_>,
     now_unix_ms: &dyn Fn() -> u64,
     report: &mut dyn FnMut(&str),
 ) -> io::Result<()> {
     let operator = rustix::process::geteuid().as_raw();
     loop {
         let (stream, _) = listener.accept()?;
-        let outcome = accept_one(&stream, operator, grants, now_unix_ms);
+        let outcome = accept_one(&stream, operator, composed, now_unix_ms);
         report(&outcome);
     }
 }
 
-fn accept_one<G: Grants + ?Sized>(
+fn accept_one(
     stream: &UnixStream,
     operator: u32,
-    grants: &G,
+    composed: Composed<'_>,
     now_unix_ms: &dyn Fn() -> u64,
 ) -> String {
     let uid = match peer_uid(stream) {
@@ -266,7 +266,7 @@ fn accept_one<G: Grants + ?Sized>(
     {
         return format!("connection refused: timeouts could not be set ({error})");
     }
-    match serve_connection(stream, stream, &principal, grants, now_unix_ms) {
+    match serve_connection(stream, stream, &principal, composed, now_unix_ms) {
         Ok(Ended::Clean { served }) => format!("connection ended: served={served}"),
         Ok(Ended::Closed { served, fault }) => {
             format!("connection closed: served={served} fault={}", fault.name())

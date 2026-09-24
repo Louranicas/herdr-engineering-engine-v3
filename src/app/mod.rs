@@ -15,4 +15,5 @@ pub mod durable_control;
 pub mod startup;
 
 pub mod control_socket;
+pub mod coordinator;
 pub mod grants;

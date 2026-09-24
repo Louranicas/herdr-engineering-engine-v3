@@ -5,7 +5,7 @@
 //! socket path is limited to 108 bytes, which a deep target directory can exceed) and removes it.
 use habitat_engine::actions::Effect;
 use habitat_engine::actions::Owner;
-use habitat_engine::actions::control::Grants;
+use habitat_engine::actions::control::{Composed, Grants};
 use habitat_engine::app::control_socket::{
     self, Ended, Error as SocketError, OPERATOR_ROLE, RUNTIME_DIRECTORY, SOCKET_NAME,
     serve_connection,
@@ -249,7 +249,10 @@ fn a_connection_is_answered_in_order_and_closed_at_its_first_unanswerable_frame(
         stream.as_slice(),
         &mut written,
         &operator()?,
-        &Open,
+        Composed {
+            grants: &Open,
+            health: None,
+        },
         &|| NOW,
     )?;
     assert_eq!(
@@ -277,7 +280,16 @@ fn a_connection_is_answered_in_order_and_closed_at_its_first_unanswerable_frame(
     let mut only = listing(4);
     only.push(b'\n');
     assert_eq!(
-        serve_connection(only.as_slice(), &mut clean, &operator()?, &Open, &|| NOW)?,
+        serve_connection(
+            only.as_slice(),
+            &mut clean,
+            &operator()?,
+            Composed {
+                grants: &Open,
+                health: None
+            },
+            &|| NOW
+        )?,
         Ended::Clean { served: 1 }
     );
     Ok(())
@@ -543,6 +555,10 @@ struct World {
 
 impl World {
     fn new() -> Result<Self, Box<dyn Error>> {
+        Self::seeing(&["actions", "task"])
+    }
+
+    fn seeing(owners: &[&str]) -> Result<Self, Box<dyn Error>> {
         let scratch = Scratch::new()?;
         let run = scratch.private("run")?;
         let home = scratch.private("home")?;
@@ -552,13 +568,7 @@ impl World {
                 .duration_since(std::time::UNIX_EPOCH)?
                 .as_millis(),
         )?;
-        let bytes = record(
-            euid(),
-            OPERATOR_ROLE,
-            &["actions", "task"],
-            &["read"],
-            now + 600_000,
-        );
+        let bytes = record(euid(), OPERATOR_ROLE, owners, &["read"], now + 600_000);
         write_grant(&grants, &format!("{GRANT}.json"), &bytes, 0o600)?;
         let scope = request_sha256(&bytes);
         Ok(Self {
@@ -680,6 +690,66 @@ fn a_second_engine_is_refused_and_a_killed_one_is_replaced() -> Outcome {
         Some(3),
         "{}",
         String::from_utf8_lossy(&absent.stderr)
+    );
+    Ok(())
+}
+
+#[test]
+fn the_engine_serves_the_health_its_start_left() -> Outcome {
+    let world = World::seeing(&["app"])?;
+    let (run, home, scope) = (&world.run, &world.home, &world.scope);
+    // Nothing commissioned: the engine serves, and says it cannot act.
+    let engine = Engine::start(run, home)?;
+    let blocked: Value = serde_json::from_slice(&wrapper(run, scope, &["health"])?.stdout)?;
+    assert_eq!(
+        (
+            &blocked["body"]["ready"],
+            &blocked["body"]["recovery"],
+            &blocked["body"]["database"]
+        ),
+        (&json!(false), &json!("blocked"), &json!("unavailable"))
+    );
+    drop(engine);
+    // A commissioned, empty ledger: reconciled at start, ready.
+    let state = home.join(".local/state/herdr-engineering-engine-v3");
+    DirBuilder::new()
+        .mode(0o700)
+        .recursive(true)
+        .create(&state)?;
+    let (generation, epoch) = (
+        "28c00000-0000-4000-8000-0000000000a1",
+        "28c00000-0000-4000-8000-0000000000a2",
+    );
+    drop(
+        habitat_engine::store::Store::open(
+            &state,
+            habitat_engine::contracts::UuidV4::parse(generation)?,
+            habitat_engine::contracts::UuidV4::parse(epoch)?,
+            true,
+            Instant::now() + Duration::from_secs(10),
+        )
+        .map_err(|error| format!("{error:?}"))?,
+    );
+    let body = serde_json::to_vec(
+        &json!({"schema": "hee3.active-generation/1", "generation": generation, "epoch": epoch}),
+    )?;
+    write_grant(&state, "active.json", &body, 0o600)?;
+    let _engine = Engine::start(run, home)?;
+    let ready: Value = serde_json::from_slice(&wrapper(run, scope, &["health"])?.stdout)?;
+    assert_eq!(ready["kind"], json!("result"), "{ready}");
+    assert_eq!(
+        (
+            &ready["body"]["ready"],
+            &ready["body"]["recovery"],
+            &ready["body"]["database"],
+            &ready["body"]["socket"]
+        ),
+        (
+            &json!(true),
+            &json!("complete"),
+            &json!("ready"),
+            &json!("owned")
+        )
     );
     Ok(())
 }

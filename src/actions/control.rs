@@ -17,7 +17,8 @@
 
 use super::{Action, CATALOGUE_REVISION, Caller, Catalogue, MAX_PAGE, PreconditionRule, Refusal};
 use crate::contracts::control::{
-    self as wire, Envelope, ErrorCode, Fault, FrameFault, Received, Retry, read_result_frame,
+    self as wire, Envelope, ErrorCode, Fault, FrameFault, Health, Received, Retry,
+    read_result_frame,
 };
 use crate::contracts::{Sha256Digest, parse_u64_decimal};
 use crate::store::Principal;
@@ -64,14 +65,45 @@ pub enum Reply {
     Frame(Vec<u8>),
 }
 
-/// Serve one frame payload (without its LF) for `principal`, at receiver wall time `now_unix_ms`.
+/// What the coordinator has composed behind the receiver: the grant store, and the health it
+/// observed at start when it has one. An action whose state is absent is refused `unavailable`.
+#[derive(Clone, Copy)]
+pub struct Composed<'a> {
+    /// The grant store.
+    pub grants: &'a dyn Grants,
+    /// The coordinator's health observation, when composed.
+    pub health: Option<&'a Health>,
+}
+
+/// Serve one frame payload (without its LF) for `principal`, at receiver wall time `now_unix_ms`,
+/// with only a grant store composed.
 #[must_use]
 pub fn serve(
     payload: &[u8],
     now_unix_ms: u64,
     principal: &Principal,
-    grants: &(impl Grants + ?Sized),
+    grants: &(impl Grants + Sized),
 ) -> Reply {
+    serve_composed(
+        payload,
+        now_unix_ms,
+        principal,
+        Composed {
+            grants,
+            health: None,
+        },
+    )
+}
+
+/// Serve one frame payload with everything the coordinator composed.
+#[must_use]
+pub fn serve_composed(
+    payload: &[u8],
+    now_unix_ms: u64,
+    principal: &Principal,
+    composed: Composed<'_>,
+) -> Reply {
+    let grants = composed.grants;
     let envelope = match wire::receive(payload, now_unix_ms) {
         Received::Closed(fault) => return Reply::Close(fault),
         Received::Refused {
@@ -81,8 +113,15 @@ pub fn serve(
         } => return Reply::Frame(fault.frame(&request_id, &request_sha256)),
         Received::Admitted(envelope) => envelope,
     };
-    let outcome = admit(&envelope, now_unix_ms, principal, grants)
-        .and_then(|(action, caller)| dispatch(action, &caller, &envelope.body, now_unix_ms));
+    let outcome = admit(&envelope, now_unix_ms, principal, grants).and_then(|(action, caller)| {
+        dispatch(
+            action,
+            &caller,
+            &envelope.body,
+            now_unix_ms,
+            composed.health,
+        )
+    });
     Reply::Frame(match outcome {
         Ok(body) => read_result_frame(&envelope.request_id, &envelope.request_sha256, &body),
         Err(fault) => fault.frame(&envelope.request_id, &envelope.request_sha256),
@@ -165,6 +204,7 @@ fn dispatch(
     caller: &Caller,
     body: &Map<String, Value>,
     now_unix_ms: u64,
+    health: Option<&Health>,
 ) -> Result<Value, Fault> {
     match action.id {
         "tools.list" => tools_list(caller, body, now_unix_ms),
@@ -174,12 +214,15 @@ fn dispatch(
             "per-action schema digests await their publication convention",
         )
         .because("RC03 schema: tuple digests bind published artifact bytes")),
-        "health" => Err(Fault::of(
-            ErrorCode::Unavailable,
-            Retry::AfterCondition,
-            "health needs the coordinator's recovery, database and socket state",
-        )
-        .because("coordinator state is not composed behind this receiver")),
+        "health" if !body.is_empty() => Err(Fault::invalid("/body", "an empty object")),
+        "health" => health.map(Health::body).ok_or(
+            Fault::of(
+                ErrorCode::Unavailable,
+                Retry::AfterCondition,
+                "health needs the coordinator's recovery, database and socket state",
+            )
+            .because("coordinator state is not composed behind this receiver"),
+        ),
         _ => Err(Fault::of(
             ErrorCode::Unavailable,
             Retry::AfterCondition,

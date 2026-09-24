@@ -28,6 +28,10 @@ mod control;
 #[path = "t28_socket.rs"]
 mod socket;
 
+/// The coordinator's start: the active generation, startup reconciliation, `health`.
+#[path = "t28_coordinator.rs"]
+mod coordinator;
+
 type Outcome = Result<(), Box<dyn Error>>;
 
 /// The plan spine's own action list — the independent source these cases compare against.

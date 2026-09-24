@@ -174,13 +174,15 @@ CONTEXT_INPUTS = ("src/context.rs",)
 COHORT_TARGET_COUNTS = {"t22_cohort": 60}
 COHORT_INPUTS = ("src/cohort.rs", "evaluation/cohorts/claim-overlap-v1.json",
                  "tests/fixtures/t22/C01.json", "tests/fixtures/t22/C02.json")
-ACTIONS_TARGET_COUNTS = {"t28_actions": 94}
+ACTIONS_TARGET_COUNTS = {"t28_actions": 98}
 # The control receiver (review coordinator step 1) is served from the catalogue: its wire half in
 # contracts, its catalogue half in actions, and the independent Python oracle its cases run.
 ACTIONS_INPUTS = ("src/actions.rs", "src/worker/tools.rs", "src/actions/control.rs",
                   "src/contracts/control.rs", "tests/t28_control.rs",
                   # IPC01: the socket, the peer principal and the file grant store.
                   "src/app/control_socket.rs", "src/app/grants.rs", "tests/t28_socket.rs",
+                  # The coordinator's start: active generation, startup reconciliation, health.
+                  "src/app/coordinator.rs", "tests/t28_coordinator.rs",
                   "tests/fixtures/native/control-v1/receiver-oracle.py",
                   # RC03's published C01 example: the receiver's known-answer digest.
                   "tests/fixtures/native/control-v1/C01-control-valid-cancel.jsonl",

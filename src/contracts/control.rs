@@ -957,3 +957,109 @@ fn precondition(value: &Value) -> Result<Precondition, Fault> {
         generation,
     })
 }
+
+/// `BodyResult_health.recovery`: whether the coordinator's startup reconciliation left anything
+/// for an operator.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Recovery {
+    /// Every attempt reconciled; nothing outstanding.
+    Complete,
+    /// Reconciled, with obligations still open (an unknown outcome retained, cleanup owed,
+    /// verification outstanding, a live attempt under observation).
+    Pending,
+    /// The engine cannot act: no ledger, a refused startup, or reconciliation mode.
+    Blocked,
+}
+
+/// `BodyResult_health.database`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Database {
+    /// The ledger is open for writing.
+    Ready,
+    /// The ledger is readable but inspection-only.
+    Degraded,
+    /// There is no usable ledger.
+    Unavailable,
+}
+
+/// `BodyResult_health.socket`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Socket {
+    /// This engine serves the control socket.
+    Owned,
+    /// It is draining connections before it stops.
+    Draining,
+}
+
+impl Recovery {
+    /// The wire spelling.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Complete => "complete",
+            Self::Pending => "pending",
+            Self::Blocked => "blocked",
+        }
+    }
+}
+
+impl Database {
+    /// The wire spelling.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Ready => "ready",
+            Self::Degraded => "degraded",
+            Self::Unavailable => "unavailable",
+        }
+    }
+}
+
+impl Socket {
+    /// The wire spelling.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Owned => "owned",
+            Self::Draining => "draining",
+        }
+    }
+}
+
+/// One health observation. `ready` is not stored: it is derived, so a snapshot cannot claim
+/// readiness its parts deny.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Health {
+    /// Startup reconciliation's outcome.
+    pub recovery: Recovery,
+    /// The ledger's state.
+    pub database: Database,
+    /// The socket's state.
+    pub socket: Socket,
+    /// When this was observed, receiver wall time.
+    pub checked_unix_ms: u64,
+}
+
+impl Health {
+    /// Ready exactly when reconciliation is complete, the ledger writable and the socket owned.
+    #[must_use]
+    pub fn ready(&self) -> bool {
+        self.recovery == Recovery::Complete
+            && self.database == Database::Ready
+            && self.socket == Socket::Owned
+    }
+
+    /// The `BodyResult_health` object.
+    #[must_use]
+    pub fn body(&self) -> Value {
+        json!({
+            "protocol_version": PROTOCOL_VERSION,
+            "engine_version": env!("CARGO_PKG_VERSION"),
+            "ready": self.ready(),
+            "recovery": self.recovery.name(),
+            "database": self.database.name(),
+            "socket": self.socket.name(),
+            "checked_unix_ms": self.checked_unix_ms.to_string(),
+        })
+    }
+}

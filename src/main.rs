@@ -191,10 +191,11 @@
 // HEE3-ANCHORS-END
 
 use habitat_engine::actions::Catalogue;
-use habitat_engine::actions::control::{Grants, NoGrants};
+use habitat_engine::actions::control::{Composed, Grants, NoGrants};
 use habitat_engine::app::control_socket::{
     self, IDLE_TIMEOUT, RUNTIME_DIRECTORY, SOCKET_NAME, WRITE_TIMEOUT,
 };
+use habitat_engine::app::coordinator;
 use habitat_engine::app::grants::{self, FileGrants};
 use habitat_engine::contracts::control::{FrameReader, MAX_FRAME_BYTES, ReadError};
 use habitat_engine::worker::namespace_shim::{self, NamespaceExec};
@@ -288,9 +289,21 @@ fn serve() -> ExitCode {
             return ExitCode::from(EXIT_CONTRACT);
         }
     };
+    // Reconcile the active generation once, before the first connection is accepted: health is
+    // what startup left, observed at a named instant (D-C3 step 2).
+    let (health, line) = coordinator::observe_at_start(
+        &coordinator::state_root(&home),
+        now_unix_ms(),
+        std::time::Instant::now() + std::time::Duration::from_secs(30),
+    );
+    eprintln!("habitat-engine: {line}");
     eprintln!("habitat-engine: serving {}", socket.display());
     let mut report = |line: &str| eprintln!("habitat-engine: {line}");
-    match control_socket::run(&listener, store.as_ref(), &now_unix_ms, &mut report) {
+    let composed = Composed {
+        grants: store.as_ref(),
+        health: Some(&health),
+    };
+    match control_socket::run(&listener, composed, &now_unix_ms, &mut report) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("habitat-engine: accept failed: {error}");
