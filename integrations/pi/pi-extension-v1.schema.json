@@ -108,12 +108,12 @@
   },
   "hee3": {
     "call_states": [
-      "pending",
       "running",
+      "cancellation_requested",
+      "effect_unknown",
       "rendered",
       "failed",
-      "cancelled",
-      "effect_unknown"
+      "cancelled"
     ],
     "refusals": [
       "host_binding_unqualified",
@@ -126,7 +126,54 @@
       "tool_limit",
       "parallel_call_limit",
       "render_limit",
-      "terminal_call"
+      "terminal_call",
+      "unknown_action_version",
+      "malformed_package",
+      "unknown_tool",
+      "unknown_error_code"
+    ],
+    "action_versions": {
+      "tools.list": 1,
+      "tools.inspect": 1,
+      "task.preview": 1,
+      "task.submit": 1,
+      "task.get": 1,
+      "task.list": 1,
+      "task.cancel": 1,
+      "task.resolve": 1,
+      "thread.get": 1,
+      "thread.list": 1,
+      "roster.list": 1,
+      "roster.inspect": 1,
+      "roster.update": 1,
+      "roster.disable": 1,
+      "service.inspect": 1,
+      "service.probe": 1,
+      "service.action": 1,
+      "analysis.request": 1,
+      "analysis.get": 1,
+      "events.subscribe": 1,
+      "health": 1
+    },
+    "error_codes": [
+      "invalid_frame",
+      "unsupported_protocol",
+      "unsupported_version",
+      "unknown_action",
+      "unsupported_action_version",
+      "unauthenticated",
+      "forbidden",
+      "invalid_argument",
+      "not_found",
+      "conflict",
+      "stale_generation",
+      "deadline_exceeded",
+      "cancelled",
+      "resource_exhausted",
+      "unavailable",
+      "resync_required",
+      "effect_unknown",
+      "internal"
     ],
     "bounds": {
       "max_tools": 64,

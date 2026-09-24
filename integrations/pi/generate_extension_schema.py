@@ -33,11 +33,13 @@ MAX_PARALLEL_CALLS = 32
 MAX_RENDER_BYTES = 131_072
 MAX_IDENTIFIER = 128
 
-CALL_STATES = ("pending", "running", "rendered", "failed", "cancelled", "effect_unknown")
+CALL_STATES = ("running", "cancellation_requested", "effect_unknown", "rendered", "failed",
+               "cancelled")
 REFUSALS = (
     "host_binding_unqualified", "unknown_bridge_version", "stale_generation",
     "unknown_call", "call_identity_mismatch", "duplicate_call", "unknown_action",
     "tool_limit", "parallel_call_limit", "render_limit", "terminal_call",
+    "unknown_action_version", "malformed_package", "unknown_tool", "unknown_error_code",
 )
 
 
@@ -48,6 +50,36 @@ def catalogue_actions():
         return tuple(node["enum"])
     raise SystemExit(f"{CATALOGUE} does not expose an action enum; this contract will not "
                      "invent one")
+
+
+def catalogue_action_versions(actions):
+    """Each action's pinned request version, read from its `Request_<action>` definition.
+
+    The catalogue pins `action_version` as a constant per request. A tool declaring any other
+    version names a request shape the engine does not have, so the version is read here and
+    checked at registration rather than copied through unexamined.
+    """
+    defs = json.loads(CATALOGUE.read_text()).get("$defs", {})
+    versions = {}
+    for name, node in defs.items():
+        properties = node.get("properties", {}) if name.startswith("Request_") else {}
+        action = properties.get("action", {}).get("const")
+        version = properties.get("action_version", {}).get("const")
+        if isinstance(action, str) and isinstance(version, int):
+            versions[action] = version
+    if set(versions) != set(actions):
+        raise SystemExit(f"{CATALOGUE} pins no request version for "
+                         f"{sorted(set(actions) - set(versions))}; this contract will not "
+                         "invent one")
+    return {action: versions[action] for action in actions}
+
+
+def catalogue_error_codes():
+    node = json.loads(CATALOGUE.read_text()).get("$defs", {}).get("ErrorCodeV1")
+    if isinstance(node, dict) and isinstance(node.get("enum"), list) and node["enum"]:
+        return list(node["enum"])
+    raise SystemExit(f"{CATALOGUE} does not expose an error-code enum; this contract will "
+                     "not invent one")
 
 
 def ident(description):
@@ -122,6 +154,8 @@ def build():
         "hee3": {
             "call_states": list(CALL_STATES),
             "refusals": list(REFUSALS),
+            "action_versions": catalogue_action_versions(actions),
+            "error_codes": catalogue_error_codes(),
             "bounds": {
                 "max_tools": MAX_TOOLS, "max_parallel_calls": MAX_PARALLEL_CALLS,
                 "max_render_bytes": MAX_RENDER_BYTES,

@@ -14,7 +14,6 @@ parity"*. The gap is named in `integrations/pi/README.md` and in the schema's
 `hee3.unqualified`, rather than left to be inferred from a count.
 """
 
-import copy
 import importlib.util
 import json
 import subprocess
@@ -127,10 +126,91 @@ class Registration(unittest.TestCase):
         tools[0]["action"] = "task.forge"
         self.refused("unknown_action", lambda: PI.register(package(tools=tools), BRIDGES))
 
+    def test_a_tool_at_an_action_version_the_catalogue_does_not_pin(self):
+        tools = package()["tools"]
+        tools[1]["action_version"] = 9
+        detail = self.refused("unknown_action_version",
+                              lambda: PI.register(package(tools=tools), BRIDGES))
+        self.assertIn("get-task", detail)
+        self.assertIn("9", detail)
+
+    def test_the_catalogue_pins_every_action_version_it_admits(self):
+        # Independent source: the control-v1 catalogue's own Request_<action> definitions,
+        # read here rather than through the generator's table.
+        catalogue = json.loads((ROOT / "schemas/actions/control-v1.schema.json").read_text())
+        expected = {}
+        for name, node in catalogue["$defs"].items():
+            if name.startswith("Request_"):
+                props = node["properties"]
+                expected[props["action"]["const"]] = props["action_version"]["const"]
+        self.assertEqual(SCHEMA["hee3"]["action_versions"], expected)
+
+    def test_a_tool_at_the_current_action_version_registers(self):
+        # Moved off the identity element: the admitted version is read back per tool, and
+        # every one of the example's three tools carries it through.
+        result = PI.register(package(), BRIDGES)
+        self.assertEqual([(t["tool_id"], t["action_version"]) for t in result["tools"]],
+                         [("list-tasks", 1), ("get-task", 1), ("engine-health", 1)])
+
+    def malformed(self, body):
+        return self.refused("malformed_package", lambda: PI.register(body, BRIDGES))
+
+    def test_a_package_missing_its_bridge_version(self):
+        body = package()
+        del body["bridge_version"]
+        self.assertIn("bridge_version", self.malformed(body))
+
+    def test_a_package_with_no_tools(self):
+        self.assertIn("tools", self.malformed(package(tools=[])))
+
+    def test_a_package_with_an_unknown_key(self):
+        self.assertIn("handlers", self.malformed(package(handlers=[])))
+
+    def test_a_tool_with_an_unknown_key(self):
+        tools = package()["tools"]
+        tools[2]["callback"] = "pi.on_result"
+        self.assertIn("callback", self.malformed(package(tools=tools)))
+
+    def test_a_tool_missing_its_action(self):
+        tools = package()["tools"]
+        del tools[0]["action"]
+        self.assertIn("action", self.malformed(package(tools=tools)))
+
+    def test_a_package_that_is_not_an_object(self):
+        self.assertIn("object", self.malformed([package()]))
+
+    def test_a_tool_that_is_not_an_object(self):
+        self.assertIn("object", self.malformed(package(tools=["get-task"])))
+
+    def test_tools_that_are_not_a_list(self):
+        # Exact: a dict of tools must fail as the wrong TYPE, not later as a non-object entry
+        # reached by iterating its keys.
+        self.assertEqual(self.malformed(package(tools={"tool_id": "x"})),
+                         "package.tools is not array")
+
+    def test_a_version_of_the_wrong_type(self):
+        # A string and a boolean are both refused: `True == 1` in Python, so a check by
+        # equality alone would admit `true` as bridge version 1.
+        self.assertIn("bridge_version", self.malformed(package(bridge_version="1")))
+        self.assertIn("bridge_version", self.malformed(package(bridge_version=True)))
+
+    def test_a_tool_version_of_the_wrong_type(self):
+        tools = package()["tools"]
+        tools[1]["action_version"] = "1"
+        self.assertIn("action_version", self.malformed(package(tools=tools)))
+
+    def test_an_identifier_of_the_wrong_type(self):
+        self.assertIn("extension_id", self.malformed(package(extension_id=7)))
+
+
+def admitted(generation=3, bridge_version=1):
+    return PI.register(package(extension_generation=generation, bridge_version=bridge_version),
+                       {1, 2})
+
 
 class Lifecycle(unittest.TestCase):
     def setUp(self):
-        self.calls = PI.Calls(generation=3)
+        self.calls = PI.Calls(admitted())
 
     def refused(self, code, call):
         EXERCISED_CODES.add(code)
@@ -147,19 +227,158 @@ class Lifecycle(unittest.TestCase):
 
     def test_a_result_under_an_old_generation_is_refused(self):
         self.calls.opened("c1", "get-task")
-        self.calls.reload(4)
-        # The call was abandoned by the reload; under the new generation it is unknown.
-        self.refused("unknown_call", lambda: self.calls.render("c1", "get-task", 4, b"{}"))
+        self.calls.reload(admitted(4))
+        # The call was revoked by the reload, not forgotten: a result for it is stale from
+        # either generation, and it is never settled by one.
+        detail = self.refused("stale_generation",
+                              lambda: self.calls.render("c1", "get-task", 4, b"{}"))
+        self.assertIn("revoked", detail)
+        self.refused("stale_generation", lambda: self.calls.render("c1", "get-task", 3, b"{}"))
+        self.assertNotIn("c1", self.calls.settled)
 
     def test_a_reload_names_what_it_abandoned(self):
         self.calls.opened("c1", "get-task")
         self.calls.opened("c2", "engine-health")
-        self.assertEqual(self.calls.reload(4), ["c1", "c2"])
+        self.assertEqual(self.calls.reload(admitted(4)), ["c1", "c2"])
         self.assertEqual(self.calls.open, {})
+        self.assertEqual(sorted(self.calls.revoked), ["c1", "c2"])
 
     def test_a_reload_must_advance_the_generation(self):
-        self.refused("stale_generation", lambda: self.calls.reload(3))
-        self.refused("stale_generation", lambda: self.calls.reload(2))
+        self.refused("stale_generation", lambda: self.calls.reload(admitted(3)))
+        self.refused("stale_generation", lambda: self.calls.reload(admitted(2)))
+
+    def test_an_unobserved_effect_survives_a_reload(self):
+        # G07: an unresolved obligation is retained until actual reconciliation. A reload
+        # is not a reconciliation, so it must not erase what nobody observed.
+        self.calls.opened("c1", "get-task")
+        self.calls.opened("c2", "engine-health")
+        self.calls.unknown_effect("c1", "get-task", 3)
+        self.calls.reload(admitted(4))
+        self.assertEqual(self.calls.revoked["c1"]["state"], "effect_unknown")
+        self.assertEqual(self.calls.revoked["c1"]["generation"], 3)
+        self.assertEqual(self.calls.revoked["c2"]["state"], "running")
+        self.assertNotIn("c1", self.calls.settled)
+
+    def test_a_revoked_call_id_cannot_be_reopened(self):
+        self.calls.opened("c1", "get-task")
+        self.calls.reload(admitted(4))
+        detail = self.refused("duplicate_call", lambda: self.calls.opened("c1", "get-task"))
+        self.assertIn("revoked", detail)
+        self.assertEqual(self.calls.revoked["c1"]["generation"], 3)
+
+    def test_a_version_switch_keeps_each_call_on_its_admitted_tuple(self):
+        # T29: the admitted package/protocol tuple stays pinned through every active
+        # attempt. Two records that differ in every tuple field, so no constant passes.
+        self.calls.opened("c1", "get-task")
+        self.calls.reload(admitted(generation=4, bridge_version=2))
+        fresh = self.calls.opened("c2", "engine-health")
+        old = self.calls.revoked["c1"]
+        self.assertEqual(
+            {k: old[k] for k in ("tool_id", "extension_id", "generation", "bridge_version",
+                                 "action_version")},
+            {"tool_id": "get-task", "extension_id": "hee3-tools", "generation": 3,
+             "bridge_version": 1, "action_version": 1})
+        self.assertEqual(
+            {k: fresh[k] for k in ("tool_id", "generation", "bridge_version")},
+            {"tool_id": "engine-health", "generation": 4, "bridge_version": 2})
+        self.refused("stale_generation", lambda: self.calls.render("c1", "get-task", 3, b"{}"))
+        self.assertEqual(self.calls.revoked["c1"]["bridge_version"], 1)
+
+    def test_a_call_records_the_admission_it_was_opened_under(self):
+        # A second admission differing from the default in every tuple field, so a record
+        # built from constants rather than from the admission cannot pass.
+        body = package(extension_id="hee3-tools-b", extension_generation=7, bridge_version=2)
+        calls = PI.Calls(PI.register(body, {1, 2}))
+        record = calls.opened("k1", "list-tasks")
+        self.assertEqual(record, {"tool_id": "list-tasks", "extension_id": "hee3-tools-b",
+                                  "generation": 7, "bridge_version": 2, "action_version": 1,
+                                  "state": "running"})
+
+    def test_a_call_for_a_tool_not_admitted_is_refused(self):
+        detail = self.refused("unknown_tool", lambda: self.calls.opened("c1", "delete-task"))
+        self.assertIn("delete-task", detail)
+        self.assertEqual(self.calls.open, {})
+
+    def test_a_reload_drops_a_tool_the_new_package_does_not_admit(self):
+        body = package(extension_generation=4)
+        body["tools"] = body["tools"][:2]
+        self.calls.reload(PI.register(body, BRIDGES))
+        self.refused("unknown_tool", lambda: self.calls.opened("c9", "engine-health"))
+        self.assertEqual(self.calls.opened("c8", "get-task")["generation"], 4)
+
+    def test_an_action_error_settles_the_call_as_failed(self):
+        self.calls.opened("c1", "get-task")
+        self.calls.opened("c2", "list-tasks")
+        settled = self.calls.fail("c1", "get-task", 3, "not_found")
+        self.assertEqual((settled["state"], settled["error_code"]), ("failed", "not_found"))
+        settled = self.calls.fail("c2", "list-tasks", 3, "forbidden")
+        self.assertEqual((settled["state"], settled["error_code"]), ("failed", "forbidden"))
+        self.assertEqual(self.calls.open, {})
+
+    def test_a_failure_outside_the_control_vocabulary_is_refused(self):
+        self.calls.opened("c1", "get-task")
+        detail = self.refused("unknown_error_code",
+                              lambda: self.calls.fail("c1", "get-task", 3, "oops"))
+        self.assertIn("oops", detail)
+        self.assertIn("c1", self.calls.open)
+
+    def test_a_failure_goes_through_the_same_identity_check(self):
+        self.calls.opened("c1", "get-task")
+        self.refused("call_identity_mismatch",
+                     lambda: self.calls.fail("c1", "engine-health", 3, "internal"))
+        self.refused("stale_generation", lambda: self.calls.fail("c1", "get-task", 2, "internal"))
+        self.assertIn("c1", self.calls.open)
+
+    def test_a_failure_wins_a_race_against_a_late_result(self):
+        self.calls.opened("c1", "get-task")
+        self.calls.fail("c1", "get-task", 3, "unavailable")
+        self.assertIn("failed", self.refused(
+            "terminal_call", lambda: self.calls.render("c1", "get-task", 3, b"{}")))
+        self.refused("terminal_call", lambda: self.calls.cancel("c1", "get-task", 3))
+        self.assertEqual(self.calls.settled["c1"]["state"], "failed")
+
+    def test_a_result_wins_a_race_against_a_late_failure(self):
+        self.calls.opened("c1", "get-task")
+        self.calls.render("c1", "get-task", 3, b"{}")
+        self.refused("terminal_call", lambda: self.calls.fail("c1", "get-task", 3, "internal"))
+        self.assertEqual(self.calls.settled["c1"]["state"], "rendered")
+
+    def test_a_cancellation_request_is_acknowledged_but_not_final(self):
+        self.calls.opened("c1", "get-task")
+        acknowledged = self.calls.cancel_requested("c1", "get-task", 3)
+        self.assertEqual(acknowledged["state"], "cancellation_requested")
+        self.assertIn("c1", self.calls.open)
+        self.assertNotIn("c1", self.calls.settled)
+
+    def test_a_result_after_a_cancellation_request_settles_as_rendered(self):
+        # The effect completed anyway: the truthful outcome is the result, not "cancelled".
+        self.calls.opened("c1", "get-task")
+        self.calls.cancel_requested("c1", "get-task", 3)
+        self.assertEqual(self.calls.render("c1", "get-task", 3, b"done")["state"], "rendered")
+
+    def test_a_confirmed_cancel_after_a_request_settles_as_cancelled(self):
+        self.calls.opened("c1", "get-task")
+        self.calls.cancel_requested("c1", "get-task", 3)
+        self.assertEqual(self.calls.cancel("c1", "get-task", 3)["state"], "cancelled")
+        self.assertNotIn("c1", self.calls.open)
+
+    def test_a_failure_after_a_cancellation_request_settles_as_failed(self):
+        self.calls.opened("c1", "get-task")
+        self.calls.cancel_requested("c1", "get-task", 3)
+        self.assertEqual(self.calls.fail("c1", "get-task", 3, "cancelled")["state"], "failed")
+
+    def test_a_cancellation_request_does_not_hide_an_unobserved_effect(self):
+        self.calls.opened("c1", "get-task")
+        self.calls.unknown_effect("c1", "get-task", 3)
+        acknowledged = self.calls.cancel_requested("c1", "get-task", 3)
+        self.assertEqual(acknowledged["state"], "effect_unknown")
+        self.assertTrue(acknowledged["cancel_acknowledged"])
+
+    def test_a_cancellation_request_goes_through_the_identity_check(self):
+        self.calls.opened("c1", "get-task")
+        self.refused("call_identity_mismatch",
+                     lambda: self.calls.cancel_requested("c1", "list-tasks", 3))
+        self.assertEqual(self.calls.open["c1"]["state"], "running")
 
     def test_a_callback_under_a_stale_generation_is_refused(self):
         self.calls.opened("c1", "get-task")
@@ -249,6 +468,14 @@ class SiteCoverage(unittest.TestCase):
 
     def test_the_schema_declares_exactly_what_the_module_raises(self):
         self.assertEqual(set(PI.refusal_sites()), set(SCHEMA["hee3"]["refusals"]))
+
+    def test_every_declared_call_state_is_one_the_module_assigns(self):
+        # A declared state nothing produces is a dead path presented as vocabulary (G10).
+        self.assertEqual(set(PI.assigned_states()), set(SCHEMA["hee3"]["call_states"]))
+
+    def test_the_error_vocabulary_is_the_control_catalogue(self):
+        catalogue = json.loads((ROOT / "schemas/actions/control-v1.schema.json").read_text())
+        self.assertEqual(SCHEMA["hee3"]["error_codes"], catalogue["$defs"]["ErrorCodeV1"]["enum"])
 
 
 if __name__ == "__main__":

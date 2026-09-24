@@ -1,17 +1,26 @@
 #!/usr/bin/env python3
-"""Neuter each refusal site in integrations/pi/reconcile.py and require a test to notice.
+"""Neuter each refusal site in integrations/pi/reconcile.py and require ITS test to notice.
 
-A case per refusal CODE is not a case per SITE: this module raises eleven codes from
-fourteen places, so three codes have a neighbour that can answer for them. `refusal_sites()`
-counting eleven would read as complete while three sites sat unpinned.
+A case per refusal CODE is not a case per SITE: this module raises fifteen codes from
+nineteen places, so four sites have a neighbour that can answer for them. `refusal_sites()`
+counting fifteen would read as complete while four sites sat unpinned.
 
 Each site is rewritten to a no-op in turn and `tests/pi_extension.py` is re-run. A site
-whose neuter leaves the suite green is a survivor: behaviour nothing pins down.
+whose neuter leaves the suite green is a survivor: behaviour nothing pins down. A site whose
+neuter fails the suite but NOT the test named for it in `EXPECTED` is killed for the wrong
+reason -- an import error, an unrelated case, or the vocabulary census noticing a code
+vanish -- and it counts as a survivor too: nothing shows the site's own behaviour is pinned.
+
+A site is keyed by (enclosing function, code, ordinal of that code within the function), not
+by line number, so an edit elsewhere in the file does not re-key it. Every site found must
+have an entry, and every entry must name a site found: the table is reconciled against the
+enumeration in both directions.
 
 Run: python3 tools/check-pi-sites
 """
 
 import ast
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -21,26 +30,71 @@ SOURCE = ROOT / "integrations/pi/reconcile.py"
 TESTS = ROOT / "tests/pi_extension.py"
 
 
+# The test whose failure is the evidence each site is pinned, keyed as `site_key` spells it.
+EXPECTED = {
+    "register:malformed_package:1": "test_a_package_missing_its_bridge_version",
+    "register:unknown_bridge_version:1": "test_a_wrong_schema_string",
+    "register:unknown_bridge_version:2": "test_an_unsupported_bridge_version",
+    "register:host_binding_unqualified:1": "test_a_declared_host_binding_is_refused",
+    "register:tool_limit:1": "test_more_tools_than_the_limit",
+    "register:duplicate_call:1": "test_a_duplicate_tool_identity",
+    "register:unknown_action:1": "test_a_tool_exposing_an_action_outside_the_catalogue",
+    "register:unknown_action_version:1":
+        "test_a_tool_at_an_action_version_the_catalogue_does_not_pin",
+    "reload:stale_generation:1": "test_a_reload_must_advance_the_generation",
+    "opened:duplicate_call:1": "test_a_call_cannot_open_twice",
+    "opened:unknown_tool:1": "test_a_call_for_a_tool_not_admitted_is_refused",
+    "opened:parallel_call_limit:1": "test_more_parallel_calls_than_the_limit",
+    "_matched:terminal_call:1": "test_cancellation_wins_a_race_against_a_late_result",
+    "_matched:stale_generation:1": "test_a_result_under_an_old_generation_is_refused",
+    "_matched:unknown_call:1": "test_an_unknown_call_is_refused",
+    "_matched:stale_generation:2": "test_a_callback_under_a_stale_generation_is_refused",
+    "_matched:call_identity_mismatch:1": "test_a_result_for_the_wrong_tool_is_refused",
+    "render:render_limit:1": "test_a_render_over_the_bound_is_refused_without_settling_the_call",
+    "fail:unknown_error_code:1": "test_a_failure_outside_the_control_vocabulary_is_refused",
+}
+
+
 def sites(text):
-    """Every `refuse(...)` call, as (line, column, end_column), from the syntax tree.
+    """Every `refuse(...)` call, as (line, column, end_line, end_column, code, key).
 
     Read from the tree rather than by regular expression: a call spanning several lines has
     no single textual form, and a pattern that missed one would shrink the denominator
-    silently, in the flattering direction.
+    silently, in the flattering direction. A call outside any function is keyed `<module>`.
     """
     found = []
-    for node in ast.walk(ast.parse(text)):
+    tree = ast.parse(text)
+    owners = [(tree, "<module>")] + [(node, node.name) for node in ast.walk(tree)
+                                     if isinstance(node, ast.FunctionDef)]
+    owner_of = {}
+    for owner, name in owners:
+        for node in ast.walk(owner):
+            if isinstance(node, ast.Call):
+                owner_of[id(node)] = name   # innermost owner wins: walked after its parent
+    for node in ast.walk(tree):
         if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
                 and node.func.id == "refuse"):
+            code = (node.args[0].value if node.args and isinstance(node.args[0], ast.Constant)
+                    else "?")
             found.append((node.lineno, node.col_offset, node.end_lineno, node.end_col_offset,
-                          node.args[0].value if node.args and isinstance(node.args[0], ast.Constant)
-                          else "?"))
-    return sorted(found)
+                          code, owner_of[id(node)]))
+    ordinal = {}
+    keyed = []
+    for line, col, end_line, end_col, code, owner in sorted(found):
+        ordinal[(owner, code)] = ordinal.get((owner, code), 0) + 1
+        keyed.append((line, col, end_line, end_col, code,
+                      f"{owner}:{code}:{ordinal[(owner, code)]}"))
+    return keyed
+
+
+def failed_tests(result):
+    """The test names unittest reported as FAIL or ERROR in this run."""
+    return set(re.findall(r"^(?:FAIL|ERROR): (\w+) ", result.stderr, re.MULTILINE))
 
 
 def neuter(text, site):
     """Replace one call with `None`, keeping every other byte."""
-    line_no, col, end_line, end_col, _ = site
+    line_no, col, end_line, end_col = site[:4]
     lines = text.splitlines(keepends=True)
     head = lines[line_no - 1][:col]
     tail = lines[end_line - 1][end_col:]
@@ -48,7 +102,11 @@ def neuter(text, site):
 
 
 def run_tests():
-    return subprocess.run([sys.executable, "-W", "error", str(TESTS)],
+    # `-B`: the suite loads reconcile.py through a source loader that trusts a cached .pyc
+    # whose recorded mtime (whole seconds) and size match. Two neutered variants of equal
+    # length written in one second would then run the FIRST variant's bytecode and credit
+    # the wrong site; measured on this module's plant battery, where it did exactly that.
+    return subprocess.run([sys.executable, "-B", "-W", "error", str(TESTS)],
                           capture_output=True, text=True, check=False)
 
 
@@ -57,30 +115,46 @@ def main():
     all_sites = sites(original)
     if not all_sites:
         raise SystemExit("no refusal sites found; the enumeration is broken, not the module")
+    found_keys = {site[5] for site in all_sites}
+    unlisted = sorted(found_keys - set(EXPECTED))
+    stale = sorted(set(EXPECTED) - found_keys)
+    if unlisted or stale:
+        raise SystemExit(f"EXPECTED does not match the sites found: unlisted={unlisted} "
+                         f"stale={stale}")
     before = run_tests()
     if before.returncode != 0:
         raise SystemExit("the suite is not green before the sweep:\n" + before.stdout + before.stderr)
 
     survivors = []
+    wrong_reason = []
     try:
         for index, site in enumerate(all_sites, 1):
             SOURCE.write_text(neuter(original, site))
             result = run_tests()
             SOURCE.write_text(original)
-            status = "killed" if result.returncode != 0 else "SURVIVED"
+            expected = EXPECTED[site[5]]
             if result.returncode == 0:
+                status = "SURVIVED"
                 survivors.append(site)
-            print(f"  {index:2}/{len(all_sites)} line {site[0]:4} refuse({site[4]!r}) {status}",
+            elif expected in failed_tests(result):
+                status = f"killed by {expected}"
+            else:
+                status = f"KILLED-WRONG-REASON (not {expected})"
+                wrong_reason.append(site)
+            print(f"  {index:2}/{len(all_sites)} line {site[0]:4} {site[5]} {status}",
                   flush=True)
     finally:
         SOURCE.write_text(original)
 
-    print(f"\nsites={len(all_sites)} killed={len(all_sites) - len(survivors)} "
+    killed = len(all_sites) - len(survivors) - len(wrong_reason)
+    print(f"\nsites={len(all_sites)} killed={killed} wrong_reason={len(wrong_reason)} "
           f"survived={len(survivors)}")
-    for site in survivors:
-        print(f"  SURVIVOR {SOURCE.name}:{site[0]} refuse({site[4]!r})")
-    print("verdict=" + ("PASS" if not survivors else "FAIL"))
-    return 0 if not survivors else 1
+    for label, group in (("SURVIVOR", survivors), ("WRONG-REASON", wrong_reason)):
+        for site in group:
+            print(f"  {label} {SOURCE.name}:{site[0]} {site[5]} expected {EXPECTED[site[5]]}")
+    passed = not survivors and not wrong_reason
+    print("verdict=" + ("PASS" if passed else "FAIL"))
+    return 0 if passed else 1
 
 
 sys.exit(main())
