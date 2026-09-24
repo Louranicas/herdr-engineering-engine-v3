@@ -58,9 +58,9 @@ UNTRACKED_BY_DESIGN = (
 T03_IMPLEMENTATION_PATHS = ("src/worker/mod.rs", "src/worker/inference.rs")
 T04_IMPLEMENTATION_PATHS = ("src/store.rs", "src/store/artifact.rs", "src/store/backup.rs",
                             "src/store/schema.rs", "migrations/001.sql", "tests/t04_store.rs")
-# Reviewed independent T04 unit suite: 68 cases. Source discovery or emitted
+# Reviewed independent T04 unit suite: 79 cases (68 + store-lane A01-A03, 2026-09-24). Source discovery or emitted
 # counts cannot lower this gate; None remains an explicit pending-state refusal.
-T04_TEST_COUNT = 68
+T04_TEST_COUNT = 79
 T05_IMPLEMENTATION_PATHS = (
     "src/contracts/roster.rs", "src/roster.rs", "src/store/roster.rs", "src/store/roster/attempts.rs",
     "tests/t05_roster.rs", "tests/t05_codec.rs", "tests/t05_store.rs",
@@ -603,7 +603,9 @@ def quality_subject_paths(root, deadline, rust_only):
     required = ["Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "tools/check-quality",
                 "tools/development_process.py", "tools/rust-offline.py", "tools/sqlite-static.py", "tools/check-store-mutations", "tests/t25_process.py",
                 "tests/t25_quality.py", "tools/check-workflow-sites", "tools/check-skill-sites", "tools/check-pi-sites", "tools/check-bash-sites",
-                "tools/check-mutation-survivors"]
+                "tools/check-mutation-survivors",
+                # tests/t01_contracts.rs pins the RC01 limits to the published decision (include_str!).
+                "docs/contract-decisions.md"]
     required += [name for directory in ("src", "tests") for name in tree_files(root, directory, deadline, ".rs")]
     required += tree_files(root, RUST_OFFLINE_BUNDLE, deadline)
     if (root / "tests/t02_pi.rs").is_file():
@@ -718,7 +720,7 @@ def rust_test_expectations(root):
         if (len(matches) != 1 or matches[0].get("path") != path or not (root / path).is_file()
                 or (name in ("t03_contract", *T05_TARGET_COUNTS) and matches[0].get("harness", True) is not True)):
             raise ValueError("Missing or substituted required Rust test target: " + name)
-    counts = [24, 27, 60] if has_t02 else [24, 27]
+    counts = [25, 27, 60] if has_t02 else [25, 27]
     if has_t03:
         counts.append(34)
     if store_present:
@@ -782,7 +784,7 @@ def rust_test_expectations(root):
         for path in T06_INPUTS:
             if not (root / path).is_file() or (root / path).is_symlink():
                 raise ValueError("Missing or substituted required T06 fixture: " + path)
-        counts = [160, 0, 0, 24, 27, 60, 34, 29, 12, *T06_TARGET_COUNTS.values()]
+        counts = [171, 0, 0, 25, 27, 60, 34, 29, 12, *T06_TARGET_COUNTS.values()]
         unit_counts.update(T06_UNIT_COUNTS)
         if has_t07(root):
             counts.extend(T07_TARGET_COUNTS.values())
