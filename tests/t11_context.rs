@@ -9,18 +9,22 @@ use std::error::Error;
 
 use habitat_engine::budget::{Amount, Provenance, Unit};
 use habitat_engine::context::{
-    Assembly, Content, MAX_DEPTH, MAX_PACKET_BYTES, MAX_SELECTED, MAX_SOURCE_BYTES, Omission,
-    Permit, Refusal, Revision, SCHEMA_VERSION,
+    Assembly, Content, MAX_DEPTH, MAX_PACKET_BYTES, MAX_ROOTS, MAX_SELECTED, MAX_SOURCE_BYTES,
+    Omission, Permit, Refusal, Relation, RelationKind, Revision, SCHEMA_VERSION,
 };
 
 type Outcome = Result<(), Box<dyn Error>>;
+
+/// The stable context identity every packet in this battery is assembled for, unless a case
+/// is about identity itself.
+const CONTEXT: &str = "0000c0de-0000-4000-8000-000000000000";
 
 fn id(index: usize) -> String {
     format!("{index:08x}-0000-4000-8000-000000000000")
 }
 
 fn bytes(budget: u64) -> Amount {
-    Amount::new(Unit::Tokens, budget)
+    Amount::new(Unit::Bytes, budget)
 }
 
 /// A permit admitting sources 1..=`count`.
@@ -56,7 +60,13 @@ fn omission_of(packet: &habitat_engine::context::Packet<'_>, identity: &str) -> 
 fn an_empty_permit_admits_nothing() -> Outcome {
     let mut assembly = Assembly::new();
     assembly.register(&id(1), Revision::new(1), &[], Content::new(b"body"))?;
-    let packet = assembly.assemble(&[&id(1)], Revision::new(1), &Permit::new(), bytes(1024))?;
+    let packet = assembly.assemble(
+        CONTEXT,
+        &[&id(1)],
+        Revision::new(1),
+        &Permit::new(),
+        bytes(1024),
+    )?;
     assert!(packet.selected().is_empty());
     assert_eq!(omission_of(&packet, &id(1)), Some(Omission::NotPermitted));
     assert_eq!(packet.bytes(), 0);
@@ -109,7 +119,7 @@ fn denial_prunes_the_subtree() -> Outcome {
     assembly.register(&id(2), Revision::new(1), &[&id(3)], Content::new(b"mid"))?;
     assembly.register(&id(3), Revision::new(1), &[], Content::new(b"leaf"))?;
     let permit = Permit::new().allow(&id(1))?.allow(&id(3))?;
-    let packet = assembly.assemble(&[&id(1)], Revision::new(1), &permit, bytes(1024))?;
+    let packet = assembly.assemble(CONTEXT, &[&id(1)], Revision::new(1), &permit, bytes(1024))?;
     assert_eq!(selected_ids(&packet), vec![id(1)]);
     assert_eq!(omission_of(&packet, &id(2)), Some(Omission::NotPermitted));
     assert_eq!(
@@ -144,7 +154,13 @@ fn hostile_text_is_selected_as_ordinary_bytes() -> Outcome {
     assembly.register(&id(1), Revision::new(1), &[], Content::new(hostile))?;
     assembly.register(&id(2), Revision::new(1), &[], Content::new(b"ordinary"))?;
     let permit = permit_through(2)?;
-    let packet = assembly.assemble(&[&id(1), &id(2)], Revision::new(1), &permit, bytes(1024))?;
+    let packet = assembly.assemble(
+        CONTEXT,
+        &[&id(1), &id(2)],
+        Revision::new(1),
+        &permit,
+        bytes(1024),
+    )?;
     assert_eq!(selected_ids(&packet), vec![id(1), id(2)]);
     assert_eq!(packet.selected()[0].content.bytes(), hostile);
     assert_eq!(
@@ -164,6 +180,7 @@ fn content_cannot_expand_its_own_reach() -> Outcome {
     assembly.register(&id(1), Revision::new(1), &[], Content::new(body.as_bytes()))?;
     assembly.register(&id(2), Revision::new(1), &[], Content::new(b"secret"))?;
     let packet = assembly.assemble(
+        CONTEXT,
         &[&id(1)],
         Revision::new(1),
         &permit_through(2)?,
@@ -187,6 +204,7 @@ fn the_budget_cuts_off_and_names_what_it_cut() -> Outcome {
     assembly.register(&id(1), Revision::new(1), &[], Content::new(b"aaaaa"))?;
     assembly.register(&id(2), Revision::new(1), &[], Content::new(b"bbbbb"))?;
     let packet = assembly.assemble(
+        CONTEXT,
         &[&id(1), &id(2)],
         Revision::new(1),
         &permit_through(2)?,
@@ -208,9 +226,9 @@ fn the_budget_boundary_admits_an_exact_fit() -> Outcome {
     let mut assembly = Assembly::new();
     assembly.register(&id(1), Revision::new(1), &[], Content::new(b"1234567890"))?;
     let permit = permit_through(1)?;
-    let exact = assembly.assemble(&[&id(1)], Revision::new(1), &permit, bytes(10))?;
+    let exact = assembly.assemble(CONTEXT, &[&id(1)], Revision::new(1), &permit, bytes(10))?;
     assert_eq!(exact.selected().len(), 1);
-    let short = assembly.assemble(&[&id(1)], Revision::new(1), &permit, bytes(9))?;
+    let short = assembly.assemble(CONTEXT, &[&id(1)], Revision::new(1), &permit, bytes(9))?;
     assert!(short.selected().is_empty());
     assert_eq!(omission_of(&short, &id(1)), Some(Omission::BudgetExhausted));
     Ok(())
@@ -224,6 +242,7 @@ fn cost_includes_rejected_work() -> Outcome {
     assembly.register(&id(1), Revision::new(1), &[], Content::new(b"aaaaa"))?;
     assembly.register(&id(2), Revision::new(1), &[], Content::new(b"bbbbbbbbbb"))?;
     let packet = assembly.assemble(
+        CONTEXT,
         &[&id(1), &id(2)],
         Revision::new(1),
         &permit_through(2)?,
@@ -240,9 +259,15 @@ fn cost_includes_rejected_work() -> Outcome {
 fn the_cost_is_a_budget_usage_ready_to_report() -> Outcome {
     let mut assembly = Assembly::new();
     assembly.register(&id(1), Revision::new(1), &[], Content::new(b"abcd"))?;
-    let packet = assembly.assemble(&[&id(1)], Revision::new(1), &permit_through(1)?, bytes(64))?;
+    let packet = assembly.assemble(
+        CONTEXT,
+        &[&id(1)],
+        Revision::new(1),
+        &permit_through(1)?,
+        bytes(64),
+    )?;
     let usage = packet.cost();
-    assert_eq!(usage.amount(), Amount::new(Unit::Tokens, 4));
+    assert_eq!(usage.amount(), Amount::new(Unit::Bytes, 4));
     assert_eq!(usage.provenance(), Provenance::CheckerMeasured);
     assert!(usage.provenance().is_measured());
     Ok(())
@@ -256,6 +281,7 @@ fn an_inadmissible_budget_is_refused_before_any_work() {
     assert_eq!(
         assembly
             .assemble(
+                CONTEXT,
                 &[],
                 Revision::new(1),
                 &Permit::new(),
@@ -267,6 +293,7 @@ fn an_inadmissible_budget_is_refused_before_any_work() {
     assert_eq!(
         assembly
             .assemble(
+                CONTEXT,
                 &[],
                 Revision::new(1),
                 &Permit::new(),
@@ -282,7 +309,13 @@ fn an_inadmissible_budget_is_refused_before_any_work() {
 fn a_zero_budget_still_reports_the_work_of_looking() -> Outcome {
     let mut assembly = Assembly::new();
     assembly.register(&id(1), Revision::new(1), &[], Content::new(b"abcd"))?;
-    let packet = assembly.assemble(&[&id(1)], Revision::new(1), &permit_through(1)?, bytes(0))?;
+    let packet = assembly.assemble(
+        CONTEXT,
+        &[&id(1)],
+        Revision::new(1),
+        &permit_through(1)?,
+        bytes(0),
+    )?;
     assert!(packet.selected().is_empty());
     assert_eq!(packet.work(), 4);
     assert_eq!(packet.bytes(), 0);
@@ -297,7 +330,13 @@ fn a_zero_budget_still_reports_the_work_of_looking() -> Outcome {
 fn a_stale_source_is_omitted_with_both_revisions() -> Outcome {
     let mut assembly = Assembly::new();
     assembly.register(&id(1), Revision::new(3), &[], Content::new(b"old"))?;
-    let packet = assembly.assemble(&[&id(1)], Revision::new(5), &permit_through(1)?, bytes(64))?;
+    let packet = assembly.assemble(
+        CONTEXT,
+        &[&id(1)],
+        Revision::new(5),
+        &permit_through(1)?,
+        bytes(64),
+    )?;
     assert_eq!(
         omission_of(&packet, &id(1)),
         Some(Omission::Stale {
@@ -314,9 +353,9 @@ fn the_staleness_boundary_admits_an_equal_revision() -> Outcome {
     let mut assembly = Assembly::new();
     assembly.register(&id(1), Revision::new(5), &[], Content::new(b"x"))?;
     let permit = permit_through(1)?;
-    let current = assembly.assemble(&[&id(1)], Revision::new(5), &permit, bytes(64))?;
+    let current = assembly.assemble(CONTEXT, &[&id(1)], Revision::new(5), &permit, bytes(64))?;
     assert_eq!(current.selected().len(), 1);
-    let stale = assembly.assemble(&[&id(1)], Revision::new(6), &permit, bytes(64))?;
+    let stale = assembly.assemble(CONTEXT, &[&id(1)], Revision::new(6), &permit, bytes(64))?;
     assert!(stale.selected().is_empty());
     Ok(())
 }
@@ -326,7 +365,13 @@ fn the_staleness_boundary_admits_an_equal_revision() -> Outcome {
 fn a_newer_revision_is_included() -> Outcome {
     let mut assembly = Assembly::new();
     assembly.register(&id(1), Revision::new(9), &[], Content::new(b"x"))?;
-    let packet = assembly.assemble(&[&id(1)], Revision::new(2), &permit_through(1)?, bytes(64))?;
+    let packet = assembly.assemble(
+        CONTEXT,
+        &[&id(1)],
+        Revision::new(2),
+        &permit_through(1)?,
+        bytes(64),
+    )?;
     assert_eq!(packet.selected()[0].revision, Revision::new(9));
     Ok(())
 }
@@ -337,7 +382,13 @@ fn a_newer_revision_is_included() -> Outcome {
 fn an_unregistered_dependency_is_a_missing_gap() -> Outcome {
     let mut assembly = Assembly::new();
     assembly.register(&id(1), Revision::new(1), &[&id(2)], Content::new(b"root"))?;
-    let packet = assembly.assemble(&[&id(1)], Revision::new(1), &permit_through(2)?, bytes(64))?;
+    let packet = assembly.assemble(
+        CONTEXT,
+        &[&id(1)],
+        Revision::new(1),
+        &permit_through(2)?,
+        bytes(64),
+    )?;
     assert_eq!(omission_of(&packet, &id(2)), Some(Omission::Missing));
     assert_eq!(packet.gaps().len(), 1);
     Ok(())
@@ -351,6 +402,7 @@ fn a_failed_fetch_is_a_gap_not_empty_content() -> Outcome {
     assembly.register_unreadable(&id(1), Revision::new(1), &[])?;
     assembly.register(&id(2), Revision::new(1), &[], Content::new(b""))?;
     let packet = assembly.assemble(
+        CONTEXT,
         &[&id(1), &id(2)],
         Revision::new(1),
         &permit_through(2)?,
@@ -378,7 +430,7 @@ fn gaps_exclude_denials() -> Outcome {
     )?;
     assembly.register_unreadable(&id(3), Revision::new(1), &[])?;
     let permit = Permit::new().allow(&id(1))?.allow(&id(3))?;
-    let packet = assembly.assemble(&[&id(1)], Revision::new(1), &permit, bytes(64))?;
+    let packet = assembly.assemble(CONTEXT, &[&id(1)], Revision::new(1), &permit, bytes(64))?;
     assert_eq!(packet.omissions().len(), 2);
     let gaps = packet.gaps();
     assert_eq!(gaps.len(), 1);
@@ -404,11 +456,11 @@ fn assembly_is_reproducible_and_order_independent() -> Outcome {
     let roots = [id(1), id(2), id(3)];
     let refs: Vec<&str> = roots.iter().map(String::as_str).collect();
     let permit = permit_through(3)?;
-    let a = forward.assemble(&refs, Revision::new(1), &permit, bytes(64))?;
-    let b = backward.assemble(&refs, Revision::new(1), &permit, bytes(64))?;
+    let a = forward.assemble(CONTEXT, &refs, Revision::new(1), &permit, bytes(64))?;
+    let b = backward.assemble(CONTEXT, &refs, Revision::new(1), &permit, bytes(64))?;
     assert_eq!(selected_ids(&a), selected_ids(&b));
     assert_eq!(selected_ids(&a), roots.to_vec());
-    let again = forward.assemble(&refs, Revision::new(1), &permit, bytes(64))?;
+    let again = forward.assemble(CONTEXT, &refs, Revision::new(1), &permit, bytes(64))?;
     assert_eq!(a, again, "the same world twice is the same packet");
     Ok(())
 }
@@ -423,7 +475,13 @@ fn traversal_is_breadth_first() -> Outcome {
     assembly.register(&id(3), Revision::new(1), &[], Content::new(b"d2"))?;
     assembly.register(&id(4), Revision::new(1), &[], Content::new(b"r2"))?;
     let permit = permit_through(4)?;
-    let packet = assembly.assemble(&[&id(1), &id(4)], Revision::new(1), &permit, bytes(64))?;
+    let packet = assembly.assemble(
+        CONTEXT,
+        &[&id(1), &id(4)],
+        Revision::new(1),
+        &permit,
+        bytes(64),
+    )?;
     assert_eq!(
         selected_ids(&packet),
         vec![id(1), id(4), id(2), id(3)],
@@ -440,7 +498,13 @@ fn a_cycle_terminates_and_does_not_duplicate() -> Outcome {
     let mut assembly = Assembly::new();
     assembly.register(&id(1), Revision::new(1), &[&id(2)], Content::new(b"a"))?;
     assembly.register(&id(2), Revision::new(1), &[&id(1)], Content::new(b"b"))?;
-    let packet = assembly.assemble(&[&id(1)], Revision::new(1), &permit_through(2)?, bytes(64))?;
+    let packet = assembly.assemble(
+        CONTEXT,
+        &[&id(1)],
+        Revision::new(1),
+        &permit_through(2)?,
+        bytes(64),
+    )?;
     assert_eq!(selected_ids(&packet), vec![id(1), id(2)]);
     Ok(())
 }
@@ -458,7 +522,13 @@ fn a_diamond_selects_the_shared_source_once() -> Outcome {
     assembly.register(&id(2), Revision::new(1), &[&id(4)], Content::new(b"l"))?;
     assembly.register(&id(3), Revision::new(1), &[&id(4)], Content::new(b"r"))?;
     assembly.register(&id(4), Revision::new(1), &[], Content::new(b"bot"))?;
-    let packet = assembly.assemble(&[&id(1)], Revision::new(1), &permit_through(4)?, bytes(64))?;
+    let packet = assembly.assemble(
+        CONTEXT,
+        &[&id(1)],
+        Revision::new(1),
+        &permit_through(4)?,
+        bytes(64),
+    )?;
     assert_eq!(selected_ids(&packet), vec![id(1), id(2), id(3), id(4)]);
     assert_eq!(packet.selected()[3].depth, 2);
     Ok(())
@@ -476,6 +546,7 @@ fn the_depth_bound_stops_expansion_visibly() -> Outcome {
         assembly.register(&id(index), Revision::new(1), &deps, Content::new(b"x"))?;
     }
     let packet = assembly.assemble(
+        CONTEXT,
         &[&id(1)],
         Revision::new(1),
         &permit_through(depth)?,
@@ -501,6 +572,7 @@ fn roots_keep_the_callers_order() -> Outcome {
         assembly.register(&id(index), Revision::new(1), &[], Content::new(b"x"))?;
     }
     let packet = assembly.assemble(
+        CONTEXT,
         &[&id(3), &id(1), &id(2)],
         Revision::new(1),
         &permit_through(3)?,
@@ -516,6 +588,7 @@ fn a_repeated_root_is_selected_once() -> Outcome {
     let mut assembly = Assembly::new();
     assembly.register(&id(1), Revision::new(1), &[], Content::new(b"x"))?;
     let packet = assembly.assemble(
+        CONTEXT,
         &[&id(1), &id(1), &id(1)],
         Revision::new(1),
         &permit_through(1)?,
@@ -533,6 +606,7 @@ fn omissions_are_sorted_by_identity() -> Outcome {
     let mut assembly = Assembly::new();
     assembly.register(&id(9), Revision::new(1), &[], Content::new(b"x"))?;
     let packet = assembly.assemble(
+        CONTEXT,
         &[&id(3), &id(1), &id(2)],
         Revision::new(1),
         &permit_through(9)?,
@@ -618,7 +692,13 @@ fn an_unreadable_source_still_declares_its_shape() -> Outcome {
     let mut assembly = Assembly::new();
     assembly.register_unreadable(&id(1), Revision::new(1), &[&id(2)])?;
     assembly.register(&id(2), Revision::new(1), &[], Content::new(b"child"))?;
-    let packet = assembly.assemble(&[&id(1)], Revision::new(1), &permit_through(2)?, bytes(64))?;
+    let packet = assembly.assemble(
+        CONTEXT,
+        &[&id(1)],
+        Revision::new(1),
+        &permit_through(2)?,
+        bytes(64),
+    )?;
     assert_eq!(omission_of(&packet, &id(1)), Some(Omission::FetchFailed));
     assert_eq!(
         selected_ids(&packet),
@@ -632,7 +712,7 @@ fn an_unreadable_source_still_declares_its_shape() -> Outcome {
 #[test]
 fn an_empty_assembly_yields_an_empty_packet() -> Outcome {
     let assembly = Assembly::new();
-    let packet = assembly.assemble(&[], Revision::new(1), &Permit::new(), bytes(64))?;
+    let packet = assembly.assemble(CONTEXT, &[], Revision::new(1), &Permit::new(), bytes(64))?;
     assert!(packet.selected().is_empty());
     assert!(packet.omissions().is_empty());
     assert_eq!(packet.bytes(), 0);
@@ -647,7 +727,13 @@ fn a_malformed_root_is_refused() {
     let assembly = Assembly::new();
     assert_eq!(
         assembly
-            .assemble(&["nope"], Revision::new(1), &Permit::new(), bytes(64))
+            .assemble(
+                CONTEXT,
+                &["nope"],
+                Revision::new(1),
+                &Permit::new(),
+                bytes(64)
+            )
             .map(|_| ()),
         Err(Refusal::MalformedIdentity(ScalarError::InvalidUuid))
     );
@@ -670,8 +756,14 @@ fn declared_bounds_are_the_enforced_bounds() {
 fn comparing_a_packet_with_itself_is_empty() -> Outcome {
     let mut assembly = Assembly::new();
     assembly.register(&id(1), Revision::new(1), &[], Content::new(b"a"))?;
-    let packet = assembly.assemble(&[&id(1)], Revision::new(1), &permit_through(1)?, bytes(64))?;
-    let change = Assembly::compare(&packet, &packet);
+    let packet = assembly.assemble(
+        CONTEXT,
+        &[&id(1)],
+        Revision::new(1),
+        &permit_through(1)?,
+        bytes(64),
+    )?;
+    let change = Assembly::compare(&packet, &packet)?;
     assert!(change.is_empty());
     assert!(change.affected().is_empty());
     Ok(())
@@ -685,9 +777,9 @@ fn a_revised_source_is_reported_with_both_revisions() -> Outcome {
     let mut new_world = Assembly::new();
     new_world.register(&id(1), Revision::new(2), &[], Content::new(b"a2"))?;
     let permit = permit_through(1)?;
-    let old = old_world.assemble(&[&id(1)], Revision::new(1), &permit, bytes(64))?;
-    let new = new_world.assemble(&[&id(1)], Revision::new(1), &permit, bytes(64))?;
-    let change = Assembly::compare(&old, &new);
+    let old = old_world.assemble(CONTEXT, &[&id(1)], Revision::new(1), &permit, bytes(64))?;
+    let new = new_world.assemble(CONTEXT, &[&id(1)], Revision::new(1), &permit, bytes(64))?;
+    let change = Assembly::compare(&old, &new)?;
     assert_eq!(
         change.revised,
         vec![(id(1), Revision::new(1), Revision::new(2))]
@@ -707,9 +799,21 @@ fn additions_and_removals_land_on_the_correct_side() -> Outcome {
     new_world.register(&id(2), Revision::new(1), &[], Content::new(b"b"))?;
     new_world.register(&id(3), Revision::new(1), &[], Content::new(b"c"))?;
     let permit = permit_through(3)?;
-    let old = old_world.assemble(&[&id(1), &id(2)], Revision::new(1), &permit, bytes(64))?;
-    let new = new_world.assemble(&[&id(2), &id(3)], Revision::new(1), &permit, bytes(64))?;
-    let change = Assembly::compare(&old, &new);
+    let old = old_world.assemble(
+        CONTEXT,
+        &[&id(1), &id(2)],
+        Revision::new(1),
+        &permit,
+        bytes(64),
+    )?;
+    let new = new_world.assemble(
+        CONTEXT,
+        &[&id(2), &id(3)],
+        Revision::new(1),
+        &permit,
+        bytes(64),
+    )?;
+    let change = Assembly::compare(&old, &new)?;
     assert_eq!(change.added, vec![id(3)]);
     assert_eq!(change.removed, vec![id(1)]);
     assert!(change.revised.is_empty());
@@ -729,9 +833,9 @@ fn affected_is_sorted_and_deduplicated() -> Outcome {
     let permit = permit_through(3)?;
     let roots = [id(3), id(1), id(2)];
     let refs: Vec<&str> = roots.iter().map(String::as_str).collect();
-    let old = old_world.assemble(&refs, Revision::new(1), &permit, bytes(64))?;
-    let new = new_world.assemble(&refs, Revision::new(1), &permit, bytes(64))?;
-    let change = Assembly::compare(&old, &new);
+    let old = old_world.assemble(CONTEXT, &refs, Revision::new(1), &permit, bytes(64))?;
+    let new = new_world.assemble(CONTEXT, &refs, Revision::new(1), &permit, bytes(64))?;
+    let change = Assembly::compare(&old, &new)?;
     let affected = change.affected();
     assert_eq!(
         affected,
@@ -750,9 +854,9 @@ fn a_budget_driven_removal_is_reported() -> Outcome {
     let permit = permit_through(2)?;
     let roots = [id(1), id(2)];
     let refs: Vec<&str> = roots.iter().map(String::as_str).collect();
-    let wide = assembly.assemble(&refs, Revision::new(1), &permit, bytes(64))?;
-    let narrow = assembly.assemble(&refs, Revision::new(1), &permit, bytes(5))?;
-    let change = Assembly::compare(&wide, &narrow);
+    let wide = assembly.assemble(CONTEXT, &refs, Revision::new(1), &permit, bytes(64))?;
+    let narrow = assembly.assemble(CONTEXT, &refs, Revision::new(1), &permit, bytes(5))?;
+    let change = Assembly::compare(&wide, &narrow)?;
     assert_eq!(change.removed, vec![id(2)]);
     assert_eq!(
         omission_of(&narrow, &id(2)),
@@ -776,6 +880,9 @@ fn refusal_names_are_distinct_and_non_overlapping() {
         Refusal::BudgetTooLarge,
         Refusal::IncompatibleUnit,
         Refusal::Overflow,
+        Refusal::RootLimit,
+        Refusal::ContextMismatch,
+        Refusal::TraversalBudget,
     ];
     for (i, a) in all.iter().enumerate() {
         assert!(!a.name().is_empty());
@@ -830,18 +937,24 @@ fn revisions_order_as_numbers() {
 }
 
 /// T11-CX-45 · the selection bound stops inclusion and names what it stopped, with the
-/// sources beyond it reported rather than dropped.
+/// sources beyond it reported rather than dropped. The root list is itself bounded at
+/// [`MAX_ROOTS`] (== [`MAX_SELECTED`]), so the bound is reached through declared dependencies:
+/// two roots whose dependencies together overfill the packet by three.
 #[test]
 fn the_selection_bound_names_what_it_stopped() -> Outcome {
     let mut assembly = Assembly::new();
     let count = MAX_SELECTED + 3;
-    for index in 1..=count {
+    let owned: Vec<String> = (1..=count).map(id).collect();
+    let first: Vec<&str> = owned[2..130].iter().map(String::as_str).collect();
+    let second: Vec<&str> = owned[130..].iter().map(String::as_str).collect();
+    assembly.register(&id(1), Revision::new(1), &first, Content::new(b"x"))?;
+    assembly.register(&id(2), Revision::new(1), &second, Content::new(b"x"))?;
+    for index in 3..=count {
         assembly.register(&id(index), Revision::new(1), &[], Content::new(b"x"))?;
     }
-    let owned: Vec<String> = (1..=count).map(id).collect();
-    let refs: Vec<&str> = owned.iter().map(String::as_str).collect();
     let packet = assembly.assemble(
-        &refs,
+        CONTEXT,
+        &[&id(1), &id(2)],
         Revision::new(1),
         &permit_through(count)?,
         bytes(MAX_PACKET_BYTES),
@@ -868,7 +981,13 @@ fn packet_bytes_equal_the_sum_of_its_content() -> Outcome {
     }
     let owned: Vec<String> = (1..=3).map(id).collect();
     let refs: Vec<&str> = owned.iter().map(String::as_str).collect();
-    let packet = assembly.assemble(&refs, Revision::new(1), &permit_through(3)?, bytes(64))?;
+    let packet = assembly.assemble(
+        CONTEXT,
+        &refs,
+        Revision::new(1),
+        &permit_through(3)?,
+        bytes(64),
+    )?;
     let summed: u64 = packet
         .selected()
         .iter()
@@ -893,6 +1012,7 @@ fn a_budget_excluded_parent_does_not_expand() -> Outcome {
     )?;
     assembly.register(&id(3), Revision::new(1), &[], Content::new(b"c"))?;
     let packet = assembly.assemble(
+        CONTEXT,
         &[&id(1), &id(2)],
         Revision::new(1),
         &permit_through(3)?,
@@ -918,7 +1038,13 @@ fn a_stale_parent_does_not_expand() -> Outcome {
     let mut assembly = Assembly::new();
     assembly.register(&id(1), Revision::new(1), &[&id(2)], Content::new(b"old"))?;
     assembly.register(&id(2), Revision::new(9), &[], Content::new(b"fresh"))?;
-    let packet = assembly.assemble(&[&id(1)], Revision::new(5), &permit_through(2)?, bytes(64))?;
+    let packet = assembly.assemble(
+        CONTEXT,
+        &[&id(1)],
+        Revision::new(5),
+        &permit_through(2)?,
+        bytes(64),
+    )?;
     assert!(packet.selected().is_empty());
     assert_eq!(
         omission_of(&packet, &id(2)),
@@ -942,7 +1068,13 @@ fn a_diamond_is_charged_once() -> Outcome {
     assembly.register(&id(2), Revision::new(1), &[&id(4)], Content::new(b"l"))?;
     assembly.register(&id(3), Revision::new(1), &[&id(4)], Content::new(b"r"))?;
     assembly.register(&id(4), Revision::new(1), &[], Content::new(b"bbbb"))?;
-    let packet = assembly.assemble(&[&id(1)], Revision::new(1), &permit_through(4)?, bytes(64))?;
+    let packet = assembly.assemble(
+        CONTEXT,
+        &[&id(1)],
+        Revision::new(1),
+        &permit_through(4)?,
+        bytes(64),
+    )?;
     assert_eq!(
         packet.work(),
         7,
@@ -965,22 +1097,29 @@ fn the_integrated_refresh_scenario_holds() -> Outcome {
     after.register(&id(2), Revision::new(2), &[], Content::new(b"dep-v2"))?;
 
     let permit = permit_through(2)?;
-    let old = before.assemble(&[&id(1)], Revision::new(1), &permit, bytes(1024))?;
-    let new = after.assemble(&[&id(1)], Revision::new(1), &permit, bytes(1024))?;
+    let old = before.assemble(CONTEXT, &[&id(1)], Revision::new(1), &permit, bytes(1024))?;
+    let new = after.assemble(CONTEXT, &[&id(1)], Revision::new(1), &permit, bytes(1024))?;
 
     assert_eq!(selected_ids(&old), vec![id(1), id(2)]);
     assert_eq!(selected_ids(&new), vec![id(1), id(2)]);
-    let change = Assembly::compare(&old, &new);
+    let change = Assembly::compare(&old, &new)?;
     assert_eq!(
         change.revised,
         vec![(id(2), Revision::new(1), Revision::new(2))]
     );
     assert_eq!(change.affected(), vec![id(2).as_str()]);
+    assert_eq!(
+        change.consumers,
+        vec![id(1)],
+        "the root consumes the revised source"
+    );
+    assert_eq!(old.context(), CONTEXT);
+    assert_eq!(new.context(), CONTEXT);
 
     assert_eq!(old.work(), 7, "root + dep");
     assert_eq!(new.work(), 10, "root + dep-v2");
     assert_eq!(old.cost().provenance(), Provenance::CheckerMeasured);
-    assert_eq!(new.cost().amount(), Amount::new(Unit::Tokens, 10));
+    assert_eq!(new.cost().amount(), Amount::new(Unit::Bytes, 10));
     Ok(())
 }
 
@@ -994,7 +1133,7 @@ fn a_fully_denied_packet_has_no_gaps() -> Outcome {
     }
     let owned: Vec<String> = (1..=3).map(id).collect();
     let refs: Vec<&str> = owned.iter().map(String::as_str).collect();
-    let packet = assembly.assemble(&refs, Revision::new(1), &Permit::new(), bytes(64))?;
+    let packet = assembly.assemble(CONTEXT, &refs, Revision::new(1), &Permit::new(), bytes(64))?;
     assert_eq!(packet.omissions().len(), 3);
     assert!(packet.gaps().is_empty(), "denial is not a gap");
     assert_eq!(packet.work(), 0, "denied sources are never read");
@@ -1014,7 +1153,13 @@ fn a_denied_source_costs_nothing() -> Outcome {
         Content::new(b"denied-but-large"),
     )?;
     let permit = Permit::new().allow(&id(1))?;
-    let packet = assembly.assemble(&[&id(1), &id(2)], Revision::new(1), &permit, bytes(64))?;
+    let packet = assembly.assemble(
+        CONTEXT,
+        &[&id(1), &id(2)],
+        Revision::new(1),
+        &permit,
+        bytes(64),
+    )?;
     assert_eq!(packet.work(), 9, "only the permitted source was read");
     Ok(())
 }
@@ -1064,23 +1209,23 @@ fn change_emptiness_is_false_for_each_clause_alone() -> Outcome {
     let permit = permit_through(3)?;
     let roots = [id(1), id(2), id(3)];
     let refs: Vec<&str> = roots.iter().map(String::as_str).collect();
-    let base = before.assemble(&refs, Revision::new(1), &permit, bytes(64))?;
+    let base = before.assemble(CONTEXT, &refs, Revision::new(1), &permit, bytes(64))?;
 
     // added only
     let mut added_world = Assembly::new();
     added_world.register(&id(1), Revision::new(1), &[], Content::new(b"a"))?;
     added_world.register(&id(2), Revision::new(1), &[], Content::new(b"b"))?;
     added_world.register(&id(3), Revision::new(1), &[], Content::new(b"c"))?;
-    let added = added_world.assemble(&refs, Revision::new(1), &permit, bytes(64))?;
-    let change = Assembly::compare(&base, &added);
+    let added = added_world.assemble(CONTEXT, &refs, Revision::new(1), &permit, bytes(64))?;
+    let change = Assembly::compare(&base, &added)?;
     assert!(!change.is_empty(), "an addition is a change");
     assert!(!change.added.is_empty() && change.removed.is_empty() && change.revised.is_empty());
 
     // removed only
     let mut removed_world = Assembly::new();
     removed_world.register(&id(1), Revision::new(1), &[], Content::new(b"a"))?;
-    let removed = removed_world.assemble(&refs, Revision::new(1), &permit, bytes(64))?;
-    let change = Assembly::compare(&base, &removed);
+    let removed = removed_world.assemble(CONTEXT, &refs, Revision::new(1), &permit, bytes(64))?;
+    let change = Assembly::compare(&base, &removed)?;
     assert!(!change.is_empty(), "a removal is a change");
     assert!(change.added.is_empty() && !change.removed.is_empty() && change.revised.is_empty());
 
@@ -1088,8 +1233,8 @@ fn change_emptiness_is_false_for_each_clause_alone() -> Outcome {
     let mut revised_world = Assembly::new();
     revised_world.register(&id(1), Revision::new(1), &[], Content::new(b"a"))?;
     revised_world.register(&id(2), Revision::new(7), &[], Content::new(b"b2"))?;
-    let revised = revised_world.assemble(&refs, Revision::new(1), &permit, bytes(64))?;
-    let change = Assembly::compare(&base, &revised);
+    let revised = revised_world.assemble(CONTEXT, &refs, Revision::new(1), &permit, bytes(64))?;
+    let change = Assembly::compare(&base, &revised)?;
     assert!(!change.is_empty(), "a revision is a change");
     assert!(change.added.is_empty() && change.removed.is_empty() && !change.revised.is_empty());
     Ok(())
@@ -1108,6 +1253,7 @@ fn the_traversal_budget_is_not_reached_by_legitimate_work() -> Outcome {
         assembly.register(&id(index), Revision::new(1), &deps, Content::new(b"x"))?;
     }
     let packet = assembly.assemble(
+        CONTEXT,
         &[&id(1)],
         Revision::new(1),
         &permit_through(count)?,
@@ -1142,7 +1288,8 @@ fn the_budget_comparison_is_pinned_at_the_boundary() -> Outcome {
     assembly.register(&id(1), Revision::new(1), &[], Content::new(b"abcd"))?;
     let permit = permit_through(1)?;
     for (budget, included) in [(3_u64, false), (4, true), (5, true)] {
-        let packet = assembly.assemble(&[&id(1)], Revision::new(1), &permit, bytes(budget))?;
+        let packet =
+            assembly.assemble(CONTEXT, &[&id(1)], Revision::new(1), &permit, bytes(budget))?;
         assert_eq!(
             packet.selected().len(),
             usize::from(included),
@@ -1164,15 +1311,319 @@ fn compare_direction_is_pinned() -> Outcome {
     let permit = permit_through(2)?;
     let roots = [id(1), id(2)];
     let refs: Vec<&str> = roots.iter().map(String::as_str).collect();
-    let few = small.assemble(&refs, Revision::new(1), &permit, bytes(64))?;
-    let many = large.assemble(&refs, Revision::new(1), &permit, bytes(64))?;
+    let few = small.assemble(CONTEXT, &refs, Revision::new(1), &permit, bytes(64))?;
+    let many = large.assemble(CONTEXT, &refs, Revision::new(1), &permit, bytes(64))?;
 
-    let growing = Assembly::compare(&few, &many);
+    let growing = Assembly::compare(&few, &many)?;
     assert_eq!(growing.added, vec![id(2)]);
     assert!(growing.removed.is_empty());
 
-    let shrinking = Assembly::compare(&many, &few);
+    let shrinking = Assembly::compare(&many, &few)?;
     assert_eq!(shrinking.removed, vec![id(2)]);
     assert!(shrinking.added.is_empty());
+    Ok(())
+}
+
+/// T11-CX-60 · context counts bytes, and a budget in model tokens is refused rather than
+/// read as bytes: the engine admits no token estimator, so a token budget has no byte meaning
+/// here and budget's no-conversion rule holds at this door too. The same refusal holds for
+/// every unit that is not bytes, enumerated from the unit world rather than listed.
+#[test]
+fn a_token_budget_is_refused_as_an_incompatible_unit() -> Outcome {
+    let mut assembly = Assembly::new();
+    assembly.register(&id(1), Revision::new(1), &[], Content::new(b"abcd"))?;
+    let permit = permit_through(1)?;
+    assert_eq!(
+        assembly
+            .assemble(
+                CONTEXT,
+                &[&id(1)],
+                Revision::new(1),
+                &permit,
+                Amount::new(Unit::Tokens, 64)
+            )
+            .map(|_| ()),
+        Err(Refusal::IncompatibleUnit)
+    );
+    for unit in Unit::ALL {
+        let outcome = assembly
+            .assemble(
+                CONTEXT,
+                &[&id(1)],
+                Revision::new(1),
+                &permit,
+                Amount::new(unit, 64),
+            )
+            .map(|packet| packet.bytes());
+        let expected = if unit == Unit::Bytes {
+            Ok(4)
+        } else {
+            Err(Refusal::IncompatibleUnit)
+        };
+        assert_eq!(outcome, expected, "{unit}");
+    }
+    Ok(())
+}
+
+/// T11-CX-61 · the root list is bounded where it is acquired: exactly [`MAX_ROOTS`] roots are
+/// admitted, and one more is refused by name before any root is parsed or queued — the last
+/// root of the refused list is malformed, so a check that ran after parsing would name the
+/// identity instead. The bound is the selection bound, asserted as a value.
+#[test]
+fn the_root_list_is_bounded_at_acquisition() -> Outcome {
+    assert_eq!(MAX_ROOTS, 256);
+    assert_eq!(MAX_ROOTS, MAX_SELECTED);
+    let mut assembly = Assembly::new();
+    assembly.register(&id(1), Revision::new(1), &[], Content::new(b"x"))?;
+    let permit = permit_through(1)?;
+    let owned: Vec<String> = (1..=MAX_ROOTS).map(id).collect();
+    let mut refs: Vec<&str> = owned.iter().map(String::as_str).collect();
+    let packet = assembly.assemble(CONTEXT, &refs, Revision::new(1), &permit, bytes(64))?;
+    assert_eq!(selected_ids(&packet), vec![id(1)]);
+    assert_eq!(
+        packet.omissions().len(),
+        MAX_ROOTS - 1,
+        "every other root is named"
+    );
+    refs.push("not-a-uuid");
+    assert_eq!(
+        assembly
+            .assemble(CONTEXT, &refs, Revision::new(1), &permit, bytes(64))
+            .map(|_| ()),
+        Err(Refusal::RootLimit)
+    );
+    Ok(())
+}
+
+fn relation(from: usize, to: usize, kind: RelationKind, omission: Option<Omission>) -> Relation {
+    Relation {
+        from: id(from),
+        to: id(to),
+        kind,
+        omission,
+    }
+}
+
+/// T11-CX-62 · the relationship kinds are a closed set with stable, distinct wire names.
+#[test]
+fn relationship_kinds_are_a_closed_named_set() {
+    assert_eq!(
+        RelationKind::ALL,
+        [
+            RelationKind::Call,
+            RelationKind::Dependency,
+            RelationKind::Ownership
+        ]
+    );
+    let names: Vec<String> = RelationKind::ALL.iter().map(ToString::to_string).collect();
+    assert_eq!(names, vec!["call", "dependency", "ownership"]);
+}
+
+/// T11-CX-63 · one relationship of each kind is left uncovered, each for a different reason,
+/// and each is reported as a relationship gap carrying its kind and its omission — kept apart
+/// from source coverage: a root that is itself missing is a source gap with no relationship,
+/// and the relationship gaps do not include it.
+#[test]
+fn each_uncovered_relationship_kind_is_its_own_gap() -> Outcome {
+    let mut assembly = Assembly::new();
+    assembly.register_related(
+        &id(1),
+        Revision::new(2),
+        &[
+            (&id(2), RelationKind::Call),
+            (&id(3), RelationKind::Dependency),
+            (&id(4), RelationKind::Ownership),
+        ],
+        Content::new(b"root"),
+    )?;
+    assembly.register(&id(3), Revision::new(1), &[], Content::new(b"old"))?;
+    assembly.register_unreadable(&id(4), Revision::new(2), &[])?;
+    let packet = assembly.assemble(
+        CONTEXT,
+        &[&id(1), &id(5)],
+        Revision::new(2),
+        &permit_through(5)?,
+        bytes(64),
+    )?;
+    let stale = Omission::Stale {
+        required: Revision::new(2),
+        found: Revision::new(1),
+    };
+    let expected = vec![
+        relation(1, 2, RelationKind::Call, Some(Omission::Missing)),
+        relation(1, 3, RelationKind::Dependency, Some(stale)),
+        relation(1, 4, RelationKind::Ownership, Some(Omission::FetchFailed)),
+    ];
+    assert_eq!(packet.relations(), expected.as_slice());
+    let gaps: Vec<Relation> = packet.relationship_gaps().into_iter().cloned().collect();
+    assert_eq!(gaps, expected);
+    assert_eq!(
+        packet.gaps(),
+        vec![
+            (id(2).as_str(), Omission::Missing),
+            (id(3).as_str(), stale),
+            (id(4).as_str(), Omission::FetchFailed),
+            (id(5).as_str(), Omission::Missing),
+        ],
+        "source coverage names the missing root too; relationship coverage does not"
+    );
+    Ok(())
+}
+
+/// T11-CX-64 · the benign control: every relationship covered is recorded with no omission and
+/// reports no gap, and a relationship into a denied source is recorded but, like a denied
+/// source, is not a gap.
+#[test]
+fn covered_and_denied_relationships_are_not_gaps() -> Outcome {
+    let mut assembly = Assembly::new();
+    assembly.register_related(
+        &id(1),
+        Revision::new(1),
+        &[
+            (&id(2), RelationKind::Ownership),
+            (&id(3), RelationKind::Call),
+            (&id(4), RelationKind::Dependency),
+        ],
+        Content::new(b"root"),
+    )?;
+    for index in 2..=4 {
+        assembly.register(&id(index), Revision::new(1), &[], Content::new(b"x"))?;
+    }
+    let packet = assembly.assemble(
+        CONTEXT,
+        &[&id(1)],
+        Revision::new(1),
+        &permit_through(3)?,
+        bytes(64),
+    )?;
+    assert_eq!(
+        packet.relations(),
+        [
+            relation(1, 2, RelationKind::Ownership, None),
+            relation(1, 3, RelationKind::Call, None),
+            relation(1, 4, RelationKind::Dependency, Some(Omission::NotPermitted)),
+        ]
+        .as_slice()
+    );
+    assert!(packet.relationship_gaps().is_empty());
+    Ok(())
+}
+
+/// T11-CX-65 · an untyped declaration is a dependency relationship, and relationships are
+/// recorded for every selected source in selection order, not only for roots.
+#[test]
+fn untyped_declarations_are_dependency_relationships() -> Outcome {
+    let mut assembly = Assembly::new();
+    assembly.register(&id(1), Revision::new(1), &[&id(2)], Content::new(b"a"))?;
+    assembly.register(&id(2), Revision::new(1), &[&id(3)], Content::new(b"b"))?;
+    let packet = assembly.assemble(
+        CONTEXT,
+        &[&id(1)],
+        Revision::new(1),
+        &permit_through(3)?,
+        bytes(64),
+    )?;
+    assert_eq!(
+        packet.relations(),
+        [
+            relation(1, 2, RelationKind::Dependency, None),
+            relation(2, 3, RelationKind::Dependency, Some(Omission::Missing)),
+        ]
+        .as_slice()
+    );
+    Ok(())
+}
+
+/// T11-CX-66 · a packet carries the stable context identity it was assembled for, and compare
+/// refuses two packets that do not share one identity and one permitted scope. A scope built
+/// in another order is the same scope.
+#[test]
+fn compare_requires_one_context_identity_and_scope() -> Outcome {
+    let mut assembly = Assembly::new();
+    assembly.register(&id(1), Revision::new(1), &[], Content::new(b"a"))?;
+    let other = "0000beef-0000-4000-8000-000000000000";
+    let permit = permit_through(2)?;
+    let base = assembly.assemble(CONTEXT, &[&id(1)], Revision::new(1), &permit, bytes(64))?;
+    let foreign = assembly.assemble(other, &[&id(1)], Revision::new(1), &permit, bytes(64))?;
+    assert_eq!(foreign.context(), other);
+    assert_eq!(
+        Assembly::compare(&base, &foreign).map(|_| ()),
+        Err(Refusal::ContextMismatch)
+    );
+    let narrower = assembly.assemble(
+        CONTEXT,
+        &[&id(1)],
+        Revision::new(1),
+        &permit_through(1)?,
+        bytes(64),
+    )?;
+    assert_eq!(
+        Assembly::compare(&base, &narrower).map(|_| ()),
+        Err(Refusal::ContextMismatch),
+        "the same identity under another scope is not the same context"
+    );
+    let reordered = Permit::new().allow(&id(2))?.allow(&id(1))?;
+    let same = assembly.assemble(CONTEXT, &[&id(1)], Revision::new(1), &reordered, bytes(64))?;
+    assert!(Assembly::compare(&base, &same)?.is_empty());
+    assert_eq!(
+        assembly
+            .assemble("nope", &[&id(1)], Revision::new(1), &permit, bytes(64))
+            .map(|_| ()),
+        Err(Refusal::MalformedIdentity(
+            habitat_engine::contracts::ScalarError::InvalidUuid
+        ))
+    );
+    Ok(())
+}
+
+/// T11-CX-67 · the integrated scenario's second fixture, differing in every dimension from the
+/// first: a chain 1 -> 2 -> 3 beside an unrelated root 4, with source 3 revised. Both
+/// sources upstream of the change are consumers, the change itself is not its own consumer,
+/// and the unrelated root is not affected. A removal names its consumers too.
+#[test]
+fn affected_consumers_follow_declared_relationships_transitively() -> Outcome {
+    let world = |third: u64| -> Result<Assembly<'static>, Box<dyn Error>> {
+        let mut assembly = Assembly::new();
+        assembly.register_related(
+            &id(1),
+            Revision::new(1),
+            &[(&id(2), RelationKind::Call)],
+            Content::new(b"one"),
+        )?;
+        assembly.register_related(
+            &id(2),
+            Revision::new(1),
+            &[(&id(3), RelationKind::Ownership)],
+            Content::new(b"two"),
+        )?;
+        assembly.register(&id(3), Revision::new(third), &[], Content::new(b"three"))?;
+        assembly.register(&id(4), Revision::new(1), &[], Content::new(b"four"))?;
+        Ok(assembly)
+    };
+    let (before, after) = (world(1)?, world(5)?);
+    let permit = permit_through(4)?;
+    let roots = [id(1), id(4)];
+    let refs: Vec<&str> = roots.iter().map(String::as_str).collect();
+    let old = before.assemble(CONTEXT, &refs, Revision::new(1), &permit, bytes(1024))?;
+    let new = after.assemble(CONTEXT, &refs, Revision::new(1), &permit, bytes(1024))?;
+    let change = Assembly::compare(&old, &new)?;
+    assert_eq!(change.affected(), vec![id(3).as_str()]);
+    assert_eq!(change.consumers, vec![id(1), id(2)]);
+
+    let narrow = before.assemble(CONTEXT, &refs, Revision::new(1), &permit, bytes(10))?;
+    let removal = Assembly::compare(&old, &narrow)?;
+    assert_eq!(removal.removed, vec![id(3)]);
+    assert_eq!(removal.consumers, vec![id(1), id(2)]);
+
+    // A tighter budget drops source 2 as well, so the relationship 2 -> 3 is recorded by only
+    // one of the two packets. The consumer set is the same in both directions: it reads the
+    // relationships of BOTH packets, not only the newer or only the older one.
+    let narrower = before.assemble(CONTEXT, &refs, Revision::new(1), &permit, bytes(7))?;
+    let shrinking = Assembly::compare(&old, &narrower)?;
+    assert_eq!(shrinking.removed, vec![id(2), id(3)]);
+    assert_eq!(shrinking.consumers, vec![id(1), id(2)]);
+    let growing = Assembly::compare(&narrower, &old)?;
+    assert_eq!(growing.added, vec![id(2), id(3)]);
+    assert_eq!(growing.consumers, vec![id(1), id(2)]);
     Ok(())
 }

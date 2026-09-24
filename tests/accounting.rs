@@ -1128,7 +1128,16 @@ fn cancelled(index: usize) -> Result<Settlement<'static>, Box<dyn Error>> {
 /// the whole world rather than a list someone maintains beside it.
 #[test]
 fn every_unit_round_trips_through_its_wire_name() -> Outcome {
-    assert_eq!(Unit::ALL.len(), 3, "unit count");
+    assert_eq!(
+        Unit::ALL,
+        [
+            Unit::Tokens,
+            Unit::Milliseconds,
+            Unit::Microcents,
+            Unit::Bytes
+        ],
+        "the whole unit world, in order"
+    );
     for unit in Unit::ALL {
         assert_eq!(Unit::parse(unit.name())?, unit, "{}", unit.name());
         assert_eq!(unit.to_string(), unit.name());
@@ -1212,6 +1221,7 @@ fn overflow_and_underflow_are_distinct_refusals() -> Outcome {
 fn amount_display_names_its_unit() {
     assert_eq!(tokens(42).to_string(), "42 tokens");
     assert_eq!(Amount::new(Unit::Microcents, 7).to_string(), "7 microcents");
+    assert_eq!(Amount::new(Unit::Bytes, 9).to_string(), "9 bytes");
     assert_eq!(
         Amount::new(Unit::Milliseconds, 0).to_string(),
         "0 milliseconds"
@@ -1356,8 +1366,8 @@ fn an_idempotent_retry_does_not_advance_the_revision() -> Outcome {
     Ok(())
 }
 
-/// T10-AC-14 · the persisted schema version is pinned, so a store that writes another shape
-/// is a visible change rather than a silent one.
+/// T10-AC-14 · the reserved schema version is pinned. No store persists a ledger yet (the D-C1
+/// target), so this pins the number a future store must start from, not a format in use.
 #[test]
 fn schema_version_is_pinned() {
     assert_eq!(SCHEMA_VERSION, 1);
@@ -1532,26 +1542,50 @@ fn a_zero_reservation_is_admitted_and_holds_nothing() -> Outcome {
 
 // ------------------------------------------------- parent, child and concurrent work
 
-/// T10-AC-25 · child work draws from the same limit as its parent, so a parent and a child
-/// together cannot exceed the configured bound. This is the acceptance text's *"concurrent
-/// reservations cannot exceed configured bounds"*.
+/// T10-AC-25 · child work draws first from its parent's hold, so a waiting parent cedes what
+/// its children need (T22: *"waiting parents release resources children require"*), and only
+/// the shortfall comes from the scope. Parent and child together still cannot exceed the
+/// configured bound (*"concurrent reservations cannot exceed configured bounds"*), and a refused
+/// child leaves its parent's hold untouched.
 #[test]
 fn parent_and_child_draw_from_one_limit() -> Outcome {
     let mut book = ledger(100, Ceiling::Soft);
     book.reserve(&id(1), tokens(60), None, None)?;
-    book.reserve(&id(2), tokens(40), Some(&id(1)), None)?;
-    assert_eq!(columns(book.balance()?)?, (0, 100, 0, 0));
     assert_eq!(
-        book.reserve(&id(3), tokens(1), Some(&id(1)), None),
-        Err(Refusal::InsufficientBudget),
-        "a child cannot conjure budget the scope does not have"
+        book.reserve(&id(2), tokens(40), Some(&id(1)), None)?,
+        tokens(40)
     );
+    assert_eq!(columns(book.balance()?)?, (40, 60, 0, 0));
+    assert_eq!(
+        book.reservation(&id(1))?.held,
+        tokens(20),
+        "the parent ceded 40"
+    );
+    assert_eq!(book.reservation(&id(2))?.held, tokens(40));
+    let revision = book.revision();
+    assert_eq!(
+        book.reserve(&id(3), tokens(61), Some(&id(1)), None),
+        Err(Refusal::InsufficientBudget),
+        "a child cannot conjure budget the scope does not have: 20 held + 40 available"
+    );
+    assert_eq!(
+        book.reservation(&id(1))?.held,
+        tokens(20),
+        "a refusal cedes nothing"
+    );
+    assert_eq!(book.revision(), revision);
+    assert_eq!(
+        book.reserve(&id(3), tokens(60), Some(&id(1)), None)?,
+        tokens(0)
+    );
+    assert_eq!(columns(book.balance()?)?, (0, 100, 0, 0));
+    assert_eq!(book.reservation(&id(1))?.held, tokens(0));
     assert!(book.conserves()?);
     Ok(())
 }
 
-/// T10-AC-26 · a chain of children each draws from the one limit; four levels deep is still
-/// bounded by the scope, not by the depth.
+/// T10-AC-26 · a chain of children each draws from the hold directly above it; four levels deep
+/// is still bounded by the scope, not by the depth.
 #[test]
 fn a_chain_of_children_is_bounded_by_the_scope() -> Outcome {
     let mut book = ledger(100, Ceiling::Soft);
@@ -1559,11 +1593,20 @@ fn a_chain_of_children_is_bounded_by_the_scope() -> Outcome {
     book.reserve(&id(2), tokens(25), Some(&id(1)), None)?;
     book.reserve(&id(3), tokens(25), Some(&id(2)), None)?;
     book.reserve(&id(4), tokens(25), Some(&id(3)), None)?;
-    assert_eq!(columns(book.balance()?)?, (0, 100, 0, 0));
+    assert_eq!(columns(book.balance()?)?, (75, 25, 0, 0));
+    let held: Vec<u64> = book
+        .reservation_list()?
+        .iter()
+        .map(|entry| entry.held.value())
+        .collect();
+    assert_eq!(held, vec![0, 0, 0, 25], "each level ceded to the one below");
     assert_eq!(
-        book.reserve(&id(5), tokens(1), Some(&id(4)), None),
+        book.reserve(&id(5), tokens(101), Some(&id(4)), None),
         Err(Refusal::InsufficientBudget)
     );
+    book.reserve(&id(5), tokens(100), Some(&id(4)), None)?;
+    assert_eq!(columns(book.balance()?)?, (0, 100, 0, 0));
+    assert!(book.conserves()?);
     Ok(())
 }
 
@@ -2666,5 +2709,60 @@ fn an_over_long_report_identity_is_refused_before_it_is_stored() -> Outcome {
         Usage::new(tokens(5), Provenance::WorkerSettled),
     )?;
     assert_eq!(columns(book.balance()?)?, (900, 95, 5, 0));
+    Ok(())
+}
+
+/// T10-AC-61 · T22's allocation tree over a whole lifecycle: a parent holding the entire scope
+/// funds its child from that hold, both report and settle, and conservation holds at every
+/// step. Before the tree existed the child was refused, because the scope had nothing left.
+#[test]
+fn a_waiting_parent_funds_its_child_through_a_full_lifecycle() -> Outcome {
+    let mut book = ledger(100, Ceiling::Soft);
+    book.reserve(&id(1), tokens(100), None, None)?;
+    assert!(book.conserves()?, "after the parent reserves");
+    assert_eq!(
+        book.reserve(&id(2), tokens(60), Some(&id(1)), None)?,
+        tokens(0)
+    );
+    assert!(book.conserves()?, "after the child reserves");
+    assert_eq!(book.reservation(&id(1))?.held, tokens(40));
+    assert_eq!(book.reservation(&id(2))?.held, tokens(60));
+    assert_eq!(columns(book.balance()?)?, (0, 100, 0, 0));
+    book.report(
+        &id(2),
+        "c1",
+        Usage::new(tokens(50), Provenance::WorkerSettled),
+    )?;
+    assert!(book.conserves()?, "after the child reports");
+    book.release(&id(2), settled(961)?)?;
+    assert!(book.conserves()?, "after the child settles");
+    assert_eq!(columns(book.balance()?)?, (10, 40, 50, 0));
+    book.report(
+        &id(1),
+        "p1",
+        Usage::new(tokens(30), Provenance::WorkerSettled),
+    )?;
+    assert!(book.conserves()?, "after the parent reports");
+    book.release(&id(1), settled(962)?)?;
+    assert!(book.conserves()?, "after the parent settles");
+    assert_eq!(columns(book.balance()?)?, (20, 0, 80, 0));
+    Ok(())
+}
+
+/// T10-AC-62 · the explicit fallback rule: a child larger than its parent's hold takes the whole
+/// hold and only the shortfall from the scope. The returned remainder and every column are
+/// pinned, so a rule that drew the whole amount from either side alone reads differently.
+#[test]
+fn a_child_beyond_its_parents_hold_takes_only_the_shortfall_from_the_scope() -> Outcome {
+    let mut book = ledger(100, Ceiling::Soft);
+    book.reserve(&id(1), tokens(30), None, None)?;
+    assert_eq!(
+        book.reserve(&id(2), tokens(50), Some(&id(1)), None)?,
+        tokens(50)
+    );
+    assert_eq!(book.reservation(&id(1))?.held, tokens(0));
+    assert_eq!(book.reservation(&id(2))?.held, tokens(50));
+    assert_eq!(columns(book.balance()?)?, (50, 50, 0, 0));
+    assert!(book.conserves()?);
     Ok(())
 }

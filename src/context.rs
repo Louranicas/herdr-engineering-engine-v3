@@ -320,7 +320,7 @@
 //! [`Packet::omissions`] with its reason — a packet that silently dropped a dependency would
 //! read exactly like one that never needed it.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use crate::budget::{Amount, Provenance, Unit, Usage};
@@ -328,6 +328,13 @@ use crate::contracts::{ScalarError, UuidV4};
 
 /// The most sources one packet may select.
 pub const MAX_SELECTED: usize = 256;
+
+/// The most roots one assembly may name.
+///
+/// Roots are caller input copied into the walk's queue, and each distinct unmatched root adds
+/// an omission to the packet, so the root list is bounded where it is acquired. It shares
+/// [`MAX_SELECTED`]'s value: a packet can never select more roots than that anyway.
+pub const MAX_ROOTS: usize = MAX_SELECTED;
 
 /// The most bytes one packet's content may total, taken at the point of acquisition.
 pub const MAX_PACKET_BYTES: u64 = 1 << 20;
@@ -431,6 +438,10 @@ pub enum Refusal {
     IncompatibleUnit,
     /// A sum left `u64`.
     Overflow,
+    /// More roots were named than [`MAX_ROOTS`].
+    RootLimit,
+    /// Two packets compared do not share one context identity and permitted scope.
+    ContextMismatch,
     /// The traversal exceeded its own step budget. Unreachable through any well-formed
     /// assembly; it exists so that a defect in the walk fails loudly instead of hanging.
     TraversalBudget,
@@ -449,6 +460,8 @@ impl Refusal {
             Self::BudgetTooLarge => "requested budget exceeds the packet byte bound",
             Self::IncompatibleUnit => "context budget must be expressed in bytes",
             Self::Overflow => "context sum exceeds the permitted integer range",
+            Self::RootLimit => "more roots than the permitted maximum",
+            Self::ContextMismatch => "packets differ in context identity or permitted scope",
             Self::TraversalBudget => "context traversal exceeded its step budget",
         }
     }
@@ -587,6 +600,56 @@ impl fmt::Display for Omission {
     }
 }
 
+/// The kind of a declared relationship between two sources.
+///
+/// T11 asks context records to *"distinguish required source-file coverage from task-critical
+/// call/dependency/ownership relationship coverage"*. The set is closed: a relationship this
+/// module cannot name is not one it can report as covered or missing.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
+pub enum RelationKind {
+    /// The source calls into the target.
+    Call,
+    /// The source depends on the target. Every edge declared through [`Assembly::register`]
+    /// or [`Assembly::register_unreadable`] is of this kind.
+    Dependency,
+    /// The source owns, or is owned through, the target.
+    Ownership,
+}
+
+impl RelationKind {
+    /// Every kind, so a caller enumerating them cannot silently miss one added later.
+    pub const ALL: [Self; 3] = [Self::Call, Self::Dependency, Self::Ownership];
+
+    /// The stable wire name.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Call => "call",
+            Self::Dependency => "dependency",
+            Self::Ownership => "ownership",
+        }
+    }
+}
+
+impl fmt::Display for RelationKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.name())
+    }
+}
+
+/// One declared relationship of a selected source, and whether the packet covers its target.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Relation {
+    /// The selected source that declared the relationship.
+    pub from: String,
+    /// The declared target.
+    pub to: String,
+    /// What kind of relationship it is.
+    pub kind: RelationKind,
+    /// `None` when the target is in the packet; otherwise why it is not.
+    pub omission: Option<Omission>,
+}
+
 /// What a caller may draw from. Deny by default: a source absent from the permit is omitted
 /// as [`Omission::NotPermitted`], never fetched.
 #[derive(Clone, Debug, Default)]
@@ -640,7 +703,7 @@ impl Permit {
 struct Source<'a> {
     identity: String,
     revision: Revision,
-    dependencies: Vec<String>,
+    dependencies: Vec<(String, RelationKind)>,
     content: Option<Content<'a>>,
 }
 
@@ -660,13 +723,43 @@ pub struct Selected<'a> {
 /// An assembled context packet.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Packet<'a> {
+    context: String,
+    scope: Vec<String>,
     selected: Vec<Selected<'a>>,
+    relations: Vec<Relation>,
     omissions: Vec<(String, Omission)>,
     bytes: u64,
     work: u64,
 }
 
 impl<'a> Packet<'a> {
+    /// The caller-supplied stable context identity this packet was assembled for.
+    #[must_use]
+    pub fn context(&self) -> &str {
+        &self.context
+    }
+
+    /// Every relationship declared by a selected source, in selection order and then in
+    /// declaration order, each with its target's coverage.
+    #[must_use]
+    pub fn relations(&self) -> &[Relation] {
+        &self.relations
+    }
+
+    /// The relationships whose target the caller needed and did not get.
+    ///
+    /// Kept apart from [`Packet::gaps`], which reports source coverage: a source can be in
+    /// the packet while a call, dependency or ownership relationship it declares is not
+    /// covered, and T11 requires the two to be distinguishable. A target omitted as
+    /// [`Omission::NotPermitted`] is not a gap here either, for the same reason as there.
+    #[must_use]
+    pub fn relationship_gaps(&self) -> Vec<&Relation> {
+        self.relations
+            .iter()
+            .filter(|relation| relation.omission.is_some_and(Omission::is_gap))
+            .collect()
+    }
+
     /// The selected references, in the packet's deterministic order.
     #[must_use]
     pub fn selected(&self) -> &[Selected<'a>] {
@@ -713,7 +806,7 @@ impl<'a> Packet<'a> {
     #[must_use]
     pub fn cost(&self) -> Usage {
         Usage::new(
-            Amount::new(Unit::Tokens, self.work),
+            Amount::new(Unit::Bytes, self.work),
             Provenance::CheckerMeasured,
         )
     }
@@ -728,6 +821,9 @@ pub struct Change {
     pub removed: Vec<String>,
     /// Sources in both, whose revision moved.
     pub revised: Vec<(String, Revision, Revision)>,
+    /// The affected consumers: every selected source, in either packet, whose chain of one or
+    /// more declared relationships reaches a changed source. Sorted and deduplicated.
+    pub consumers: Vec<String>,
 }
 
 impl Change {
@@ -737,7 +833,8 @@ impl Change {
         self.added.is_empty() && self.removed.is_empty() && self.revised.is_empty()
     }
 
-    /// Every source a consumer would have to re-read, sorted and deduplicated.
+    /// Every changed source a consumer would have to re-read, sorted and deduplicated. The
+    /// consumers themselves are [`Change::consumers`].
     #[must_use]
     pub fn affected(&self) -> Vec<&str> {
         let mut out: Vec<&str> = self
@@ -795,6 +892,9 @@ impl<'a> Assembly<'a> {
     /// * [`Refusal::DependencyLimit`] beyond [`MAX_SELECTED`] declared dependencies;
     /// * [`Refusal::SourceTooLarge`] beyond [`MAX_SOURCE_BYTES`], refused at registration so
     ///   the bound is taken where the bytes are acquired rather than where they are copied.
+    ///
+    /// Every declared edge is a [`RelationKind::Dependency`]; [`Assembly::register_related`]
+    /// declares typed ones.
     pub fn register(
         &mut self,
         identity: &str,
@@ -802,10 +902,30 @@ impl<'a> Assembly<'a> {
         dependencies: &[&str],
         content: Content<'a>,
     ) -> Result<(), Refusal> {
+        let related = as_dependencies(dependencies);
+        self.register_related(identity, revision, &related, content)
+    }
+
+    /// Register a readable source whose declared relationships carry their kind.
+    ///
+    /// Every relationship is followed exactly as a dependency is; the kind is what lets a
+    /// packet report [`Packet::relationship_gaps`] by call, dependency or ownership.
+    ///
+    /// # Errors
+    ///
+    /// As [`Assembly::register`], with [`Refusal::DependencyLimit`] beyond [`MAX_SELECTED`]
+    /// declared relationships.
+    pub fn register_related(
+        &mut self,
+        identity: &str,
+        revision: Revision,
+        relations: &[(&str, RelationKind)],
+        content: Content<'a>,
+    ) -> Result<(), Refusal> {
         if u64::try_from(content.len()).map_err(|_| Refusal::Overflow)? > MAX_SOURCE_BYTES {
             return Err(Refusal::SourceTooLarge);
         }
-        self.insert(identity, revision, dependencies, Some(content))
+        self.insert(identity, revision, relations, Some(content))
     }
 
     /// Register a source whose read failed.
@@ -822,14 +942,15 @@ impl<'a> Assembly<'a> {
         revision: Revision,
         dependencies: &[&str],
     ) -> Result<(), Refusal> {
-        self.insert(identity, revision, dependencies, None)
+        let related = as_dependencies(dependencies);
+        self.insert(identity, revision, &related, None)
     }
 
     fn insert(
         &mut self,
         identity: &str,
         revision: Revision,
-        dependencies: &[&str],
+        dependencies: &[(&str, RelationKind)],
         content: Option<Content<'a>>,
     ) -> Result<(), Refusal> {
         if dependencies.len() > MAX_SELECTED {
@@ -840,9 +961,9 @@ impl<'a> Assembly<'a> {
             return Err(Refusal::DuplicateSource);
         }
         let mut declared = Vec::with_capacity(dependencies.len());
-        for dependency in dependencies {
+        for (dependency, kind) in dependencies {
             let dependency = UuidV4::parse(dependency).map_err(Refusal::MalformedIdentity)?;
-            declared.push(dependency.as_str().to_owned());
+            declared.push((dependency.as_str().to_owned(), *kind));
         }
         self.sources.push(Source {
             identity: identity.as_str().to_owned(),
@@ -872,26 +993,39 @@ impl<'a> Assembly<'a> {
     /// by a deep one, so exhausting the budget truncates the *edge* of the graph rather than
     /// an arbitrary slice of it.
     ///
+    /// `context_id` is the caller's stable context identity. The packet carries it and the
+    /// permit's scope, so [`Assembly::compare`] can refuse to treat two different contexts as
+    /// one refreshed context.
+    ///
     /// # Errors
     ///
-    /// * [`Refusal::IncompatibleUnit`] when `budget` is not in bytes
-    ///   ([`Unit::Tokens`] is this module's byte unit, matching `budget`'s ledger);
+    /// * [`Refusal::IncompatibleUnit`] when `budget` is not in [`Unit::Bytes`]. A token
+    ///   budget is refused too: no token estimator is admitted, so it has no byte meaning;
     /// * [`Refusal::BudgetTooLarge`] beyond [`MAX_PACKET_BYTES`], taken before any content
     ///   is copied;
+    /// * [`Refusal::MalformedIdentity`] when `context_id` is not a `UUIDv4`;
+    /// * [`Refusal::RootLimit`] for more than [`MAX_ROOTS`] roots, before any root is read;
     /// * [`Refusal::MalformedIdentity`] for a root that is not a `UUIDv4`;
     /// * [`Refusal::Overflow`] on a byte sum that leaves `u64`.
     pub fn assemble(
         &'a self,
+        context_id: &str,
         roots: &[&str],
         required: Revision,
         permit: &Permit,
         budget: Amount,
     ) -> Result<Packet<'a>, Refusal> {
-        if budget.unit() != Unit::Tokens {
+        if budget.unit() != Unit::Bytes {
             return Err(Refusal::IncompatibleUnit);
         }
         if budget.value() > MAX_PACKET_BYTES {
             return Err(Refusal::BudgetTooLarge);
+        }
+        let context_id = UuidV4::parse(context_id).map_err(Refusal::MalformedIdentity)?;
+        // The root list is caller input the queue copies whole, so its bound is taken here,
+        // before any root is parsed or queued.
+        if roots.len() > MAX_ROOTS {
+            return Err(Refusal::RootLimit);
         }
         let mut queue: Vec<(String, u32)> = Vec::new();
         for root in roots {
@@ -901,6 +1035,7 @@ impl<'a> Assembly<'a> {
         let mut seen: Vec<String> = Vec::new();
         let mut omissions: BTreeMap<String, Omission> = BTreeMap::new();
         let mut selected: Vec<Selected<'a>> = Vec::new();
+        let mut selected_sources: Vec<&Source<'a>> = Vec::new();
         let mut bytes: u64 = 0;
         let mut work: u64 = 0;
         let mut head = 0;
@@ -970,12 +1105,19 @@ impl<'a> Assembly<'a> {
                 content,
                 depth,
             });
-            for dependency in &source.dependencies {
+            selected_sources.push(source);
+            for (dependency, _) in &source.dependencies {
                 queue.push((dependency.clone(), depth + 1));
             }
         }
 
+        let relations = relations_of(&selected_sources, &omissions);
+        let mut scope = permit.allowed.clone();
+        scope.sort_unstable();
         Ok(Packet {
+            context: context_id.as_str().to_owned(),
+            scope,
+            relations,
             selected,
             omissions: omissions.into_iter().collect(),
             bytes,
@@ -987,8 +1129,16 @@ impl<'a> Assembly<'a> {
     ///
     /// Both lists are sorted, so the report is reproducible regardless of the order the
     /// packets were assembled in.
-    #[must_use]
-    pub fn compare(old: &Packet<'_>, new: &Packet<'_>) -> Change {
+    ///
+    /// # Errors
+    ///
+    /// [`Refusal::ContextMismatch`] when the two packets were assembled for different context
+    /// identities or under different permitted scopes: their difference would not be a
+    /// refresh of one context, and reporting it as one would name the wrong consumers.
+    pub fn compare(old: &Packet<'_>, new: &Packet<'_>) -> Result<Change, Refusal> {
+        if old.context != new.context || old.scope != new.scope {
+            return Err(Refusal::ContextMismatch);
+        }
         let index = |packet: &Packet<'_>| -> BTreeMap<String, Revision> {
             packet
                 .selected()
@@ -1016,12 +1166,72 @@ impl<'a> Assembly<'a> {
                 })
             })
             .collect();
-        Change {
+        let mut change = Change {
             added,
             removed,
             revised,
+            consumers: Vec::new(),
+        };
+        change.consumers = consumers(&change.affected(), old, new);
+        Ok(change)
+    }
+}
+
+/// Untyped declarations as [`RelationKind::Dependency`] relationships.
+///
+/// At most one more than [`MAX_SELECTED`] is copied: that is enough for the registration to
+/// refuse by [`Refusal::DependencyLimit`], and no more is acquired from an over-long list.
+fn as_dependencies<'d>(dependencies: &[&'d str]) -> Vec<(&'d str, RelationKind)> {
+    dependencies
+        .iter()
+        .take(MAX_SELECTED.saturating_add(1))
+        .map(|dependency| (*dependency, RelationKind::Dependency))
+        .collect()
+}
+
+/// Every relationship a selected source declared, with its target's coverage, in selection
+/// order and then declaration order.
+///
+/// The set is derived, so it takes its bound from the two it is derived from: at most
+/// [`MAX_SELECTED`] sources, each declaring at most [`MAX_SELECTED`] relationships.
+fn relations_of(selected: &[&Source<'_>], omissions: &BTreeMap<String, Omission>) -> Vec<Relation> {
+    let mut relations = Vec::new();
+    for source in selected {
+        for (target, kind) in &source.dependencies {
+            relations.push(Relation {
+                from: source.identity.clone(),
+                to: target.clone(),
+                kind: *kind,
+                omission: omissions.get(target).copied(),
+            });
         }
     }
+    relations
+}
+
+/// Every selected source, in either packet, whose chain of one or more declared relationships
+/// reaches one of `changed`, sorted.
+///
+/// The walk goes backwards over the relationships both packets recorded, so it needs no second
+/// registry: a consumer is exactly a declared relationship read from its target's side.
+fn consumers(changed: &[&str], old: &Packet<'_>, new: &Packet<'_>) -> Vec<String> {
+    let mut declared_by: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+    for relation in old.relations.iter().chain(&new.relations) {
+        declared_by
+            .entry(relation.to.as_str())
+            .or_default()
+            .push(relation.from.as_str());
+    }
+    let mut frontier: Vec<&str> = changed.to_vec();
+    let mut found: BTreeSet<&str> = BTreeSet::new();
+    while let Some(target) = frontier.pop() {
+        for consumer in declared_by.get(target).into_iter().flatten() {
+            if found.insert(consumer) {
+                frontier.push(consumer);
+            }
+        }
+    }
+    found.into_iter().map(str::to_owned).collect()
 }
 
 #[cfg(test)]

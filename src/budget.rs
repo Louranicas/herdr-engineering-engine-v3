@@ -359,7 +359,11 @@ pub const MAX_TOOLS: usize = 32;
 /// unbounded read however short the constraint is.
 pub const MAX_CANDIDATES: usize = 64;
 
-/// Schema version of the persisted accounting shape owned by `store`.
+/// Schema version reserved for a persisted accounting shape.
+///
+/// Nothing reads it yet: no `store` code persists a [`Ledger`], and this module keeps its books
+/// in memory only. Persistence is the D-C1 target (the store is the durable authority and this
+/// module supplies the arithmetic); until that lands the constant pins a number, not a format.
 pub const SCHEMA_VERSION: i64 = 1;
 
 /// A declared accounting unit. Mixing two units is a refusal, never a conversion:
@@ -372,21 +376,30 @@ pub enum Unit {
     Milliseconds,
     /// Cost in millionths of a currency unit, so no fractional arithmetic is needed.
     Microcents,
+    /// Bytes of content examined or carried, such as context selection work. Not tokens: the
+    /// engine admits no token estimator, so a byte count is never summed as a model token.
+    Bytes,
 }
 
 impl Unit {
-    /// The stable wire name. Used by `store` and by every diagnostic.
+    /// The stable wire name, read by [`Unit::parse`] and by every diagnostic.
     #[must_use]
     pub const fn name(self) -> &'static str {
         match self {
             Self::Tokens => "tokens",
             Self::Milliseconds => "milliseconds",
             Self::Microcents => "microcents",
+            Self::Bytes => "bytes",
         }
     }
 
     /// Every unit, so a caller enumerating them cannot silently miss one added later.
-    pub const ALL: [Self; 3] = [Self::Tokens, Self::Milliseconds, Self::Microcents];
+    pub const ALL: [Self; 4] = [
+        Self::Tokens,
+        Self::Milliseconds,
+        Self::Microcents,
+        Self::Bytes,
+    ];
 
     /// Parse a wire name.
     ///
@@ -1119,10 +1132,13 @@ pub struct Applied {
 
 /// The single owner of every counter in one accounting scope.
 ///
-/// A scope is a task or a thread; `store` persists one ledger per scope at
-/// [`SCHEMA_VERSION`]. Child work takes a reservation whose `parent` is its caller's
-/// reservation, so parent and child draw from the **same** limit and concurrent oversubscription
-/// is impossible without a second writer, which this type's ownership forbids.
+/// A scope is a task or a thread. The ledger lives in memory: persisting one per scope is the
+/// D-C1 target and is not implemented, so [`SCHEMA_VERSION`] is not yet read by any store.
+/// Child work takes a reservation whose `parent` is its caller's reservation. The reservations
+/// form one allocation tree: a child is funded first from its parent's hold, so a waiting parent
+/// cedes what its children need (T22), and only the shortfall comes from the scope. Parent and
+/// child draw from the **same** limit, and concurrent oversubscription is impossible without a
+/// second writer, which this type's ownership forbids.
 #[derive(Clone, Debug)]
 pub struct Ledger {
     unit: Unit,
@@ -1211,6 +1227,11 @@ impl Ledger {
 
     /// Admit a reservation of `amount`, optionally as child work under `parent`.
     ///
+    /// Child work is funded first from the parent's current hold, which moves to the child; only
+    /// the part the parent's hold cannot cover is drawn from the scope's available budget. That
+    /// fallback is the one explicit rule: a child is never refused while its parent's hold and
+    /// the scope together can cover it. Returns what the scope still has available afterwards.
+    ///
     /// `expected_revision` makes a read-then-reserve atomic: pass the revision the balance
     /// was read at, or `None` to accept whatever the current one is.
     ///
@@ -1223,8 +1244,10 @@ impl Ledger {
     /// * [`Refusal::IncompatibleUnit`] when `amount` is not in the ledger's unit;
     /// * [`Refusal::DuplicateReservation`], [`Refusal::MalformedIdentity`],
     ///   [`Refusal::SelfParent`], [`Refusal::UnknownParent`];
-    /// * [`Refusal::InsufficientBudget`] when `amount` exceeds what remains. Concurrent
-    ///   parent and child work cannot exceed the bound, because both draw here.
+    /// * [`Refusal::InsufficientBudget`] when `amount` exceeds what remains: the scope's
+    ///   available budget, plus the parent's hold for child work. Nothing is ceded on a
+    ///   refusal. Concurrent parent and child work cannot exceed the bound, because both draw
+    ///   from this one ledger.
     pub fn reserve(
         &mut self,
         identity: &str,
@@ -1258,13 +1281,28 @@ impl Ledger {
                 if self.entries[entry].state != State::Open {
                     return Err(Refusal::UnknownParent);
                 }
-                Some(parent.as_str().to_owned())
+                Some((parent.as_str().to_owned(), entry))
             }
         };
+        // The allocation tree (T22): child work is funded first from its parent's hold, which is
+        // how a waiting parent cedes what its children need; only the shortfall is drawn from
+        // the scope. Both figures are decided before anything moves, so a refusal cedes nothing.
+        let from_parent = parent.as_ref().map_or(0, |(_, entry)| {
+            amount.value().min(self.entries[*entry].held.value())
+        });
+        let from_scope = amount.value() - from_parent;
         let available = self.available()?;
-        if amount.value() > available.value() {
+        if from_scope > available.value() {
             return Err(Refusal::InsufficientBudget);
         }
+        let parent = match parent {
+            None => None,
+            Some((parent, entry)) => {
+                let ceded = &mut self.entries[entry].held;
+                *ceded = ceded.checked_sub(Amount::new(self.unit, from_parent))?;
+                Some(parent)
+            }
+        };
         self.entries.push(Entry {
             identity: identity.as_str().to_owned(),
             parent,
@@ -1276,7 +1314,7 @@ impl Ledger {
             applied: BTreeMap::new(),
         });
         self.revision = self.revision.wrapping_add(1);
-        available.checked_sub(amount)
+        available.checked_sub(Amount::new(self.unit, from_scope))
     }
 
     /// Apply one usage report against an open reservation.
@@ -1287,8 +1325,10 @@ impl Ledger {
     ///
     /// A report larger than the remaining held amount is **recorded**, not refused: the cost
     /// is already incurred. The excess is taken from the scope's available budget and
-    /// returned as [`Applied::discrepancy`]. If the scope cannot cover it, the remainder
-    /// moves to `unknown` rather than vanishing.
+    /// returned as [`Applied::discrepancy`]. The whole reported figure is recorded in `spent`
+    /// when its provenance is measured and in `unknown` when it is not; any part the scope
+    /// could not cover is recorded again in `overdrawn`, so `available` reads zero rather than
+    /// going negative. A real cost never vanishes.
     ///
     /// # Errors
     ///
@@ -1370,6 +1410,9 @@ impl Ledger {
     /// abandoned or uncertainly-cancelled attempt moves its remainder into `unknown`, where
     /// it stays visible as a liability — the engine cannot prove the cost was not incurred,
     /// and quietly returning it would make the books cheaper than reality.
+    ///
+    /// A settled child's remainder returns to the scope, not to its parent: the parent ceded
+    /// that hold when the child was reserved, and it may reserve again from the scope.
     ///
     /// # Errors
     ///
