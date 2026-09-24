@@ -26,6 +26,10 @@ const HELLO: &str = "sha256:2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e7304
 /// while the whole-file digest changed three times). Not derived from the crate's own digest.
 const MIGRATION_1_BODY: &str =
     "sha256:ac5916feaee05749404dd7d87d98cde7e2ae93048e8b07e133ba7868fc1ee9f2";
+/// Migration 2's body digest (A25), computed outside the code under test: `awk` over the bytes
+/// after the end marker piped to `sha256sum` — the same method reproduces `MIGRATION_1_BODY`.
+const MIGRATION_2_BODY: &str =
+    "sha256:bcd3de842dddb090ba6ef208b825d7764ca7d7b8326e0a18394fcc784ce24d4a";
 static NEXT_ROOT: AtomicU64 = AtomicU64::new(0);
 
 struct Area {
@@ -276,11 +280,32 @@ fn fresh_ledger_has_exact_runtime_profile_and_migration() {
     assert_eq!(
         db.query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
             .unwrap(),
-        1
+        2,
+        "a fresh create goes straight to the last migration (A25)"
     );
-    let history: (i64,String,i64,Option<String>) = db.query_row("SELECT version,checksum,predecessor_version,predecessor_checksum FROM migration_history", [], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?))).unwrap();
-    assert_eq!(history, (1, MIGRATION_1_BODY.to_owned(), 0, None));
-    assert_eq!(count(&area, "migration_history"), 1);
+    let mut rows = db
+        .prepare("SELECT version,checksum,predecessor_version,predecessor_checksum FROM migration_history ORDER BY version")
+        .unwrap();
+    let history: Vec<(i64, String, i64, Option<String>)> = rows
+        .query_map([], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+        })
+        .unwrap()
+        .collect::<std::result::Result<_, _>>()
+        .unwrap();
+    assert_eq!(
+        history,
+        [
+            (1, MIGRATION_1_BODY.to_owned(), 0, None),
+            (
+                2,
+                MIGRATION_2_BODY.to_owned(),
+                1,
+                Some(MIGRATION_1_BODY.to_owned())
+            ),
+        ],
+        "each row names its body and links its predecessor"
+    );
     no_admission(&area);
 }
 
@@ -476,16 +501,19 @@ fn unrelated_version_zero_database_is_preserved_and_refused() {
 fn future_schema_refuses_without_downgrade() {
     let area = Area::new();
     drop(area.open());
-    area.edit_closed("PRAGMA user_version=2;");
+    area.edit_closed("PRAGMA user_version=3;");
     assert!(matches!(
         Store::open(&area.path, uuid(GEN), uuid(EPOCH), false, deadline()),
-        Err(Error::UnsupportedSchema)
+        Err(Error::Chain(Chain::Newer {
+            recorded: 3,
+            current: 2
+        }))
     ));
     assert_eq!(
         area.inspect()
             .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
             .unwrap(),
-        2
+        3
     );
 }
 
@@ -498,7 +526,7 @@ fn changed_migration_checksum_refuses_even_at_supported_version() {
     ));
     assert!(matches!(
         Store::open(&area.path, uuid(GEN), uuid(EPOCH), false, deadline()),
-        Err(Error::UnsupportedSchema)
+        Err(Error::Chain(Chain::Checksum { version: 1 }))
     ));
 }
 
@@ -989,12 +1017,12 @@ fn whole_file_checksum_recorded_before_the_freeze_is_refused() {
     let area = Area::new();
     drop(area.open());
     area.edit_closed(&format!(
-        "UPDATE migration_history SET checksum='{}';",
+        "UPDATE migration_history SET checksum='{}' WHERE version=1;",
         digest(include_bytes!("../migrations/001.sql"))
     ));
     assert!(matches!(
         Store::open(&area.path, uuid(GEN), uuid(EPOCH), false, deadline()),
-        Err(Error::UnsupportedSchema)
+        Err(Error::Chain(Chain::Checksum { version: 1 }))
     ));
 }
 
@@ -1014,7 +1042,7 @@ fn unexpected_trigger_refuses_exact_schema_compatibility() {
     area.edit_closed("CREATE TRIGGER surprise AFTER INSERT ON events BEGIN SELECT 1; END;");
     assert!(matches!(
         Store::open(&area.path, uuid(GEN), uuid(EPOCH), false, deadline()),
-        Err(Error::UnsupportedSchema)
+        Err(Error::Chain(Chain::Schema { version: 2 }))
     ));
 }
 
@@ -2430,4 +2458,336 @@ fn read_apis_enforce_the_same_expired_caller_deadline() {
     assert_eq!(head_of(&store).state, "admitted");
     assert_eq!(store.read_object(&object, deadline()).unwrap(), b"hello");
     assert_eq!(count(&area, "events"), 1);
+}
+
+// ---- A25: the additive migration chain ---------------------------------------------------------
+
+/// The `CREATE TABLE operations` statement exactly as migration 1 spells it.
+fn operations_v1_ddl() -> &'static str {
+    let sql = include_str!("../migrations/001.sql");
+    let start = sql.find("CREATE TABLE operations (").unwrap();
+    let end = start + sql[start..].find(") STRICT;").unwrap() + ") STRICT;".len();
+    &sql[start..end]
+}
+
+/// Turn a current ledger into a genuine migration-1 ledger that keeps every `operations` row:
+/// migration 2 reversed by hand, which no production path does (A25 is forward only).
+fn downgrade_to_v1(area: &Area) {
+    area.edit_closed(&format!(
+        "BEGIN; CREATE TEMP TABLE kept AS SELECT * FROM operations; DROP TABLE operations; {} \
+         INSERT INTO operations SELECT * FROM kept; DROP TABLE kept; \
+         DELETE FROM migration_history WHERE version=2; PRAGMA user_version=1; COMMIT;",
+        operations_v1_ddl()
+    ));
+}
+
+/// Every `operations` row, every value, in primary-key order: compared whole, not digested.
+fn operations_rows(area: &Area) -> Vec<Vec<rusqlite::types::Value>> {
+    let db = area.inspect();
+    let mut statement = db
+        .prepare(
+            "SELECT * FROM operations \
+             ORDER BY principal_uid,principal_role,action,version,request_key",
+        )
+        .unwrap();
+    let width = statement.column_count();
+    statement
+        .query_map([], |row| (0..width).map(|index| row.get(index)).collect())
+        .unwrap()
+        .collect::<std::result::Result<_, _>>()
+        .unwrap()
+}
+
+fn user_version(db: &Connection) -> i64 {
+    db.query_row("PRAGMA user_version", [], |row| row.get(0))
+        .unwrap()
+}
+
+/// A migration-1 ledger holding two admissions, and those rows as they stand.
+fn v1_ledger(area: &Area) -> Vec<Vec<rusqlite::types::Value>> {
+    let mut store = area.open();
+    admit(&mut store);
+    let owner = principal();
+    store
+        .submit(
+            Submission {
+                key: uuid(OTHER),
+                task: uuid(STAGE),
+                event: uuid(CANCELLED),
+                ..submission(&owner)
+            },
+            deadline(),
+        )
+        .unwrap();
+    drop(store);
+    downgrade_to_v1(area);
+    let rows = operations_rows(area);
+    assert_eq!(rows.len(), 2, "the fixture holds two operations rows");
+    rows
+}
+
+/// A25 pin: a migration-1 ledger is refused by name by an ordinary open (and left untouched),
+/// then upgrades behind a verified backup of itself, keeps every operations row, and reopens.
+#[test]
+fn a_migration_one_ledger_upgrades_behind_a_verified_backup_and_reopens() {
+    let area = Area::new();
+    let rows = v1_ledger(&area);
+    let before = fs::read(area.database()).unwrap();
+    assert!(matches!(
+        Store::open(&area.path, uuid(GEN), uuid(EPOCH), false, deadline()),
+        Err(Error::UpgradeRequired {
+            recorded: 1,
+            current: 2
+        })
+    ));
+    assert_eq!(
+        fs::read(area.database()).unwrap(),
+        before,
+        "a refused open writes nothing"
+    );
+    let backup = Area::new();
+    let upgrade =
+        Store::upgrade(&area.path, uuid(GEN), uuid(EPOCH), &backup.path, deadline()).unwrap();
+    assert_eq!((upgrade.from, upgrade.to), (1, 2));
+    let report = upgrade.backup.expect("a step was taken, so a backup was");
+    assert_eq!(inspect_backup(&backup).unwrap(), report);
+    assert_eq!(report.counts.get("operations"), Some(&2));
+    let snapshot = Connection::open_with_flags(
+        backup.path.join("ledger.sqlite3"),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NOFOLLOW,
+    )
+    .unwrap();
+    assert_eq!(
+        user_version(&snapshot),
+        1,
+        "the backup is of the ledger before any step"
+    );
+    assert_eq!(
+        operations_rows(&area),
+        rows,
+        "every operations row survives the rebuild"
+    );
+    assert_eq!(user_version(&area.inspect()), 2);
+    let store = area.reopen();
+    assert_eq!(
+        store
+            .get_by_key(&principal(), uuid(KEY), deadline())
+            .unwrap()
+            .id,
+        TASK
+    );
+    assert_eq!(
+        store
+            .get_by_key(&principal(), uuid(OTHER), deadline())
+            .unwrap()
+            .id,
+        STAGE
+    );
+}
+
+/// A25 pin (RC06): a step that fails inside its transaction leaves the ledger byte-identical, and
+/// still refused by an ordinary open; a later upgrade then succeeds.
+#[test]
+fn a_failed_upgrade_step_leaves_the_ledger_byte_identical() {
+    let area = Area::new();
+    let rows = v1_ledger(&area);
+    let before = fs::read(area.database()).unwrap();
+    let backup = Area::new();
+    injected(
+        Store::upgrade_faulted(
+            &area.path,
+            uuid(GEN),
+            uuid(EPOCH),
+            &backup.path,
+            deadline(),
+            CutPoint::MigrationStep,
+        ),
+        CutPoint::MigrationStep,
+    );
+    assert_eq!(fs::read(area.database()).unwrap(), before);
+    assert!(
+        backup.path.join("store-backup.json").exists(),
+        "the backup precedes the first step"
+    );
+    assert!(matches!(
+        Store::open(&area.path, uuid(GEN), uuid(EPOCH), false, deadline()),
+        Err(Error::UpgradeRequired { .. })
+    ));
+    let retry = Area::new();
+    let upgrade =
+        Store::upgrade(&area.path, uuid(GEN), uuid(EPOCH), &retry.path, deadline()).unwrap();
+    assert_eq!((upgrade.from, upgrade.to), (1, 2));
+    assert_eq!(operations_rows(&area), rows);
+}
+
+/// A current ledger has no step to take: nothing is backed up and nothing changes.
+#[test]
+fn a_current_ledger_upgrades_to_itself_without_a_backup() {
+    let area = Area::new();
+    drop(area.open());
+    let before = fs::read(area.database()).unwrap();
+    let backup = Area::new();
+    let upgrade =
+        Store::upgrade(&area.path, uuid(GEN), uuid(EPOCH), &backup.path, deadline()).unwrap();
+    assert_eq!((upgrade.from, upgrade.to), (2, 2));
+    assert!(upgrade.backup.is_none());
+    assert_eq!(fs::read_dir(&backup.path).unwrap().count(), 0);
+    assert_eq!(fs::read(area.database()).unwrap(), before);
+}
+
+/// A25 pin: each clause of the recorded chain refuses by its own name, with a case that only
+/// that clause decides.
+#[test]
+fn each_migration_chain_clause_refuses_by_its_own_name() {
+    let cases: [(&str, String, Chain); 10] = [
+        (
+            "newer than this binary",
+            "PRAGMA user_version=3;".into(),
+            Chain::Newer {
+                recorded: 3,
+                current: 2,
+            },
+        ),
+        (
+            "missing history row",
+            "DELETE FROM migration_history WHERE version=2;".into(),
+            Chain::History {
+                recorded: 2,
+                rows: 1,
+            },
+        ),
+        (
+            "a gap in the versions",
+            "UPDATE migration_history SET version=3 WHERE version=2;".into(),
+            Chain::Sequence { position: 2 },
+        ),
+        (
+            "wrong 002 digest",
+            format!("UPDATE migration_history SET checksum='{CRITERIA}' WHERE version=2;"),
+            Chain::Checksum { version: 2 },
+        ),
+        (
+            "reordered chain",
+            format!(
+                "UPDATE migration_history SET checksum=CASE version WHEN 1 THEN \
+                 '{MIGRATION_2_BODY}' ELSE '{MIGRATION_1_BODY}' END;"
+            ),
+            Chain::Checksum { version: 1 },
+        ),
+        (
+            "predecessor names another body",
+            format!(
+                "UPDATE migration_history SET predecessor_checksum='{CRITERIA}' WHERE version=2;"
+            ),
+            Chain::Predecessor { version: 2 },
+        ),
+        (
+            "predecessor names another version",
+            "UPDATE migration_history SET predecessor_version=0 WHERE version=2;".into(),
+            Chain::Predecessor { version: 2 },
+        ),
+        (
+            "the first row claims a predecessor",
+            format!(
+                "UPDATE migration_history SET predecessor_checksum='{MIGRATION_2_BODY}' \
+                 WHERE version=1;"
+            ),
+            Chain::Predecessor { version: 1 },
+        ),
+        (
+            "applied by another package",
+            "UPDATE migration_history SET package_identity='other' WHERE version=2;".into(),
+            Chain::Package { version: 2 },
+        ),
+        (
+            "schema differs from applying the chain",
+            "CREATE INDEX surplus ON tasks(state);".into(),
+            Chain::Schema { version: 2 },
+        ),
+    ];
+    for (case, edit, expected) in cases {
+        let area = Area::new();
+        drop(area.open());
+        area.edit_closed(&edit);
+        match Store::open(&area.path, uuid(GEN), uuid(EPOCH), false, deadline()) {
+            Err(Error::Chain(actual)) => assert_eq!(actual, expected, "{case}"),
+            other => panic!("{case}: expected {expected:?}, got {other:?}"),
+        }
+    }
+}
+
+static OPERATIONS_PRESERVED: [schema::Preserved; 1] = [schema::Preserved {
+    table: "operations",
+    order: "principal_uid,principal_role,action,version,request_key",
+}];
+
+/// A25 pin: a step whose migration changes a table it must preserve is refused by name and
+/// rolled back; one that leaves the table's rows alone passes the same check.
+#[test]
+fn a_step_that_changes_a_preserved_table_is_refused_and_rolled_back() {
+    let area = Area::new();
+    let rows = v1_ledger(&area);
+    let open = || {
+        let db = Connection::open_with_flags(
+            area.database(),
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_NOFOLLOW,
+        )
+        .unwrap();
+        schema::protect(&db, deadline()).unwrap();
+        db
+    };
+    let mut db = open();
+    let changing = schema::Migration {
+        sql: "UPDATE operations SET result=x'00';",
+        body: MIGRATION_2_BODY,
+        preserves: &OPERATIONS_PRESERVED,
+    };
+    assert!(matches!(
+        schema::step_with(&mut db, 2, &changing, NO_FAULT, deadline()),
+        Err(Error::Chain(Chain::Preserved { version: 2 }))
+    ));
+    assert_eq!(user_version(&db), 1, "the refused step rolled back");
+    drop(db);
+    assert_eq!(operations_rows(&area), rows);
+    let mut db = open();
+    let keeping = schema::Migration {
+        sql: "CREATE INDEX kept_rows ON tasks(state);",
+        body: MIGRATION_2_BODY,
+        preserves: &OPERATIONS_PRESERVED,
+    };
+    schema::step_with(&mut db, 2, &keeping, NO_FAULT, deadline()).unwrap();
+    assert_eq!(user_version(&db), 2);
+}
+
+/// A25 pin: a migration file whose body no longer has its pinned digest refuses by name, naming
+/// the version; the binary's own chain is intact.
+#[test]
+fn a_migration_file_that_lost_its_pinned_body_is_refused() {
+    let one = include_str!("../migrations/001.sql");
+    let two = include_str!("../migrations/002.sql");
+    let pinned = |sql, body| schema::Migration {
+        sql,
+        body,
+        preserves: &[],
+    };
+    assert!(
+        schema::intact(&[pinned(one, MIGRATION_1_BODY), pinned(two, MIGRATION_2_BODY)]).is_ok()
+    );
+    assert!(matches!(
+        schema::intact(&[pinned(one, MIGRATION_1_BODY), pinned(two, CRITERIA)]),
+        Err(Error::Chain(Chain::File { version: 2 }))
+    ));
+    assert!(matches!(
+        schema::intact(&[pinned(one, MIGRATION_2_BODY), pinned(two, MIGRATION_2_BODY)]),
+        Err(Error::Chain(Chain::File { version: 1 }))
+    ));
+    // The chain names every file in `migrations/`, and only those: read the directory (the world),
+    // not the chain's own list. The directory holds migrations and nothing else.
+    let mut files: Vec<String> = fs::read_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/migrations"))
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+        .collect();
+    files.sort();
+    assert_eq!(files, ["001.sql", "002.sql"]);
+    assert_eq!(files.len(), usize::try_from(schema::CURRENT).unwrap());
 }

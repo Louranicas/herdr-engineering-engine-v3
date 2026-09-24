@@ -342,6 +342,7 @@ pub use roster::{RequestSource, RosterAttempt, RosterSnapshot, RosterStart};
 
 pub use artifact::Object;
 pub use backup::{BackupReport, RestoreStatus};
+pub use schema::Chain;
 
 use crate::contracts::rc01::{MAX_ATTEMPTS, TASK_LIMIT};
 use crate::contracts::{Generation, Sha256Digest, UuidV4};
@@ -385,6 +386,15 @@ pub enum Error {
     NotWritable,
     Corrupt,
     UnsupportedSchema,
+    /// The ledger's recorded migration chain differs from this binary's, by the named clause at
+    /// the named version (A25).
+    Chain(Chain),
+    /// The ledger records a valid earlier migration chain: [`Store::upgrade`] brings it forward,
+    /// behind a verified backup. Nothing else opens it (A25).
+    UpgradeRequired {
+        recorded: u32,
+        current: u32,
+    },
     Runtime,
     UncertainCommit,
     /// Storage refused a write for lack of space (`SQLITE_FULL`, `ENOSPC`). Before commit the
@@ -454,6 +464,8 @@ impl From<serde_json::Error> for Error {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum CutPoint {
     MigrationWrite,
+    /// Inside an upgrade step's transaction, after its migration ran and before it commits.
+    MigrationStep,
     RosterWrite,
     RosterPin,
     RosterObservation,
@@ -644,6 +656,26 @@ pub struct Store {
     inspection_only: bool,
     clock: roster::ReceiverClock,
     fault: Fault,
+    /// The migration version the ledger records (A25): [`schema::CURRENT`] for every store but
+    /// the one [`Store::upgrade`] holds while it brings the ledger forward.
+    schema_version: u32,
+}
+
+/// How a ledger is opened: writable (created when asked), for inspection, or to be upgraded.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Access {
+    Writable { create: bool },
+    Inspection,
+    Upgrade,
+}
+
+/// What [`Store::upgrade`] did: the version the ledger recorded, the version it records now, and
+/// the verified backup taken before the first step (none when there was no step to take).
+#[derive(Debug)]
+pub struct Upgrade {
+    pub from: u32,
+    pub to: u32,
+    pub backup: Option<BackupReport>,
 }
 
 impl Store {
@@ -683,7 +715,14 @@ impl Store {
         deadline: Instant,
         fault: Fault,
     ) -> Result<Self> {
-        Self::open_access(root, generation, epoch, create, deadline, fault, false)
+        Self::open_access(
+            root,
+            generation,
+            epoch,
+            Access::Writable { create },
+            deadline,
+            fault,
+        )
     }
 
     /// Open existing durable state for inspection only, including reconciliation mode.
@@ -697,18 +736,26 @@ impl Store {
         epoch: UuidV4<'_>,
         deadline: Instant,
     ) -> Result<Self> {
-        Self::open_access(root, generation, epoch, false, deadline, NO_FAULT, true)
+        Self::open_access(
+            root,
+            generation,
+            epoch,
+            Access::Inspection,
+            deadline,
+            NO_FAULT,
+        )
     }
 
     fn open_access(
         root: &Path,
         generation: UuidV4<'_>,
         epoch: UuidV4<'_>,
-        create: bool,
+        access: Access,
         deadline: Instant,
         fault: Fault,
-        inspection_only: bool,
     ) -> Result<Self> {
+        let create = access == Access::Writable { create: true };
+        let inspection_only = access == Access::Inspection;
         remaining(deadline)?;
         schema::runtime(deadline)?;
         let root = Directory::root(root)?;
@@ -748,7 +795,13 @@ impl Store {
             deadline,
         )?;
         schema::profile(&connection, deadline)?;
-        schema::validate(&connection, generation.as_str(), deadline)?;
+        let schema_version = schema::validate(&connection, generation.as_str(), deadline)?;
+        if schema_version != schema::CURRENT && access != Access::Upgrade {
+            return Err(Error::UpgradeRequired {
+                recorded: schema_version,
+                current: schema::CURRENT,
+            });
+        }
         let (actual_epoch, mode): (String, String) = connection.query_row(
             "SELECT epoch,mode FROM ledger_meta WHERE singleton=1",
             [],
@@ -780,6 +833,84 @@ impl Store {
             inspection_only,
             clock: roster::ReceiverClock::new(deadline)?,
             fault,
+            schema_version,
+        })
+    }
+
+    /// Bring a ledger that records an earlier migration chain up to this binary's (A25;
+    /// RC06/T04). Forward only. Before the first step a backup is taken through
+    /// [`Store::backup`] into the empty private `backup` directory, which reads it back through
+    /// [`Store::inspect_backup`] before it returns; then each step runs in its own transaction, which also checks
+    /// that every table the step rebuilds kept exactly its rows. A failed step rolls back and
+    /// leaves the ledger as it was. A current ledger is left untouched, with no backup. The
+    /// caller reopens with [`Store::open`].
+    /// # Errors
+    /// Everything [`Store::open`] refuses except [`Error::UpgradeRequired`]; any backup refusal
+    /// (outstanding work, an unusable destination); a backup that does not read back as written;
+    /// a step's failure, including [`Chain::Preserved`].
+    pub fn upgrade(
+        root: &Path,
+        generation: UuidV4<'_>,
+        epoch: UuidV4<'_>,
+        backup: &Path,
+        deadline: Instant,
+    ) -> Result<Upgrade> {
+        Self::open_access(root, generation, epoch, Access::Upgrade, deadline, NO_FAULT)?
+            .upgrade_to_current(generation, backup, deadline)
+    }
+
+    /// Upgrade as [`Store::upgrade`] does, with `point` injected.
+    #[cfg(test)]
+    pub(crate) fn upgrade_faulted(
+        root: &Path,
+        generation: UuidV4<'_>,
+        epoch: UuidV4<'_>,
+        backup: &Path,
+        deadline: Instant,
+        point: CutPoint,
+    ) -> Result<Upgrade> {
+        Self::open_access(
+            root,
+            generation,
+            epoch,
+            Access::Upgrade,
+            deadline,
+            Some(point),
+        )?
+        .upgrade_to_current(generation, backup, deadline)
+    }
+
+    fn upgrade_to_current(
+        mut self,
+        generation: UuidV4<'_>,
+        destination: &Path,
+        deadline: Instant,
+    ) -> Result<Upgrade> {
+        let from = self.schema_version;
+        if from == schema::CURRENT {
+            return Ok(Upgrade {
+                from,
+                to: from,
+                backup: None,
+            });
+        }
+        // `backup` publishes its manifest only after reading the snapshot back through
+        // `inspect_backup` and comparing it with what it wrote: the verification is its own.
+        let report = self.backup(destination, deadline)?;
+        for version in from + 1..=schema::CURRENT {
+            schema::step(&mut self.connection, version, self.fault, deadline)?;
+        }
+        let to = schema::validate(&self.connection, generation.as_str(), deadline)?;
+        if to != schema::CURRENT {
+            return Err(Error::UpgradeRequired {
+                recorded: to,
+                current: schema::CURRENT,
+            });
+        }
+        Ok(Upgrade {
+            from,
+            to,
+            backup: Some(report),
         })
     }
 

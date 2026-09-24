@@ -1799,7 +1799,7 @@ fn store_secondary_prior_draft_is_refused_without_rebasing_or_erasing_it() {
     let before = fs::read(area.database()).unwrap();
     assert!(matches!(
         Store::open(&area.path, uuid(GEN), uuid(LEDGER_EPOCH), false, deadline()),
-        Err(Error::UnsupportedSchema)
+        Err(Error::Chain(Chain::Checksum { version: 1 }))
     ));
     assert_eq!(fs::read(area.database()).unwrap(), before);
     let db = area.inspect();

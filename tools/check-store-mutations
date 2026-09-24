@@ -19,10 +19,11 @@ import time
 
 sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[1]
-TEST_COUNT = 86
+TEST_COUNT = 92
 REQUIRED_SUBJECTS = (
     "src/store.rs", "src/store/artifact.rs", "src/store/schema.rs", "src/store/backup.rs",
-    "migrations/001.sql", "tests/t04_store.rs", "tools/sqlite-static.py", "tools/check-store-mutations",
+    "migrations/001.sql", "migrations/002.sql", "tests/t04_store.rs", "tools/sqlite-static.py",
+    "tools/check-store-mutations",
 )
 
 MUTATIONS = (('replay-digest-conflict',
@@ -56,8 +57,8 @@ MUTATIONS = (('replay-digest-conflict',
  ('migration-history',
   'src/store/schema.rs',
   'changed_migration_checksum_refuses_even_at_supported_version',
-  'history != (1, identity(SQL)?, 0, None, PACKAGE.to_owned())',
-  '(history != (1, identity(SQL)?, 0, None, PACKAGE.to_owned()) && false)',
+  'if checksum != migration.body {',
+  'if checksum != migration.body && false {',
   'Supported user_version alone cannot admit a ledger whose exact applied migration history differs.'),
  ('atomic-outbox',
   'src/store.rs',

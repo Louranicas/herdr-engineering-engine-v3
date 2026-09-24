@@ -90,11 +90,12 @@ UNTRACKED_BY_DESIGN = (
 )
 T03_IMPLEMENTATION_PATHS = ("src/worker/mod.rs", "src/worker/inference.rs")
 T04_IMPLEMENTATION_PATHS = ("src/store.rs", "src/store/artifact.rs", "src/store/backup.rs",
-                            "src/store/schema.rs", "migrations/001.sql", "tests/t04_store.rs")
+                            "src/store/schema.rs", "migrations/001.sql", "migrations/002.sql",
+                            "tests/t04_store.rs")
 # Reviewed independent T04 unit suite: 81 cases (68 + store-lane A01-A03 and A24, 2026-09-24; B02's
-# unwritable-ledger read-back, 2026-09-25; B03's four task_view cases, 2026-09-25; B03b's closure-predicate case). Source discovery or emitted
+# unwritable-ledger read-back, 2026-09-25; B03's four task_view cases, 2026-09-25; B03b's closure-predicate case; A25's six migration-chain cases). Source discovery or emitted
 # counts cannot lower this gate; None remains an explicit pending-state refusal.
-T04_TEST_COUNT = 86
+T04_TEST_COUNT = 92
 # Cargo build parallelism for every gate build (operator decisions 2026-09-24: raised from 2 to 8,
 # then "utilise the full capacity of all hardware"): every CPU this process may run on, taken from
 # the affinity mask so a pinned or containerised habitat is respected. One owner: the store and pi
@@ -843,7 +844,7 @@ def rust_test_expectations(root):
         for path in T06_INPUTS:
             if not (root / path).is_file() or (root / path).is_symlink():
                 raise ValueError("Missing or substituted required T06 fixture: " + path)
-        counts = [178, 0, 0, 26, 27, 60, 34, 29, 12, *T06_TARGET_COUNTS.values()]
+        counts = [184, 0, 0, 26, 27, 60, 34, 29, 12, *T06_TARGET_COUNTS.values()]
         unit_counts.update(T06_UNIT_COUNTS)
         if has_t07(root):
             counts.extend(T07_TARGET_COUNTS.values())
@@ -1183,7 +1184,7 @@ def main():
             return texts
 
         run("process-controls", [sys.executable, "-W", "error", "tests/t25_process.py"], required_text="17 tests")
-        run("quality-integration-controls", [sys.executable, "-W", "error", "tests/t25_quality.py"], required_text="Ran 105 tests" if has_t09(ROOT) else "Ran 93 tests" if has_t08_contract(ROOT) or has_recovery(ROOT) else ("Ran 83 tests" if has_t08(ROOT) else ("Ran 73 tests" if has_t07(ROOT) else ("Ran 66 tests" if has_t21(ROOT) or has_t13(ROOT) else ("Ran 47 tests" if has_t06(ROOT) else "Ran 43 tests")))), required_stream="stderr")
+        run("quality-integration-controls", [sys.executable, "-W", "error", "tests/t25_quality.py"], required_text="Ran 106 tests" if has_t09(ROOT) else "Ran 93 tests" if has_t08_contract(ROOT) or has_recovery(ROOT) else ("Ran 83 tests" if has_t08(ROOT) else ("Ran 73 tests" if has_t07(ROOT) else ("Ran 66 tests" if has_t21(ROOT) or has_t13(ROOT) else ("Ran 47 tests" if has_t06(ROOT) else "Ran 43 tests")))), required_stream="stderr")
         run("workflow-procedure-controls", [sys.executable, "-W", "error", "tests/procedure_schema.py"],
             required_text="run=103 failures=0 errors=0")
         run("workflow-site-sweep", [sys.executable, "tools/check-workflow-sites"],

@@ -137,7 +137,10 @@ impl Store {
                 | OpenFlags::SQLITE_OPEN_NOFOLLOW,
         )?;
         reopened.execute_batch("PRAGMA query_only=ON;")?;
-        schema::validate(&reopened, &source_generation, deadline)?;
+        // The copy must record the source's own migration version (A25), not merely a valid one.
+        if schema::validate(&reopened, &source_generation, deadline)? != self.schema_version {
+            return Err(Error::Corrupt);
+        }
         let inventory = counts(&self.connection)?;
         if inventory != counts(&reopened)? {
             return Err(Error::Corrupt);
