@@ -97,6 +97,10 @@ T04_IMPLEMENTATION_PATHS = ("src/store.rs", "src/store/artifact.rs", "src/store/
 # unwritable-ledger read-back, 2026-09-25; B03's four task_view cases, 2026-09-25; B03b's closure-predicate case; A25's six migration-chain cases; B14-P2c's workspace CHECK and added-column preservation cases; B14a-1a's cancellation-first begin). Source discovery or emitted
 # counts cannot lower this gate; None remains an explicit pending-state refusal.
 T04_TEST_COUNT = 95
+# The fixed pre-T04 batteries (T01-T03), by target name: one home, read by both census branches of
+# rust_test_expectations and by tests/t25_quality.py, which looks targets up here rather than
+# re-typing a number (S1). t02_transport is harness = false and prints no summary of its own.
+BASE_TARGET_COUNTS = {"t01_contracts": 26, "t01_task": 27, "t02_pi": 60, "t03_contract": 34}
 # Cargo build parallelism for every gate build (operator decisions 2026-09-24: raised from 2 to 8,
 # then "utilise the full capacity of all hardware"): every CPU this process may run on, taken from
 # the affinity mask so a pinned or containerised habitat is respected. One owner: the store and pi
@@ -826,9 +830,11 @@ def rust_test_expectations(root):
         if (len(matches) != 1 or matches[0].get("path") != path or not (root / path).is_file()
                 or (name in ("t03_contract", *T05_TARGET_COUNTS) and matches[0].get("harness", True) is not True)):
             raise ValueError("Missing or substituted required Rust test target: " + name)
-    counts = [26, 27, 60] if has_t02 else [26, 27]
+    counts = [BASE_TARGET_COUNTS["t01_contracts"], BASE_TARGET_COUNTS["t01_task"]]
+    if has_t02:
+        counts.append(BASE_TARGET_COUNTS["t02_pi"])
     if has_t03:
-        counts.append(34)
+        counts.append(BASE_TARGET_COUNTS["t03_contract"])
     if store_present:
         for path in T04_IMPLEMENTATION_PATHS:
             if not (root / path).is_file() or (root / path).is_symlink():
@@ -893,7 +899,9 @@ def rust_test_expectations(root):
         # The library target's own count is the sum of its reviewed unit namespaces, never a second
         # literal beside them: a literal here went stale when T05_STORE_TEST_COUNT moved (B05e).
         library = T04_TEST_COUNT + T05_STORE_TEST_COUNT + sum(T06_UNIT_COUNTS.values())
-        counts = [library, 0, 0, 26, 27, 60, 34, 29, 12, *T06_TARGET_COUNTS.values()]
+        # The two zeros are the binaries' own (empty) unit harnesses: habitat-engine and the shim.
+        counts = [library, 0, 0, *BASE_TARGET_COUNTS.values(), *T05_TARGET_COUNTS.values(),
+                  *T06_TARGET_COUNTS.values()]
         unit_counts.update(T06_UNIT_COUNTS)
         if has_t07(root):
             counts.extend(T07_TARGET_COUNTS.values())
