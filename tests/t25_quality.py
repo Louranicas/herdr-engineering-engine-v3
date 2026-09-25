@@ -830,6 +830,74 @@ Precompiling packages...
         manifest = tomllib.loads((ROOT / "Cargo.toml").read_text())
         self.assertEqual(quality.rustdoc_unforbidden(self.RUSTDOC_HELP, manifest), [])
 
+    SWEEP_MODULE = (
+        "class Refused(Exception):\n    pass\n\n\n"
+        "def refuse(code, detail):\n    raise Refused(code, detail)\n\n\n"
+        "def check(value):\n"
+        "    if value < 0:\n        refuse(\"negative\", \"below zero\")\n"
+        "    if value > 9:\n        refuse(\"large\", \"above nine\")\n"
+        "    if value == 5:\n        refuse(\"five\", \"is five\")\n"
+        "    return value\n")
+    SWEEP_TESTS = (
+        "import importlib.util, sys, unittest\nfrom pathlib import Path\n"
+        "spec = importlib.util.spec_from_file_location('m', Path(__file__).with_name('m.py'))\n"
+        "m = importlib.util.module_from_spec(spec)\nspec.loader.exec_module(m)\n\n\n"
+        "class T(unittest.TestCase):\n"
+        "    def test_negative(self):\n"
+        "        with self.assertRaisesRegex(m.Refused, 'negative'):\n            m.check(-1)\n\n"
+        "    def test_large(self):\n"
+        "        with self.assertRaisesRegex(m.Refused, 'large'):\n            m.check(10)\n\n\n"
+        "unittest.main()\n")
+
+    def sweep(self, expected, argv=()):
+        import contextlib
+        import io
+        sys.path.insert(0, str(ROOT / "tools"))
+        import site_sweep
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            (root / "m.py").write_text(self.SWEEP_MODULE)
+            (root / "t.py").write_text(self.SWEEP_TESTS)
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                code = site_sweep.main(root / "m.py", root / "t.py", expected, argv=list(argv))
+            self.assertEqual((root / "m.py").read_text(), self.SWEEP_MODULE, "the module is restored")
+            return code, out.getvalue()
+
+    def test_a_site_sweep_credits_only_the_named_test(self):
+        # One site per outcome: `negative` is killed by its named test; `large` is killed, but not
+        # by the test named for it (wrong reason); `five` has no test at all (survivor).
+        code, out = self.sweep({"check:negative:1": "test_negative", "check:large:1": "test_negative",
+                                "check:five:1": "test_negative"})
+        self.assertEqual(code, 1)
+        self.assertIn("sites=3 killed=1 wrong_reason=1 survived=1\n", out)
+        self.assertIn("WRONG-REASON m.py:13 check:large:1 expected test_negative", out)
+        self.assertIn("SURVIVOR m.py:15 check:five:1 expected test_negative", out)
+        self.assertIn("verdict=FAIL", out)
+
+    def test_a_site_sweep_passes_when_every_site_is_killed_by_its_own_test(self):
+        module = self.SWEEP_MODULE
+        try:
+            self.SWEEP_MODULE = module.replace('    if value == 5:\n        refuse(\"five\", \"is five\")\n', "")
+            code, out = self.sweep({"check:negative:1": "test_negative", "check:large:1": "test_large"})
+        finally:
+            self.SWEEP_MODULE = module
+        self.assertEqual(code, 0, out)
+        self.assertIn("sites=2 killed=2 wrong_reason=0 survived=0\n", out)
+
+    def test_a_site_sweep_reconciles_its_table_in_both_directions(self):
+        full = {"check:negative:1": "test_negative", "check:large:1": "test_large", "check:five:1": "test_large"}
+        with self.assertRaisesRegex(SystemExit, r"unlisted=\['check:five:1'\] stale=\[\]"):
+            self.sweep({key: value for key, value in full.items() if key != "check:five:1"})
+        with self.assertRaisesRegex(SystemExit, r"unlisted=\[\] stale=\['check:ghost:1'\]"):
+            self.sweep({**full, "check:ghost:1": "test_large"})
+
+    def test_a_site_sweep_discovery_names_the_tests_each_neuter_fails_and_no_verdict(self):
+        code, out = self.sweep({}, ["--discover"])
+        self.assertEqual(code, 0)
+        self.assertEqual(out.splitlines(), ["check:negative:1\t1\ttest_negative", "check:large:1\t1\ttest_large",
+                                            "check:five:1\t0\t", "discovered sites=3"])
+
     def test_shell_lint_names_the_planted_defect_by_its_rule(self):
         # BASH-G11's negative control asserts on the rule's own diagnostic (F96/F130): a planted
         # unquoted expansion must fail the step naming SC2086 at its line and column (a code the
@@ -1973,7 +2041,7 @@ class T06QualityInventoryControls(unittest.TestCase):
         # The recheck reads the pin's own path and digest, after the Rust commands.
         recheck = text.index("Pinned interpreter changed")
         self.assertGreater(recheck, text.index("run_rust_test_partitions(ROOT, run, cargo, common, label, test_expectations, parallel_main)"))
-        self.assertIn("required_text='Ran 114 tests' if has_t09(ROOT) else", text)
+        self.assertIn("required_text='Ran 118 tests' if has_t09(ROOT) else", text)
         self.assertIn("'Ran 93 tests' if has_t08_contract(ROOT) or has_recovery(ROOT) else", text)
 
     def test_t06_partition_holds_every_t06_target_once_and_nothing_else(self):

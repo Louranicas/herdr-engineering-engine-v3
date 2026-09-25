@@ -1,86 +1,49 @@
 #!/usr/bin/env python3
-"""Neuter each refusal site in skills/load_skill.py and require a test to notice.
+"""Neuter each refusal site in skills/load_skill.py and require ITS test to notice (SK-07/08).
 
-A case per refusal CODE is not a case per SITE: this loader raises ten codes from fifteen
-places, so five codes have a neighbour that can answer for them. `refusal_sites()` counting
-ten would read as complete while five sites sat unpinned.
+This loader raises twelve codes from twenty places, so eight sites have a neighbour that can
+answer for them. The mechanism -- site keys, the table reconciled both ways, killed only by the
+named test, never by any non-zero exit -- is `tools/site_sweep.py`, shared with the workflow and
+pi sweeps. The table was written from `--discover` (2026-09-26): each site's most direct case
+among the tests its neuter fails, never the vocabulary census, which notices any vanished code.
 
-Each site is rewritten to a no-op in turn and `tests/skill_schema.py` is re-run. A site
-whose neuter leaves the suite green is a survivor: behaviour nothing pins down.
-
-Run: python3 tools/check-skill-sites
+Run: python3 tools/check-skill-sites   (--discover lists the tests each neuter fails)
 """
 
-import ast
-import subprocess
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "tools"))
+import site_sweep  # the tools directory is not a package: imported by path, after it is on sys.path
+
 SOURCE = ROOT / "skills/load_skill.py"
 TESTS = ROOT / "tests/skill_schema.py"
 
 
-def sites(text):
-    """Every `refuse(...)` call, as (line, column, end_column), from the syntax tree.
-
-    Read from the tree rather than by regular expression: a call spanning several lines has
-    no single textual form, and a pattern that missed one would shrink the denominator
-    silently, in the flattering direction.
-    """
-    found = []
-    for node in ast.walk(ast.parse(text)):
-        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
-                and node.func.id == "refuse"):
-            found.append((node.lineno, node.col_offset, node.end_lineno, node.end_col_offset,
-                          node.args[0].value if node.args and isinstance(node.args[0], ast.Constant)
-                          else "?"))
-    return sorted(found)
-
-
-def neuter(text, site):
-    """Replace one call with `None`, keeping every other byte."""
-    line_no, col, end_line, end_col, _ = site
-    lines = text.splitlines(keepends=True)
-    head = lines[line_no - 1][:col]
-    tail = lines[end_line - 1][end_col:]
-    return "".join(lines[: line_no - 1]) + head + "None" + tail + "".join(lines[end_line:])
-
-
-def run_tests():
-    return subprocess.run([sys.executable, "-W", "error", str(TESTS)],
-                          capture_output=True, text=True, check=False)
+# The test whose failure is the evidence each site is pinned, keyed as `site_sweep.sites` spells it.
+EXPECTED = {
+    "safe_path:unsafe_path:1": "test_backslash_in_a_path",
+    "safe_path:unsafe_path:2": "test_parent_segment_in_a_path",
+    "require_fields:malformed_manifest:1": "test_a_manifest_missing_a_required_field",
+    "structure:version_mismatch:1": "test_wrong_schema_string",
+    "structure:incompatible_action:1": "test_more_required_actions_than_the_limit",
+    "structure:unknown_action:1": "test_action_outside_the_catalogue",
+    "structure:missing_dependency:1": "test_more_dependencies_than_the_limit",
+    "structure:conflicting_dependency:1": "test_one_skill_pinned_at_two_versions",
+    "structure:traversal_budget:1": "test_more_references_than_the_limit",
+    "structure:duplicate_reference:1": "test_duplicate_reference_identity",
+    "structure:traversal_budget:2": "test_a_deep_path_declaring_a_shallow_depth",
+    "structure:traversal_budget:3": "test_a_declared_depth_that_disagrees_with_its_path",
+    "discover:retired_skill:1": "test_retired_skill_does_not_load",
+    "discover:authority_widening:1": "test_action_the_caller_does_not_hold",
+    "discover:missing_dependency:1": "test_required_dependency_absent",
+    "read_package:unsafe_path:1": "test_reading_through_a_symlink_that_leaves_the_package",
+    "load:context_budget:1": "test_entry_larger_than_the_budget",
+    "revise:version_mismatch:1": "test_revision_of_a_different_skill",
+    "revise:version_mismatch:2": "test_revision_that_does_not_advance",
+    "revise:retired_skill:1": "test_revision_of_a_retired_skill",
+}
 
 
-def main():
-    original = SOURCE.read_text()
-    all_sites = sites(original)
-    if not all_sites:
-        raise SystemExit("no refusal sites found; the enumeration is broken, not the module")
-    before = run_tests()
-    if before.returncode != 0:
-        raise SystemExit("the suite is not green before the sweep:\n" + before.stdout + before.stderr)
-
-    survivors = []
-    try:
-        for index, site in enumerate(all_sites, 1):
-            SOURCE.write_text(neuter(original, site))
-            result = run_tests()
-            SOURCE.write_text(original)
-            status = "killed" if result.returncode != 0 else "SURVIVED"
-            if result.returncode == 0:
-                survivors.append(site)
-            print(f"  {index:2}/{len(all_sites)} line {site[0]:4} refuse({site[4]!r}) {status}",
-                  flush=True)
-    finally:
-        SOURCE.write_text(original)
-
-    print(f"\nsites={len(all_sites)} killed={len(all_sites) - len(survivors)} "
-          f"survived={len(survivors)}")
-    for site in survivors:
-        print(f"  SURVIVOR {SOURCE.name}:{site[0]} refuse({site[4]!r})")
-    print("verdict=" + ("PASS" if not survivors else "FAIL"))
-    return 0 if not survivors else 1
-
-
-sys.exit(main())
+sys.exit(site_sweep.main(SOURCE, TESTS, EXPECTED))

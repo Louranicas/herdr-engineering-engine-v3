@@ -752,7 +752,7 @@ def refuse_untracked_inputs(root, names, deadline):
 def quality_subject_paths(root, deadline, rust_only):
     required = ["Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "tools/check-quality",
                 "tools/development_process.py", "tools/rust-offline.py", "tools/sqlite-static.py", "tools/check-store-mutations", "tests/t25_process.py",
-                "tests/t25_quality.py", "tools/check-workflow-sites", "tools/check-skill-sites", "tools/check-pi-sites", "tools/check-bash-sites",
+                "tests/t25_quality.py", "tools/check-workflow-sites", "tools/check-skill-sites", "tools/check-pi-sites", "tools/check-bash-sites", "tools/site_sweep.py",
                 "tools/check-mutation-survivors",
                 # tests/t01_contracts.rs pins the RC01 limits to the published decision (include_str!).
                 "docs/contract-decisions.md"]
@@ -1300,15 +1300,15 @@ def main():
             return texts
 
         run("process-controls", [sys.executable, "-W", "error", "tests/t25_process.py"], required_text="17 tests")
-        run("quality-integration-controls", [sys.executable, "-W", "error", "tests/t25_quality.py"], required_text="Ran 114 tests" if has_t09(ROOT) else "Ran 93 tests" if has_t08_contract(ROOT) or has_recovery(ROOT) else ("Ran 83 tests" if has_t08(ROOT) else ("Ran 73 tests" if has_t07(ROOT) else ("Ran 66 tests" if has_t21(ROOT) or has_t13(ROOT) else ("Ran 47 tests" if has_t06(ROOT) else "Ran 43 tests")))), required_stream="stderr")
+        run("quality-integration-controls", [sys.executable, "-W", "error", "tests/t25_quality.py"], required_text="Ran 118 tests" if has_t09(ROOT) else "Ran 93 tests" if has_t08_contract(ROOT) or has_recovery(ROOT) else ("Ran 83 tests" if has_t08(ROOT) else ("Ran 73 tests" if has_t07(ROOT) else ("Ran 66 tests" if has_t21(ROOT) or has_t13(ROOT) else ("Ran 47 tests" if has_t06(ROOT) else "Ran 43 tests")))), required_stream="stderr")
         run("workflow-procedure-controls", [sys.executable, "-W", "error", "tests/procedure_schema.py"],
             required_text="run=103 failures=0 errors=0")
         run("workflow-site-sweep", [sys.executable, "tools/check-workflow-sites"],
-            required_text="sites=39 killed=39 survived=0")
+            required_text="sites=39 killed=39 wrong_reason=0 survived=0")
         run("skill-package-controls", [sys.executable, "-W", "error", "tests/skill_schema.py"],
             required_text="run=70 failures=0 errors=0")
         run("skill-site-sweep", [sys.executable, "tools/check-skill-sites"],
-            required_text="sites=20 killed=20 survived=0")
+            required_text="sites=20 killed=20 wrong_reason=0 survived=0")
         run("bash-wrapper-controls", [sys.executable, "-W", "error", "tests/bash_wrapper.py"],
             required_text="run=161 failures=0 errors=0")
         if not RUFF.is_file() or not os.access(RUFF, os.X_OK):

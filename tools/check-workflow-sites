@@ -1,87 +1,73 @@
 #!/usr/bin/env python3
-"""Neuter each refusal site in workflows/validate_procedure.py and require a test to notice.
+"""Neuter each refusal site in workflows/validate_procedure.py and require ITS test to notice (WF-08).
 
-A case per refusal CODE is not a case per SITE: this validator raises nineteen codes from
-thirty-nine places (measured 2026-09-25, after WF-11's dispatch/observe and WF-14's reconcile), so
-eight codes have a neighbour that can answer for them. `refusal_sites()` counting nineteen would
-read as complete while twenty sites sat unpinned.
+This validator raises nineteen codes from thirty-nine places (measured 2026-09-25, after WF-11's
+dispatch/observe and WF-14's reconcile), so twenty sites have a neighbour that can answer for
+them. The mechanism -- site keys, the table reconciled both ways, killed only by the named test,
+never by any non-zero exit -- is `tools/site_sweep.py`, shared with the skill and pi sweeps. The
+table was written from `--discover` (2026-09-26): each site's most direct case among the tests its
+neuter fails, never the vocabulary census or the CLI exit case, which notice any vanished code.
+Where one case serves three sites (observe's and reconcile's `malformed_reply`), it holds one input
+per site and asserts the detail only that site produces (F140).
 
-Each site is rewritten to a no-op in turn and `tests/procedure_schema.py` is re-run. A site
-whose neuter leaves the suite green is a survivor: behaviour nothing pins down.
-
-Run: python3 tools/check-workflow-sites
+Run: python3 tools/check-workflow-sites   (--discover lists the tests each neuter fails)
 """
 
-import ast
-import subprocess
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "tools"))
+import site_sweep  # the tools directory is not a package: imported by path, after it is on sys.path
+
 SOURCE = ROOT / "workflows/validate_procedure.py"
 TESTS = ROOT / "tests/procedure_schema.py"
 
+REPLY = "test_a_reply_that_is_not_a_control_record_is_refused"
+READBACK = "test_a_readback_that_is_not_a_control_record_is_refused"
 
-def sites(text):
-    """Every `refuse(...)` call, as (line, column, end_column), from the syntax tree.
-
-    Read from the tree rather than by regular expression: a call spanning several lines has
-    no single textual form, and a pattern that missed one would shrink the denominator
-    silently, in the flattering direction.
-    """
-    found = []
-    for node in ast.walk(ast.parse(text)):
-        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
-                and node.func.id == "refuse"):
-            found.append((node.lineno, node.col_offset, node.end_lineno, node.end_col_offset,
-                          node.args[0].value if node.args and isinstance(node.args[0], ast.Constant)
-                          else "?"))
-    return sorted(found)
-
-
-def neuter(text, site):
-    """Replace one call with `None`, keeping every other byte."""
-    line_no, col, end_line, end_col, _ = site
-    lines = text.splitlines(keepends=True)
-    head = lines[line_no - 1][:col]
-    tail = lines[end_line - 1][end_col:]
-    return "".join(lines[: line_no - 1]) + head + "None" + tail + "".join(lines[end_line:])
-
-
-def run_tests():
-    return subprocess.run([sys.executable, "-W", "error", str(TESTS)],
-                          capture_output=True, text=True, check=False)
-
-
-def main():
-    original = SOURCE.read_text()
-    all_sites = sites(original)
-    if not all_sites:
-        raise SystemExit("no refusal sites found; the enumeration is broken, not the module")
-    before = run_tests()
-    if before.returncode != 0:
-        raise SystemExit("the suite is not green before the sweep:\n" + before.stdout + before.stderr)
-
-    survivors = []
-    try:
-        for index, site in enumerate(all_sites, 1):
-            SOURCE.write_text(neuter(original, site))
-            result = run_tests()
-            SOURCE.write_text(original)
-            status = "killed" if result.returncode != 0 else "SURVIVED"
-            if result.returncode == 0:
-                survivors.append(site)
-            print(f"  {index:2}/{len(all_sites)} line {site[0]:4} refuse({site[4]!r}) {status}",
-                  flush=True)
-    finally:
-        SOURCE.write_text(original)
-
-    print(f"\nsites={len(all_sites)} killed={len(all_sites) - len(survivors)} "
-          f"survived={len(survivors)}")
-    for site in survivors:
-        print(f"  SURVIVOR {SOURCE.name}:{site[0]} refuse({site[4]!r})")
-    print("verdict=" + ("PASS" if not survivors else "FAIL"))
-    return 0 if not survivors else 1
+# The test whose failure is the evidence each site is pinned, keyed as `site_sweep.sites` spells it.
+EXPECTED = {
+    "_shape:malformed_procedure:1": "test_member_of_the_wrong_type_is_refused",
+    "_shape:malformed_procedure:2": "test_every_schema_required_member_is_refused_when_absent",
+    "validate:stale_procedure_version:1": "test_stale_schema_string",
+    "validate:fanout_exceeded:1": "test_more_steps_than_the_limit",
+    "validate:duplicate_step:1": "test_duplicate_step_identity",
+    "validate:unknown_action:1": "test_unknown_action_reaches_the_validator",
+    "validate:unsupported_action_version:1": "test_action_version_the_catalogue_does_not_serve",
+    "validate:retry_limit:1": "test_more_attempts_than_the_limit",
+    "validate:unreconciled_effect:1": "test_effect_unknown_listed_as_retryable",
+    "validate:dependency_limit:1": "test_more_dependencies_than_the_limit",
+    "validate:missing_step:1": "test_dependency_naming_an_absent_step",
+    "validate:duplicate_criterion:1": "test_duplicate_criterion_identity",
+    "validate:fanout_exceeded:2": "test_fanout_above_the_limit",
+    "validate:time_limit:1": "test_seconds_above_the_limit",
+    "validate:resource_limit:1": "test_tokens_above_the_limit",
+    "validate:cycle:1": "test_two_step_cycle",
+    "_committed_steps:identity_mismatch:1": "test_committed_record_without_a_step_map",
+    "_committed_steps:identity_mismatch:2": "test_committed_under_another_procedure_identity",
+    "_committed_steps:stale_procedure_version:1": "test_committed_under_another_procedure_version",
+    "_committed_steps:identity_mismatch:3": "test_committed_step_not_in_the_procedure",
+    "_committed_steps:identity_mismatch:4": "test_committed_state_outside_the_vocabulary",
+    "resume:unreconciled_effect:1": "test_resume_refuses_an_unreconciled_effect",
+    "dispatch:not_ready:1": "test_a_step_resume_does_not_offer_is_not_dispatched",
+    "dispatch:authority_widening:1": "test_a_step_outside_the_held_actions_is_not_dispatched",
+    "dispatch:undispatchable_action:1": "test_a_submit_step_without_a_spec_is_not_dispatched",
+    "dispatch:undispatchable_action:2": "test_a_read_step_needs_exactly_one_submit_dependency",
+    "dispatch:undispatchable_action:3": "test_an_action_with_no_dispatch_arm_is_named",
+    "_require_step:identity_mismatch:1": "test_a_reply_for_a_step_the_procedure_lacks_is_refused",
+    "observe:not_ready:1": "test_a_step_already_committed_is_not_observed_again",
+    "observe:malformed_reply:1": REPLY,
+    "observe:malformed_reply:2": REPLY,
+    "observe:malformed_reply:3": REPLY,
+    "observe:identity_mismatch:1": "test_a_reply_for_another_steps_key_is_refused",
+    "_unknown_step:not_ready:1": "test_only_an_unknown_step_is_reconciled",
+    "unanswered:not_ready:1": "test_an_answered_step_is_not_marked_unanswered",
+    "reconcile_argv:undispatchable_action:1": "test_only_a_submit_step_has_a_readback_to_settle_it",
+    "reconcile:malformed_reply:1": READBACK,
+    "reconcile:malformed_reply:2": READBACK,
+    "reconcile:malformed_reply:3": READBACK,
+}
 
 
-sys.exit(main())
+sys.exit(site_sweep.main(SOURCE, TESTS, EXPECTED))

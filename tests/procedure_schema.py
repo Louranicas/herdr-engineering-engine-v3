@@ -676,10 +676,16 @@ class Dispatch(unittest.TestCase):
 
     def test_a_reply_that_is_not_a_control_record_is_refused(self):
         body = submit_and_read_back()
-        for reply in ([], {"kind": "result"}, {"kind": "error"}, {"kind": "other", "effect": "none"}):
+        # One input per refusal site, each asserting the detail only that site produces (F140):
+        # three sites share `malformed_reply`, so the code alone cannot tell them apart.
+        for reply, detail in (([], "the reply is not a control result or error"),
+                              ({"kind": "other", "effect": "none"}, "the reply is not a control result or error"),
+                              ({"kind": "error"}, "an error reply carries no code"),
+                              ({"kind": "result"}, "a result reply carries no body")):
             with self.subTest(reply=reply):
-                Refusals.refused(self, body, "malformed_reply", call=lambda reply=reply: VP.observe(
+                said = Refusals.refused(self, body, "malformed_reply", call=lambda reply=reply: VP.observe(
                     body, record({}, "submit-and-read-back"), "submit", reply))
+                self.assertIn(detail, said)
 
     def test_a_reply_for_a_step_the_procedure_lacks_is_refused(self):
         body = submit_and_read_back()
@@ -760,10 +766,14 @@ class Reconcile(unittest.TestCase):
 
     def test_a_readback_that_is_not_a_control_record_is_refused(self):
         body, after = self.lost()
-        for reply in ([], {"kind": "error"}, {"kind": "result"}):
+        # One input per refusal site, each asserting its own detail (F140), as for observe.
+        for reply, detail in (([], "the readback is not a control result or error"),
+                              ({"kind": "error"}, "a readback error carries no code"),
+                              ({"kind": "result"}, "a readback result carries no body")):
             with self.subTest(reply=reply):
-                Refusals.refused(self, body, "malformed_reply",
-                                 call=lambda reply=reply: VP.reconcile(body, after, "submit", reply))
+                said = Refusals.refused(self, body, "malformed_reply",
+                                        call=lambda reply=reply: VP.reconcile(body, after, "submit", reply))
+                self.assertIn(detail, said)
 
     def test_an_answered_step_is_not_marked_unanswered(self):
         body = submit_and_read_back()

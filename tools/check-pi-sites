@@ -1,36 +1,25 @@
 #!/usr/bin/env python3
 """Neuter each refusal site in integrations/pi/reconcile.py and require ITS test to notice.
 
-A case per refusal CODE is not a case per SITE: this module raises fifteen codes from
-nineteen places, so four sites have a neighbour that can answer for them. `refusal_sites()`
-counting fifteen would read as complete while four sites sat unpinned.
+This module raises fifteen codes from nineteen places, so four sites have a neighbour that can
+answer for them. The mechanism -- site keys, the table reconciled both ways, killed only by the
+named test -- is `tools/site_sweep.py`, shared with the skill and workflow sweeps.
 
-Each site is rewritten to a no-op in turn and `tests/pi_extension.py` is re-run. A site
-whose neuter leaves the suite green is a survivor: behaviour nothing pins down. A site whose
-neuter fails the suite but NOT the test named for it in `EXPECTED` is killed for the wrong
-reason -- an import error, an unrelated case, or the vocabulary census noticing a code
-vanish -- and it counts as a survivor too: nothing shows the site's own behaviour is pinned.
-
-A site is keyed by (enclosing function, code, ordinal of that code within the function), not
-by line number, so an edit elsewhere in the file does not re-key it. Every site found must
-have an entry, and every entry must name a site found: the table is reconciled against the
-enumeration in both directions.
-
-Run: python3 tools/check-pi-sites
+Run: python3 tools/check-pi-sites   (--discover lists the tests each neuter fails)
 """
 
-import ast
-import re
-import subprocess
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "tools"))
+import site_sweep  # the tools directory is not a package: imported by path, after it is on sys.path
+
 SOURCE = ROOT / "integrations/pi/reconcile.py"
 TESTS = ROOT / "tests/pi_extension.py"
 
 
-# The test whose failure is the evidence each site is pinned, keyed as `site_key` spells it.
+# The test whose failure is the evidence each site is pinned, keyed as `site_sweep.sites` spells it.
 EXPECTED = {
     "register:malformed_package:1": "test_a_package_missing_its_bridge_version",
     "register:unknown_bridge_version:1": "test_a_wrong_schema_string",
@@ -55,106 +44,4 @@ EXPECTED = {
 }
 
 
-def sites(text):
-    """Every `refuse(...)` call, as (line, column, end_line, end_column, code, key).
-
-    Read from the tree rather than by regular expression: a call spanning several lines has
-    no single textual form, and a pattern that missed one would shrink the denominator
-    silently, in the flattering direction. A call outside any function is keyed `<module>`.
-    """
-    found = []
-    tree = ast.parse(text)
-    owners = [(tree, "<module>")] + [(node, node.name) for node in ast.walk(tree)
-                                     if isinstance(node, ast.FunctionDef)]
-    owner_of = {}
-    for owner, name in owners:
-        for node in ast.walk(owner):
-            if isinstance(node, ast.Call):
-                owner_of[id(node)] = name   # innermost owner wins: walked after its parent
-    for node in ast.walk(tree):
-        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
-                and node.func.id == "refuse"):
-            code = (node.args[0].value if node.args and isinstance(node.args[0], ast.Constant)
-                    else "?")
-            found.append((node.lineno, node.col_offset, node.end_lineno, node.end_col_offset,
-                          code, owner_of[id(node)]))
-    ordinal = {}
-    keyed = []
-    for line, col, end_line, end_col, code, owner in sorted(found):
-        ordinal[(owner, code)] = ordinal.get((owner, code), 0) + 1
-        keyed.append((line, col, end_line, end_col, code,
-                      f"{owner}:{code}:{ordinal[(owner, code)]}"))
-    return keyed
-
-
-def failed_tests(result):
-    """The test names unittest reported as FAIL or ERROR in this run."""
-    return set(re.findall(r"^(?:FAIL|ERROR): (\w+) ", result.stderr, re.MULTILINE))
-
-
-def neuter(text, site):
-    """Replace one call with `None`, keeping every other byte."""
-    line_no, col, end_line, end_col = site[:4]
-    lines = text.splitlines(keepends=True)
-    head = lines[line_no - 1][:col]
-    tail = lines[end_line - 1][end_col:]
-    return "".join(lines[: line_no - 1]) + head + "None" + tail + "".join(lines[end_line:])
-
-
-def run_tests():
-    # `-B`: the suite loads reconcile.py through a source loader that trusts a cached .pyc
-    # whose recorded mtime (whole seconds) and size match. Two neutered variants of equal
-    # length written in one second would then run the FIRST variant's bytecode and credit
-    # the wrong site; measured on this module's plant battery, where it did exactly that.
-    return subprocess.run([sys.executable, "-B", "-W", "error", str(TESTS)],
-                          capture_output=True, text=True, check=False)
-
-
-def main():
-    original = SOURCE.read_text()
-    all_sites = sites(original)
-    if not all_sites:
-        raise SystemExit("no refusal sites found; the enumeration is broken, not the module")
-    found_keys = {site[5] for site in all_sites}
-    unlisted = sorted(found_keys - set(EXPECTED))
-    stale = sorted(set(EXPECTED) - found_keys)
-    if unlisted or stale:
-        raise SystemExit(f"EXPECTED does not match the sites found: unlisted={unlisted} "
-                         f"stale={stale}")
-    before = run_tests()
-    if before.returncode != 0:
-        raise SystemExit("the suite is not green before the sweep:\n" + before.stdout + before.stderr)
-
-    survivors = []
-    wrong_reason = []
-    try:
-        for index, site in enumerate(all_sites, 1):
-            SOURCE.write_text(neuter(original, site))
-            result = run_tests()
-            SOURCE.write_text(original)
-            expected = EXPECTED[site[5]]
-            if result.returncode == 0:
-                status = "SURVIVED"
-                survivors.append(site)
-            elif expected in failed_tests(result):
-                status = f"killed by {expected}"
-            else:
-                status = f"KILLED-WRONG-REASON (not {expected})"
-                wrong_reason.append(site)
-            print(f"  {index:2}/{len(all_sites)} line {site[0]:4} {site[5]} {status}",
-                  flush=True)
-    finally:
-        SOURCE.write_text(original)
-
-    killed = len(all_sites) - len(survivors) - len(wrong_reason)
-    print(f"\nsites={len(all_sites)} killed={killed} wrong_reason={len(wrong_reason)} "
-          f"survived={len(survivors)}")
-    for label, group in (("SURVIVOR", survivors), ("WRONG-REASON", wrong_reason)):
-        for site in group:
-            print(f"  {label} {SOURCE.name}:{site[0]} {site[5]} expected {EXPECTED[site[5]]}")
-    passed = not survivors and not wrong_reason
-    print("verdict=" + ("PASS" if passed else "FAIL"))
-    return 0 if passed else 1
-
-
-sys.exit(main())
+sys.exit(site_sweep.main(SOURCE, TESTS, EXPECTED))
