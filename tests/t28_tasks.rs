@@ -2364,30 +2364,6 @@ fn a_list_cursor_resumes_only_its_own_filter_snapshot_and_lifetime() -> Outcome 
             "/body/page/cursor/snapshot_revision",
         ),
         (
-            "another ledger's epoch",
-            unfiltered(
-                1,
-                &with(&|c| c["after_key"] = json!("28d00000-0000-4000-8000-00000000ffff.1")),
-            ),
-            NOW,
-            "resync_required",
-            "/body/page/cursor/after_key",
-        ),
-        (
-            "a key above its own snapshot",
-            unfiltered(1, &with(&|c| c["after_key"] = json!(format!("{EPOCH}.4")))),
-            NOW,
-            "invalid_argument",
-            "/body/page/cursor/after_key",
-        ),
-        (
-            "an after_key that is not a sequence",
-            unfiltered(1, &with(&|c| c["after_key"] = json!("task-1"))),
-            NOW,
-            "invalid_argument",
-            "/body/page/cursor/after_key",
-        ),
-        (
             "an unknown member",
             unfiltered(1, &with(&|c| c["extra"] = json!(1))),
             NOW,
@@ -2729,13 +2705,25 @@ fn a_list_continuation_refuses_a_snapshot_its_members_moved_past() -> Outcome {
         );
     }
     let why = json!({"reason": "superseded", "note": null});
+    let other = Principal::new(1001, "operator").map_err(|error| format!("{error:?}"))?;
+    let admitted = serve(&tasks, &other, &submit_nth(9))?;
+    let theirs = admitted["body"]["task"]["task_id"]
+        .as_str()
+        .ok_or("task id")?
+        .to_owned();
     let first = serve(
         &tasks,
         &operator,
         &list_frame(1, &unfiltered(1, &Value::Null)),
     )?;
     let cursor = first["body"]["page"]["next_cursor"].clone();
-    // The listed member moves, and a non-member is admitted: the listing still continues.
+    // The listed member moves, another principal's task moves, and a non-member is admitted: the
+    // listing still continues.
+    serve(
+        &tasks,
+        &other,
+        &cancel_frame(6, CANCEL_KEY, &theirs, "1", &why)?,
+    )?;
     serve(
         &tasks,
         &operator,
@@ -2847,5 +2835,74 @@ fn a_list_selects_by_parent_and_scopes_by_the_whole_principal() -> Outcome {
         ("task.list", &unfiltered_reply),
         ("task.list", &other_role),
     ])?;
+    Ok(())
+}
+
+/// B06: the `after_key` a listing issues names its ledger epoch and an admission sequence. One from
+/// another epoch (a restore) is `resync_required`; sequence 0, a key past the cursor's own snapshot and
+/// one that is not `<epoch>.<sequence>` are `invalid_argument`, all at `/body/page/cursor/after_key`.
+#[test]
+fn a_list_after_key_names_its_epoch_and_an_issued_sequence() -> Outcome {
+    let scratch = Scratch::new()?;
+    let tasks = ledger(&scratch)?;
+    let operator = Principal::new(1000, "operator").map_err(|error| format!("{error:?}"))?;
+    for n in 1..=3 {
+        serve(&tasks, &operator, &submit_nth(n))?;
+    }
+    let first = serve(
+        &tasks,
+        &operator,
+        &list_frame(1, &unfiltered(1, &Value::Null)),
+    )?;
+    let cursor = first["body"]["page"]["next_cursor"].clone();
+    let with = |edit: &dyn Fn(&mut Value)| {
+        let mut cursor = cursor.clone();
+        edit(&mut cursor);
+        cursor
+    };
+    let mut replies = Vec::new();
+    for (case, body, now, code, field) in [
+        (
+            "another ledger's epoch",
+            unfiltered(
+                1,
+                &with(&|c| c["after_key"] = json!("28d00000-0000-4000-8000-00000000ffff.1")),
+            ),
+            NOW,
+            "resync_required",
+            "/body/page/cursor/after_key",
+        ),
+        (
+            "sequence 0, which no listing issues",
+            unfiltered(1, &with(&|c| c["after_key"] = json!(format!("{EPOCH}.0")))),
+            NOW,
+            "invalid_argument",
+            "/body/page/cursor/after_key",
+        ),
+        (
+            "a key above its own snapshot",
+            unfiltered(1, &with(&|c| c["after_key"] = json!(format!("{EPOCH}.4")))),
+            NOW,
+            "invalid_argument",
+            "/body/page/cursor/after_key",
+        ),
+        (
+            "an after_key that is not a sequence",
+            unfiltered(1, &with(&|c| c["after_key"] = json!("task-1"))),
+            NOW,
+            "invalid_argument",
+            "/body/page/cursor/after_key",
+        ),
+    ] {
+        let reply = serve_at(&tasks, &operator, &list_frame_at(2, &body, now)?, now)?;
+        assert_eq!(
+            (&reply["code"], &reply["details"]["field"]),
+            (&json!(code), &json!(field)),
+            "{case}: {reply}"
+        );
+        replies.push(reply);
+    }
+    let rows: Vec<(&str, &Value)> = replies.iter().map(|reply| ("task.list", reply)).collect();
+    conforms(&rows)?;
     Ok(())
 }

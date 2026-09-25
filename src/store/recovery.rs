@@ -613,8 +613,10 @@ impl Store {
     /// B06 `task.list`: one page of `principal`'s tasks in admission order, each read as
     /// [`Store::task_view`] reads it, from one read snapshot. Membership is fixed by `snapshot` (the
     /// event high-water when the listing began; `None` begins one): a task admitted after it is not
-    /// a member. A continuation is refused (`SnapshotMoved`) once a member it has yet to list changed
-    /// after the snapshot, so every page shows its members as they were at it. `states`, the admitted class and the parent select; the page starts after the
+    /// a member. A continuation is refused (`SnapshotMoved`) once a member it has yet to list has an
+    /// event after the snapshot, so every page shows its members as they were at it -- as far as the
+    /// ledger's events record: a delivery acknowledgement (`acknowledge_delivery`, not yet reached from
+    /// the wire) writes none, so it can lower a later member's unresolved obligations unseen. `states`, the admitted class and the parent select; the page starts after the
     /// admission sequence `after` and holds at most `limit` tasks, `more` saying whether any remain.
     /// A class and a parent are read from the task's admitted request, where they are persisted.
     /// # Errors

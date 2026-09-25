@@ -84,8 +84,10 @@ impl StoreTasks {
     }
 
     /// Where a `task.list` cursor resumes. The key this listing issues is `<ledger epoch>.<admission
-    /// sequence>`: one from another ledger epoch (a restore) is `resync_required`, and one this
-    /// listing could not have issued -- malformed, or past its own snapshot -- is `invalid_argument`.
+    /// sequence>`: one from another ledger epoch (a restore) is `resync_required`, and one malformed,
+    /// naming sequence 0 or past its own snapshot -- which this listing never issues -- is
+    /// `invalid_argument`. A well-formed key that is not an admission sequence resumes after it; it
+    /// cannot widen what the principal sees.
     fn resume_key(&self, cursor: &PageCursor) -> Result<u64, Fault> {
         let issued = || Fault::invalid("/body/page/cursor/after_key", "a key this listing issued");
         let (epoch, sequence) = cursor.after_key.split_once('.').ok_or_else(issued)?;
@@ -94,7 +96,7 @@ impl StoreTasks {
         if epoch != self.epoch {
             return Err(Fault::resync("/body/page/cursor/after_key"));
         }
-        if sequence > cursor.snapshot_revision {
+        if sequence == 0 || sequence > cursor.snapshot_revision {
             return Err(issued());
         }
         Ok(sequence)
