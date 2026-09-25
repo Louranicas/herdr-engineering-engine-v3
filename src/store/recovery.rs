@@ -470,12 +470,33 @@ fn list_in(
     let high_water = db.query_row("SELECT coalesce(max(sequence),0) FROM events", [], |row| {
         read_number(row, 0)
     })?;
+    let continuing = snapshot.is_some();
     let snapshot = snapshot.unwrap_or(high_water);
     if snapshot > high_water {
         return Err(Error::SnapshotAhead {
             snapshot,
             high_water,
         });
+    }
+    let (after_at, snapshot_at) = (
+        i64::try_from(after).map_err(|_| Error::Bound)?,
+        i64::try_from(snapshot).map_err(|_| Error::Bound)?,
+    );
+    // A continuation shows each member as it was at the snapshot: refused once a member it has
+    // yet to list has an event after it. A member already listed, or a task admitted after the
+    // snapshot (not a member), does not move it.
+    if continuing {
+        let moved: bool = db.query_row(
+            "SELECT EXISTS(SELECT 1 FROM events n JOIN tasks t ON t.id=n.task_id \
+             JOIN events a ON a.task_id=t.id AND a.kind='admitted' \
+             WHERE n.sequence>?4 AND a.sequence>?3 AND a.sequence<=?4 \
+             AND t.principal_uid=?1 AND t.principal_role=?2)",
+            rusqlite::params![principal.uid(), principal.role(), after_at, snapshot_at],
+            |row| row.get(0),
+        )?;
+        if moved {
+            return Err(Error::SnapshotMoved { snapshot });
+        }
     }
     let states = serde_json::to_string(filter.states)?;
     let sql = format!(
@@ -492,8 +513,8 @@ fn list_in(
             rusqlite::params![
                 principal.uid(),
                 principal.role(),
-                i64::try_from(after).map_err(|_| Error::Bound)?,
-                i64::try_from(snapshot).map_err(|_| Error::Bound)?,
+                after_at,
+                snapshot_at,
                 states,
                 filter.task_class,
                 filter.parent_task_id,
@@ -592,11 +613,13 @@ impl Store {
     /// B06 `task.list`: one page of `principal`'s tasks in admission order, each read as
     /// [`Store::task_view`] reads it, from one read snapshot. Membership is fixed by `snapshot` (the
     /// event high-water when the listing began; `None` begins one): a task admitted after it is not
-    /// a member. `states`, the admitted class and the parent select; the page starts after the
+    /// a member. A continuation is refused (`SnapshotMoved`) once a member it has yet to list changed
+    /// after the snapshot, so every page shows its members as they were at it. `states`, the admitted class and the parent select; the page starts after the
     /// admission sequence `after` and holds at most `limit` tasks, `more` saying whether any remain.
     /// A class and a parent are read from the task's admitted request, where they are persisted.
     /// # Errors
     /// `UncertainCommit` when poisoned; `SnapshotAhead` for a snapshot beyond the high-water;
+    /// `SnapshotMoved`;
     /// `TaskViewBound` for a listed task past the attempt bound; `Bound`; read failures.
     pub fn task_list(
         &mut self,

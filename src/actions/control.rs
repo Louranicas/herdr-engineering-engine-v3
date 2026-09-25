@@ -136,8 +136,9 @@ pub trait Tasks {
     ///
     /// # Errors
     ///
-    /// `resync_required` for a snapshot the ledger never reached; `invalid_argument` for an
-    /// `after_key` this listing could not have issued; `resource_exhausted` past a task's read bound;
+    /// `resync_required` for a snapshot the ledger never reached or its members moved past, and for a
+    /// cursor from another ledger epoch; `invalid_argument` for an `after_key` this listing could not
+    /// have issued (malformed, or past its own snapshot); `resource_exhausted` past a task's read bound;
     /// `unavailable` when the ledger cannot be read.
     fn list(
         &self,

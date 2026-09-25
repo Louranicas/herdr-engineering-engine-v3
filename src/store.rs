@@ -393,6 +393,11 @@ pub enum Error {
         snapshot: u64,
         high_water: u64,
     },
+    /// A listing's continuation names a snapshot that no longer describes a member it has yet to
+    /// list: that member changed after it (B06). The listing must begin again.
+    SnapshotMoved {
+        snapshot: u64,
+    },
     /// The task's outcome is already decided without a cancellation (accepted, or its terminal stop
     /// committed): there is no intent left to record, and its outcome stays historical (B05, RC03 §6).
     AlreadyStopped,

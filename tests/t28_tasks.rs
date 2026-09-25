@@ -2158,8 +2158,10 @@ fn a_list_pages_the_principals_tasks_in_admission_order() -> Outcome {
         &operator,
         &list_frame(1, &unfiltered(2, &Value::Null)),
     )?;
+    // The after_key names the ledger epoch and the admission sequence, so a cursor from another
+    // ledger (a restore) can be told apart.
     let cursor = |after: &str| {
-        json!({"snapshot_revision": snapshot, "after_key": after, "filter_sha256": filter,
+        json!({"snapshot_revision": snapshot, "after_key": format!("{EPOCH}.{after}"), "filter_sha256": filter,
                "expires_unix_ms": (NOW + 300_000).to_string()})
     };
     assert_eq!(
@@ -2331,7 +2333,7 @@ fn a_list_cursor_resumes_only_its_own_filter_snapshot_and_lifetime() -> Outcome 
         &list_frame(1, &unfiltered(1, &Value::Null)),
     )?;
     let cursor = first["body"]["page"]["next_cursor"].clone();
-    assert_eq!(cursor["after_key"], json!("1"), "{first}");
+    assert_eq!(cursor["after_key"], json!(format!("{EPOCH}.1")), "{first}");
     let with = |edit: &dyn Fn(&mut Value)| {
         let mut cursor = cursor.clone();
         edit(&mut cursor);
@@ -2360,6 +2362,23 @@ fn a_list_cursor_resumes_only_its_own_filter_snapshot_and_lifetime() -> Outcome 
             NOW,
             "resync_required",
             "/body/page/cursor/snapshot_revision",
+        ),
+        (
+            "another ledger's epoch",
+            unfiltered(
+                1,
+                &with(&|c| c["after_key"] = json!("28d00000-0000-4000-8000-00000000ffff.1")),
+            ),
+            NOW,
+            "resync_required",
+            "/body/page/cursor/after_key",
+        ),
+        (
+            "a key above its own snapshot",
+            unfiltered(1, &with(&|c| c["after_key"] = json!(format!("{EPOCH}.4")))),
+            NOW,
+            "invalid_argument",
+            "/body/page/cursor/after_key",
         ),
         (
             "an after_key that is not a sequence",
@@ -2393,7 +2412,7 @@ fn a_list_cursor_resumes_only_its_own_filter_snapshot_and_lifetime() -> Outcome 
     )?;
     assert_eq!(
         resumed["body"]["page"]["next_cursor"]["after_key"],
-        json!("2"),
+        json!(format!("{EPOCH}.2")),
         "{resumed}"
     );
     replies.push(resumed);
@@ -2648,7 +2667,7 @@ fn a_list_filter_is_one_filter_whatever_the_order_of_its_states() -> Outcome {
     let reordered = both(5, json!(["admitted", "cancellation_requested"]), &issued)?;
     assert_eq!(
         reordered["body"]["page"]["next_cursor"]["after_key"],
-        json!("2"),
+        json!(format!("{EPOCH}.2")),
         "{reordered}"
     );
     // The class and the parent are the filter too: the same cursor presented under another class or
@@ -2686,6 +2705,147 @@ fn a_list_filter_is_one_filter_whatever_the_order_of_its_states() -> Outcome {
         ("task.list", &reordered),
         ("task.list", &refused[0]),
         ("task.list", &refused[1]),
+    ])?;
+    Ok(())
+}
+
+/// B06 (review 2): a listing is consistent with its snapshot. A continuation is refused
+/// `resync_required` once any member it has yet to list has changed after the snapshot, so every
+/// item a listing shows is its state at the snapshot and every filter is applied at it. A change to
+/// a member already listed, or a task admitted after the snapshot (not a member), does not refuse.
+#[test]
+fn a_list_continuation_refuses_a_snapshot_its_members_moved_past() -> Outcome {
+    let scratch = Scratch::new()?;
+    let tasks = ledger(&scratch)?;
+    let operator = Principal::new(1000, "operator").map_err(|error| format!("{error:?}"))?;
+    let mut ids = Vec::new();
+    for n in 1..=3 {
+        let reply = serve(&tasks, &operator, &submit_nth(n))?;
+        ids.push(
+            reply["body"]["task"]["task_id"]
+                .as_str()
+                .ok_or("task id")?
+                .to_owned(),
+        );
+    }
+    let why = json!({"reason": "superseded", "note": null});
+    let first = serve(
+        &tasks,
+        &operator,
+        &list_frame(1, &unfiltered(1, &Value::Null)),
+    )?;
+    let cursor = first["body"]["page"]["next_cursor"].clone();
+    // The listed member moves, and a non-member is admitted: the listing still continues.
+    serve(
+        &tasks,
+        &operator,
+        &cancel_frame(2, CANCEL_KEY, &ids[0], "1", &why)?,
+    )?;
+    serve(&tasks, &operator, &submit_nth(4))?;
+    let second = serve(&tasks, &operator, &list_frame(3, &unfiltered(1, &cursor)))?;
+    assert_eq!(
+        second["body"]["page"]["items"][0]["task_id"],
+        json!(ids[1]),
+        "{second}"
+    );
+    // A member not yet listed moves: the snapshot no longer describes it.
+    let later = second["body"]["page"]["next_cursor"].clone();
+    serve(
+        &tasks,
+        &operator,
+        &cancel_frame(4, CANCEL_KEY_2, &ids[2], "1", &why)?,
+    )?;
+    let refused = serve(&tasks, &operator, &list_frame(5, &unfiltered(1, &later)))?;
+    assert_eq!(
+        (&refused["code"], &refused["details"]["field"]),
+        (
+            &json!("resync_required"),
+            &json!("/body/page/cursor/snapshot_revision")
+        ),
+        "{refused}"
+    );
+    conforms(&[
+        ("task.list", &first),
+        ("task.list", &second),
+        ("task.list", &refused),
+    ])?;
+    Ok(())
+}
+
+/// B06 (review 2): the parent selects the tasks whose admitted request names it (staged through
+/// the store's own API, since the wire does not yet admit a parent), and a listing is scoped by the
+/// whole principal: the same uid under another role lists none of these tasks.
+#[test]
+fn a_list_selects_by_parent_and_scopes_by_the_whole_principal() -> Outcome {
+    use habitat_engine::store::{Allocation, Submission};
+    let scratch = Scratch::new()?;
+    let operator = Principal::new(1000, "operator").map_err(|error| format!("{error:?}"))?;
+    let reviewer = Principal::new(1000, "reviewer").map_err(|error| format!("{error:?}"))?;
+    let parent = "28d00000-0000-4000-8000-0000000008aa";
+    let mut store = raw_store(&scratch)?;
+    let until = Instant::now() + Duration::from_secs(10);
+    let criteria_text = format!("sha256:{}", "5".repeat(64));
+    let criteria = habitat_engine::contracts::Sha256Digest::parse(&criteria_text)?;
+    for (index, bytes) in [
+        (
+            1_u16,
+            json!({"body": {"spec": {"task_class": "rust-library-change/1",
+                                         "parent": {"task_id": parent}}}}),
+        ),
+        (
+            2,
+            json!({"body": {"spec": {"task_class": "rust-library-change/1", "parent": null}}}),
+        ),
+    ] {
+        let request_bytes = serde_json::to_vec(&bytes)?;
+        store
+            .submit(
+                Submission {
+                    principal: &operator,
+                    key: UuidV4::parse(&nth(0x08b0, index))?,
+                    task: UuidV4::parse(&nth(0x08b1, index))?,
+                    event: UuidV4::parse(&nth(0x08b2, index))?,
+                    request_bytes: &request_bytes,
+                    criteria,
+                    allocation: Allocation {
+                        limit_ms: 1_200_000,
+                        work_ms: 900_000,
+                        verify_ms: 300_000,
+                    },
+                },
+                until,
+            )
+            .map_err(|error| format!("{error:?}"))?;
+    }
+    let tasks = StoreTasks::new(store, EPOCH.to_owned());
+    let listed = |principal: &Principal, no: u8, parent: Value| {
+        let reply = serve(
+            &tasks,
+            principal,
+            &list_frame(
+                no,
+                &json!({"states": [], "task_class": null, "parent_task_id": parent,
+                        "page": {"limit": 100, "cursor": null}}),
+            ),
+        )?;
+        let ids: Vec<String> = reply["body"]["page"]["items"]
+            .as_array()
+            .ok_or("items")?
+            .iter()
+            .map(|item| item["task_id"].as_str().unwrap_or("?").to_owned())
+            .collect();
+        Ok::<_, Box<dyn Error>>((ids, reply))
+    };
+    let (children, by_parent) = listed(&operator, 1, json!(parent))?;
+    assert_eq!(children, [nth(0x08b1, 1)], "{by_parent}");
+    let (all, unfiltered_reply) = listed(&operator, 2, Value::Null)?;
+    assert_eq!(all, [nth(0x08b1, 1), nth(0x08b1, 2)], "{unfiltered_reply}");
+    let (theirs, other_role) = listed(&reviewer, 3, Value::Null)?;
+    assert!(theirs.is_empty(), "{other_role}");
+    conforms(&[
+        ("task.list", &by_parent),
+        ("task.list", &unfiltered_reply),
+        ("task.list", &other_role),
     ])?;
     Ok(())
 }

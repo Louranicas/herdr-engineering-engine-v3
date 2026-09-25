@@ -33,7 +33,7 @@
 use crate::actions::control::{CURSOR_LIFETIME_MS, Recorded, TaskRequest, Tasks};
 use crate::app::evidence::fresh_id;
 use crate::contracts::control::{
-    ErrorCode, Fault, Outcome, Precondition, ResultEffect, Retry, request_sha256,
+    ErrorCode, Fault, Outcome, PageCursor, Precondition, ResultEffect, Retry, request_sha256,
 };
 use crate::contracts::parse_u64_decimal;
 use crate::contracts::{Sha256Digest, UuidV4};
@@ -81,6 +81,23 @@ impl StoreTasks {
             "issued_unix_ms": now_unix_ms.to_string(),
             "expires_unix_ms": now_unix_ms.saturating_add(ENGINE_CURSOR_LIFETIME_MS).to_string(),
         })
+    }
+
+    /// Where a `task.list` cursor resumes. The key this listing issues is `<ledger epoch>.<admission
+    /// sequence>`: one from another ledger epoch (a restore) is `resync_required`, and one this
+    /// listing could not have issued -- malformed, or past its own snapshot -- is `invalid_argument`.
+    fn resume_key(&self, cursor: &PageCursor) -> Result<u64, Fault> {
+        let issued = || Fault::invalid("/body/page/cursor/after_key", "a key this listing issued");
+        let (epoch, sequence) = cursor.after_key.split_once('.').ok_or_else(issued)?;
+        UuidV4::parse(epoch).map_err(|_| issued())?;
+        let sequence = parse_u64_decimal(sequence).map_err(|_| issued())?;
+        if epoch != self.epoch {
+            return Err(Fault::resync("/body/page/cursor/after_key"));
+        }
+        if sequence > cursor.snapshot_revision {
+            return Err(issued());
+        }
+        Ok(sequence)
     }
 
     /// The `task.submit` result for a stored admission: the one rendering of a first reply and of
@@ -367,13 +384,8 @@ impl Tasks for StoreTasks {
     ) -> Result<Outcome, Fault> {
         let until = deadline(deadline_unix_ms, now_unix_ms);
         let cursor = list.page.cursor.as_ref();
-        // The after_key this listing issues is an admission sequence; anything else it never issued.
         let after = cursor
-            .map(|cursor| {
-                parse_u64_decimal(&cursor.after_key).map_err(|_| {
-                    Fault::invalid("/body/page/cursor/after_key", "a key this listing issued")
-                })
-            })
+            .map(|cursor| self.resume_key(cursor))
             .transpose()?
             .unwrap_or(0);
         let states: Vec<&str> = list.states.iter().map(|state| state.name()).collect();
@@ -397,7 +409,7 @@ impl Tasks for StoreTasks {
                 until,
             )
             .map_err(|error| match error {
-                StoreError::SnapshotAhead { .. } => {
+                StoreError::SnapshotAhead { .. } | StoreError::SnapshotMoved { .. } => {
                     Fault::resync("/body/page/cursor/snapshot_revision")
                 }
                 other => store_fault(&other),
@@ -417,7 +429,7 @@ impl Tasks for StoreTasks {
         let next_cursor = match listing.tasks.last() {
             Some((sequence, _)) if listing.more => json!({
                 "snapshot_revision": snapshot,
-                "after_key": sequence.to_string(),
+                "after_key": format!("{}.{sequence}", self.epoch),
                 "filter_sha256": list.filter_sha256(),
                 "expires_unix_ms": now_unix_ms.saturating_add(CURSOR_LIFETIME_MS).to_string(),
             }),
