@@ -239,7 +239,7 @@ ACTIONS_INPUTS = ("src/actions.rs", "src/worker/tools.rs", "src/actions/control.
 HERDR_TARGET_COUNTS = {"t16_herdr": 71}
 HERDR_INPUTS = ("src/herdr.rs",)
 
-T09_TARGET_COUNTS = {"t09_route": 72}
+T09_TARGET_COUNTS = {"t09_route": 77}
 # make-known-answers.py is the independent Python oracle that wrote known-answers.json; the gate
 # re-derives the table with it (review N9: it had lived only in the evidence store).
 T09_INPUTS = ("config/routes.toml", "src/route.rs", "tests/fixtures/route/fixture.json",

@@ -4,10 +4,10 @@
 //! is involved: the age of every availability observation is a value here.
 use habitat_engine::contracts::roster::{Availability, Locality};
 use habitat_engine::route::{
-    Attempt, ConfigError, Declaration, EvidenceGap, Exclusion, Explanation, Failure, Fallback,
-    Figure, Filter, Gap, Invalid, Key, MAX_CANDIDATES, MAX_QUALITY_BASIS_POINTS, MAX_STALENESS_MS,
-    Observation, Policy, PrivacyClass, Ranked, Recipe, Refusal, Route, Rule, Step, Task, TieRule,
-    evaluate_fallback, route,
+    Attempt, ConfigError, Declaration, DeclaredRecipe, EvidenceGap, Exclusion, Explanation,
+    Failure, Fallback, Figure, Filter, Gap, Invalid, Key, MAX_CANDIDATES, MAX_QUALITY_BASIS_POINTS,
+    MAX_RECIPES, MAX_STALENESS_MS, Observation, Policy, PrivacyClass, Ranked, Recipe, Refusal,
+    Route, Routing, Rule, Step, Task, TieRule, evaluate_fallback, route,
 };
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
@@ -2393,6 +2393,9 @@ fn policy_source_names_no_effectful_item() {
 /// revision (route-G5), and associated items of the primitive integers. Nothing here performs I/O.
 const ROUTE_MAY_REFERENCE: &[&str] = &[
     "crate::contracts::roster",
+    // B07a: the one UUIDv4 validator, a pure byte-shape check (`src/contracts.rs`), for a declared
+    // recipe's adapter and roster record — the type only, not the rest of `crate::contracts`.
+    "crate::contracts::UuidV4",
     "serde::Serialize",
     "sha2",
     "std::cmp",
@@ -2403,6 +2406,7 @@ const ROUTE_MAY_REFERENCE: &[&str] = &[
     "toml",
     "u64",
     "i64",
+    "u16",
 ];
 
 /// Segment-aware: an entry admits itself and anything below it, so `std::fmt` admits
@@ -3130,6 +3134,158 @@ fn config_renderings_c() -> Vec<Rendering> {
     ]
 }
 
+fn config_renderings_e() -> Vec<Rendering> {
+    vec![
+        (
+            "TooManyRecipes",
+            ConfigError::TooManyRecipes {
+                count: 129,
+                limit: 128,
+            }
+            .to_string(),
+            "129 recipes exceed the bound of 128",
+        ),
+        (
+            "TooManyRecipes",
+            ConfigError::TooManyRecipes {
+                count: 300,
+                limit: 17,
+            }
+            .to_string(),
+            "300 recipes exceed the bound of 17",
+        ),
+        (
+            "RecipeIdentity",
+            ConfigError::RecipeIdentity { index: 0 }.to_string(),
+            "invalid recipe identity at recipes[0]",
+        ),
+        (
+            "RecipeIdentity",
+            ConfigError::RecipeIdentity { index: 41 }.to_string(),
+            "invalid recipe identity at recipes[41]",
+        ),
+        (
+            "DuplicateRecipe",
+            ConfigError::DuplicateRecipe {
+                recipe: "chi".to_owned(),
+            }
+            .to_string(),
+            "duplicate recipe identity \"chi\"",
+        ),
+        (
+            "DuplicateRecipe",
+            ConfigError::DuplicateRecipe {
+                recipe: "psi-23".to_owned(),
+            }
+            .to_string(),
+            "duplicate recipe identity \"psi-23\"",
+        ),
+        (
+            "RecipeVersion",
+            ConfigError::RecipeVersion {
+                recipe: "omega".to_owned(),
+            }
+            .to_string(),
+            "recipe \"omega\" version is outside 1..=65535",
+        ),
+        (
+            "RecipeVersion",
+            ConfigError::RecipeVersion {
+                recipe: "alef-2".to_owned(),
+            }
+            .to_string(),
+            "recipe \"alef-2\" version is outside 1..=65535",
+        ),
+        (
+            "RecipeAdapter",
+            ConfigError::RecipeAdapter {
+                recipe: "bet".to_owned(),
+            }
+            .to_string(),
+            "recipe \"bet\" adapter is not a UUIDv4",
+        ),
+    ]
+}
+
+fn config_renderings_f() -> Vec<Rendering> {
+    vec![
+        (
+            "RecipeAdapter",
+            ConfigError::RecipeAdapter {
+                recipe: "gimel-3".to_owned(),
+            }
+            .to_string(),
+            "recipe \"gimel-3\" adapter is not a UUIDv4",
+        ),
+        (
+            "RecipeRosterRecord",
+            ConfigError::RecipeRosterRecord {
+                recipe: "dalet".to_owned(),
+            }
+            .to_string(),
+            "recipe \"dalet\" roster_record is not a UUIDv4",
+        ),
+        (
+            "RecipeRosterRecord",
+            ConfigError::RecipeRosterRecord {
+                recipe: "he-5".to_owned(),
+            }
+            .to_string(),
+            "recipe \"he-5\" roster_record is not a UUIDv4",
+        ),
+        (
+            "RecipeServes",
+            ConfigError::RecipeServes {
+                recipe: "vav".to_owned(),
+            }
+            .to_string(),
+            "recipe \"vav\" serves no class, repeats one or names an invalid one",
+        ),
+        (
+            "RecipeServes",
+            ConfigError::RecipeServes {
+                recipe: "zayin-7".to_owned(),
+            }
+            .to_string(),
+            "recipe \"zayin-7\" serves no class, repeats one or names an invalid one",
+        ),
+        (
+            "RecipeQuality",
+            ConfigError::RecipeQuality {
+                recipe: "het".to_owned(),
+            }
+            .to_string(),
+            "recipe \"het\" quality figure exceeds 10000",
+        ),
+        (
+            "RecipeQuality",
+            ConfigError::RecipeQuality {
+                recipe: "tet-9".to_owned(),
+            }
+            .to_string(),
+            "recipe \"tet-9\" quality figure exceeds 10000",
+        ),
+        (
+            "RecipeFigure",
+            ConfigError::RecipeFigure {
+                recipe: "yod".to_owned(),
+                key: "cost_microunits".to_owned(),
+            }
+            .to_string(),
+            "recipe \"yod\" figure \"cost_microunits\" is negative",
+        ),
+        (
+            "RecipeFigure",
+            ConfigError::RecipeFigure {
+                recipe: "kaf-11".to_owned(),
+                key: "latency_ms".to_owned(),
+            }
+            .to_string(),
+            "recipe \"kaf-11\" figure \"latency_ms\" is negative",
+        ),
+    ]
+}
+
 fn config_renderings_d() -> Vec<Rendering> {
     vec![
         (
@@ -3214,11 +3370,17 @@ fn every_config_refusal_renders_its_own_whole_diagnostic() -> Outcome {
     table.extend(config_renderings_b());
     table.extend(config_renderings_c());
     table.extend(config_renderings_d());
+    table.extend(config_renderings_e());
+    table.extend(config_renderings_f());
     for (variant, rendered, expected) in &table {
         assert_eq!(rendered, expected, "{variant} rendered wrongly");
     }
     let declared = declared_variants("ConfigError")?;
-    assert_eq!(declared.len(), 18, "ConfigError declares eighteen variants");
+    assert_eq!(
+        declared.len(),
+        27,
+        "ConfigError declares twenty-seven variants"
+    );
     for variant in &declared {
         assert!(
             table.iter().any(|(name, ..)| name == variant),
@@ -3651,6 +3813,340 @@ fn every_decision_enum_variant_is_produced_by_a_named_whole_case() -> Outcome {
         declared.len(),
         23,
         "8 exclusions, 4 gaps, 6 steps, 3 fallbacks, 2 refusals"
+    );
+    Ok(())
+}
+
+// ---- B07a · declared recipes (route owns them; `config/routes.toml` `recipes`) ----------------
+
+/// `sha256sum` of `printf 'hee3-route-recipes\nschema_version=1\ncount=0\n'`, computed outside Rust.
+const EMPTY_RECIPES_REVISION: &str =
+    "sha256:c53ff16b5668c96e25cd51ecb33bb7d452d7448d25482a092362eb102e0966b4";
+/// `sha256sum` of the literal two-recipe rendering written out in T09-RT-74, computed outside Rust.
+const TWO_RECIPES_REVISION: &str =
+    "sha256:c65951dd32cb5596a9cc2c5547467144060d262e34738ae8bbe84670d0b713de";
+const ROUTINE: &str = r#"{ id = "routine-code", version = 3, adapter = "09000000-0000-4000-8000-0000000000e1", actual_model_required = true, roster_record = "09000000-0000-4000-8000-0000000000f1", serves = ["rust-library-change/1"], context_limit_tokens = 32768, cost_microunits = 0, quality_basis_points = 7000, latency_ms = 900 }"#;
+const PRIVATE: &str = r#"{ id = "private-local", version = 1, adapter = "09000000-0000-4000-8000-0000000000e2", actual_model_required = false, roster_record = "09000000-0000-4000-8000-0000000000f2", serves = ["b-class", "a-class"] }"#;
+
+/// The shipped configuration with its empty `recipes = []` replaced by `rows`.
+fn with_recipes(rows: &[&str]) -> String {
+    assert_eq!(
+        CONFIG.matches("recipes = []").count(),
+        1,
+        "one empty recipes key ships"
+    );
+    CONFIG.replacen(
+        "recipes = []",
+        &format!("recipes = [\n  {},\n]", rows.join(",\n  ")),
+        1,
+    )
+}
+
+/// A `ROUTINE` row with `member` replaced (or added) as `key = value`.
+fn routine_with(key: &str, value: &str) -> String {
+    let mut members: Vec<String> = ROUTINE
+        .trim_start_matches("{ ")
+        .trim_end_matches(" }")
+        .split(", ")
+        .filter(|member| !member.starts_with(&format!("{key} =")))
+        .map(str::to_owned)
+        .collect();
+    if !value.is_empty() {
+        members.push(format!("{key} = {value}"));
+    }
+    format!("{{ {} }}", members.join(", "))
+}
+
+/// T09-RT-73 · the shipped `config/routes.toml` declares no recipes (commissioning populates them,
+/// RC02/T18): one parse reads the declaration and the empty recipe set, whose revision is the
+/// digest of the empty rendering; the policy it yields is the one `Policy::load` yields (C1); the
+/// `[baseline]` token and the `recipes = []` key each appear exactly once (C4).
+#[test]
+fn the_shipped_configuration_declares_no_recipes_and_one_policy() -> Outcome {
+    let routing = Routing::parse(CONFIG)?;
+    assert_eq!(routing.recipes(), &[] as &[DeclaredRecipe]);
+    assert_eq!(routing.baseline(), BASELINE_ID);
+    assert_eq!(routing.recipes_revision(), EMPTY_RECIPES_REVISION);
+    assert_eq!(routing.policy(&baseline())?, policy()?);
+    assert_eq!(routing.policy(&baseline())?.revision(), REVIEWED_REVISION);
+    assert_eq!(CONFIG.matches("[baseline]").count(), 1);
+    assert_eq!(CONFIG.matches("recipes = []").count(), 1);
+    Ok(())
+}
+
+/// T09-RT-74 · two declared recipes that differ in every field read back whole, in identity order
+/// with `serves` sorted; an absent figure is `None` (unknown, never invented). The recipe-set
+/// revision is `sha256:` over the canonical rendering written out below; its digest was computed
+/// by `sha256sum` over that literal, so the rendering is pinned byte for byte. Row order in the
+/// source does not enter it; recipes do not enter the policy's own revision (C3).
+#[test]
+fn declared_recipes_read_back_whole_with_their_own_revision() -> Outcome {
+    let source = with_recipes(&[ROUTINE, PRIVATE]);
+    let routing = Routing::parse(&source)?;
+    let local = DeclaredRecipe {
+        id: "private-local".to_owned(),
+        version: 1,
+        adapter: "09000000-0000-4000-8000-0000000000e2".to_owned(),
+        actual_model_required: false,
+        roster_record: "09000000-0000-4000-8000-0000000000f2".to_owned(),
+        serves: vec!["a-class".to_owned(), "b-class".to_owned()],
+        context_limit_tokens: None,
+        cost_microunits: None,
+        quality_basis_points: None,
+        latency_ms: None,
+    };
+    let coding = DeclaredRecipe {
+        id: "routine-code".to_owned(),
+        version: 3,
+        adapter: "09000000-0000-4000-8000-0000000000e1".to_owned(),
+        actual_model_required: true,
+        roster_record: "09000000-0000-4000-8000-0000000000f1".to_owned(),
+        serves: vec!["rust-library-change/1".to_owned()],
+        context_limit_tokens: Some(32_768),
+        cost_microunits: Some(0),
+        quality_basis_points: Some(7_000),
+        latency_ms: Some(900),
+    };
+    assert_eq!(routing.recipes(), &[local.clone(), coding.clone()]);
+    // The rendering whose `sha256sum` is TWO_RECIPES_REVISION:
+    // hee3-route-recipes / schema_version=1 / count=2 / then per recipe in id order:
+    // recipe.id, recipe.version, recipe.adapter, recipe.actual_model_required,
+    // recipe.roster_record, recipe.serves.count, one recipe.serves line per class (sorted),
+    // recipe.context_limit_tokens, recipe.cost_microunits, recipe.quality_basis_points,
+    // recipe.latency_ms — `unknown` for an absent figure; one `key=value` per line.
+    assert_eq!(routing.recipes_revision(), TWO_RECIPES_REVISION);
+    let swapped = Routing::parse(&with_recipes(&[PRIVATE, ROUTINE]))?;
+    assert_eq!(swapped.recipes(), &[local, coding]);
+    assert_eq!(swapped.recipes_revision(), TWO_RECIPES_REVISION);
+    assert_eq!(routing.policy(&baseline())?.revision(), REVIEWED_REVISION);
+    Ok(())
+}
+
+/// The recipe refusal cases of T09-RT-75: the key and type rules.
+fn recipe_key_cases() -> Vec<(String, ConfigError)> {
+    let routine = |key: &str, value: &str| routine_with(key, value);
+    vec![
+        (
+            CONFIG.replacen("recipes = []", "recipes = 5", 1),
+            ConfigError::WrongType {
+                key: "recipes".to_owned(),
+            },
+        ),
+        (
+            with_recipes(&["7"]),
+            ConfigError::WrongType {
+                key: "recipes[0]".to_owned(),
+            },
+        ),
+        (
+            with_recipes(&[PRIVATE, &routine("model", "\"x\"")]),
+            ConfigError::UnknownKey {
+                key: "recipes[1].model".to_owned(),
+            },
+        ),
+        (
+            with_recipes(&[&routine("id", "")]),
+            ConfigError::MissingKey {
+                key: "recipes[0].id".to_owned(),
+            },
+        ),
+        (
+            with_recipes(&[&routine("serves", "")]),
+            ConfigError::MissingKey {
+                key: "recipes[0].serves".to_owned(),
+            },
+        ),
+        (
+            with_recipes(&[&routine("version", "\"3\"")]),
+            ConfigError::WrongType {
+                key: "recipes[0].version".to_owned(),
+            },
+        ),
+        (
+            with_recipes(&[&routine("actual_model_required", "1")]),
+            ConfigError::WrongType {
+                key: "recipes[0].actual_model_required".to_owned(),
+            },
+        ),
+        (
+            with_recipes(&[&routine("latency_ms", "\"900\"")]),
+            ConfigError::WrongType {
+                key: "recipes[0].latency_ms".to_owned(),
+            },
+        ),
+        (
+            with_recipes(&[&routine("serves", "[1]")]),
+            ConfigError::WrongType {
+                key: "recipes[0].serves".to_owned(),
+            },
+        ),
+        (
+            with_recipes(&[&routine("id", "\"\"")]),
+            ConfigError::RecipeIdentity { index: 0 },
+        ),
+        (
+            with_recipes(&[PRIVATE, &routine("id", "\"a\\u0001b\"")]),
+            ConfigError::RecipeIdentity { index: 1 },
+        ),
+    ]
+}
+
+/// The recipe refusal cases of T09-RT-75: the value rules.
+fn recipe_value_cases() -> Vec<(String, ConfigError)> {
+    let routine = |key: &str, value: &str| routine_with(key, value);
+    vec![
+        (
+            with_recipes(&[ROUTINE, ROUTINE]),
+            ConfigError::DuplicateRecipe {
+                recipe: "routine-code".to_owned(),
+            },
+        ),
+        (
+            with_recipes(&[&routine("version", "0")]),
+            ConfigError::RecipeVersion {
+                recipe: "routine-code".to_owned(),
+            },
+        ),
+        (
+            with_recipes(&[&routine("version", "65536")]),
+            ConfigError::RecipeVersion {
+                recipe: "routine-code".to_owned(),
+            },
+        ),
+        (
+            with_recipes(&[&routine(
+                "adapter",
+                "\"09000000-0000-1000-8000-0000000000e1\"",
+            )]),
+            ConfigError::RecipeAdapter {
+                recipe: "routine-code".to_owned(),
+            },
+        ),
+        (
+            with_recipes(&[&routine("roster_record", "\"f1\"")]),
+            ConfigError::RecipeRosterRecord {
+                recipe: "routine-code".to_owned(),
+            },
+        ),
+        (
+            with_recipes(&[&routine("serves", "[]")]),
+            ConfigError::RecipeServes {
+                recipe: "routine-code".to_owned(),
+            },
+        ),
+        (
+            with_recipes(&[&routine("serves", "[\"a\", \"a\"]")]),
+            ConfigError::RecipeServes {
+                recipe: "routine-code".to_owned(),
+            },
+        ),
+        (
+            with_recipes(&[&routine("serves", "[\"a\\u0007\"]")]),
+            ConfigError::RecipeServes {
+                recipe: "routine-code".to_owned(),
+            },
+        ),
+        (
+            with_recipes(&[&routine("quality_basis_points", "10001")]),
+            ConfigError::RecipeQuality {
+                recipe: "routine-code".to_owned(),
+            },
+        ),
+        (
+            with_recipes(&[&routine("cost_microunits", "-1")]),
+            ConfigError::RecipeFigure {
+                recipe: "routine-code".to_owned(),
+                key: "cost_microunits".to_owned(),
+            },
+        ),
+        (
+            with_recipes(&[&routine("context_limit_tokens", "-5")]),
+            ConfigError::RecipeFigure {
+                recipe: "routine-code".to_owned(),
+                key: "context_limit_tokens".to_owned(),
+            },
+        ),
+    ]
+}
+
+/// T09-RT-75 · every recipe refusal by name, one mutation of one valid row each.
+#[test]
+fn each_recipe_refusal_names_its_row_and_rule() {
+    let mut cases = recipe_key_cases();
+    cases.extend(recipe_value_cases());
+    for (source, expected) in cases {
+        assert_eq!(Routing::parse(&source), Err(expected.clone()), "{expected}");
+        assert_eq!(Policy::load(&source, &baseline()), Err(expected));
+    }
+    // The quality bound is inclusive: 10000 is admitted.
+    let at_bound = routine_with("quality_basis_points", "10000");
+    assert!(Routing::parse(&with_recipes(&[&at_bound])).is_ok());
+}
+
+/// T09-RT-76 · the declaration is checked before any recipe (C2): a declaration defect wins over a
+/// recipe defect in the same source, and a missing `recipes` key is refused after every
+/// declaration key (R3.1), so no existing refusal moved.
+#[test]
+fn declaration_refusals_come_before_recipe_refusals() {
+    let bad_recipe = with_recipes(&[&routine_with("version", "0")]);
+    let bad_both = bad_recipe.replacen("\"deadline\"", "\"dead_line\"", 1);
+    assert_eq!(
+        Routing::parse(&bad_both),
+        Err(ConfigError::UnknownRule {
+            name: "dead_line".to_owned()
+        })
+    );
+    let unknown_tie = bad_recipe.replacen("tie = \"baseline\"", "tie = \"coin\"", 1);
+    assert_eq!(
+        Routing::parse(&unknown_tie),
+        Err(ConfigError::UnknownTieRule {
+            name: "coin".to_owned()
+        })
+    );
+    let bad_identity = bad_recipe.replacen(BASELINE_ID, "caf\u{e9}", 1);
+    assert_eq!(
+        Routing::parse(&bad_identity),
+        Err(ConfigError::BaselineIdentity {
+            recipe: "caf\u{e9}".to_owned()
+        })
+    );
+    let without = CONFIG.replacen("recipes = []", "", 1);
+    assert_eq!(
+        Routing::parse(&without),
+        Err(ConfigError::MissingKey {
+            key: "recipes".to_owned()
+        })
+    );
+    let without_and_bad = without.replacen("\"deadline\"", "\"dead_line\"", 1);
+    assert_eq!(
+        Routing::parse(&without_and_bad),
+        Err(ConfigError::UnknownRule {
+            name: "dead_line".to_owned()
+        })
+    );
+}
+
+/// T09-RT-77 · the recipe count is bounded at acquisition by `MAX_RECIPES` (128, the preview
+/// result's array bound): 128 rows parse, 129 are refused by count with both numbers.
+#[test]
+fn the_recipe_set_is_bounded_by_count() -> Outcome {
+    assert_eq!(MAX_RECIPES, 128);
+    let rows: Vec<String> = (0..=MAX_RECIPES)
+        .map(|index| routine_with("id", &format!("\"r-{index:03}\"")))
+        .collect();
+    let refs: Vec<&str> = rows.iter().map(String::as_str).collect();
+    assert_eq!(
+        Routing::parse(&with_recipes(&refs[..MAX_RECIPES]))?
+            .recipes()
+            .len(),
+        128
+    );
+    assert_eq!(
+        Routing::parse(&with_recipes(&refs)),
+        Err(ConfigError::TooManyRecipes {
+            count: 129,
+            limit: 128
+        })
     );
     Ok(())
 }

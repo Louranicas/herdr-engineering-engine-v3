@@ -428,8 +428,10 @@
 # [What the Workflow Is Worth](obsidian://open?vault=my-diary.vault&file=Reflections%2FWhat%20the%20Workflow%20Is%20Worth)
 # HEE3-ANCHORS-END
 
-# Route policy declaration read by `habitat_engine::route::Policy::load` and by
-# nothing else. Every value here is a declared policy input, not a measurement.
+# Route policy declaration and declared recipes, read by one parser,
+# `habitat_engine::route::Routing::parse` (`Policy::load` is that parse plus the
+# baseline check), and by nothing else. Every value here is a declared input, not
+# a measurement.
 schema_version = 1
 
 # Hard filters, applied to every screened recipe in this order. A recipe stops
@@ -461,6 +463,17 @@ tie = "baseline"
 # An availability observation whose age in milliseconds reaches this bound is
 # stale evidence (age >= bound), within the roster's 60000 ms TTL ceiling.
 staleness_bound_ms = 30000
+
+# Declared recipes (route's recipe tuple: id, version 1..65535, adapter UUIDv4,
+# actual_model_required, roster_record UUIDv4, serves = task classes, and the
+# optional figures context_limit_tokens, cost_microunits (external currency),
+# quality_basis_points and latency_ms; an absent figure is unknown). A recipe
+# restates no roster fact: capabilities, locality and availability come from the
+# roster record it names. None is declared here: recipes are populated at
+# commissioning from the runtimes actually available (RC02/T18), and until then
+# the baseline below names no declared recipe, so task.preview answers that the
+# route configuration is refused. At most 128 rows.
+recipes = []
 
 # The explicit baseline recipe: the fixed local recipe a tie, an evidence gap or
 # an empty eligible set routes to. The loader binds this identity to the baseline

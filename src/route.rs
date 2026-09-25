@@ -307,8 +307,10 @@
 //! recipe after a failed attempt by the same rules, with the previous recipe
 //! excluded first. This file makes no model call, performs
 //! no I/O and reads no clock: the age of every observation is an input value,
-//! and the only place a route configuration is read is [`Policy::load`].
+//! and the only place a route configuration is read is [`Routing::parse`] (which
+//! [`Policy::load`] calls).
 
+use crate::contracts::UuidV4;
 use crate::contracts::roster::{Availability, Locality};
 use serde::Serialize;
 use sha2::Digest as _;
@@ -319,6 +321,9 @@ use std::fmt::Write as _;
 
 /// The roster's record bound; a larger candidate set is refused by count.
 pub const MAX_CANDIDATES: usize = 256;
+/// The declared recipe bound: `task.preview` reports at most 128 eligible recipes and 128
+/// exclusions (`docs/contract-decisions.md`), so a larger declared set is refused by count at load.
+pub const MAX_RECIPES: usize = 128;
 /// The roster's observation TTL bound; a staleness bound outside `1..=MAX_STALENESS_MS` is refused.
 pub const MAX_STALENESS_MS: u64 = 60_000;
 /// Quality figures are basis points of a caller-owned scale; larger values are refused.
@@ -830,23 +835,89 @@ pub struct Declaration {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ConfigError {
     Syntax,
-    UnknownKey { key: String },
-    MissingKey { key: String },
-    WrongType { key: String },
-    SchemaVersion { found: i64 },
-    UnknownRule { name: String },
-    DuplicateRule { name: String },
-    MissingRule { name: String },
-    UnknownRankingKey { name: String },
-    DuplicateRankingKey { name: String },
-    MissingRankingKey { name: String },
-    UnknownTieRule { name: String },
-    StalenessBound { value: i64 },
+    UnknownKey {
+        key: String,
+    },
+    MissingKey {
+        key: String,
+    },
+    WrongType {
+        key: String,
+    },
+    SchemaVersion {
+        found: i64,
+    },
+    UnknownRule {
+        name: String,
+    },
+    DuplicateRule {
+        name: String,
+    },
+    MissingRule {
+        name: String,
+    },
+    UnknownRankingKey {
+        name: String,
+    },
+    DuplicateRankingKey {
+        name: String,
+    },
+    MissingRankingKey {
+        name: String,
+    },
+    UnknownTieRule {
+        name: String,
+    },
+    StalenessBound {
+        value: i64,
+    },
     MissingBaseline,
-    BaselineIdentity { recipe: String },
-    BaselineMismatch { declared: String, supplied: String },
-    BaselineNotLocal { recipe: String, locality: Locality },
-    BaselineMissingFigure { recipe: String, figure: Figure },
+    BaselineIdentity {
+        recipe: String,
+    },
+    BaselineMismatch {
+        declared: String,
+        supplied: String,
+    },
+    BaselineNotLocal {
+        recipe: String,
+        locality: Locality,
+    },
+    BaselineMissingFigure {
+        recipe: String,
+        figure: Figure,
+    },
+    /// More declared recipes than [`MAX_RECIPES`].
+    TooManyRecipes {
+        count: usize,
+        limit: usize,
+    },
+    /// The `recipes` row at this index has an invalid identity (it has no valid one to name).
+    RecipeIdentity {
+        index: usize,
+    },
+    DuplicateRecipe {
+        recipe: String,
+    },
+    RecipeVersion {
+        recipe: String,
+    },
+    RecipeAdapter {
+        recipe: String,
+    },
+    RecipeRosterRecord {
+        recipe: String,
+    },
+    RecipeServes {
+        recipe: String,
+    },
+    RecipeQuality {
+        recipe: String,
+    },
+    RecipeFigure {
+        recipe: String,
+        key: String,
+    },
 }
 
 impl fmt::Display for ConfigError {
@@ -888,15 +959,45 @@ impl fmt::Display for ConfigError {
                 formatter,
                 "baseline {recipe:?} carries no {figure:?} figure and cannot be screened"
             ),
+            Self::TooManyRecipes { count, limit } => {
+                write!(formatter, "{count} recipes exceed the bound of {limit}")
+            }
+            Self::RecipeIdentity { index } => {
+                write!(formatter, "invalid recipe identity at recipes[{index}]")
+            }
+            Self::DuplicateRecipe { recipe } => {
+                write!(formatter, "duplicate recipe identity {recipe:?}")
+            }
+            Self::RecipeVersion { recipe } => {
+                write!(formatter, "recipe {recipe:?} version is outside 1..=65535")
+            }
+            Self::RecipeAdapter { recipe } => {
+                write!(formatter, "recipe {recipe:?} adapter is not a UUIDv4")
+            }
+            Self::RecipeRosterRecord { recipe } => {
+                write!(formatter, "recipe {recipe:?} roster_record is not a UUIDv4")
+            }
+            Self::RecipeServes { recipe } => write!(
+                formatter,
+                "recipe {recipe:?} serves no class, repeats one or names an invalid one"
+            ),
+            Self::RecipeQuality { recipe } => write!(
+                formatter,
+                "recipe {recipe:?} quality figure exceeds {MAX_QUALITY_BASIS_POINTS}"
+            ),
+            Self::RecipeFigure { recipe, key } => {
+                write!(formatter, "recipe {recipe:?} figure {key:?} is negative")
+            }
         }
     }
 }
 
 impl std::error::Error for ConfigError {}
 
-/// A validated route policy. Constructed only through [`Policy::load`] (the one
-/// place a configuration is read) or [`Policy::declare`] (the same validation
-/// over supplied values); its fields cannot be set directly.
+/// A validated route policy. Constructed only through [`Policy::load`] or
+/// [`Routing::policy`] (both over [`Routing::parse`], the one place a configuration
+/// is read) or [`Policy::declare`] (the same validation over supplied values); its
+/// fields cannot be set directly.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Policy {
     filters: Vec<Filter>,
@@ -918,8 +1019,7 @@ impl Policy {
     /// supplied, and a baseline ineligible by construction (not local, or
     /// lacking a figure the filters and ranking read).
     pub fn load(source: &str, baseline: &Recipe<'_>) -> Result<Self, ConfigError> {
-        let table: toml::Table = source.parse().map_err(|_| ConfigError::Syntax)?;
-        Self::declare(declaration(&table)?, baseline)
+        Routing::parse(source)?.policy(baseline)
     }
 
     /// Validate supplied declaration values against the supplied baseline recipe.
@@ -927,34 +1027,7 @@ impl Policy {
     /// # Errors
     /// The same refusals as [`Policy::load`], except the TOML-only ones.
     pub fn declare(declaration: Declaration, baseline: &Recipe<'_>) -> Result<Self, ConfigError> {
-        if declaration.schema_version != SCHEMA_VERSION {
-            return Err(ConfigError::SchemaVersion {
-                found: declaration.schema_version,
-            });
-        }
-        let filters = ordered_filters(&declaration.filters)?;
-        let ranking = ordered_keys(&declaration.ranking)?;
-        let tie = match declaration.tie.as_str() {
-            "baseline" => TieRule::Baseline,
-            other => {
-                return Err(ConfigError::UnknownTieRule {
-                    name: other.to_owned(),
-                });
-            }
-        };
-        if !(1..=MAX_STALENESS_MS).contains(&declaration.staleness_bound_ms) {
-            return Err(ConfigError::StalenessBound {
-                value: i64::try_from(declaration.staleness_bound_ms).unwrap_or(i64::MAX),
-            });
-        }
-        if declaration.baseline.is_empty() {
-            return Err(ConfigError::MissingBaseline);
-        }
-        if !text_valid(&declaration.baseline) {
-            return Err(ConfigError::BaselineIdentity {
-                recipe: declaration.baseline,
-            });
-        }
+        let (filters, ranking, tie) = admitted(&declaration)?;
         if declaration.baseline != baseline.id {
             return Err(ConfigError::BaselineMismatch {
                 declared: declaration.baseline,
@@ -1028,6 +1101,351 @@ impl Policy {
     }
 }
 
+/// One declared recipe: a row of `recipes` in `config/routes.toml`. The spine's recipe tuple
+/// (identity, version, adapter, whether an actual model is required) and the figures the roster
+/// cannot hold (RC03 declares none). It restates no roster fact: capabilities, locality and
+/// availability come from the roster record it names. A figure absent from the row is `None`,
+/// unknown, never invented. `serves` names the task classes the recipe is declared to serve
+/// (a recipe fact, since no roster observer can observe suitability for a class); which classes
+/// exist is the task module's, checked where the two meet.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DeclaredRecipe {
+    pub id: String,
+    pub version: u16,
+    pub adapter: String,
+    pub actual_model_required: bool,
+    pub roster_record: String,
+    /// Duplicate-free and sorted.
+    pub serves: Vec<String>,
+    pub context_limit_tokens: Option<u64>,
+    /// External currency per invocation (R06 compares it with the task's currency ceiling).
+    pub cost_microunits: Option<u64>,
+    pub quality_basis_points: Option<u16>,
+    pub latency_ms: Option<u64>,
+}
+
+/// A parsed route configuration: the declaration and the declared recipes, from one parse of one
+/// source. Built once; a [`Policy`] is derived from it per decision with [`Routing::policy`],
+/// because the baseline's locality and figures are facts of the baseline recipe at that moment.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Routing {
+    declaration: Declaration,
+    recipes: Vec<DeclaredRecipe>,
+    recipes_revision: String,
+}
+
+impl Routing {
+    /// Read a `routes.toml` document: the one reader of a route configuration.
+    ///
+    /// # Errors
+    /// Refuses, by name and in this order: malformed TOML; an unknown, missing or mistyped
+    /// declaration key; every check [`Policy::declare`] makes before it reads the baseline recipe;
+    /// then the recipes — a missing or mistyped `recipes`, more than [`MAX_RECIPES`] rows, an
+    /// unknown, missing or mistyped row key, an invalid or duplicate identity, a version outside
+    /// `1..=65535`, an adapter or roster record that is not a `UuidV4`, a `serves` list that is
+    /// empty, repeats a class or names an invalid one, a quality figure above
+    /// [`MAX_QUALITY_BASIS_POINTS`], and a negative figure.
+    pub fn parse(source: &str) -> Result<Self, ConfigError> {
+        let table: toml::Table = source.parse().map_err(|_| ConfigError::Syntax)?;
+        let declaration = declaration(&table)?;
+        admitted(&declaration)?;
+        let recipes = declared_recipes(&table)?;
+        let recipes_revision = revision(&recipes_canonical(&recipes));
+        Ok(Self {
+            declaration,
+            recipes,
+            recipes_revision,
+        })
+    }
+
+    /// The policy this configuration declares, validated against the supplied baseline recipe.
+    ///
+    /// # Errors
+    /// [`Policy::declare`]'s baseline refusals: a baseline other than the declared one, one that
+    /// is not local, and one lacking a figure the ranking reads.
+    pub fn policy(&self, baseline: &Recipe<'_>) -> Result<Policy, ConfigError> {
+        Policy::declare(self.declaration.clone(), baseline)
+    }
+
+    /// The declared recipes, in identity (byte) order.
+    #[must_use]
+    pub fn recipes(&self) -> &[DeclaredRecipe] {
+        &self.recipes
+    }
+
+    /// The declared baseline recipe identity.
+    #[must_use]
+    pub fn baseline(&self) -> &str {
+        &self.declaration.baseline
+    }
+
+    /// `sha256:` over the canonical rendering of the declared recipes. Two configurations share it
+    /// exactly when their validated recipes are equal; row order and formatting do not enter it.
+    /// A decision is replayable only under the same pair of this and [`Policy::revision`].
+    #[must_use]
+    pub fn recipes_revision(&self) -> &str {
+        &self.recipes_revision
+    }
+}
+
+/// The recipes' canonical rendering: a fixed header and count, then per recipe in identity order
+/// one `recipe.<field>=<value>` line per field in a fixed order (`serves` as a count and one
+/// sorted line per class; `unknown` for an absent figure). No value holds a line break (every
+/// text passes route's text rule), so no two distinct recipe sets render alike.
+fn recipes_canonical(recipes: &[DeclaredRecipe]) -> String {
+    let figure = |value: Option<u64>| value.map_or_else(|| "unknown".to_owned(), |v| v.to_string());
+    let mut text = format!(
+        "hee3-route-recipes\nschema_version={SCHEMA_VERSION}\ncount={}\n",
+        recipes.len()
+    );
+    for recipe in recipes {
+        // Writing into a `String` cannot fail; its `fmt::Result` carries no information.
+        let _ = write!(
+            text,
+            "recipe.id={}\nrecipe.version={}\nrecipe.adapter={}\nrecipe.actual_model_required={}\n\
+             recipe.roster_record={}\nrecipe.serves.count={}\n",
+            recipe.id,
+            recipe.version,
+            recipe.adapter,
+            recipe.actual_model_required,
+            recipe.roster_record,
+            recipe.serves.len(),
+        );
+        for class in &recipe.serves {
+            let _ = writeln!(text, "recipe.serves={class}");
+        }
+        let _ = write!(
+            text,
+            "recipe.context_limit_tokens={}\nrecipe.cost_microunits={}\n\
+             recipe.quality_basis_points={}\nrecipe.latency_ms={}\n",
+            figure(recipe.context_limit_tokens),
+            figure(recipe.cost_microunits),
+            figure(recipe.quality_basis_points.map(u64::from)),
+            figure(recipe.latency_ms),
+        );
+    }
+    text
+}
+
+fn declared_recipes(table: &toml::Table) -> Result<Vec<DeclaredRecipe>, ConfigError> {
+    let toml::Value::Array(rows) = required(table, "recipes")? else {
+        return Err(ConfigError::WrongType {
+            key: "recipes".to_owned(),
+        });
+    };
+    if rows.len() > MAX_RECIPES {
+        return Err(ConfigError::TooManyRecipes {
+            count: rows.len(),
+            limit: MAX_RECIPES,
+        });
+    }
+    let mut recipes: Vec<DeclaredRecipe> = Vec::with_capacity(rows.len());
+    for (index, row) in rows.iter().enumerate() {
+        let recipe = declared_recipe(index, row)?;
+        if recipes.iter().any(|seen| seen.id == recipe.id) {
+            return Err(ConfigError::DuplicateRecipe { recipe: recipe.id });
+        }
+        recipes.push(recipe);
+    }
+    recipes.sort_by(|left, right| left.id.cmp(&right.id));
+    Ok(recipes)
+}
+
+/// A `recipes` row's members, read and typed but not yet validated.
+struct Row {
+    id: String,
+    version: i64,
+    adapter: String,
+    actual_model_required: bool,
+    roster_record: String,
+    serves: Vec<String>,
+    /// `context_limit_tokens`, `cost_microunits`, `quality_basis_points`, `latency_ms`.
+    figures: [Option<i64>; 4],
+}
+
+const FIGURE_KEYS: [&str; 4] = [
+    "context_limit_tokens",
+    "cost_microunits",
+    "quality_basis_points",
+    "latency_ms",
+];
+
+fn declared_recipe(index: usize, row: &toml::Value) -> Result<DeclaredRecipe, ConfigError> {
+    validated(index, typed_row(index, row)?)
+}
+
+/// The key rule of one row: every member known, every required member present, each of its type.
+fn typed_row(index: usize, row: &toml::Value) -> Result<Row, ConfigError> {
+    const REQUIRED: [&str; 6] = [
+        "id",
+        "version",
+        "adapter",
+        "actual_model_required",
+        "roster_record",
+        "serves",
+    ];
+    let at = |key: &str| format!("recipes[{index}].{key}");
+    let toml::Value::Table(row) = row else {
+        return Err(ConfigError::WrongType {
+            key: format!("recipes[{index}]"),
+        });
+    };
+    if let Some(key) = row
+        .keys()
+        .find(|key| !REQUIRED.contains(&key.as_str()) && !FIGURE_KEYS.contains(&key.as_str()))
+    {
+        return Err(ConfigError::UnknownKey { key: at(key) });
+    }
+    for key in REQUIRED {
+        if !row.contains_key(key) {
+            return Err(ConfigError::MissingKey { key: at(key) });
+        }
+    }
+    let wrong = |key: &str| ConfigError::WrongType { key: at(key) };
+    let text = |key: &str| match row.get(key) {
+        Some(toml::Value::String(value)) => Ok(value.clone()),
+        _ => Err(wrong(key)),
+    };
+    let id = text("id")?;
+    let Some(toml::Value::Integer(version)) = row.get("version") else {
+        return Err(wrong("version"));
+    };
+    let adapter = text("adapter")?;
+    let Some(toml::Value::Boolean(actual_model_required)) = row.get("actual_model_required") else {
+        return Err(wrong("actual_model_required"));
+    };
+    let roster_record = text("roster_record")?;
+    let Some(toml::Value::Array(classes)) = row.get("serves") else {
+        return Err(wrong("serves"));
+    };
+    let serves = classes
+        .iter()
+        .map(|class| match class {
+            toml::Value::String(value) => Ok(value.clone()),
+            _ => Err(wrong("serves")),
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut figures = [None; 4];
+    for (slot, key) in figures.iter_mut().zip(FIGURE_KEYS) {
+        *slot = match row.get(key) {
+            None => None,
+            Some(toml::Value::Integer(value)) => Some(*value),
+            Some(_) => return Err(wrong(key)),
+        };
+    }
+    Ok(Row {
+        id,
+        version: *version,
+        adapter,
+        actual_model_required: *actual_model_required,
+        roster_record,
+        serves,
+        figures,
+    })
+}
+
+/// The value rules of one typed row, in order: identity, version, adapter, roster record,
+/// `serves`, figure signs, the quality bound.
+fn validated(index: usize, row: Row) -> Result<DeclaredRecipe, ConfigError> {
+    let Row {
+        id,
+        version,
+        adapter,
+        actual_model_required,
+        roster_record,
+        serves,
+        figures,
+    } = row;
+    if !text_valid(&id) {
+        return Err(ConfigError::RecipeIdentity { index });
+    }
+    let Some(version) = u16::try_from(version).ok().filter(|version| *version >= 1) else {
+        return Err(ConfigError::RecipeVersion { recipe: id });
+    };
+    if UuidV4::parse(&adapter).is_err() {
+        return Err(ConfigError::RecipeAdapter { recipe: id });
+    }
+    if UuidV4::parse(&roster_record).is_err() {
+        return Err(ConfigError::RecipeRosterRecord { recipe: id });
+    }
+    let mut serves = serves;
+    serves.sort();
+    let unique = serves.windows(2).all(|pair| pair[0] != pair[1]);
+    if serves.is_empty()
+        || serves.len() > MAX_CAPABILITIES
+        || !unique
+        || !serves.iter().all(|class| text_valid(class))
+    {
+        return Err(ConfigError::RecipeServes { recipe: id });
+    }
+    let mut unsigned = [None; 4];
+    for ((slot, value), key) in unsigned.iter_mut().zip(figures).zip(FIGURE_KEYS) {
+        *slot = match value.map(u64::try_from) {
+            None => None,
+            Some(Ok(value)) => Some(value),
+            Some(Err(_)) => {
+                return Err(ConfigError::RecipeFigure {
+                    recipe: id,
+                    key: key.to_owned(),
+                });
+            }
+        };
+    }
+    let [context_limit_tokens, cost_microunits, quality, latency_ms] = unsigned;
+    let quality_basis_points = match quality.map(u16::try_from) {
+        None => None,
+        Some(Ok(quality)) if quality <= MAX_QUALITY_BASIS_POINTS => Some(quality),
+        Some(_) => return Err(ConfigError::RecipeQuality { recipe: id }),
+    };
+    Ok(DeclaredRecipe {
+        id,
+        version,
+        adapter,
+        actual_model_required,
+        roster_record,
+        serves,
+        context_limit_tokens,
+        cost_microunits,
+        quality_basis_points,
+        latency_ms,
+    })
+}
+
+/// Every check [`Policy::declare`] makes before it reads the baseline recipe, in its order:
+/// schema version, filters, ranking, tie, staleness bound, then the baseline identity's presence and
+/// text. One function, so [`Routing::parse`] refuses exactly what `declare` would, and first.
+fn admitted(declaration: &Declaration) -> Result<(Vec<Filter>, Vec<Key>, TieRule), ConfigError> {
+    if declaration.schema_version != SCHEMA_VERSION {
+        return Err(ConfigError::SchemaVersion {
+            found: declaration.schema_version,
+        });
+    }
+    let filters = ordered_filters(&declaration.filters)?;
+    let ranking = ordered_keys(&declaration.ranking)?;
+    let tie = match declaration.tie.as_str() {
+        "baseline" => TieRule::Baseline,
+        other => {
+            return Err(ConfigError::UnknownTieRule {
+                name: other.to_owned(),
+            });
+        }
+    };
+    if !(1..=MAX_STALENESS_MS).contains(&declaration.staleness_bound_ms) {
+        return Err(ConfigError::StalenessBound {
+            value: i64::try_from(declaration.staleness_bound_ms).unwrap_or(i64::MAX),
+        });
+    }
+    if declaration.baseline.is_empty() {
+        return Err(ConfigError::MissingBaseline);
+    }
+    if !text_valid(&declaration.baseline) {
+        return Err(ConfigError::BaselineIdentity {
+            recipe: declaration.baseline.clone(),
+        });
+    }
+    Ok((filters, ranking, tie))
+}
+
 /// The canonical rendering a policy revision digests: a fixed header, then one `key=value`
 /// line per validated value in a fixed order, lists comma-joined in declared order. Every name
 /// is a fixed ASCII word and the baseline identity has no control characters, so no two
@@ -1063,13 +1481,14 @@ fn revision(rendering: &str) -> String {
 }
 
 fn declaration(table: &toml::Table) -> Result<Declaration, ConfigError> {
-    const KEYS: [&str; 6] = [
+    const KEYS: [&str; 7] = [
         "schema_version",
         "filters",
         "ranking",
         "tie",
         "staleness_bound_ms",
         "baseline",
+        "recipes",
     ];
     if let Some(key) = table.keys().find(|key| !KEYS.contains(&key.as_str())) {
         return Err(ConfigError::UnknownKey { key: key.clone() });
