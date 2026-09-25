@@ -1,0 +1,605 @@
+{
+ "generator": "tests/fixtures/patch/gen-patch-fixtures.py",
+ "generator_sha256": "29ef0caf513eb5da04fccbcd71df7f6197786e7034e00569a9cb5ed8a7b27bd3",
+ "oracle": "diff (GNU diffutils) 3.12",
+ "command": "diff -u --label a/src/lib.rs --label b/src/lib.rs <before> <after>",
+ "distance": "textbook LCS over lines that keep their terminators (distance() above)",
+ "path": "src/lib.rs",
+ "cases": [
+  {
+   "name": "identical",
+   "before": "a\nb\nc\n",
+   "after": "a\nb\nc\n",
+   "expected": "",
+   "distance": 0
+  },
+  {
+   "name": "empty_to_text",
+   "before": "",
+   "after": "a\nb\n",
+   "expected": "--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -0,0 +1,2 @@\n+a\n+b\n",
+   "distance": 2
+  },
+  {
+   "name": "text_to_empty",
+   "before": "a\nb\n",
+   "after": "",
+   "expected": "--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,2 +0,0 @@\n-a\n-b\n",
+   "distance": 2
+  },
+  {
+   "name": "empty_to_no_newline",
+   "before": "",
+   "after": "a",
+   "expected": "--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -0,0 +1 @@\n+a\n\\ No newline at end of file\n",
+   "distance": 1
+  },
+  {
+   "name": "add_final_newline",
+   "before": "a\nb",
+   "after": "a\nb\n",
+   "expected": "--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,2 +1,2 @@\n a\n-b\n\\ No newline at end of file\n+b\n",
+   "distance": 2
+  },
+  {
+   "name": "drop_final_newline",
+   "before": "a\nb\n",
+   "after": "a\nb",
+   "expected": "--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,2 +1,2 @@\n a\n-b\n+b\n\\ No newline at end of file\n",
+   "distance": 2
+  },
+  {
+   "name": "both_no_newline_change_last",
+   "before": "a\nb",
+   "after": "a\nc",
+   "expected": "--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,2 +1,2 @@\n a\n-b\n\\ No newline at end of file\n+c\n\\ No newline at end of file\n",
+   "distance": 2
+  },
+  {
+   "name": "both_no_newline_change_first",
+   "before": "x\nb\nc\nd\ne\nf",
+   "after": "y\nb\nc\nd\ne\nf",
+   "expected": "--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,4 +1,4 @@\n-x\n+y\n b\n c\n d\n",
+   "distance": 2
+  },
+  {
+   "name": "first_line",
+   "before": "a\nl0\nl1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\nl9\n",
+   "after": "A\nl0\nl1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\nl9\n",
+   "expected": "--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,4 +1,4 @@\n-a\n+A\n l0\n l1\n l2\n",
+   "distance": 2
+  },
+  {
+   "name": "last_line",
+   "before": "l0\nl1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\nl9\nz\n",
+   "after": "l0\nl1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\nl9\nZ\n",
+   "expected": "--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -8,4 +8,4 @@\n l7\n l8\n l9\n-z\n+Z\n",
+   "distance": 2
+  },
+  {
+   "name": "single_insert_middle",
+   "before": "l0\nl1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\nl9\n",
+   "after": "l0\nl1\nl2\nl3\nl4\nnew\nl5\nl6\nl7\nl8\nl9\n",
+   "expected": "--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -3,6 +3,7 @@\n l2\n l3\n l4\n+new\n l5\n l6\n l7\n",
+   "distance": 1
+  },
+  {
+   "name": "single_delete_middle",
+   "before": "l0\nl1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\nl9\n",
+   "after": "l0\nl1\nl2\nl3\nl5\nl6\nl7\nl8\nl9\n",
+   "expected": "--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -2,7 +2,6 @@\n l1\n l2\n l3\n-l4\n l5\n l6\n l7\n",
+   "distance": 1
+  },
+  {
+   "name": "gap6_merged",
+   "before": "0\n1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15\n16\n17\n18\n19\n",
+   "after": "0\n1\n2\nX\n4\n5\n6\n7\n8\n9\nX\n11\n12\n13\n14\n15\n16\n17\n18\n19\n",
+   "expected": "--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,14 +1,14 @@\n 0\n 1\n 2\n-3\n+X\n 4\n 5\n 6\n 7\n 8\n 9\n-10\n+X\n 11\n 12\n 13\n",
+   "distance": 4
+  },
+  {
+   "name": "gap7_split",
+   "before": "0\n1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15\n16\n17\n18\n19\n",
+   "after": "0\n1\n2\nX\n4\n5\n6\n7\n8\n9\n10\nX\n12\n13\n14\n15\n16\n17\n18\n19\n",
+   "expected": "--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,7 +1,7 @@\n 0\n 1\n 2\n-3\n+X\n 4\n 5\n 6\n@@ -9,7 +9,7 @@\n 8\n 9\n 10\n-11\n+X\n 12\n 13\n 14\n",
+   "distance": 4
+  },
+  {
+   "name": "crlf",
+   "before": "a\r\nb\r\nc\r\n",
+   "after": "a\r\nB\r\nc\r\n",
+   "expected": "--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,3 +1,3 @@\n a\r\n-b\r\n+B\r\n c\r\n",
+   "distance": 2
+  },
+  {
+   "name": "crlf_to_lf",
+   "before": "a\r\nb\r\n",
+   "after": "a\nb\n",
+   "expected": "--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,2 +1,2 @@\n-a\r\n-b\r\n+a\n+b\n",
+   "distance": 4
+  },
+  {
+   "name": "repeated_ties",
+   "before": "a\na\na\nb\na\na\n",
+   "after": "a\na\nb\na\na\na\n",
+   "expected": "--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,6 +1,6 @@\n a\n a\n-a\n b\n a\n a\n+a\n",
+   "distance": 2
+  },
+  {
+   "name": "braces",
+   "before": "fn a() {\n}\n\nfn b() {\n}\n",
+   "after": "fn a() {\n}\n\nfn c() {\n}\n\nfn b() {\n}\n",
+   "expected": "--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,5 +1,8 @@\n fn a() {\n }\n \n+fn c() {\n+}\n+\n fn b() {\n }\n",
+   "distance": 3
+  },
+  {
+   "name": "reverse",
+   "before": "1\n2\n3\n4\n",
+   "after": "4\n3\n2\n1\n",
+   "expected": "--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,4 +1,4 @@\n-1\n-2\n-3\n 4\n+3\n+2\n+1\n",
+   "distance": 6
+  },
+  {
+   "name": "insert_at_start_of_empty_lines",
+   "before": "\n\n\n",
+   "after": "x\n\n\n\n",
+   "expected": "--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,3 +1,4 @@\n+x\n \n \n \n",
+   "distance": 1
+  },
+  {
+   "name": "unicode",
+   "before": "α\nβ\nγ\n",
+   "after": "α\nδ\nγ\n",
+   "expected": "--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,3 +1,3 @@\n α\n-β\n+δ\n γ\n",
+   "distance": 2
+  },
+  {
+   "name": "no_newline_context",
+   "before": "a\nb\nc",
+   "after": "A\nb\nc",
+   "expected": "--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,3 +1,3 @@\n-a\n+A\n b\n c\n\\ No newline at end of file\n",
+   "distance": 2
+  },
+  {
+   "name": "no_newline_context_insert",
+   "before": "a\nb",
+   "after": "a\nx\nb",
+   "expected": "--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,2 +1,3 @@\n a\n+x\n b\n\\ No newline at end of file\n",
+   "distance": 1
+  },
+  {
+   "name": "only_newline_both_empty_lines",
+   "before": "\n",
+   "after": "",
+   "expected": "--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1 +0,0 @@\n-\n",
+   "distance": 1
+  },
+  {
+   "name": "empty_line_to_no_newline",
+   "before": "\n",
+   "after": "x",
+   "expected": "--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1 +1 @@\n-\n+x\n\\ No newline at end of file\n",
+   "distance": 2
+  },
+  {
+   "name": "random_00",
+   "before": "a\na\n",
+   "after": "b\na\nb\n",
+   "expected": "--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,2 +1,3 @@\n+b\n a\n-a\n+b\n",
+   "distance": 3
+  },
+  {
+   "name": "random_01",
+   "before": "    x;\na\n    x;\nc\n    x;\n\n\nb\n\n\n}\n    x;\nb\n",
+   "after": "    x;\na\n    x;\nc\n    x;\n\n\nb\nc\n\n\n}\n    x;\nb\n",
+   "expected": "--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -6,6 +6,7 @@\n \n \n b\n+c\n \n \n }\n",
+   "distance": 1
+  },
+  {
+   "name": "random_02",
+   "before": "c\na\n}\nc\n\nc\n    x;\n",
+   "after": "c\na\n}\nc\n\nc\n    x;\n",
+   "expected": "",
+   "distance": 0
+  },
+  {
+   "name": "random_03",
+   "before": "\n}\n    x;\n}\n    x;\n",
+   "after": "\nc\n    x;\n    x;\n    x;\nb\n}\n    x;\na\n",
+   "expected": "--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,5 +1,9 @@\n \n-}\n+c\n+    x;\n+    x;\n     x;\n+b\n }\n     x;\n+a\n",
+   "distance": 6
+  },
+  {
+   "name": "random_04",
+   "before": "b\nc\nc\n}\n    x;\na\n    x;\na\nb\nc\n    x;\na\na\n\n\na\n\nb\nb\n    x;\n\n}\n}\na\nb\na\nc\nb\n",
+   "after": "b\nc\nc\n}\n    x;\na\n    x;\na\nb\n    x;\na\n}\n\na\n\nb\nb\n    x;\n\n}\n}\na\nb\na\nc\nb\n",
+   "expected": "--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -7,11 +7,9 @@\n     x;\n a\n b\n-c\n     x;\n a\n-a\n-\n+}\n \n a\n \n",
+   "distance": 4
+  },
+  {
+   "name": "random_05",
+   "before": "\n\n\na\n}\nc\n\nb\nb\n}\na\n\na\n\na\nc\nb\n",
+   "after": "\n\na\n}\nb\nc\n\nb\nb\n}\na\n\na\n\nc\na\nc\nb\n",
+   "expected": "--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,8 +1,8 @@\n \n \n-\n a\n }\n+b\n c\n \n b\n@@ -12,6 +12,7 @@\n \n a\n \n+c\n a\n c\n b\n",
+   "distance": 3
+  },
+  {
+   "name": "random_06",
+   "before": "c\n\n\n}\n\nb\n}\na\nc\na\n\n    x;\na\n}\nc\n\n    x;\n",
+   "after": "\n\n}\n\nb\n}\na\nc\na\n\n    x;\na\n}\nc\n\n    x;\n",
+   "expected": "--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,4 +1,3 @@\n-c\n \n \n }\n",
+   "distance": 1
+  },
+  {
+   "name": "random_07",
+   "before": "",
+   "after": "}\nc\n",
+   "expected": "--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -0,0 +1,2 @@\n+}\n+c\n",
+   "distance": 2
+  },
+  {
+   "name": "random_08",
+   "before": "    x;\n\nc\nc\n}\nc\na\n\n}\n    x;\n\n",
+   "after": "    x;\n\na\nc\n}\nc\na\n}\n    x;\n",
+   "expected": "--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,11 +1,9 @@\n     x;\n \n-c\n+a\n c\n }\n c\n a\n-\n }\n     x;\n-\n",
+   "distance": 4
+  },
+  {
+   "name": "random_09",
+   "before": "a\nb\na\nb\nb\na\na\nc\n}\nc\nc\nc\nb\n}\nb\na\n    x;\nb\n\n}\na\na\na\n\n",
+   "after": "a\nb\na\nb\nb\na\na\nc\n}\nc\nc\nc\nb\n}\nb\na\n    x;\nb\n\n}\na\na\na\n\n",
+   "expected": "",
+   "distance": 0
+  },
+  {
+   "name": "random_10",
+   "before": "c\n}\n\n\na\na\n    x;\n}\n\n\na\na\n    x;\n}\n}\n    x;\n    x;\n\n    x;\n\nb\na\n\n",
+   "after": "}\n\n\na\na\n    x;\n}\n    x;\n\n\na\na\n    x;\n}\n}\n    x;\n    x;\n\n    x;\n\nb\na\na\n\n",
+   "expected": "--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,4 +1,3 @@\n-c\n }\n \n \n@@ -6,6 +5,7 @@\n a\n     x;\n }\n+    x;\n \n \n a\n@@ -20,4 +20,5 @@\n \n b\n a\n+a\n \n",
+   "distance": 3
+  },
+  {
+   "name": "random_11",
+   "before": "a\nc\na\nb\nc\n",
+   "after": "b\n    x;\nb\nc\n\nc\n",
+   "expected": "--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,5 +1,6 @@\n-a\n-c\n-a\n b\n+    x;\n+b\n+c\n+\n c\n",
+   "distance": 7
+  },
+  {
+   "name": "random_12",
+   "before": "    x;\na\nb\nb\nc\na\na\n\na\n}\n}\n}\n    x;\na\nc\n}\n    x;\na\nb\n",
+   "after": "    x;\na\nb\nb\nc\na\na\n\na\n}\n}\n}\n    x;\na\nc\n}\n    x;\na\nb\n",
+   "expected": "",
+   "distance": 0
+  },
+  {
+   "name": "random_13",
+   "before": "\n\n\na\n\n\n}\n}\na\nc\n\n}\n}\n    x;\n    x;\n    x;\n",
+   "after": "\n\n\na\n\n\n}\n}\na\nc\n\n}\n}\n    x;\n    x;\n    x;\n",
+   "expected": "",
+   "distance": 0
+  },
+  {
+   "name": "random_14",
+   "before": "}\n}\nc\n}\nc\n",
+   "after": "    x;\n\n}\nc\nc\nc\n",
+   "expected": "--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,5 +1,6 @@\n-}\n+    x;\n+\n }\n c\n-}\n+c\n c\n",
+   "distance": 5
+  },
+  {
+   "name": "random_15",
+   "before": "c\na\na\nb\na\na\n    x;\n}\na\n",
+   "after": "c\na\na\nb\nb\na\n    x;\n}\na\n",
+   "expected": "--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -2,7 +2,7 @@\n a\n a\n b\n-a\n+b\n a\n     x;\n }\n",
+   "distance": 2
+  },
+  {
+   "name": "random_16",
+   "before": "    x;\nb\na\n",
+   "after": "    x;\nb\na\n",
+   "expected": "",
+   "distance": 0
+  },
+  {
+   "name": "random_17",
+   "before": "\n}\nb\n\n\nb\n    x;\n    x;\nb\nb\n    x;\n    x;\n    x;\na\n    x;\n}\na\n}\n}\n\nb\nb\n}\n}\n\na\n",
+   "after": "\n}\nb\n\nb\n    x;\nb\nb\n    x;\n    x;\n    x;\na\n    x;\n}\na\n}\nb\nb\n}\n}\n\na\n",
+   "expected": "--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -2,10 +2,8 @@\n }\n b\n \n-\n b\n     x;\n-    x;\n b\n b\n     x;\n@@ -16,8 +14,6 @@\n }\n a\n }\n-}\n-\n b\n b\n }\n",
+   "distance": 4
+  },
+  {
+   "name": "random_18",
+   "before": "    x;\n\n\n    x;\n\n}\n\n\nb\nc\n\nb\n\n}\nc\n\n}\nc\n    x;\n}\n}\n    x;\n}\nc\nc\n\nb\nb\n    x;\n",
+   "after": "    x;\n\n\n    x;\n\n}\n\n\nb\nc\n\nb\n\n}\nc\n\n}\nc\n    x;\n}\n}\n    x;\nc\nc\n\nb\nb\n    x;",
+   "expected": "--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -20,10 +20,9 @@\n }\n }\n     x;\n-}\n c\n c\n \n b\n b\n-    x;\n+    x;\n\\ No newline at end of file\n",
+   "distance": 3
+  },
+  {
+   "name": "random_19",
+   "before": "c\n\nb\n    x;\n",
+   "after": "c\nb\n    x;\n",
+   "expected": "--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,4 +1,3 @@\n c\n-\n b\n     x;\n",
+   "distance": 1
+  },
+  {
+   "name": "random_20",
+   "before": "",
+   "after": "\n    x;",
+   "expected": "--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -0,0 +1,2 @@\n+\n+    x;\n\\ No newline at end of file\n",
+   "distance": 2
+  },
+  {
+   "name": "random_21",
+   "before": "a\n\na\nc\na\na\nb\nb\n    x;\n    x;\n\n\n    x;\nb\nb\na\n}\n}\nc\n    x;\nb\n    x;\n",
+   "after": "    x;\na\n\na\nb\nc\na\nb\nb\n    x;\n    x;\n\n\n    x;\nb\nb\na\n}\n}\nc\n    x;\nb\n    x;",
+   "expected": "--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,9 +1,10 @@\n+    x;\n a\n \n a\n+b\n c\n a\n-a\n b\n b\n     x;\n@@ -19,4 +20,4 @@\n c\n     x;\n b\n-    x;\n+    x;\n\\ No newline at end of file\n",
+   "distance": 5
+  },
+  {
+   "name": "random_22",
+   "before": "c\n    x;\n}\n}\n    x;\nc\na\n}\n    x;\n}\n\n",
+   "after": "c\n    x;\n}\n}\n    x;\nc\na\n}\n    x;\n}\n\n",
+   "expected": "",
+   "distance": 0
+  },
+  {
+   "name": "random_23",
+   "before": "\n\nc\n}\n    x;\nc\n    x;\nc\n\n\n}\nc\n}\na\na\n    x;\nb\nc\nb\na\n\nb\n",
+   "after": "\n\nc\n}\n    x;\n    x;\n    x;\nc\n\n\n}\n}\n}\na\na\n    x;\nb\nc\nb\na\n\nb\n",
+   "expected": "--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -3,13 +3,13 @@\n c\n }\n     x;\n-c\n+    x;\n     x;\n c\n \n \n }\n-c\n+}\n }\n a\n a\n",
+   "distance": 4
+  },
+  {
+   "name": "random_24",
+   "before": "    x;\n\n}\n}\n    x;\nb\n\n    x;\n}\n\n}\n    x;\nb\n}\n",
+   "after": "    x;\n\n}\n}\n    x;\nb\n\n    x;\n}\n\na\nb\n}",
+   "expected": "--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -8,7 +8,6 @@\n     x;\n }\n \n-}\n-    x;\n+a\n b\n-}\n+}\n\\ No newline at end of file\n",
+   "distance": 5
+  },
+  {
+   "name": "random_25",
+   "before": "b\na\n}\na\nc\n\na\nb\na\n",
+   "after": "}\nb\nb\na\n}\n}\na\n\na\na\n",
+   "expected": "--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,9 +1,10 @@\n+}\n+b\n b\n a\n }\n+}\n a\n-c\n \n a\n-b\n a\n",
+   "distance": 5
+  },
+  {
+   "name": "random_26",
+   "before": "b\n    x;\nb\n    x;\nb\na\na\na\n}\nc\na\n}\n\nc\nb\na\nb\na\n    x;\n\nb\n    x;\n    x;\na\nc\nc\n",
+   "after": "b\n    x;\nb\n    x;\nb\na\na\na\n}\nc\na\n}\n\nc\nb\na\nb\na\n    x;\na\n\nb\n    x;\n    x;\na\nc\nc\n",
+   "expected": "--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -17,6 +17,7 @@\n b\n a\n     x;\n+a\n \n b\n     x;\n",
+   "distance": 1
+  },
+  {
+   "name": "random_27",
+   "before": "c\nc\na\nb\nb\nc\nc\n}\na\nc\n}\nc\na\n\n}\n    x;\n}\n}\n    x;\nc\nb\nc\n",
+   "after": "c\nc\na\nb\nb\nc\nc\n}\na\nc\n}\nc\na\n\n}\n    x;\n}\n}\n    x;\nc\nb\nc\n",
+   "expected": "",
+   "distance": 0
+  },
+  {
+   "name": "random_28",
+   "before": "    x;\na\na\n    x;\na\nc\na\nb\n}\nb\nb\n}\n    x;\nb\n    x;\n}\n\n\n\n    x;\n    x;\n    x;\nc\nb\n",
+   "after": "    x;\na\n    x;\na\na\nb\n}\nb\nc\n}\n    x;\nb\n    x;\n}\n\n\nc\n\n    x;\n    x;\n}\nc\nb\n",
+   "expected": "--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,14 +1,12 @@\n     x;\n a\n-a\n     x;\n a\n-c\n a\n b\n }\n b\n-b\n+c\n }\n     x;\n b\n@@ -16,9 +14,10 @@\n }\n \n \n+c\n \n     x;\n     x;\n-    x;\n+}\n c\n b\n",
+   "distance": 7
+  },
+  {
+   "name": "random_29",
+   "before": "b\n    x;\n}\na\n    x;\n}\nc\nb\na\n    x;\n",
+   "after": "b\n    x;\n\na\n    x;\n}\nc\nc\na\n    x;\n",
+   "expected": "--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,10 +1,10 @@\n b\n     x;\n-}\n+\n a\n     x;\n }\n c\n-b\n+c\n a\n     x;\n",
+   "distance": 4
+  },
+  {
+   "name": "random_30",
+   "before": "b\n    x;\n}\nc\nc\nb\nc\n}\na\n\n\n    x;\na\n",
+   "after": "b\n}\nc\nc\nb\nc\n}\na\n\n\n    x;\n\n",
+   "expected": "--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,5 +1,4 @@\n b\n-    x;\n }\n c\n c\n@@ -10,4 +9,4 @@\n \n \n     x;\n-a\n+\n",
+   "distance": 3
+  },
+  {
+   "name": "random_31",
+   "before": "    x;\n\n    x;\n",
+   "after": "",
+   "expected": "--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,3 +0,0 @@\n-    x;\n-\n-    x;\n",
+   "distance": 3
+  },
+  {
+   "name": "random_32",
+   "before": "}\nb\n}\n    x;\n}\nc\na\n    x;\na\n",
+   "after": "}\nb\n}\n    x;\n}\nc\na\n    x;\n}",
+   "expected": "--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -6,4 +6,4 @@\n c\n a\n     x;\n-a\n+}\n\\ No newline at end of file\n",
+   "distance": 2
+  },
+  {
+   "name": "random_33",
+   "before": "    x;\n\n\na\n    x;\na\nb\na\n\n\n    x;\n\nb\na\nb\n}\nb\na\na\nb\nc\na\na\nc\n    x;\nc\na\n    x;\na\n",
+   "after": "    x;\n\n\na\n    x;\na\nb\na\n\n\n    x;\n\nb\na\nb\n}\nb\na\na\nb\nc\na\na\nc\n    x;\nc\na\n    x;\na\n",
+   "expected": "",
+   "distance": 0
+  },
+  {
+   "name": "random_34",
+   "before": "    x;\n    x;\n\n    x;\nc\na\na\n\n\nb\na\n    x;\n\n\n    x;\n}\na\n    x;\nc\n    x;\n}\na\nc\n",
+   "after": "    x;\n    x;\n\n    x;\na\n    x;\n\n\nb\na\n    x;\n\n\n    x;\n}\na\n    x;\nc\n    x;\n}\na\nc\n",
+   "expected": "--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -2,9 +2,8 @@\n     x;\n \n     x;\n-c\n-a\n a\n+    x;\n \n \n b\n",
+   "distance": 3
+  },
+  {
+   "name": "random_35",
+   "before": "b\n\n\n\nb\na\n}\nb\n\n",
+   "after": "}\nb\na\n\n\n    x;\nb\na\nb\n\n",
+   "expected": "--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,9 +1,10 @@\n+}\n b\n+a\n \n \n-\n+    x;\n b\n a\n-}\n b\n \n",
+   "distance": 5
+  },
+  {
+   "name": "random_36",
+   "before": "a\na\n\n    x;\n}\n\n}\na\n    x;\na\n\n    x;\nc\n    x;\n}\n",
+   "after": "a\na\n\n    x;\n}\n\n}\na\n    x;\na\n\n    x;\nc\n    x;\n}\n",
+   "expected": "",
+   "distance": 0
+  },
+  {
+   "name": "random_37",
+   "before": "c\n}\nb\nc\na\n    x;\n\n\n    x;\na\n\na\n\n\n",
+   "after": "c\n}\nb\nc\n}\n    x;\n\n\n    x;\na\n\na\n\n\n",
+   "expected": "--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -2,7 +2,7 @@\n }\n b\n c\n-a\n+}\n     x;\n \n \n",
+   "distance": 2
+  },
+  {
+   "name": "random_38",
+   "before": "}\na\na\na\na\na\n    x;\n",
+   "after": "}\na\na\na\na\n\n    x;\n",
+   "expected": "--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -3,5 +3,5 @@\n a\n a\n a\n-a\n+\n     x;\n",
+   "distance": 2
+  },
+  {
+   "name": "random_39",
+   "before": "    x;\n}\na\n\nc\n}\na\n    x;\n",
+   "after": "    x;\n}\na\n\nc\n}\na\n    x;\n",
+   "expected": "",
+   "distance": 0
+  },
+  {
+   "name": "random_40",
+   "before": "}\na\nc\n}\n}\n",
+   "after": "}\na\nc\n}\n}\n",
+   "expected": "",
+   "distance": 0
+  },
+  {
+   "name": "random_41",
+   "before": "a\n",
+   "after": "",
+   "expected": "--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1 +0,0 @@\n-a\n",
+   "distance": 1
+  },
+  {
+   "name": "random_42",
+   "before": "a\nc\nb\na\n    x;\n    x;\n}\n\nc\n    x;\n    x;\n\n    x;\n\n",
+   "after": "a\nc\na\n    x;\n}\n    x;\n}\n\nc\na\n    x;\na\nc\n    x;\n    x;\n\n",
+   "expected": "--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,14 +1,16 @@\n a\n c\n-b\n a\n     x;\n+}\n     x;\n }\n \n c\n+a\n     x;\n+a\n+c\n     x;\n-\n     x;\n \n",
+   "distance": 6
+  },
+  {
+   "name": "random_43",
+   "before": "\nb\n}\nc\n}\n}\n\n    x;\na\n\n}\na\nb\n    x;\n}\nc\n    x;\n}\n",
+   "after": "b\n}\nc\n}\n}\n\n    x;\na\n\n}\na\nb\n    x;\n}\nc\n    x;\n}\n",
+   "expected": "--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,4 +1,3 @@\n-\n b\n }\n c\n",
+   "distance": 1
+  },
+  {
+   "name": "random_44",
+   "before": "c\nc\n    x;\nb\n\nb\n\n}\na\nb\n\n    x;\na\n    x;\n    x;\n",
+   "after": "c\nc\n    x;\nb\n\nb\n\n}\na\nb\n\n    x;\na\n    x;\n    x;\n",
+   "expected": "",
+   "distance": 0
+  },
+  {
+   "name": "random_45",
+   "before": "    x;\n}\nb\nc\n    x;\nb\na\na\na\nc\na\n\n}\nb\n    x;\nc\n",
+   "after": "    x;\n}\nb\nc\n    x;\nb\na\na\na\nc\na\n\n}\nb\n}\n}\n",
+   "expected": "--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -12,5 +12,5 @@\n \n }\n b\n-    x;\n-c\n+}\n+}\n",
+   "distance": 4
+  },
+  {
+   "name": "random_46",
+   "before": "a\nc\n\nc\n    x;\n\n}\n\na\n",
+   "after": "a\nc\n\n    x;\n\n}\n\na\n",
+   "expected": "--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,7 +1,6 @@\n a\n c\n \n-c\n     x;\n \n }\n",
+   "distance": 1
+  },
+  {
+   "name": "random_47",
+   "before": "    x;\n    x;\n}\n    x;\n}\nb\n}\n    x;\n    x;\n\nb\nb\nc\n\nb\n}\nc\n}\n    x;\n\nb\n\n\n    x;\nc\n\n    x;\n}\nc\na\n",
+   "after": "    x;\n    x;\n}\n    x;\n}\nb\n}\n\n    x;\n\nb\nb\nc\n\nb\n}\nc\n}\n    x;\n\n\nb\n\n    x;\nc\n\n    x;\n}\nc\na",
+   "expected": "--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -5,7 +5,7 @@\n }\n b\n }\n-    x;\n+\n     x;\n \n b\n@@ -18,8 +18,8 @@\n }\n     x;\n \n-b\n \n+b\n \n     x;\n c\n@@ -27,4 +27,4 @@\n     x;\n }\n c\n-a\n+a\n\\ No newline at end of file\n",
+   "distance": 6
+  },
+  {
+   "name": "random_48",
+   "before": "\nc\nb\nc\nc\n    x;\n}\n\nb\n\na\n\na\nc\nc\n    x;\n    x;\n\n    x;\n    x;\nc\n",
+   "after": "\nc\n    x;\n}\n\nb\na\n\nc\nc\nc\n    x;\n    x;\n\n    x;\n    x;\nc\n",
+   "expected": "--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,16 +1,12 @@\n \n c\n-b\n-c\n-c\n     x;\n }\n \n b\n-\n a\n \n-a\n+c\n c\n c\n     x;\n",
+   "distance": 6
+  },
+  {
+   "name": "random_49",
+   "before": "}\n    x;\nc\n    x;\nc\n\n}\nc\n\n}\nb\n    x;\n",
+   "after": "}\n    x;\nc\n    x;\n}\nc\n\n}\nc\n\n}\n    x;",
+   "expected": "--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -2,11 +2,11 @@\n     x;\n c\n     x;\n+}\n c\n \n }\n c\n \n }\n-b\n-    x;\n+    x;\n\\ No newline at end of file\n",
+   "distance": 4
+  },
+  {
+   "name": "random_50",
+   "before": "}\nc\na\n\nc\n    x;\n}\n\n    x;\nc\n\n    x;\na\nb\nc\n    x;\n    x;\nb\nc\n}\na\n    x;\nb\n}\n",
+   "after": "}\nc\na\nc\n    x;\n}\n    x;\n}\n\n    x;\nc\n\n    x;\na\nb\nc\n    x;\n    x;\nb\nc\n}\na\nb\n}\nc",
+   "expected": "--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,10 +1,11 @@\n }\n c\n a\n-\n c\n     x;\n }\n+    x;\n+}\n \n     x;\n c\n@@ -19,6 +20,6 @@\n c\n }\n a\n-    x;\n b\n }\n+c\n\\ No newline at end of file\n",
+   "distance": 5
+  },
+  {
+   "name": "random_51",
+   "before": "    x;\nb\na\n    x;\n}\n\na\n",
+   "after": "b\na\n\nb\na\n",
+   "expected": "--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,7 +1,5 @@\n-    x;\n b\n a\n-    x;\n-}\n \n+b\n a\n",
+   "distance": 4
+  },
+  {
+   "name": "random_52",
+   "before": "\n\nb\nb\nc\n    x;\nb\n\n}\n\n    x;\nb\n    x;\nc\nb\n}\n\nc\n}\n    x;\na\n    x;\nb\n}\nb\nb\n\n}\n    x;\nb\n",
+   "after": "\n\nb\nb\nc\n    x;\nb\n\n}\n\n    x;\nb\n    x;\nc\nb\n}\nc\n}\n    x;\na\n    x;\nb\nb\nb\n\n}\n\n",
+   "expected": "--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -14,17 +14,14 @@\n c\n b\n }\n-\n c\n }\n     x;\n a\n     x;\n b\n-}\n b\n b\n \n }\n-    x;\n-b\n+\n",
+   "distance": 5
+  },
+  {
+   "name": "random_53",
+   "before": "c\n    x;\nb\nc\na\nc\nb\na\n",
+   "after": "c\n}\nb\nc\na\nc\nb\nb\n",
+   "expected": "--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,8 +1,8 @@\n c\n-    x;\n+}\n b\n c\n a\n c\n b\n-a\n+b\n",
+   "distance": 4
+  },
+  {
+   "name": "random_54",
+   "before": "\n\na\nc\na\n    x;\n}\n\n    x;\n}\n",
+   "after": "\n\na\na\nb\nc\na\n}\n}\na\n    x;\n}\n",
+   "expected": "--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,10 +1,12 @@\n \n \n a\n+a\n+b\n c\n a\n-    x;\n }\n-\n+}\n+a\n     x;\n }\n",
+   "distance": 6
+  },
+  {
+   "name": "random_55",
+   "before": "a\n\n    x;\n    x;\nb\nb\nc\na\n    x;\nb\nb\nc\n\nb\nc\n\n}\n\nc\n}\nb\n\n",
+   "after": "a\n    x;\nb\nb\nb\na\n    x;\nb\nb\nc\n\nb\nc\n\n}\n\nc\n}\nb\n\n",
+   "expected": "--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,10 +1,8 @@\n a\n-\n-    x;\n     x;\n b\n b\n-c\n+b\n a\n     x;\n b\n",
+   "distance": 4
+  },
+  {
+   "name": "random_56",
+   "before": "b\na\nc\n\na\na\nb\nb\nc\n}\na\na\na\nb\n}\nc\n}\n    x;\n    x;\n    x;\n\na\n\n    x;\n\n    x;\n}\nb\n    x;\n",
+   "after": "b\nb\na\n}\nc\n\na\nb\nb\nc\n}\na\na\na\n\n\nc\n}\n    x;\n    x;\n    x;\n\na\n\n    x;\n\n    x;\n}\nb\n    x;\n",
+   "expected": "--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,9 +1,10 @@\n b\n+b\n a\n+}\n c\n \n a\n-a\n b\n b\n c\n@@ -11,8 +12,8 @@\n a\n a\n a\n-b\n-}\n+\n+\n c\n }\n     x;\n",
+   "distance": 7
+  },
+  {
+   "name": "random_57",
+   "before": "b\nb\nc\na\nc\nc\na\n",
+   "after": "b\nb\nc\na\nc\n    x;\n\nc\n\nb\n}\n",
+   "expected": "--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -3,5 +3,9 @@\n c\n a\n c\n+    x;\n+\n c\n-a\n+\n+b\n+}\n",
+   "distance": 6
+  },
+  {
+   "name": "random_58",
+   "before": "a\n}\nc\na\nb\n\n    x;\n    x;\n    x;\n    x;\nb\nc\n\nc\nb\nc\n\n\n}\n    x;\n",
+   "after": "a\n}\nc\na\nb\n\n    x;\n    x;\n    x;\n    x;\nb\nc\n\nc\nb\nc\n\n\n}\n    x;\n",
+   "expected": "",
+   "distance": 0
+  },
+  {
+   "name": "random_59",
+   "before": "a\n    x;\n    x;\n    x;\n    x;\n}\na\nc\nc\na\nc\n\nc\nb\n}\nc\n    x;\nb\n    x;\na\n\na\nc\nb\n",
+   "after": "a\n    x;\n    x;\n    x;\n    x;\n}\na\nc\nc\na\nc\n\nc\nb\n}\nc\n    x;\nb\n    x;\na\n\n\na\nc\nb\n",
+   "expected": "--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -19,6 +19,7 @@\n     x;\n a\n \n+\n a\n c\n b\n",
+   "distance": 1
+  }
+ ]
+}

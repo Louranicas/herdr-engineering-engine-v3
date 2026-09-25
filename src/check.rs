@@ -320,6 +320,8 @@ pub mod graph;
 
 pub mod consistency;
 
+pub mod patch;
+
 pub mod u64_oracle;
 
 pub mod collector;

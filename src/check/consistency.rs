@@ -2,16 +2,16 @@
 //! Consistency is necessary, but cannot authenticate candidate or collector custody.
 
 use super::graph::{Error as GraphError, Graph};
-use super::u64_oracle;
+use super::{patch, u64_oracle};
 use crate::contracts::receipt::{
     Address, ArtifactV1, ArtifactV1Availability, AvailabilityReceiptV1, AvailabilityV1State,
     CampaignV1, CaseV1, CaseV1Outcome, CleanupContractV1, DiagnosticV1, EffectPageV1,
     EnvironmentPageV1, ExpectationV1, ExpectationV1ExpectedOracle, ExpectedProducerV1,
     ExpectedProducerV1Status, FindingV1, FindingV1Disposition, Generation, GrantPageV1, Id,
     IdentityV1, InvocationV1, LimitsV1, List, Maybe, MutantV1, MutantV1Outcome, Name, ObligationV1,
-    ObligationV1State, OracleResultV1, OracleResultV1Result, ProducerV1, ProducerV1Status,
-    ReceiptRecord, ReceiptV1, Ref, ReviewReceiptV1, ReviewV1, Sha, SubjectFileV1, SubjectV1,
-    SubjectsV1, Text, TypedRef, Validate, VerdictV1State, decode,
+    ObligationV1State, OracleResultV1, OracleResultV1Result, Payload, ProducerV1, ProducerV1Status,
+    ReceiptRecord, ReceiptV1, Ref, ReviewReceiptV1, ReviewV1, Sha, SubjectFileV1,
+    SubjectFileV1Kind, SubjectV1, SubjectsV1, Text, TypedRef, Validate, VerdictV1State, decode,
 };
 use serde::de::DeserializeOwned;
 use std::collections::{BTreeMap, BTreeSet};
@@ -143,6 +143,26 @@ pub enum Error {
     Clock,
     Obligation,
     Availability,
+    /// The seed → result patch is not the one its subjects derive (B14-P4).
+    Patch(PatchRefusal),
+}
+
+/// Why a receipt's `seed_to_result_patch` is not bound to its seed and result subjects.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PatchRefusal {
+    /// The two subjects list different numbers of entries.
+    Count,
+    /// An entry differs in something other than its content (path, kind, mode, link, origin,
+    /// exclusion).
+    Entry,
+    /// More than one entry's content differs.
+    TwoChanges,
+    /// The one changed entry is not a regular file with content on both sides.
+    Editable,
+    /// The two editable texts derive no patch within the patch's own edit count.
+    Derivation(patch::Error),
+    /// The patch object's bytes are not the derived patch.
+    Mismatch,
 }
 impl From<GraphError> for Error {
     fn from(error: GraphError) -> Self {
@@ -182,6 +202,7 @@ pub fn validate(
     {
         return Err(Error::Binding);
     }
+    patch_binding(graph, &receipt.subjects)?;
     let pass = receipt.verdict.state == VerdictV1State::PassCandidate;
     let summary = cases(graph, receipt, prepared, pass)?;
     diagnostics(graph, receipt, pass)?;
@@ -226,6 +247,84 @@ pub fn validate(
         return Err(Error::Availability);
     }
     Ok(summary)
+}
+
+/// B14-P4 · a receipt that names both a result and a seed → result patch names the patch its
+/// subjects derive, whoever composed it. The seed's and the result's files are read back from the
+/// receipt's own graph and must agree entry for entry (path, kind, mode, link, origin, exclusion);
+/// at most one entry's content may differ, and it must be a regular file on both sides. The patch
+/// object's bytes must then be exactly the unified diff of that file's two texts under its own path
+/// — or empty when no content differs. Which file a class may change is the class's rule (B14-P3's
+/// apply, B14-P2's profile), not this one's. The derivation is bounded by the patch's own edit
+/// count (at most `patch::MAX_EDITS`), so its work is bounded by an object already acquired. A
+/// receipt missing either side claims no patch and is left to the pass predicates.
+fn patch_binding(graph: &Graph, subjects: &SubjectsV1) -> Result<(), Error> {
+    let (Some(result), Some(claimed)) = (
+        subjects.result_subject.value.as_ref(),
+        subjects.seed_to_result_patch.value.as_ref(),
+    ) else {
+        return Ok(());
+    };
+    let refuse = |refusal| Error::Patch(refusal);
+    let seed: SubjectV1 = typed(graph, &subjects.seed_subject)?;
+    let result: SubjectV1 = typed(graph, result)?;
+    let seed: Vec<SubjectFileV1> = rows(graph, seed.files.as_ref())?;
+    let result: Vec<SubjectFileV1> = rows(graph, result.files.as_ref())?;
+    if seed.len() != result.len() {
+        return Err(refuse(PatchRefusal::Count));
+    }
+    let identity = |content: &Maybe<Payload>| {
+        content.value.as_ref().map(|payload| {
+            let reference: &Ref = payload.as_ref();
+            (reference.sha256.clone(), reference.byte_length)
+        })
+    };
+    let mut changed = None;
+    for (before, after) in seed.iter().zip(&result) {
+        if before.path != after.path
+            || before.kind != after.kind
+            || before.executable != after.executable
+            || before.link_target != after.link_target
+            || before.origin != after.origin
+            || before.exclusion_reason != after.exclusion_reason
+        {
+            return Err(refuse(PatchRefusal::Entry));
+        }
+        if identity(&before.content) != identity(&after.content) {
+            if changed.is_some() {
+                return Err(refuse(PatchRefusal::TwoChanges));
+            }
+            changed = Some((
+                before.path.as_str(),
+                changed_text(before)?,
+                changed_text(after)?,
+            ));
+        }
+    }
+    let claimed = graph.get(claimed.as_ref())?.bytes();
+    let derived = match changed {
+        None => Vec::new(),
+        Some((path, before, after)) => patch::unified(
+            graph.get(before)?.bytes(),
+            graph.get(after)?.bytes(),
+            path,
+            patch::edit_count(claimed),
+            None,
+        )
+        .map_err(|error| refuse(PatchRefusal::Derivation(error)))?,
+    };
+    if derived != claimed {
+        return Err(refuse(PatchRefusal::Mismatch));
+    }
+    Ok(())
+}
+
+/// The changed entry's content reference: it must be a regular file with content.
+fn changed_text(file: &SubjectFileV1) -> Result<&Ref, Error> {
+    match (&file.kind, &file.content.value) {
+        (SubjectFileV1Kind::File, Some(content)) => Ok(content.as_ref()),
+        _ => Err(Error::Patch(PatchRefusal::Editable)),
+    }
 }
 
 fn typed<T: ReceiptRecord>(graph: &Graph, reference: &TypedRef<T>) -> Result<T, Error> {

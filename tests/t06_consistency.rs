@@ -4,8 +4,11 @@
 //! SHA helper adapt this agent's independent graph fixture, not production logic.
 //! Synthetic producer/review assertions establish no custody or authentication.
 
-use habitat_engine::check::consistency::{CasePlan, Error, Prepared, Summary, validate};
+use habitat_engine::check::consistency::{
+    CasePlan, Error, PatchRefusal, Prepared, Summary, validate,
+};
 use habitat_engine::check::graph::{Error as GraphError, Graph, Objects};
+use habitat_engine::check::patch;
 use habitat_engine::contracts::receipt::{
     Id, List, Name, ReceiptRecord, ReceiptV1, Ref, Sha, TypedRef, decode,
 };
@@ -1114,4 +1117,197 @@ fn complete_availability_cannot_contain_a_missing_object_descriptor() {
             .typed("MissingObjectPageV1", &page(&[descriptor])),
     );
     fixture.reject();
+}
+
+/// One subject file row: `path` holding the raw bytes `content` (or none), with `kind` and mode.
+fn subject_file(content: Option<&Ref>, path: &str, kind: &str, executable: bool) -> Value {
+    json!({"path":path,"kind":kind,
+        "content":content.map_or_else(|| unavailable("no content"), |content| present(&value(content))),
+        "executable":executable,"link_target":unavailable("regular file"),"origin":"authored",
+        "exclusion_reason":unavailable("included")})
+}
+
+fn candidate(content: &Ref) -> Value {
+    subject_file(Some(content), "candidate.rs", "file", false)
+}
+fn other(content: &Ref) -> Value {
+    subject_file(Some(content), "other.rs", "file", false)
+}
+
+impl Fixture {
+    /// Publish a `SubjectV1` over `rows` and return its reference.
+    fn subject(&mut self, rows: &[Value]) -> Ref {
+        let files = self.memory.typed("SubjectFilePageV1", &page(rows));
+        let subject = json!({"subject_id":"18000000-0000-4000-8000-000000000009","files":files,
+            "tree_sha256":files.sha256,"dirty_patch":unavailable("clean")});
+        self.memory.typed("SubjectV1", &subject)
+    }
+
+    /// Bind `seed`, `result` and `patch` into the root and the preparation alike (so the plan's
+    /// binding holds and the patch binding is what decides), with the artifact inventory naming
+    /// what a PASS requires: the log, the result's contents and the patch.
+    fn bind(&mut self, seed: &Ref, result: &Ref, patch: &Ref, result_contents: &[&Ref]) {
+        self.root["subjects"]["seed_subject"] = value(seed);
+        self.root["subjects"]["result_subject"] = present(&value(result));
+        self.root["subjects"]["seed_to_result_patch"] = present(&value(patch));
+        self.prepared.subjects = dto(&self.root["subjects"]);
+        self.artifacts = std::iter::once(&self.refs["log"])
+            .chain(result_contents.iter().copied())
+            .chain(std::iter::once(patch))
+            .map(payload)
+            .collect();
+        self.recount_artifacts();
+    }
+
+    /// Bind a seed and a result each of one `candidate.rs` holding the given text, and `patch`.
+    fn bind_texts(&mut self, seed: &[u8], result: &[u8], patch: &[u8]) {
+        let (seed_bytes, result_bytes) = (self.memory.raw(seed), self.memory.raw(result));
+        let patch = self.memory.raw(patch);
+        let seed = self.subject(&[candidate(&seed_bytes)]);
+        let result = self.subject(&[candidate(&result_bytes)]);
+        self.bind(&seed, &result, &patch, &[&result_bytes]);
+    }
+}
+
+const SEED: &[u8] = b"seed fixture\n";
+const RESULT: &[u8] = b"candidate result\n";
+const PATCH: &[u8] =
+    b"--- a/candidate.rs\n+++ b/candidate.rs\n@@ -1 +1 @@\n-seed fixture\n+candidate result\n";
+
+/// B14-P4 · the fixture's own triple is accepted because its patch IS the derivation (the two
+/// texts re-published under fresh identities, so the binding reads contents, never references),
+/// and an unchanged result — the development baseline's shape — is accepted only with an empty
+/// patch.
+#[test]
+fn a_patch_bound_to_its_subjects_is_accepted() {
+    let mut fixture = Fixture::new();
+    fixture.bind_texts(SEED, RESULT, PATCH);
+    assert!(fixture.check().is_ok());
+    let mut fixture = Fixture::new();
+    fixture.bind_texts(SEED, SEED, b"");
+    assert!(fixture.check().is_ok());
+}
+
+/// B14-P4 · the seed ↔ result ↔ patch triple is one binding: a patch from another pair, a seed
+/// swapped under a correct patch, a result published from the seed under a nonempty patch, and a
+/// nonempty patch over an unchanged file are each refused as the one mismatch.
+#[test]
+fn a_patch_not_derived_from_its_subjects_is_refused() {
+    let other =
+        b"--- a/candidate.rs\n+++ b/candidate.rs\n@@ -1 +1 @@\n-seed fixture\n+mutated result\n";
+    for (seed, result, claimed) in [
+        (SEED, RESULT, &other[..]),
+        (&b"other seed\n"[..], RESULT, PATCH),
+        (SEED, SEED, PATCH),
+        (RESULT, RESULT, PATCH),
+    ] {
+        let mut fixture = Fixture::new();
+        fixture.bind_texts(seed, result, claimed);
+        assert_eq!(
+            fixture.check().map(|_| ()),
+            Err(Error::Patch(PatchRefusal::Mismatch)),
+            "{:?}",
+            String::from_utf8_lossy(seed)
+        );
+    }
+    // The result subject itself published as the seed's: no content differs, so only an empty
+    // patch could be bound.
+    let mut fixture = Fixture::new();
+    let seed = fixture.refs["seed"].clone();
+    let patch = fixture.memory.raw(PATCH);
+    let seed_bytes = fixture.refs["seed_bytes"].clone();
+    fixture.bind(&seed, &seed, &patch, &[&seed_bytes]);
+    assert_eq!(
+        fixture.check().map(|_| ()),
+        Err(Error::Patch(PatchRefusal::Mismatch))
+    );
+}
+
+/// B14-P4 · a patch too short for its change, or over text that is not text, derives nothing:
+/// each refused with the derivation's own cause.
+#[test]
+fn a_patch_the_subjects_cannot_derive_names_the_cause() {
+    for (seed, result, claimed, cause) in [
+        (
+            SEED,
+            RESULT,
+            &b"--- a/candidate.rs\n+++ b/candidate.rs\n"[..],
+            patch::Error::Changes,
+        ),
+        (SEED, &b"nul\0\n"[..], PATCH, patch::Error::Encoding),
+        (&b"\xff\n"[..], RESULT, PATCH, patch::Error::Encoding),
+    ] {
+        let mut fixture = Fixture::new();
+        fixture.bind_texts(seed, result, claimed);
+        assert_eq!(
+            fixture.check().map(|_| ()),
+            Err(Error::Patch(PatchRefusal::Derivation(cause)))
+        );
+    }
+}
+
+/// B14-P4 · every refusal of the inventory by its own site: a result with an extra entry
+/// (`Count`), the changed file's mode or kind differing (`Entry`), a second file's contents changed
+/// (`TwoChanges`), and a changed entry that is not a regular file (`Editable`: an `other` entry,
+/// the one non-file kind a valid record may give content — a file must have it, a directory may
+/// not, and a symlink must name its target).
+#[test]
+fn the_subjects_may_differ_in_one_file_s_contents_only() {
+    type Rows = fn(&Ref, &Ref) -> (Vec<Value>, Vec<Value>);
+    let cases: [(Rows, PatchRefusal); 5] = [
+        (
+            |seed, result| (vec![candidate(seed)], vec![candidate(result), other(seed)]),
+            PatchRefusal::Count,
+        ),
+        (
+            |seed, result| {
+                (
+                    vec![subject_file(Some(seed), "candidate.rs", "file", false)],
+                    vec![subject_file(Some(result), "candidate.rs", "file", true)],
+                )
+            },
+            PatchRefusal::Entry,
+        ),
+        (
+            |seed, result| {
+                (
+                    vec![subject_file(Some(seed), "candidate.rs", "file", false)],
+                    vec![subject_file(Some(result), "candidate.rs", "other", false)],
+                )
+            },
+            PatchRefusal::Entry,
+        ),
+        (
+            |seed, result| {
+                (
+                    vec![candidate(seed), other(seed)],
+                    vec![candidate(result), other(result)],
+                )
+            },
+            PatchRefusal::TwoChanges,
+        ),
+        (
+            |seed, result| {
+                (
+                    vec![subject_file(Some(seed), "candidate.rs", "other", false)],
+                    vec![subject_file(Some(result), "candidate.rs", "other", false)],
+                )
+            },
+            PatchRefusal::Editable,
+        ),
+    ];
+    for (rows, refusal) in cases {
+        let mut fixture = Fixture::new();
+        let (seed_bytes, result_bytes) = (fixture.memory.raw(SEED), fixture.memory.raw(RESULT));
+        let (seed_rows, result_rows) = rows(&seed_bytes, &result_bytes);
+        let seed = fixture.subject(&seed_rows);
+        let result = fixture.subject(&result_rows);
+        let patch = fixture.memory.raw(PATCH);
+        fixture.bind(&seed, &result, &patch, &[&result_bytes]);
+        assert_eq!(
+            fixture.check().map(|_| ()),
+            Err(Error::Patch(refusal)),
+            "{refusal:?}"
+        );
+    }
 }

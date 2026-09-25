@@ -1,6 +1,7 @@
 //! One predeclared fixed-file repair over a fresh immutable source snapshot ([`apply`]), and one
 //! untrusted candidate's replacement of a class's single editable file ([`apply_candidate`], B14-P3).
 
+use crate::check::patch;
 use crate::worker::workspace::{self, Content, Snapshot};
 use rustix::fs::{Mode, OFlags, open, openat};
 use std::fs::{File, Permissions};
@@ -233,8 +234,9 @@ pub fn apply(
 }
 
 /// The most changed lines any class may admit: the ceiling a caller's bound is clamped to, so the
-/// shortest-edit search is `O((n+m)·MAX_CHANGED_LINES)` whatever a caller asks (review P3-1).
-pub const MAX_CHANGED_LINES: usize = 4096;
+/// shortest-edit search is `O((n+m)·MAX_CHANGED_LINES)` whatever a caller asks (review P3-1). The
+/// check lane owns it with the search, which it bounds (B14-P4).
+pub use crate::check::patch::MAX_CHANGED_LINES;
 
 /// What a task class admits of one candidate (B14-P3): at most `bytes` of new text for its editable
 /// file, changing at most `changed_lines` of the baseline's lines. The class profile (B14-P2)
@@ -244,8 +246,9 @@ pub struct CandidateBounds {
     /// The largest candidate, in bytes: the bound on volume.
     pub bytes: usize,
     /// The most changed lines: line insertions plus deletions in a shortest edit, every
-    /// newline-delimited line counted, blank or not — the unit the derived patch counts (B14-P4) —
-    /// clamped to [`MAX_CHANGED_LINES`]. The bound on edit scope, not on volume.
+    /// newline-delimited line counted, blank or not, a final line's newline not counted — the
+    /// derived patch (B14-P4) counts it, so its edits exceed this by at most two — clamped to
+    /// [`MAX_CHANGED_LINES`]. The bound on edit scope, not on volume.
     pub changed_lines: usize,
 }
 
@@ -269,47 +272,15 @@ fn line_count(text: &[u8]) -> usize {
 /// The shortest edit distance (line insertions plus deletions) between `before` and `after`, if it
 /// is at most `limit` — a bounded Myers search, so a large rewrite is refused in `O((n+m)·limit)`
 /// without ever computing the whole diff; a distance is at least the length difference, so that is
-/// refused first; the deadline is checked every round.
+/// refused first; the deadline is checked every round. The search is the check lane's, the one
+/// the receipt's patch binding also runs (B14-P4).
 fn changed_lines(
     before: &[&[u8]],
     after: &[&[u8]],
     limit: usize,
     deadline: Instant,
 ) -> Result<Option<usize>, Error> {
-    let (n, m) = (before.len(), after.len());
-    if n.abs_diff(m) > limit {
-        return Ok(None);
-    }
-    let limit = limit.min(n + m).min(MAX_CHANGED_LINES);
-    // The furthest `x` reached on each diagonal `k = x - y`, indexed `k + limit + 1`.
-    let mut furthest = vec![0_usize; 2 * limit + 3];
-    for distance in 0..=limit {
-        budget(deadline)?;
-        for step in 0..=distance {
-            // k runs -distance, -distance + 2, ..., distance: index = k + limit + 1.
-            let index = limit + 1 + 2 * step - distance;
-            let down = step == 0 || (step != distance && furthest[index - 1] < furthest[index + 1]);
-            let mut x = if down {
-                furthest[index + 1]
-            } else {
-                furthest[index - 1] + 1
-            };
-            // y = x - k, with k = 2·step - distance. Never negative (a down move adds one to a
-            // non-negative y, a right move keeps one); were it ever, refuse rather than guess.
-            let Some(mut y) = (x + distance).checked_sub(2 * step) else {
-                return Ok(None);
-            };
-            while x < n && y < m && before[x] == after[y] {
-                x += 1;
-                y += 1;
-            }
-            furthest[index] = x;
-            if x >= n && y >= m {
-                return Ok(Some(distance));
-            }
-        }
-    }
-    Ok(None)
+    patch::distance(before, after, limit, Some(deadline)).map_err(|patch::Expired| Error::Deadline)
 }
 
 /// Materialize `baseline` (create-new), replace its one `editable_path` with an untrusted
