@@ -4,10 +4,12 @@
 //! `diff -u --label a/<path> --label b/<path>` rendering.
 //!
 //! Allocations, each bounded before it is made: a text past [`MAX_TEXT`] is refused before it is
-//! split; the line views are one slice per line (at most `MAX_TEXT` lines a side); the search's
-//! trace holds `2·d + 1` cells for each round `d` actually run, `d ≤` the caller's limit, itself at
-//! most [`MAX_EDITS`]; the rendering is at most both texts plus two bytes and one marker a line,
-//! plus one header a hunk. A deadline, when given, is read every search round — the only
+//! split; the line views are one 16-byte slice per line (at most `MAX_TEXT` lines a side); the
+//! search's trace holds `2·d + 1` `usize` cells for each round `d` actually run, `d ≤` the caller's
+//! limit, itself at most [`MAX_EDITS`] (so at most `(MAX_EDITS + 1)²` cells); the edit script is
+//! one 16-byte `Edit` per line of both texts; the rendering is at most both texts plus two bytes
+//! and one marker a line, plus one header a hunk. The search is `O((n + m) · limit)`; everything
+//! after it is linear. A deadline, when given, is read every search round — the only
 //! superlinear work; one round's diagonal slides are not individually bounded (inherited from P3),
 //! and the rendering after the search is linear in its output.
 
@@ -18,6 +20,21 @@ pub const MAX_CHANGED_LINES: usize = 4096;
 /// The most edits a derivation searches: a class's changed lines plus the at most one deletion and
 /// one insertion a final line's missing newline adds when the terminator counts (B14-P4 P4-R1.4).
 pub const MAX_EDITS: usize = MAX_CHANGED_LINES + 2;
+/// What a task class admits of one candidate (B14-P3): at most `bytes` of new text for its editable
+/// file, changing at most `changed_lines` of the baseline's lines. The class profile (B14-P2)
+/// supplies both, with the editable path; `app::repair::apply_candidate` and the receipt's patch
+/// binding (`consistency`) each take them from their caller's trusted preparation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CandidateBounds {
+    /// The largest candidate, in bytes: the bound on volume.
+    pub bytes: usize,
+    /// The most changed lines: line insertions plus deletions in a shortest edit, every
+    /// newline-delimited line counted, blank or not, a final line's newline not counted — the
+    /// derived patch counts it, so its edits exceed this by at most two — clamped to
+    /// [`MAX_CHANGED_LINES`]. The bound on edit scope, not on volume.
+    pub changed_lines: usize,
+}
+
 /// The largest text either side may be, in bytes (the candidate replacement's bound).
 pub const MAX_TEXT: usize = 16 * 1024 * 1024;
 /// Unchanged lines a GNU unified diff shows around each change.
@@ -264,7 +281,9 @@ pub fn unified(
         changes.push(start..position);
     }
     let mut text = format!("--- a/{path}\n+++ b/{path}\n").into_bytes();
-    let mut index = 0;
+    // Hunks never overlap and only advance, so the lines consumed before each one are carried
+    // forward (review P4-2: refolding the prefix per hunk was quadratic).
+    let (mut index, mut seen, mut start) = (0, 0, (0, 0));
     while index < changes.len() {
         // Merge every following change at most 2·CONTEXT kept lines after this hunk's last.
         let mut last = index;
@@ -278,7 +297,10 @@ pub fn unified(
             old: &old,
             new: &new,
         };
-        lines.hunk(&mut text, consumed(&edits[..from]), &edits[from..to]);
+        let (old_before, new_before) = consumed(&edits[seen..from]);
+        start = (start.0 + old_before, start.1 + new_before);
+        seen = from;
+        lines.hunk(&mut text, start, &edits[from..to]);
         index = last + 1;
     }
     Ok(text)
@@ -374,6 +396,8 @@ mod tests {
             return None;
         }
         let (mut out, mut cursor) = (Vec::new(), 0_usize);
+        // Whether each side's unterminated last line has been written: nothing may follow it.
+        let mut ended = (false, false);
         let number = |text: &str| text.parse::<usize>().ok();
         while let Some(row) = rows.next() {
             let row = std::str::from_utf8(row).ok()?;
@@ -383,26 +407,48 @@ mod tests {
                 Some((start, count)) => Some((number(start)?, number(count)?)),
                 None => Some((number(text)?, 1)),
             };
-            let ((old_start, old_count), (_, new_count)) = (side(minus)?, side(plus)?);
-            let begin = if old_count == 0 {
-                old_start
-            } else {
-                old_start.checked_sub(1)?
+            let ((old_start, old_count), (new_start, new_count)) = (side(minus)?, side(plus)?);
+            let at = |start: usize, count: usize| {
+                if count == 0 {
+                    Some(start)
+                } else {
+                    start.checked_sub(1)
+                }
             };
-            if begin < cursor || begin > old.len() {
+            let begin = at(old_start, old_count)?;
+            if begin < cursor || begin > old.len() || ended.0 || ended.1 {
                 return None;
             }
             out.extend(old[cursor..begin].iter().copied().flatten());
             cursor = begin;
+            // The `+` side must start where the output stands: every line before it is written.
+            if at(new_start, new_count)? != terminated(&out).len() {
+                return None;
+            }
             let (mut consumed, mut produced) = (0, 0);
             while consumed < old_count || produced < new_count {
                 let line = rows.next()?;
                 let (prefix, body) = line.split_first()?;
                 let mut body = body.to_vec();
-                if rows.peek() == Some(&&b"\\ No newline at end of file\n"[..]) {
+                let unterminated = rows.peek() == Some(&&b"\\ No newline at end of file\n"[..]);
+                if unterminated {
                     rows.next();
-                    body.pop()?;
+                    if body.pop()? != b'\n' {
+                        return None;
+                    }
                 }
+                let (old_side, new_side) = match prefix {
+                    b' ' => (true, true),
+                    b'-' => (true, false),
+                    _ => (false, true),
+                };
+                if (old_side && ended.0) || (new_side && ended.1) {
+                    return None;
+                }
+                ended = (
+                    ended.0 || (old_side && unterminated),
+                    ended.1 || (new_side && unterminated),
+                );
                 match prefix {
                     b' ' | b'-' => {
                         if old.get(cursor)? != &body.as_slice() {
@@ -482,6 +528,51 @@ mod tests {
         assert_eq!(named, 25, "every named case is held to GNU's bytes");
         assert!(differing.iter().all(|name| name.starts_with("random_")));
         Ok(())
+    }
+
+    /// The strict applier refuses what is not an exact patch of `before` — else the random cases,
+    /// judged by it alone, would be judged by an applier that accepts anything (review P4-6). Each
+    /// plant differs from a valid patch in one place: the `+` start, a `-` count, a context line, a
+    /// marker after a line that is not its side's last, and a marker's removal of a byte that is
+    /// not a newline.
+    #[test]
+    fn the_strict_applier_refuses_inexact_patches() {
+        let (before, after) = (&b"a\nb\nc\n"[..], &b"a\nB\nc\n"[..]);
+        let valid = "--- a/f\n+++ b/f\n@@ -1,3 +1,3 @@\n a\n-b\n+B\n c\n";
+        assert_eq!(
+            apply_patch(before, valid.as_bytes(), "f").as_deref(),
+            Some(after)
+        );
+        for plant in [
+            valid.replace("+1,3 @@", "+2,3 @@"),
+            valid.replace("-1,3 +", "-1,2 +"),
+            valid.replace(" a\n", " x\n"),
+            valid.replace("-b\n", "-b\n\\ No newline at end of file\n"),
+        ] {
+            assert_eq!(
+                apply_patch(before, plant.as_bytes(), "f"),
+                None,
+                "{plant:?}"
+            );
+        }
+        let (before, after) = (&b"a\nb"[..], &b"a\nc"[..]);
+        let valid = "--- a/f\n+++ b/f\n@@ -1,2 +1,2 @@\n a\n-b\n\\ No newline at end of file\n+c\n\\ No newline at end of file\n";
+        assert_eq!(
+            apply_patch(before, valid.as_bytes(), "f").as_deref(),
+            Some(after)
+        );
+        // `+d` after the `+` side's unterminated `c`: a marker on a line that is not its side's last.
+        let plant = valid
+            .replace(
+                "+c\n\\ No newline at end of file\n",
+                "+c\n\\ No newline at end of file\n+d\n",
+            )
+            .replace("+1,2 @@", "+1,3 @@");
+        assert_eq!(
+            apply_patch(before, plant.as_bytes(), "f"),
+            None,
+            "{plant:?}"
+        );
     }
 
     /// B14-P4 · the class's own frozen pair: `reference.patch` is the manifest's object (its digest

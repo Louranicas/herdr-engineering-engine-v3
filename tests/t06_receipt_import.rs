@@ -7,11 +7,14 @@ use habitat_engine::app::{
     evidence::Evidence,
     receipt_import::{Error, receipt as import},
 };
+use habitat_engine::check::consistency::Editable;
+use habitat_engine::check::patch::CandidateBounds;
 use habitat_engine::check::{
     collector::Sink,
     consistency::{CasePlan, Prepared, Summary},
     graph::{Graph, Objects},
 };
+use habitat_engine::contracts::receipt::RelPath;
 use habitat_engine::contracts::{
     UuidV4,
     receipt::{
@@ -98,6 +101,14 @@ fn preparation() -> Prepared {
                 reviewed_design: None,
             })
             .collect(),
+        // The imported receipts are the WL-U64 lane's, whose one editable file this is.
+        editable: Editable {
+            path: RelPath::new("src/lib.rs").unwrap(),
+            bounds: CandidateBounds {
+                bytes: 65_536,
+                changed_lines: 200,
+            },
+        },
     }
 }
 

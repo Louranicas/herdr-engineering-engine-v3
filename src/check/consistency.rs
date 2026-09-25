@@ -10,7 +10,7 @@ use crate::contracts::receipt::{
     ExpectedProducerV1Status, FindingV1, FindingV1Disposition, Generation, GrantPageV1, Id,
     IdentityV1, InvocationV1, LimitsV1, List, Maybe, MutantV1, MutantV1Outcome, Name, ObligationV1,
     ObligationV1State, OracleResultV1, OracleResultV1Result, Payload, ProducerV1, ProducerV1Status,
-    ReceiptRecord, ReceiptV1, Ref, ReviewReceiptV1, ReviewV1, Sha, SubjectFileV1,
+    ReceiptRecord, ReceiptV1, Ref, RelPath, ReviewReceiptV1, ReviewV1, Sha, SubjectFileV1,
     SubjectFileV1Kind, SubjectV1, SubjectsV1, Text, TypedRef, Validate, VerdictV1State, decode,
 };
 use serde::de::DeserializeOwned;
@@ -40,12 +40,29 @@ pub struct Prepared {
     pub subjects: SubjectsV1,
     pub invocation: InvocationV1,
     pub cases: Vec<CasePlan>,
+    /// The one file a candidate may change, and how much: the class's, fixed before execution. The
+    /// receipt's patch binding refuses a change anywhere else or past these bounds (B14-P4 R2).
+    pub editable: Editable,
+}
+
+/// A class's one editable file and its candidate bounds (B14-P2's profile will supply both).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Editable {
+    pub path: RelPath,
+    pub bounds: patch::CandidateBounds,
 }
 
 /// The one frozen WL-U64 case and the criterion it credits.
 pub const U64_CASE_ID: &str = "WL-U64-PARSE-001-v1";
 pub const U64_CRITERION_ID: &str = "u64-frozen-exact-output";
 const U64_MODULE_ID: &str = "check";
+/// The WL-U64 class's one editable file (`TASK.md`: "Change only `src/lib.rs`") and its bounds:
+/// R1's 200 changed lines, and 64 KiB against a 751-byte reference. B14-P2's profile takes them over.
+const U64_EDITABLE: &str = "src/lib.rs";
+const U64_BOUNDS: patch::CandidateBounds = patch::CandidateBounds {
+    bytes: 65_536,
+    changed_lines: 200,
+};
 const U64_CWD: &str = "work";
 
 /// Typed, already published inputs for one WL-U64 attempt. Nothing here is a
@@ -124,6 +141,10 @@ pub fn prepare_u64(attempt: U64Attempt) -> Result<Prepared, Error> {
             cleanup_contract: attempt.cleanup_contract,
         },
         cases: vec![case],
+        editable: Editable {
+            path: RelPath::new(U64_EDITABLE).map_err(|_| Error::Encoding)?,
+            bounds: U64_BOUNDS,
+        },
     })
 }
 
@@ -159,6 +180,8 @@ pub enum PatchRefusal {
     TwoChanges,
     /// The one changed entry is not a regular file with content on both sides.
     Editable,
+    /// The one changed entry is not the preparation's editable file.
+    Path,
     /// The two editable texts derive no patch within the patch's own edit count.
     Derivation(patch::Error),
     /// The patch object's bytes are not the derived patch.
@@ -202,7 +225,7 @@ pub fn validate(
     {
         return Err(Error::Binding);
     }
-    patch_binding(graph, &receipt.subjects)?;
+    patch_binding(graph, &receipt.subjects, &prepared.editable)?;
     let pass = receipt.verdict.state == VerdictV1State::PassCandidate;
     let summary = cases(graph, receipt, prepared, pass)?;
     diagnostics(graph, receipt, pass)?;
@@ -253,12 +276,13 @@ pub fn validate(
 /// subjects derive, whoever composed it. The seed's and the result's files are read back from the
 /// receipt's own graph and must agree entry for entry (path, kind, mode, link, origin, exclusion);
 /// at most one entry's content may differ, and it must be a regular file on both sides. The patch
-/// object's bytes must then be exactly the unified diff of that file's two texts under its own path
-/// — or empty when no content differs. Which file a class may change is the class's rule (B14-P3's
-/// apply, B14-P2's profile), not this one's. The derivation is bounded by the patch's own edit
-/// count (at most `patch::MAX_EDITS`), so its work is bounded by an object already acquired. A
-/// receipt missing either side claims no patch and is left to the pass predicates.
-fn patch_binding(graph: &Graph, subjects: &SubjectsV1) -> Result<(), Error> {
+/// object's bytes must then be exactly the unified diff of that file's two texts under its path
+/// — or empty when no content differs. That file must be the preparation's editable one, and its
+/// result text at most the class's bytes (the seed, the class's own baseline, only `MAX_TEXT`). The
+/// search runs at most `min(edit_count(claimed), changed_lines + 2)` rounds, so its work is
+/// `O((seed + result lines) · (changed_lines + 2))`, bounded by the preparation, never by a clock
+/// (review P4-2). A receipt missing either side claims no patch and is left to the pass predicates.
+fn patch_binding(graph: &Graph, subjects: &SubjectsV1, editable: &Editable) -> Result<(), Error> {
     let (Some(result), Some(claimed)) = (
         subjects.result_subject.value.as_ref(),
         subjects.seed_to_result_patch.value.as_ref(),
@@ -294,24 +318,34 @@ fn patch_binding(graph: &Graph, subjects: &SubjectsV1) -> Result<(), Error> {
             if changed.is_some() {
                 return Err(refuse(PatchRefusal::TwoChanges));
             }
-            changed = Some((
-                before.path.as_str(),
-                changed_text(before)?,
-                changed_text(after)?,
-            ));
+            if before.path != editable.path {
+                return Err(refuse(PatchRefusal::Path));
+            }
+            changed = Some((changed_text(before)?, changed_text(after)?));
         }
     }
     let claimed = graph.get(claimed.as_ref())?.bytes();
     let derived = match changed {
         None => Vec::new(),
-        Some((path, before, after)) => patch::unified(
-            graph.get(before)?.bytes(),
-            graph.get(after)?.bytes(),
-            path,
-            patch::edit_count(claimed),
-            None,
-        )
-        .map_err(|error| refuse(PatchRefusal::Derivation(error)))?,
+        Some((before, after)) => {
+            let after = graph.get(after)?.bytes();
+            if after.len() > editable.bounds.bytes.min(patch::MAX_TEXT) {
+                return Err(refuse(PatchRefusal::Derivation(patch::Error::Bound)));
+            }
+            let class = editable
+                .bounds
+                .changed_lines
+                .min(patch::MAX_CHANGED_LINES)
+                .saturating_add(2);
+            patch::unified(
+                graph.get(before)?.bytes(),
+                after,
+                editable.path.as_str(),
+                patch::edit_count(claimed).min(class),
+                None,
+            )
+            .map_err(|error| refuse(PatchRefusal::Derivation(error)))?
+        }
     };
     if derived != claimed {
         return Err(refuse(PatchRefusal::Mismatch));

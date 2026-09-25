@@ -6,8 +6,11 @@
 //! SHA helper adapt this agent's independent graph fixture, not production logic.
 //! Synthetic producer/review assertions establish no custody or authentication.
 
+use habitat_engine::check::consistency::Editable;
 use habitat_engine::check::consistency::{CasePlan, Prepared};
 use habitat_engine::check::graph::{Error as GraphError, Graph, Objects};
+use habitat_engine::check::patch::CandidateBounds;
+use habitat_engine::contracts::receipt::RelPath;
 use habitat_engine::contracts::receipt::{
     Id, List, Name, ReceiptRecord, Ref, Sha, TypedRef, decode,
 };
@@ -311,6 +314,13 @@ impl Fixture {
             subjects: dto(&root["subjects"]),
             invocation: dto(&root["invocation"]),
             cases: vec![plan],
+            editable: Editable {
+                path: RelPath::new("candidate.rs").unwrap(),
+                bounds: CandidateBounds {
+                    bytes: 4096,
+                    changed_lines: 200,
+                },
+            },
         };
         let artifacts = vec![
             payload(&refs["log"]),

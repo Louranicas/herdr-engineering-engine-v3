@@ -57,6 +57,14 @@ fn recipe(index: u32) -> Recipe {
                 excluded: false,
                 reviewed_design: None,
             }],
+            // The WL-U64 lane's one editable file and bounds, as `prepare_u64` pins them.
+            editable: habitat_engine::check::consistency::Editable {
+                path: r::RelPath::new("src/lib.rs").unwrap(),
+                bounds: habitat_engine::check::patch::CandidateBounds {
+                    bytes: 65_536,
+                    changed_lines: 200,
+                },
+            },
         },
         recipe: parse(&reference("hee3.raw/1")),
         host: parse(&reference("hee3.receipt/1:HostV1")),

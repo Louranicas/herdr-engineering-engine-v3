@@ -233,24 +233,10 @@ pub fn apply(
     })
 }
 
-/// The most changed lines any class may admit: the ceiling a caller's bound is clamped to, so the
-/// shortest-edit search is `O((n+m)·MAX_CHANGED_LINES)` whatever a caller asks (review P3-1). The
-/// check lane owns it with the search, which it bounds (B14-P4).
-pub use crate::check::patch::MAX_CHANGED_LINES;
-
-/// What a task class admits of one candidate (B14-P3): at most `bytes` of new text for its editable
-/// file, changing at most `changed_lines` of the baseline's lines. The class profile (B14-P2)
-/// supplies both, with the editable path; this function trusts its caller for that binding.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct CandidateBounds {
-    /// The largest candidate, in bytes: the bound on volume.
-    pub bytes: usize,
-    /// The most changed lines: line insertions plus deletions in a shortest edit, every
-    /// newline-delimited line counted, blank or not, a final line's newline not counted — the
-    /// derived patch (B14-P4) counts it, so its edits exceed this by at most two — clamped to
-    /// [`MAX_CHANGED_LINES`]. The bound on edit scope, not on volume.
-    pub changed_lines: usize,
-}
+/// The ceiling a class's changed-line bound is clamped to, and what a task class admits of one
+/// candidate: both owned by the check lane with the search that bounds them and the receipt binding
+/// that re-checks them (B14-P4), so the two doors share one type.
+pub use crate::check::patch::{CandidateBounds, MAX_CHANGED_LINES};
 
 /// The newline-delimited lines of `text` (a final line needs no newline; a final newline adds no
 /// empty line): the unit a class counts changes in (design B14 R2, review P3-3).
@@ -756,6 +742,34 @@ mod tests {
             Error::Path
         );
         assert_eq!(refused(CANDIDATE, WIDE, "src", "directory"), Error::Path);
+        // A class asking more than the ceiling is held to it: the shared search admits 4098 (its
+        // newline slack), so only this call's own clamp keeps 4097 appended lines out (review P4-7).
+        let beyond = CandidateBounds {
+            bytes: 1 << 20,
+            changed_lines: 5000,
+        };
+        let appended = |lines: usize| [BASE, "x\n".repeat(lines).as_bytes()].concat();
+        assert!(
+            apply_candidate(
+                &f.base,
+                "src/lib.rs",
+                &appended(MAX_CHANGED_LINES),
+                beyond,
+                &f.fresh,
+                "at-ceiling",
+                deadline()
+            )
+            .is_ok()
+        );
+        assert_eq!(
+            refused(
+                &appended(MAX_CHANGED_LINES + 1),
+                beyond,
+                "src/lib.rs",
+                "past-ceiling"
+            ),
+            Error::Changes
+        );
     }
 
     /// B14-P3 · never reopen: a destination that exists is refused by `materialize`'s create-new

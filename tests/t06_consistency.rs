@@ -4,11 +4,13 @@
 //! SHA helper adapt this agent's independent graph fixture, not production logic.
 //! Synthetic producer/review assertions establish no custody or authentication.
 
+use habitat_engine::check::consistency::Editable;
 use habitat_engine::check::consistency::{
     CasePlan, Error, PatchRefusal, Prepared, Summary, validate,
 };
 use habitat_engine::check::graph::{Error as GraphError, Graph, Objects};
-use habitat_engine::check::patch;
+use habitat_engine::check::patch::{self, CandidateBounds};
+use habitat_engine::contracts::receipt::RelPath;
 use habitat_engine::contracts::receipt::{
     Id, List, Name, ReceiptRecord, ReceiptV1, Ref, Sha, TypedRef, decode,
 };
@@ -315,6 +317,13 @@ impl Fixture {
             subjects: dto(&root["subjects"]),
             invocation: dto(&root["invocation"]),
             cases: vec![plan],
+            editable: Editable {
+                path: RelPath::new("candidate.rs").unwrap(),
+                bounds: CandidateBounds {
+                    bytes: 4096,
+                    changed_lines: 200,
+                },
+            },
         };
         let artifacts = vec![
             payload(&refs["log"]),
@@ -1269,15 +1278,19 @@ fn a_patch_the_subjects_cannot_derive_names_the_cause() {
 }
 
 /// B14-P4 · every refusal of the inventory by its own site: a result with an extra entry
-/// (`Count`), the changed file's mode, kind, origin, link target or exclusion reason differing
-/// (`Entry`, one case each), a second file's contents changed
+/// (`Count`), the entry's path, the changed file's mode, kind, origin, link target or exclusion
+/// reason differing (`Entry`, one case each), a second file's contents changed
 /// (`TwoChanges`), and a changed entry that is not a regular file (`Editable`: an `other` entry,
 /// the one non-file kind a valid record may give content — a file must have it, a directory may
 /// not, and a symlink must name its target).
 #[test]
 fn the_subjects_may_differ_in_one_file_s_contents_only() {
     type Rows = fn(&Ref, &Ref) -> (Vec<Value>, Vec<Value>);
-    let cases: [(Rows, PatchRefusal); 8] = [
+    let cases: [(Rows, PatchRefusal); 9] = [
+        (
+            |seed, result| (vec![candidate(seed)], vec![other(result)]),
+            PatchRefusal::Entry,
+        ),
         (
             |seed, result| (vec![candidate(seed)], vec![candidate(result), other(seed)]),
             PatchRefusal::Count,
@@ -1366,5 +1379,55 @@ fn the_subjects_may_differ_in_one_file_s_contents_only() {
             Err(Error::Patch(refusal)),
             "{refusal:?}"
         );
+    }
+}
+
+/// B14-P4 R2 · the preparation names the one editable file and its bounds, and the binding holds
+/// the receipt to them: the only changed file elsewhere is `Path`; a result text past the class's
+/// bytes is refused before any derivation, one of exactly that size is not; and the search stops at
+/// the class's changed lines plus the two a final newline may add.
+#[test]
+fn the_binding_holds_the_receipt_to_the_preparation_s_editable_file() {
+    // The one changed file is other.rs, correctly patched, but the preparation names candidate.rs.
+    let mut fixture = Fixture::new();
+    let (seed_bytes, result_bytes) = (fixture.memory.raw(SEED), fixture.memory.raw(RESULT));
+    let seed = fixture.subject(&[other(&seed_bytes)]);
+    let result = fixture.subject(&[other(&result_bytes)]);
+    let patch = fixture
+        .memory
+        .raw(b"--- a/other.rs\n+++ b/other.rs\n@@ -1 +1 @@\n-seed fixture\n+candidate result\n");
+    fixture.bind(&seed, &result, &patch, &[&result_bytes]);
+    assert_eq!(
+        fixture.check().map(|_| ()),
+        Err(Error::Patch(PatchRefusal::Path))
+    );
+    // The result at the class's byte bound, and one byte past it.
+    for (bytes, verdict) in [
+        (RESULT.len(), Ok(())),
+        (
+            RESULT.len() - 1,
+            Err(Error::Patch(PatchRefusal::Derivation(patch::Error::Bound))),
+        ),
+    ] {
+        let mut fixture = Fixture::new();
+        fixture.prepared.editable.bounds.bytes = bytes;
+        fixture.bind_texts(SEED, RESULT, PATCH);
+        assert_eq!(fixture.check().map(|_| ()), verdict, "bound {bytes}");
+    }
+    // Four edits (two lines replaced) against a class of two changed lines (+2) and of one (+2).
+    let two = b"--- a/candidate.rs\n+++ b/candidate.rs\n@@ -1,2 +1,2 @@\n-a\n-b\n+c\n+d\n";
+    for (lines, verdict) in [
+        (2, Ok(())),
+        (
+            1,
+            Err(Error::Patch(PatchRefusal::Derivation(
+                patch::Error::Changes,
+            ))),
+        ),
+    ] {
+        let mut fixture = Fixture::new();
+        fixture.prepared.editable.bounds.changed_lines = lines;
+        fixture.bind_texts(b"a\nb\n", b"c\nd\n", two);
+        assert_eq!(fixture.check().map(|_| ()), verdict, "lines {lines}");
     }
 }

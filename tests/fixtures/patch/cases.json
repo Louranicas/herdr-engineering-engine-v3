@@ -1,6 +1,6 @@
 {
  "generator": "tests/fixtures/patch/gen-patch-fixtures.py",
- "generator_sha256": "29ef0caf513eb5da04fccbcd71df7f6197786e7034e00569a9cb5ed8a7b27bd3",
+ "generator_sha256": "35b0d48b6a0eda0eb93956b6438cb285a88cd52be7656872b1e7c7d18d03b993",
  "oracle": "diff (GNU diffutils) 3.12",
  "command": "diff -u --label a/src/lib.rs --label b/src/lib.rs <before> <after>",
  "distance": "textbook LCS over lines that keep their terminators (distance() above)",

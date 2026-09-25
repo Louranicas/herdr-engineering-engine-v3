@@ -114,7 +114,7 @@ T05_STORE_TEST_COUNT = 36
 # Fixed reviewed T06 development inventory. Profile repetition earns no new cases.
 T06_TARGET_COUNTS = {
     "t06_receipts": 64, "t06_store": 39, "t06_graph": 32,
-    "t06_driver": 29, "t06_consistency": 49, "t06_workspace": 35,
+    "t06_driver": 29, "t06_consistency": 50, "t06_workspace": 35,
     "t06_terminal": 39, "t06_evidence": 26, "t06_collector": 29,
     "t06_availability": 22, "t06_decision": 40, "t06_staging": 20,
     "t06_subjects": 8, "t06_process_timing": 3, "t06_workspace_export": 9,
@@ -139,7 +139,7 @@ T06_UNIT_COUNTS = {
     "store::staging_tests::": 13, "check::u64_oracle::tests::": 22,
     "app::capture::tests::": 6, "app::durable_control::tests::": 6,
     "app::repair::tests::": 7, "worker::namespace::": 8,
-    "check::patch::tests::": 5,
+    "check::patch::tests::": 6,
 }
 
 

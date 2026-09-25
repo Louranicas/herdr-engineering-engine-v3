@@ -4,7 +4,7 @@
 Each case: before/after text; expected = `diff -u --label a/P --label b/P` output
 (empty when equal). Writes JSON to argv[1].
 """
-import json, subprocess, sys, tempfile, os, random
+import json, subprocess, sys, tempfile, os, random, re
 
 P = "src/lib.rs"
 def lines(n, tag="l"):
@@ -60,7 +60,10 @@ for i in range(60):
 def distance(before, after):
     """Minimal line insertions plus deletions, by the textbook LCS dynamic program over lines
     that keep their terminators: an implementation independent of the Rust Myers search."""
-    a, b = before.splitlines(keepends=True), after.splitlines(keepends=True)
+    # Split on "\n" only, as the Rust line model does: str.splitlines would also split on "\r",
+    # "\v", "\f", "\x1c"-"\x1e", "\x85" and the Unicode separators (review P4-10).
+    lines = lambda text: re.findall(r"[^\n]*\n|[^\n]+$", text)
+    a, b = lines(before), lines(after)
     row = [0] * (len(b) + 1)
     for x in a:
         prev, row = row, [0] * (len(b) + 1)
