@@ -507,7 +507,9 @@ fn inventory_bound_never_successfully_truncates() {
     for n in 1..=1025 {
         let task = format!("07000000-0000-4000-8001-{n:012x}");
         db.execute(
-            "INSERT INTO tasks VALUES(?,1000,'operator',x'00',?,'1','admitted',0,NULL,1,0,0,0)",
+            "INSERT INTO tasks(id,principal_uid,principal_role,spec,criteria_digest,generation,state,\
+             cancellation,accepted_event,limit_ms,spent_ms,reserved_work_ms,reserved_verify_ms) \
+             VALUES(?,1000,'operator',x'00',?,'1','admitted',0,NULL,1,0,0,0)",
             rusqlite::params![task, DIGEST],
         )
         .unwrap();

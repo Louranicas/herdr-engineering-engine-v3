@@ -33,6 +33,12 @@ use std::sync::{
 };
 use std::time::{Duration, Instant};
 
+/// The one workspace this development frontend admits every task for (B14-P2c). Its
+/// `fixed-u64-task/1` submission carries no `workspace_id`, so the id is this fixture's, not the
+/// request's: `Store::submit` does not check the one against the other, and the production door
+/// (`StoreTasks::submit`) is the one that binds the spec's own (review P2c-7).
+const DEVELOPMENT_WORKSPACE: &str = "28f00000-0000-4000-8000-00000000000a";
+
 fn uuid(value: &str) -> Result<UuidV4<'_>> {
     checked(UuidV4::parse(value))
 }
@@ -500,7 +506,7 @@ fn admit(
             task: uuid(&m.identities.task)?,
             event: uuid(&m.identities.submit_event)?,
             request_bytes: &request,
-            workspace_id: uuid("28f00000-0000-4000-8000-00000000000a")?,
+            workspace_id: uuid(DEVELOPMENT_WORKSPACE)?,
             criteria: checked(Sha256Digest::parse(&criteria))?,
             allocation: Allocation {
                 limit_ms: 1_200_000,
@@ -844,7 +850,7 @@ mod cancellation_controls {
                     task: uuid(TASK).unwrap(),
                     event: uuid("c0000000-0000-4000-8000-000000000005").unwrap(),
                     request_bytes: b"preparation cancellation fixture",
-                    workspace_id: uuid("28f00000-0000-4000-8000-00000000000a").unwrap(),
+                    workspace_id: uuid(DEVELOPMENT_WORKSPACE).unwrap(),
                     criteria: Sha256Digest::parse(&format!("sha256:{}", "a".repeat(64))).unwrap(),
                     allocation: Allocation {
                         limit_ms: 1_200_000,

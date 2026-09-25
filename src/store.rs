@@ -2119,8 +2119,23 @@ fn same_generation(head: &TaskHead, expected: Generation) -> Result<()> {
 /// The columns every task-head read selects, in [`task_row`]'s order: the one list, so the two
 /// head reads and recovery's inventory cannot select differently (review P2c-6).
 pub(crate) const HEAD_COLUMNS: &str = "id,generation,state,cancellation,accepted_event,criteria_digest,spent_ms,reserved_work_ms,reserved_verify_ms,workspace_id";
-/// How many columns [`HEAD_COLUMNS`] names: a reader of more columns starts after them.
-pub(crate) const HEAD_WIDTH: usize = 10;
+/// How many columns [`HEAD_COLUMNS`] names, counted from it at compile time: a reader of more
+/// columns starts after them, and the two cannot drift apart (review P2c-5).
+pub(crate) const HEAD_WIDTH: usize = column_count(HEAD_COLUMNS);
+
+/// The number of comma-separated names in a column list.
+const fn column_count(list: &str) -> usize {
+    let bytes = list.as_bytes();
+    let (mut index, mut commas) = (0, 0);
+    while index < bytes.len() {
+        if bytes[index] == b',' {
+            commas += 1;
+        }
+        index += 1;
+    }
+    commas + 1
+}
+const _: () = assert!(HEAD_WIDTH == 10, "task_row reads ten head columns");
 
 fn task_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TaskHead> {
     Ok(TaskHead {

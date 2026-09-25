@@ -522,7 +522,7 @@ impl Tasks for StoreTasks {
         // profile says now (RC03 section 6; review P2c-4).
         if !replayed {
             class_profile::screen(&self.class_profile, &spec.workspace_id).map_err(|why| {
-                unavailable("the installed class profile does not admit this workspace")
+                unavailable(why.message())
                     .at("/body/spec/workspace_id")
                     .because(why.constraint())
             })?;

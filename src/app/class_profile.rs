@@ -196,6 +196,15 @@ pub enum Screen {
 }
 
 impl Screen {
+    /// The refusal's message, one per reason (review P2c-8).
+    #[must_use]
+    pub const fn message(self) -> &'static str {
+        match self {
+            Self::WorkspaceNotInstalled => "the installed class profile declares no such workspace",
+            Self::ProfileRefused => "the installed class profile was refused at start",
+        }
+    }
+
     /// The refusal's constraint text, one per reason.
     #[must_use]
     pub const fn constraint(self) -> &'static str {

@@ -94,9 +94,9 @@ T04_IMPLEMENTATION_PATHS = ("src/store.rs", "src/store/artifact.rs", "src/store/
                             "migrations/003.sql", "migrations/004.sql",
                             "tests/t04_store.rs")
 # Reviewed independent T04 unit suite: 81 cases (68 + store-lane A01-A03 and A24, 2026-09-24; B02's
-# unwritable-ledger read-back, 2026-09-25; B03's four task_view cases, 2026-09-25; B03b's closure-predicate case; A25's six migration-chain cases; B14-P2c's workspace CHECK case). Source discovery or emitted
+# unwritable-ledger read-back, 2026-09-25; B03's four task_view cases, 2026-09-25; B03b's closure-predicate case; A25's six migration-chain cases; B14-P2c's workspace CHECK and added-column preservation cases). Source discovery or emitted
 # counts cannot lower this gate; None remains an explicit pending-state refusal.
-T04_TEST_COUNT = 93
+T04_TEST_COUNT = 94
 # Cargo build parallelism for every gate build (operator decisions 2026-09-24: raised from 2 to 8,
 # then "utilise the full capacity of all hardware"): every CPU this process may run on, taken from
 # the affinity mask so a pinned or containerised habitat is respected. One owner: the store and pi
@@ -158,7 +158,7 @@ def has_t06(root):
 
 # Reviewed current T07 inventory target: 51 controls (the earlier 43-control
 # inventory is superseded; this recipe does not accept it).
-T07_TARGET_COUNTS = {"t07_inventory": 51}
+T07_TARGET_COUNTS = {"t07_inventory": 52}
 T07_INPUTS = ("src/store/recovery.rs", "tests/t07_inventory.rs")
 # Reviewed T08 native adapter extension: one registered offline-client target
 # with 21 controls and no library-unit namespace. The Rust tests copy the

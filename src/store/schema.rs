@@ -195,6 +195,36 @@ fn preserved_states(connection: &Connection, migration: &Migration) -> Result<Ve
         .collect()
 }
 
+/// Whether every preserved table a step names by column list names exactly its pre-step columns
+/// (review P2c-3): a list short of the table would compare only what it names, proving nothing
+/// about the rest; `*` compares every column of a rebuild and needs no list.
+fn named_columns_are_whole(connection: &Connection, migration: &Migration) -> Result<bool> {
+    for table in migration
+        .preserves
+        .iter()
+        .filter(|table| table.columns != "*")
+    {
+        let mut statement = connection.prepare(&format!(
+            "SELECT name FROM pragma_table_info('{}')",
+            table.table
+        ))?;
+        let mut actual: Vec<String> = statement
+            .query_map([], |row| row.get(0))?
+            .collect::<rusqlite::Result<_>>()?;
+        let mut named: Vec<String> = table
+            .columns
+            .split(',')
+            .map(|name| name.trim().to_owned())
+            .collect();
+        actual.sort();
+        named.sort();
+        if actual != named {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
 /// Apply upgrade step `version` in its own transaction: the migration, a check that every table
 /// it rebuilds kept exactly its rows, the history row and `user_version`. Any failure rolls the
 /// whole step back, leaving the ledger as it was (A25; RC06).
@@ -217,6 +247,9 @@ pub(super) fn step_with(
 ) -> Result<()> {
     bound(connection, deadline)?;
     let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    if !named_columns_are_whole(&tx, migration)? {
+        return Err(chain(Chain::Preserved { version }));
+    }
     let before = preserved_states(&tx, migration)?;
     tx.execute_batch(migration.sql)?;
     cut_point!(fault, CutPoint::MigrationStep);

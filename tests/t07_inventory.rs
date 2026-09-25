@@ -631,6 +631,28 @@ fn malformed_task_generation_is_not_successful_readback() {
         Err(Error::Corrupt)
     ));
 }
+/// B14-P2c: migration 4's CHECK admits any 36 characters, so recovery validates the id itself: a
+/// 36-character non-UUID is corrupt, and NULL (a task admitted before migration 4) is not.
+#[test]
+fn a_task_workspace_is_a_uuid_or_unbound() {
+    for (value, corrupt) in [(Some("x".repeat(36)), true), (None, false)] {
+        let mut r = Rig::admitted();
+        drop(r.store.take());
+        let db = Connection::open(r.area.db()).unwrap();
+        db.execute("UPDATE tasks SET workspace_id=?", [value.as_deref()])
+            .unwrap();
+        db.close().unwrap();
+        r.store = Some(r.area.open(false));
+        let read = r
+            .store()
+            .recovery_inventory(id(EPOCH), limits(), deadline());
+        assert_eq!(
+            matches!(read, Err(Error::Corrupt)),
+            corrupt,
+            "{value:?}: {read:?}"
+        );
+    }
+}
 #[test]
 fn malformed_attempt_identity_is_refused() {
     let mut r = Rig::running();

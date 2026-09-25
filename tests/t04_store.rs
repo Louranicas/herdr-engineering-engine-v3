@@ -32,10 +32,10 @@ const MIGRATION_2_BODY: &str =
     "sha256:bcd3de842dddb090ba6ef208b825d7764ca7d7b8326e0a18394fcc784ce24d4a";
 /// Migration 3's body digest (B08), by the same method (`awk` after the end marker, `sha256sum`), and
 /// independently by Python's `hashlib`; both reproduce `MIGRATION_2_BODY`.
-/// The workspace every fixture task is admitted for (B14-P2c).
-const WORKSPACE: &str = "28f00000-0000-4000-8000-00000000000a";
 const MIGRATION_3_BODY: &str =
     "sha256:4b4e9a7e06fa50f26bc8e74af58cd444fe8a6cfca47b7b85e4a598743bbf2d7d";
+/// The workspace every fixture task is admitted for (B14-P2c).
+const WORKSPACE: &str = "28f00000-0000-4000-8000-00000000000a";
 /// Migration 4's body digest, computed from the file by Python's hashlib over the text below the
 /// anchor block (the same rule reproduces 3's pinned value), not by the store's own `identity`.
 const MIGRATION_4_BODY: &str =
@@ -729,7 +729,7 @@ fn task_view_refuses_more_attempts_than_the_bound_with_both_numbers() {
     admit(&mut store);
     drop(store);
     area.edit_closed(&format!(
-        "INSERT INTO attempts VALUES \
+        "INSERT INTO attempts(id,task_id,generation,state,effect,cleanup,used_ms) VALUES \
          ('00000000-0000-4000-8000-0000000000f1','{TASK}','1','settled','none','settled',0),\
          ('00000000-0000-4000-8000-0000000000f2','{TASK}','2','settled','none','settled',0),\
          ('00000000-0000-4000-8000-0000000000f3','{TASK}','3','settled','none','settled',0),\
@@ -2821,6 +2821,64 @@ static OPERATIONS_PRESERVED: [schema::Preserved; 1] = [schema::Preserved {
     order: "principal_uid,principal_role,action,version,request_key",
     columns: "*",
 }];
+
+/// B14-P2c: a step that adds a column preserves the table over its pre-step columns, and the list
+/// it names must be every one of them.
+static TASKS_PRESERVED: [schema::Preserved; 1] = [schema::Preserved {
+    table: "tasks",
+    order: "id",
+    columns: "id,principal_uid,principal_role,spec,criteria_digest,generation,state,\
+              cancellation,accepted_event,limit_ms,spent_ms,reserved_work_ms,reserved_verify_ms",
+}];
+static TASKS_ID_ONLY: [schema::Preserved; 1] = [schema::Preserved {
+    table: "tasks",
+    order: "id",
+    columns: "id",
+}];
+
+/// B14-P2c pin: an added column is checked over the table's pre-step columns — an ADD alone
+/// passes; one that also changes a row is refused; and a column list short of the table is
+/// refused before anything runs, since it would compare only what it names.
+#[test]
+fn an_added_column_step_preserves_the_whole_pre_step_row() {
+    for (sql, preserves, refused) in [
+        (
+            "ALTER TABLE tasks ADD COLUMN planted TEXT; UPDATE tasks SET spec=x'01';",
+            &TASKS_PRESERVED,
+            true,
+        ),
+        (
+            "ALTER TABLE tasks ADD COLUMN planted TEXT;",
+            &TASKS_ID_ONLY,
+            true,
+        ),
+        (
+            "ALTER TABLE tasks ADD COLUMN planted TEXT;",
+            &TASKS_PRESERVED,
+            false,
+        ),
+    ] {
+        let area = Area::new();
+        v1_ledger(&area);
+        let mut db = Connection::open_with_flags(
+            area.database(),
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_NOFOLLOW,
+        )
+        .unwrap();
+        schema::protect(&db, deadline()).unwrap();
+        let step = schema::Migration {
+            sql,
+            body: MIGRATION_2_BODY,
+            preserves,
+        };
+        let result = schema::step_with(&mut db, 2, &step, NO_FAULT, deadline());
+        assert_eq!(
+            matches!(result, Err(Error::Chain(Chain::Preserved { version: 2 }))),
+            refused,
+            "{sql}: {result:?}"
+        );
+    }
+}
 
 /// A25 pin: a step whose migration changes a table it must preserve is refused by name and
 /// rolled back; one that leaves the table's rows alone passes the same check.
