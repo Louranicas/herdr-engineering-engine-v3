@@ -2464,6 +2464,10 @@ serde_json = { version = "=1.0.151", features = ["float_roundtrip"] }
 rusqlite = { version = "=0.40.2", default-features = false, features = ["backup", "modern_sqlite", "hooks"] }
 rustix = { version = "=1.1.4", features = ["fs", "process", "rand", "event", "net"] }
 sha2 = "=0.11.0"
+# APP-01 (Luke, 2026-09-25: "complete the clean shutdown"): SIGTERM through a safe API. Owner T28
+# (app lane); purpose: the serve loop's drain signal. rustix 1.1.4's signal calls are all `unsafe`
+# (`runtime` feature) and it has no signalfd, and this crate forbids `unsafe`.
+signal-hook = { version = "=0.4.4", default-features = false, features = ["iterator"] }
 
 [[test]]
 name = "t02_pi"

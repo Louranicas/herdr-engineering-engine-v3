@@ -193,12 +193,14 @@
 use habitat_engine::actions::Catalogue;
 use habitat_engine::actions::control::{Grants, NoGrants};
 use habitat_engine::app::control_socket::{
-    self, IDLE_TIMEOUT, RUNTIME_DIRECTORY, SOCKET_NAME, WRITE_TIMEOUT,
+    self, Drain, IDLE_TIMEOUT, RUNTIME_DIRECTORY, SOCKET_NAME, WRITE_TIMEOUT,
 };
 use habitat_engine::app::coordinator;
 use habitat_engine::app::grants::{self, FileGrants};
 use habitat_engine::contracts::control::{FrameReader, MAX_FRAME_BYTES, ReadError};
 use habitat_engine::worker::namespace_shim::{self, NamespaceExec};
+use signal_hook::consts::SIGTERM;
+use signal_hook::iterator::Signals;
 use std::io::{self, Read, Write};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
@@ -259,9 +261,20 @@ fn socket_path() -> Result<PathBuf, control_socket::Error> {
 
 /// `habitat-engine serve`: take single-instance custody of IPC01, reconcile the active
 /// generation, compose the task owner over the ledger startup left open, and only then bind and
-/// serve until killed (IPC01: acquire custody before recovery; bind after ready). A stale socket
+/// serve until SIGTERM (IPC01: acquire custody before recovery; bind after ready). SIGTERM drains
+/// (APP-01): nothing more is admitted, each open connection finishes the frame it is serving, the
+/// ledger's writer lock is released, the socket is removed and the engine exits 0. A stale socket
 /// left by a killed engine is cleared at the next start; a live or starting one refuses the start.
 fn serve() -> ExitCode {
+    // APP-01: SIGTERM is taken before anything else, so one that arrives during startup is held
+    // and drains the engine once it serves, rather than killing it mid-reconciliation.
+    let mut signals = match Signals::new([SIGTERM]) {
+        Ok(signals) => signals,
+        Err(error) => {
+            eprintln!("habitat-engine: SIGTERM could not be taken ({error})");
+            return ExitCode::from(EXIT_CONTRACT);
+        }
+    };
     let prepared =
         match control_socket::runtime_root(std::env::var_os("XDG_RUNTIME_DIR").as_deref())
             .and_then(|root| control_socket::prepare(&root))
@@ -326,21 +339,64 @@ fn serve() -> ExitCode {
         }
     };
     eprintln!("habitat-engine: serving {}", prepared.socket().display());
-    let report = |line: &str| eprintln!("habitat-engine: {line}");
+    let drain = Drain::default();
     let shared = control_socket::Shared {
         grants: store.as_ref(),
         health: Some(&health),
         tasks: tasks
             .as_ref()
             .map(|tasks| tasks as &(dyn habitat_engine::actions::control::Tasks + Sync)),
+        drain: &drain,
     };
-    match control_socket::run(&listener, shared, &now_unix_ms, &report) {
-        Ok(()) => ExitCode::SUCCESS,
-        Err(error) => {
-            eprintln!("habitat-engine: accept failed: {error}");
-            ExitCode::from(EXIT_CONTRACT)
-        }
+    if let Err(error) = serve_until_signalled(&mut signals, &listener, shared, &drain, &prepared) {
+        eprintln!("habitat-engine: accept failed: {error}");
+        return ExitCode::from(EXIT_CONTRACT);
     }
+    // Drained: the task owner goes first, releasing the ledger's writer lock; then the socket,
+    // removed while custody is still held; then custody itself.
+    drop(tasks);
+    drop(listener);
+    finish_drained(prepared)
+}
+
+/// Serve until the first SIGTERM has drained every connection (APP-01). A watcher thread waits on
+/// `signals` and begins the drain; closing the handle once `run` returns ends its wait unsignalled.
+fn serve_until_signalled(
+    signals: &mut Signals,
+    listener: &std::os::unix::net::UnixListener,
+    shared: control_socket::Shared<'_>,
+    drain: &Drain,
+    prepared: &control_socket::Prepared,
+) -> io::Result<()> {
+    let report = |line: &str| eprintln!("habitat-engine: {line}");
+    let handle = signals.handle();
+    std::thread::scope(|scope| {
+        scope.spawn(|| {
+            if signals.forever().next().is_some() {
+                eprintln!("habitat-engine: SIGTERM: draining");
+                if let Err(error) = drain.begin(prepared.socket()) {
+                    eprintln!("habitat-engine: drain wake-up failed ({error})");
+                }
+            }
+        });
+        let served = control_socket::run(listener, shared, &now_unix_ms, &report);
+        handle.close();
+        served
+    })
+}
+
+/// Remove the socket and give up custody, then say so: the last step of a drain.
+fn finish_drained(prepared: control_socket::Prepared) -> ExitCode {
+    let socket = prepared.socket().to_path_buf();
+    if let Err(error) = prepared.finish() {
+        eprintln!("habitat-engine: drained, but the socket was not removed: {error:?}");
+        return ExitCode::from(EXIT_CONTRACT);
+    }
+    eprintln!(
+        "habitat-engine: drained; removed {}; exiting",
+        socket.display()
+    );
+    ExitCode::SUCCESS
 }
 
 /// `habitat-engine <action-id> < request`: the wrapper's producer. Sends the request's exact

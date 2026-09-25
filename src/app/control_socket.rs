@@ -42,7 +42,7 @@ use std::net::Shutdown;
 use std::os::unix::fs::{DirBuilderExt, FileTypeExt, MetadataExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
@@ -163,6 +163,51 @@ impl Prepared {
     #[must_use]
     pub fn socket(&self) -> &Path {
         &self.socket
+    }
+
+    /// Remove the socket file, still under custody, then give custody up (APP-01). Only this
+    /// user's socket is removed: while custody is held no other engine can have bound the path,
+    /// and anything else found there is left in place and refused by name.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Custody`] when the path is no longer this user's socket; [`Error::Io`] when it
+    /// cannot be read or removed.
+    pub fn finish(self) -> Result<(), Error> {
+        let meta = fs::symlink_metadata(&self.socket)?;
+        if !meta.file_type().is_socket() || meta.uid() != rustix::process::geteuid().as_raw() {
+            return Err(Error::Custody("control socket path"));
+        }
+        fs::remove_file(&self.socket)?;
+        Ok(())
+    }
+}
+
+/// The engine's drain (APP-01): begun once, by SIGTERM in `main` or by a caller in a test. From
+/// then on the accept loop admits nothing, every admitted connection finishes the frame it is
+/// serving and reads no other, and `health` reports `socket: draining`.
+#[derive(Debug, Default)]
+pub struct Drain {
+    begun: AtomicBool,
+}
+
+impl Drain {
+    /// Begin draining, and wake the accept loop by connecting to `socket` once: the loop checks
+    /// the drain after every accept, so the connection that wakes it is closed unread.
+    ///
+    /// # Errors
+    ///
+    /// When the wake-up connection cannot be made; the drain has begun regardless, and the loop
+    /// sees it at its next accept.
+    pub fn begin(&self, socket: &Path) -> io::Result<()> {
+        self.begun.store(true, Ordering::Release);
+        UnixStream::connect(socket).map(drop)
+    }
+
+    /// Whether the drain has begun.
+    #[must_use]
+    pub fn begun(&self) -> bool {
+        self.begun.load(Ordering::Acquire)
     }
 }
 
@@ -456,6 +501,8 @@ pub struct Shared<'a> {
     pub health: Option<&'a Health>,
     /// The task owner, when a writable ledger is composed.
     pub tasks: Option<&'a (dyn Tasks + Sync)>,
+    /// The engine's drain, which `health` reads at every frame.
+    pub drain: &'a Drain,
 }
 
 impl<'a> Shared<'a> {
@@ -464,6 +511,7 @@ impl<'a> Shared<'a> {
             grants: self.grants,
             health: self.health,
             tasks: self.tasks.map(|tasks| tasks as &dyn Tasks),
+            draining: Some(&self.drain.begun),
         }
     }
 }
@@ -489,9 +537,10 @@ impl Drop for Place<'_> {
     }
 }
 
-/// Over-capacity connections being answered, each with a handle the accept loop can shut down.
-/// A refusal's read has no timer of its own, so when `accept` fails the loop ends each refusal
-/// this way rather than waiting on a peer that may never send.
+/// Open connections, each with a handle the accept loop can shut down: over-capacity refusals
+/// (whose read has no timer of its own, so when `accept` fails the loop ends each rather than
+/// waiting on a peer that may never send) and, separately, admitted connections (whose reads a
+/// drain ends, APP-01).
 #[derive(Default)]
 struct Refusals {
     open: Mutex<Vec<(u64, UnixStream)>>,
@@ -528,6 +577,16 @@ impl Refusals {
             }
         }
     }
+
+    /// End the reads of every connection held here, leaving their writes open: a frame already
+    /// being served is answered, and the next read sees end of file (the drain, APP-01).
+    fn shut_down_reads(&self, report: &dyn Fn(&str)) {
+        for (_, stream) in self.open().iter() {
+            if let Err(error) = stream.shutdown(Shutdown::Read) {
+                report(&format!("connection drain: read shutdown failed ({error})"));
+            }
+        }
+    }
 }
 
 impl Drop for Registered<'_> {
@@ -536,10 +595,15 @@ impl Drop for Registered<'_> {
     }
 }
 
-/// Accept connections forever, serving each admitted one on its own thread under
-/// [`CONNECTION_CAP`]. A peer that is not the operator is closed unread; a peer over the cap is
-/// refused whole without disturbing an admitted one. Each connection's outcome is reported through
-/// `report`, which never receives request content.
+/// Accept connections until `shared.drain` begins, serving each admitted one on its own thread
+/// under [`CONNECTION_CAP`]. A peer that is not the operator is closed unread; a peer over the cap
+/// is refused whole without disturbing an admitted one. Each connection's outcome is reported
+/// through `report`, which never receives request content.
+///
+/// Once the drain has begun (checked after every accept) the loop admits nothing more: the
+/// connection that woke it is closed unread, every admitted connection's read is shut down so it
+/// finishes the frame it is serving and reads no other, every refusal is ended, and `run` returns
+/// `Ok` once every connection has ended (APP-01).
 ///
 /// # Errors
 ///
@@ -557,6 +621,7 @@ pub fn run(
     let serving = AtomicUsize::new(0);
     let refusing = AtomicUsize::new(0);
     let refusals = Refusals::default();
+    let admitted = Refusals::default();
     std::thread::scope(|scope| {
         loop {
             let (stream, _) = match listener.accept() {
@@ -566,6 +631,13 @@ pub fn run(
                     return Err(error);
                 }
             };
+            if shared.drain.begun() {
+                drop(stream);
+                admitted.shut_down_reads(report);
+                refusals.shut_down(report);
+                report("draining: no connection is admitted");
+                return Ok(());
+            }
             let principal = match peer_of(&stream, operator) {
                 Ok(principal) => principal,
                 Err(refusal) => {
@@ -575,9 +647,19 @@ pub fn run(
             };
             let admission = &admission;
             let spawned = if let Some(place) = Place::take(&serving, CONNECTION_CAP) {
+                let registered = match admitted.register(&stream) {
+                    Ok(registered) => registered,
+                    Err(error) => {
+                        report(&format!(
+                            "connection refused: no handle to drain it by ({error})"
+                        ));
+                        continue;
+                    }
+                };
                 std::thread::Builder::new().spawn_scoped(scope, move || {
                     let outcome =
                         serve_admitted(&stream, &principal, shared, admission, now_unix_ms);
+                    drop(registered);
                     drop(place);
                     report(&outcome);
                 })

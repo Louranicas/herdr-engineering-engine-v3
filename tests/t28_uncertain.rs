@@ -126,6 +126,7 @@ fn serve(tasks: &StoreTasks, payload: &[u8]) -> Result<Value, Box<dyn Error>> {
         grants: &Open,
         health: None,
         tasks: Some(tasks),
+        draining: None,
     };
     match control::serve_composed(payload, NOW, &operator, composed) {
         Reply::Frame(bytes) => Ok(serde_json::from_slice(&bytes)?),

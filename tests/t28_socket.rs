@@ -273,6 +273,7 @@ fn a_connection_is_answered_in_order_and_closed_at_its_first_unanswerable_frame(
             grants: &Open,
             health: None,
             tasks: None,
+            draining: None,
         },
         &control_socket::Admission::new(),
         &|| NOW,
@@ -310,7 +311,8 @@ fn a_connection_is_answered_in_order_and_closed_at_its_first_unanswerable_frame(
             Composed {
                 grants: &Open,
                 health: None,
-                tasks: None
+                tasks: None,
+                draining: None,
             },
             &control_socket::Admission::new(),
             &|| NOW
@@ -512,7 +514,7 @@ fn a_linked_record_or_a_shared_directory_is_not_a_grant() -> Outcome {
 
 /// The engine binary under a private runtime root and home, killed by its own handle on drop.
 struct Engine {
-    child: Child,
+    child: Option<Child>,
 }
 
 impl Engine {
@@ -543,14 +545,26 @@ impl Engine {
             assert!(started.elapsed() < budget, "no socket within {budget:?}");
             std::thread::sleep(Duration::from_millis(20));
         }
-        Ok(Self { child })
+        Ok(Self { child: Some(child) })
+    }
+
+    /// Send the engine SIGTERM and return its output once it exits, within `budget` (APP-01).
+    fn terminate(mut self, budget: Duration) -> Result<Output, Box<dyn Error>> {
+        let child = self.child.take().ok_or("the engine was already taken")?;
+        rustix::process::kill_process(
+            rustix::process::Pid::from_child(&child),
+            rustix::process::Signal::TERM,
+        )?;
+        exits_within(child, budget)
     }
 }
 
 impl Drop for Engine {
     fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        if let Some(child) = self.child.as_mut() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
     }
 }
 
@@ -921,6 +935,7 @@ fn an_admission_survives_a_kill_after_commit_and_its_exact_bytes_replay() -> Out
             grants: &Open,
             health: None,
             tasks: Some(&local),
+            draining: None,
         },
     ) else {
         return Err("the library receiver closed the connection".into());
@@ -2056,11 +2071,12 @@ fn blocked_on_stderr(world: &World) -> Result<(Blocked, usize), Box<dyn Error>> 
         .stdout(Stdio::null())
         .stderr(writer)
         .spawn()?;
+    let pid = child.id();
     let blocked = Blocked {
-        engine: Engine { child },
+        _engine: Engine { child: Some(child) },
         _drain: drain,
     };
-    let wchan = PathBuf::from(format!("/proc/{}/wchan", blocked.engine.child.id()));
+    let wchan = PathBuf::from(format!("/proc/{pid}/wchan"));
     let started = Instant::now();
     let budget = Duration::from_secs(20);
     // Wait on the kernel's account of where the engine sleeps, with a budget.
@@ -2077,7 +2093,7 @@ fn blocked_on_stderr(world: &World) -> Result<(Blocked, usize), Box<dyn Error>> 
 /// An engine blocked on its standard error; the engine is killed before the pipe's read end
 /// closes (fields drop in declaration order).
 struct Blocked {
-    engine: Engine,
+    _engine: Engine,
     _drain: std::io::PipeReader,
 }
 
@@ -2459,6 +2475,7 @@ fn a_frame_past_the_burst_is_answered_resource_exhausted_and_never_dispatched() 
         grants: &grants,
         health: None,
         tasks: None,
+        draining: None,
     };
     let frames = |ids: std::ops::Range<u8>| {
         ids.flat_map(|id| {
@@ -2582,6 +2599,7 @@ fn a_clock_advancing_a_tokens_worth_per_frame_is_never_refused() -> Outcome {
             grants: &Open,
             health: None,
             tasks: None,
+            draining: None,
         },
         &control_socket::Admission::new(),
         &advancing,
@@ -2625,10 +2643,12 @@ fn an_accept_failure_returns_while_a_silent_peer_holds_the_refusal_place() -> Ou
     let listener = std::os::unix::net::UnixListener::bind(&path)?;
     let lines = Lines::default();
     let report = |line: &str| lines.push(line);
+    let drain = control_socket::Drain::default();
     let shared = control_socket::Shared {
         grants: &Open,
         health: None,
         tasks: None,
+        drain: &drain,
     };
     let (done, finished) = std::sync::mpsc::channel();
     std::thread::scope(|scope| -> Outcome {
@@ -2708,5 +2728,201 @@ fn an_accept_failure_returns_while_a_silent_peer_holds_the_refusal_place() -> Ou
     ]);
     expected.sort();
     assert_eq!(lines.sorted(), expected);
+    Ok(())
+}
+
+/// APP-01 pin (Luke, 2026-09-25: "complete the clean shutdown"): SIGTERM stops the engine cleanly.
+/// An admitted idle connection is ended (its peer reads end of file), the ledger's writer lock is
+/// released (the ledger opens writable at once), the socket file is removed, the engine says it
+/// drained, and it exits 0 -- all through the binary, within a budget.
+#[test]
+fn sigterm_drains_releases_the_ledger_unlinks_the_socket_and_exits_zero() -> Outcome {
+    let world = World::seeing(&["app"])?;
+    commission(&world.home)?;
+    let log = world.home.join("engine.log");
+    let engine = Engine::start_logged(&world.run, &world.home, &log)?;
+    let socket = world.run.join(RUNTIME_DIRECTORY).join(SOCKET_NAME);
+    let mut idle = UnixStream::connect(&socket)?;
+    idle.set_read_timeout(Some(Duration::from_secs(20)))?;
+    let health = reply_of(&wrapper(&world.run, &world.scope, &["health"])?)?;
+    assert_eq!(health["body"]["socket"], json!("owned"), "{health}");
+    let output = engine.terminate(Duration::from_secs(20))?;
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let mut byte = [0_u8; 1];
+    assert_eq!(
+        std::io::Read::read(&mut idle, &mut byte)?,
+        0,
+        "the idle connection is ended"
+    );
+    assert!(
+        fs::symlink_metadata(&socket).is_err(),
+        "the socket file is removed"
+    );
+    drop(ledger_at(
+        &world.home.join(".local/state/herdr-engineering-engine-v3"),
+    )?);
+    let stderr = fs::read_to_string(&log)?;
+    assert!(
+        stderr.lines().any(|line| line
+            == format!(
+                "habitat-engine: drained; removed {}; exiting",
+                socket.display()
+            )),
+        "{stderr}"
+    );
+    Ok(())
+}
+
+/// A `health` request frame (no trailing LF).
+fn health_frame(request: u8) -> Vec<u8> {
+    serde_json::to_vec(&json!({
+        "protocol": "hee3.control", "version": 1, "kind": "request",
+        "request_id": format!("123e4567-e89b-42d3-a456-0000000001{request:02x}"),
+        "action": "health", "action_version": 1, "idempotency_key": null,
+        "deadline_unix_ms": (NOW + 1_000).to_string(),
+        "authority": {"grant_id": GRANT, "scope_sha256": format!("sha256:{}", "3".repeat(64))},
+        "precondition": null,
+        "body": {},
+    }))
+    .unwrap_or_default()
+}
+
+/// APP-01 pin: `health` reads the drain at each frame. Before the drain the socket is owned and
+/// the engine ready; once it has begun the same observation reports `socket: draining`, never
+/// ready, with every other field unchanged.
+#[test]
+fn health_reports_draining_from_the_frame_the_drain_begins() -> Outcome {
+    let observed = habitat_engine::contracts::control::Health {
+        recovery: habitat_engine::contracts::control::Recovery::Complete,
+        database: habitat_engine::contracts::control::Database::Ready,
+        socket: habitat_engine::contracts::control::Socket::Owned,
+        checked_unix_ms: 1_790_000_000_123,
+    };
+    let flag = std::sync::atomic::AtomicBool::new(false);
+    let body = |request: u8| -> Result<Value, Box<dyn Error>> {
+        let Reply::Frame(bytes) = control::serve_composed(
+            &health_frame(request),
+            NOW,
+            &operator()?,
+            Composed {
+                grants: &Open,
+                health: Some(&observed),
+                tasks: None,
+                draining: Some(&flag),
+            },
+        ) else {
+            return Err("health closed the connection".into());
+        };
+        Ok(records(&bytes)?
+            .pop()
+            .ok_or("no record")?
+            .get("body")
+            .cloned()
+            .ok_or("no body")?)
+    };
+    let owned = body(1)?;
+    flag.store(true, std::sync::atomic::Ordering::Release);
+    let draining = body(2)?;
+    assert_eq!(
+        (&owned["socket"], &owned["ready"]),
+        (&json!("owned"), &json!(true))
+    );
+    assert_eq!(
+        (&draining["socket"], &draining["ready"]),
+        (&json!("draining"), &json!(false))
+    );
+    for field in ["recovery", "database", "checked_unix_ms", "engine_version"] {
+        assert_eq!(owned[field], draining[field], "{field}");
+    }
+    Ok(())
+}
+
+/// Grants every effect, but holds each frame inside dispatch until released: a frame provably in
+/// flight when the drain begins.
+struct Gate {
+    entered: std::sync::mpsc::Sender<()>,
+    release: std::sync::Mutex<std::sync::mpsc::Receiver<()>>,
+}
+
+impl Grants for Gate {
+    fn resolve(
+        &self,
+        principal: &Principal,
+        grant_id: &str,
+        scope_sha256: &str,
+        now_unix_ms: u64,
+    ) -> Option<habitat_engine::actions::Caller> {
+        let _ = self.entered.send(());
+        let released = self
+            .release
+            .lock()
+            .ok()?
+            .recv_timeout(Duration::from_secs(20));
+        released.ok()?;
+        Open.resolve(principal, grant_id, scope_sha256, now_unix_ms)
+    }
+}
+
+/// APP-01 pin: a frame being dispatched when the drain begins is answered in full; then its
+/// connection reads no other frame (its peer sees end of file), nothing more is admitted, and
+/// `run` returns `Ok` once every connection has ended.
+#[test]
+fn a_frame_in_flight_when_the_drain_begins_is_answered_and_run_returns() -> Outcome {
+    let scratch = Scratch::new()?;
+    let path = scratch.0.join("control.sock");
+    let listener = std::os::unix::net::UnixListener::bind(&path)?;
+    let lines = Lines::default();
+    let report = |line: &str| lines.push(line);
+    let (entered, in_flight) = std::sync::mpsc::channel();
+    let (release, released) = std::sync::mpsc::channel();
+    let gate = Gate {
+        entered,
+        release: std::sync::Mutex::new(released),
+    };
+    let drain = control_socket::Drain::default();
+    let shared = control_socket::Shared {
+        grants: &gate,
+        health: None,
+        tasks: None,
+        drain: &drain,
+    };
+    let (done, finished) = std::sync::mpsc::channel();
+    std::thread::scope(|scope| -> Outcome {
+        scope.spawn(|| {
+            let returned = control_socket::run(&listener, shared, &|| NOW, &report);
+            let _ = done.send(returned.map_err(|error| error.kind()));
+        });
+        let mut peer = UnixStream::connect(&path)?;
+        peer.set_read_timeout(Some(REPLY_BUDGET))?;
+        let mut frame = listing(7);
+        frame.push(b'\n');
+        peer.write_all(&frame)?;
+        in_flight.recv_timeout(REPLY_BUDGET)?;
+        drain.begin(&path)?;
+        release.send(())?;
+        let mut reader = FrameReader::new(&mut peer);
+        let reply: Value = match reader.next_frame() {
+            Ok(Some(bytes)) => serde_json::from_slice(&bytes)?,
+            other => return Err(format!("no reply to the frame in flight: {other:?}").into()),
+        };
+        assert_eq!(reply["kind"], json!("result"), "{reply}");
+        assert!(
+            matches!(reader.next_frame(), Ok(None)),
+            "the connection then ends"
+        );
+        assert_eq!(
+            finished.recv_timeout(REPLY_BUDGET)?,
+            Ok(()),
+            "run returns once drained"
+        );
+        Ok(())
+    })?;
+    assert!(
+        lines
+            .sorted()
+            .iter()
+            .any(|line| line == "draining: no connection is admitted"),
+        "the drain is reported"
+    );
     Ok(())
 }

@@ -1,7 +1,7 @@
 # Closed offline Rust inputs for quality checks
 
 The isolated quality runner consumes the reviewed lock-bound registry archives
-available in the local Cargo cache. T05 has 43; the original T02 tuple had eleven. Each copied `.crate` file must match the exact checksum
+available in the local Cargo cache. T05 had 43; APP-01 (2026-09-25) adds signal-hook 0.4.4 and signal-hook-registry 1.4.8 for 45; the original T02 tuple had eleven. Each copied `.crate` file must match the exact checksum
 in the copied `Cargo.lock`. The bundle also binds the entire lock-file hash and
 its closed archive inventory. Setup copies no registry index, Cargo configuration
 or authentication files.
@@ -116,7 +116,7 @@ with benign neighbors, without deriving case floors from candidate output.
 
 ## T05 bounded TOML input
 
-The current lock includes 43 registry archives. Nine TOML/transitive archives are
+At T05 the lock included 43 registry archives (45 since APP-01's two signal crates). Nine TOML/transitive archives are
 added to the unchanged earlier package versions; the manifest binds the complete
 new lock hash. TOML 1.1.5+spec-1.1.0 enables only std, serde, parse and display.
 The parser's unbounded feature remains disabled. The existing rustix 1.1.4 adds

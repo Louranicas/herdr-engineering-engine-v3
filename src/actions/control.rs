@@ -23,11 +23,12 @@ use super::{
 use crate::contracts::Principal;
 use crate::contracts::control::{
     self as wire, Envelope, ErrorCode, Fault, FrameFault, Health, MAX_DEADLINE_AHEAD_MS,
-    MAX_FRAME_BYTES, Outcome, Received, Retry, result_frame,
+    MAX_FRAME_BYTES, Outcome, Received, Retry, Socket, result_frame,
 };
 use crate::contracts::{Sha256Digest, parse_u64_decimal};
 use crate::task::control::{self as task_body, Selector, Spec};
 use serde_json::{Map, Value, json};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// How long a `tools.list` continuation cursor stays valid after it is issued.
 pub const CURSOR_LIFETIME_MS: u64 = 300_000;
@@ -119,6 +120,9 @@ pub struct Composed<'a> {
     pub health: Option<&'a Health>,
     /// The task owner, when a writable ledger is composed.
     pub tasks: Option<&'a dyn Tasks>,
+    /// Whether the engine is draining (APP-01), read at each `health`: a drain begun while a
+    /// connection is open is reported from that frame on, as `socket: draining` (never ready).
+    pub draining: Option<&'a AtomicBool>,
 }
 
 /// Everything one dispatch may read.
@@ -147,6 +151,7 @@ pub fn serve(
             grants,
             health: None,
             tasks: None,
+            draining: None,
         },
     )
 }
@@ -301,7 +306,21 @@ fn dispatch(action: Action, caller: &Caller, context: &Context<'_>) -> Result<Ou
         "health" => context
             .composed
             .health
-            .map(|health| Outcome::read(health.body()))
+            .map(|health| {
+                let draining = context
+                    .composed
+                    .draining
+                    .is_some_and(|flag| flag.load(Ordering::Acquire));
+                let health = if draining {
+                    Health {
+                        socket: Socket::Draining,
+                        ..*health
+                    }
+                } else {
+                    *health
+                };
+                Outcome::read(health.body())
+            })
             .ok_or(
                 Fault::of(
                     ErrorCode::Unavailable,

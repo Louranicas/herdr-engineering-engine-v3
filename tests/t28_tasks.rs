@@ -294,6 +294,7 @@ pub(super) fn serve(
         grants: &Open,
         health: None,
         tasks: Some(tasks),
+        draining: None,
     };
     match control::serve_composed(payload, NOW, principal, composed) {
         Reply::Frame(bytes) => Ok(serde_json::from_slice(&bytes)?),
@@ -545,6 +546,7 @@ fn without_a_composed_ledger_task_actions_are_unavailable() -> Result<(), Box<dy
         grants: &Open,
         health: None,
         tasks: None,
+        draining: None,
     };
     let Reply::Frame(bytes) = control::serve_composed(
         &request("task.submit", 6, Some(KEY), &json!({"spec": spec()})),

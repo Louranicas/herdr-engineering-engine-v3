@@ -216,7 +216,7 @@ CONTEXT_INPUTS = ("src/context.rs",)
 COHORT_TARGET_COUNTS = {"t22_cohort": 67}
 COHORT_INPUTS = ("src/cohort.rs", "evaluation/cohorts/claim-overlap-v1.json",
                  "tests/fixtures/t22/C01.json", "tests/fixtures/t22/C02.json")
-ACTIONS_TARGET_COUNTS = {"t28_actions": 143}
+ACTIONS_TARGET_COUNTS = {"t28_actions": 146}
 # The control receiver (review coordinator step 1) is served from the catalogue: its wire half in
 # contracts, its catalogue half in actions, and the independent Python oracle its cases run.
 ACTIONS_INPUTS = ("src/actions.rs", "src/worker/tools.rs", "src/actions/control.rs",
@@ -454,10 +454,11 @@ def validate_t05_features_at(metadata, root):
     """The reviewed T05 tuple for the tree at `root`, with that tree's own feature flags: the one
     call both this gate and check-store-mutations make, so the two cannot disagree about the flags
     (A25: the mutation campaign had called the bare tuple since T06/IPC01 and refused before running)."""
-    validate_t05_features(metadata, t06=has_t06(root), t21=has_t21(root), ipc01=has_ipc01(root))
+    validate_t05_features(metadata, t06=has_t06(root), t21=has_t21(root), ipc01=has_ipc01(root),
+                          app01=has_app01(root))
 
 
-def validate_t05_features(metadata, *, t06=False, t21=False, ipc01=False):
+def validate_t05_features(metadata, *, t06=False, t21=False, ipc01=False, app01=False):
     """Compare resolved metadata with the reviewed T05 package/feature tuple."""
     raw_nodes = metadata["resolve"]["nodes"]
     nodes = {node["id"]: node for node in raw_nodes}
@@ -474,6 +475,14 @@ def validate_t05_features(metadata, *, t06=False, t21=False, ipc01=False):
         expected["rustix"] = (version, sorted([*features, "net"]))
     if t21:
         expected["serde_json"] = ("1.0.151", ["default", "float_roundtrip", "std"])
+    if app01:
+        # APP-01's SIGTERM drain (Luke, 2026-09-25): signal-hook with only its iterator, and the
+        # registry beneath it. Two crates added; libc and errno were already locked, and gain only
+        # their `default` feature, which for both is `std` alone (already enabled).
+        expected["signal-hook"] = ("0.4.4", ["channel", "iterator"])
+        expected["signal-hook-registry"] = ("1.4.8", [])
+        expected["libc"] = ("0.2.189", ["default", "std"])
+        expected["errno"] = ("0.3.14", ["default", "std"])
     for name, (version, features) in expected.items():
         packages = [package for package in metadata["packages"] if package["name"] == name]
         if (len(packages) != 1 or packages[0]["version"] != version
@@ -484,6 +493,12 @@ def validate_t05_features(metadata, *, t06=False, t21=False, ipc01=False):
 
 def has_ipc01(root):
     return (root / "src/app/control_socket.rs").is_file()
+
+
+def has_app01(root):
+    """Whether the tree declares APP-01's signal dependency: the manifest decides, not a path."""
+    manifest = tomllib.loads((root / "Cargo.toml").read_text()) if (root / "Cargo.toml").is_file() else {}
+    return "signal-hook" in manifest.get("dependencies", {})
 
 
 def has_t04(root):
