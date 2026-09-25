@@ -28,6 +28,13 @@ pub const MAX_PROFILE_BYTES: u64 = 65_536;
 pub const WORKLOAD_MOUNTS: usize = 2;
 /// The most runtime files a profile may declare: what the namespace mounts less the workload's own.
 pub const MAX_RUNTIME_FILES: usize = MAX_MOUNTS - WORKLOAD_MOUNTS;
+/// The class directory's store of independently reviewed records (B14a-2a): each a 0600 file named
+/// by the 64 lowercase hex of its sha256, in this 0700 directory beside [`PROFILE_FILE`]. The repo
+/// never carries the answer to its own review; the profile names each record by digest.
+pub const REVIEWED_DIRECTORY: &str = "reviewed";
+/// A reviewed record's acquisition bound: the profile's own. The class records it holds measured
+/// 794 B (the expectation) and 8,888 B (its review provenance) in `fixed-task-execution-003`.
+pub const MAX_REVIEWED_BYTES: u64 = MAX_PROFILE_BYTES;
 
 const SCHEMA: &str = "hee3.class-profile/1";
 const CLASS: &str = "rust-library-change/1";
@@ -60,6 +67,15 @@ pub struct RuntimeFile {
     pub sha256: [u8; 32],
 }
 
+/// The independently reviewed records a task's receipt binds (B14a-R8/R9): the expectation and its
+/// review, each named by its `sha256:` digest; the objects are in [`REVIEWED_DIRECTORY`] and are
+/// read only through [`read_reviewed`], which verifies them.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Reviewed {
+    pub expectation: String,
+    pub review: String,
+}
+
 /// What a profile declares, typed and shape-checked, before any of it is used.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Declared {
@@ -71,6 +87,7 @@ pub struct Declared {
     /// `sha256:` spellings, the aggregate's and the resources' own field types.
     pub busctl_sha256: String,
     pub systemd_run_sha256: String,
+    pub reviewed: Reviewed,
 }
 
 /// A read profile: its declaration, the directory it was read from, and the `sha256:` of the exact
@@ -168,6 +185,19 @@ pub enum ProfileError {
         name: String,
         why: PinWhy,
     },
+    /// A `[reviewed]` entry: not a `sha256:` digest, or the review naming the expectation itself.
+    Reviewed {
+        name: &'static str,
+        why: ReviewedWhy,
+    },
+}
+
+/// Why a `[reviewed]` entry is refused.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ReviewedWhy {
+    Digest,
+    /// The review and the expectation are one record: a review of itself reviews nothing.
+    Same,
 }
 
 /// Why dispatch has no profile: none installed, or one refused with its name.
@@ -282,7 +312,11 @@ pub fn compose(bytes: &[u8]) -> Result<Declared, ProfileError> {
         let (line, column) = position(text, error.span().map_or(0, |span| span.start));
         ProfileError::Syntax { line, column }
     })?;
-    only(&table, "", &["schema", "class", "workspace", "pins"])?;
+    only(
+        &table,
+        "",
+        &["schema", "class", "workspace", "pins", "reviewed"],
+    )?;
     let schema = string(&table, "", "schema")?;
     if schema != SCHEMA {
         return Err(ProfileError::Schema { found: schema });
@@ -318,6 +352,7 @@ pub fn compose(bytes: &[u8]) -> Result<Declared, ProfileError> {
         namespace_directories,
         busctl_sha256: digest_text(pins, "busctl_sha256")?,
         systemd_run_sha256: digest_text(pins, "systemd_run_sha256")?,
+        reviewed: reviewed(&table)?,
     })
 }
 
@@ -628,6 +663,89 @@ fn derived(files: &[RuntimeFile], declared: &[PathBuf]) -> Result<(), ProfileErr
     }
 }
 
+/// The `[reviewed]` table: exactly the expectation's and the review's digests, distinct.
+fn reviewed(table: &toml::Table) -> Result<Reviewed, ProfileError> {
+    let reviewed = sub_table(table, "", "reviewed")?;
+    only(
+        reviewed,
+        "reviewed",
+        &["expectation_sha256", "review_sha256"],
+    )?;
+    let digest = |name: &'static str| -> Result<String, ProfileError> {
+        let value = string(reviewed, "reviewed", name)?;
+        Sha256Digest::parse(&value).map_err(|_| ProfileError::Reviewed {
+            name,
+            why: ReviewedWhy::Digest,
+        })?;
+        Ok(value)
+    };
+    let (expectation, review) = (digest("expectation_sha256")?, digest("review_sha256")?);
+    if expectation == review {
+        return Err(ProfileError::Reviewed {
+            name: "review_sha256",
+            why: ReviewedWhy::Same,
+        });
+    }
+    Ok(Reviewed {
+        expectation,
+        review,
+    })
+}
+
+/// Which reviewed record to read.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Which {
+    Expectation,
+    Review,
+}
+
+/// Why a reviewed record could not be read.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ReviewedError {
+    /// The directory or the file is absent.
+    NotInstalled,
+    /// Something is there and it is not the operator's private record (0700 directory, 0600 file).
+    Custody,
+    /// Larger than [`MAX_REVIEWED_BYTES`].
+    TooLarge,
+    /// The bytes are not the record the profile names.
+    Mismatch,
+    Io,
+}
+
+/// Read the reviewed record `which` names under custody, at most [`MAX_REVIEWED_BYTES`], and return
+/// it only if its bytes hash to the digest the profile declares for it (B14a-2a). The profile's
+/// digest is the only name a caller can ask for: there is no door to read an arbitrary record.
+///
+/// # Errors
+/// Each [`ReviewedError`], named.
+pub fn read_reviewed(profile: &Profile, which: Which) -> Result<Vec<u8>, ReviewedError> {
+    let declared = match which {
+        Which::Expectation => &profile.declared.reviewed.expectation,
+        Which::Review => &profile.declared.reviewed.review,
+    };
+    let name = declared
+        .strip_prefix("sha256:")
+        .ok_or(ReviewedError::Mismatch)?;
+    let held = match PrivateDirectory::open(&profile.directory.join(REVIEWED_DIRECTORY)) {
+        Ok(held) => held,
+        Err(DirectoryError::NotFound) => return Err(ReviewedError::NotInstalled),
+        Err(DirectoryError::Custody) => return Err(ReviewedError::Custody),
+        Err(DirectoryError::Io(_)) => return Err(ReviewedError::Io),
+    };
+    let bytes = match held.read(name, MAX_REVIEWED_BYTES) {
+        Ok(bytes) => bytes,
+        Err(FileError::NotFound) => return Err(ReviewedError::NotInstalled),
+        Err(FileError::Custody) => return Err(ReviewedError::Custody),
+        Err(FileError::TooLarge) => return Err(ReviewedError::TooLarge),
+        Err(FileError::Io(_)) => return Err(ReviewedError::Io),
+    };
+    if super::evidence::digest(&bytes) != *declared {
+        return Err(ReviewedError::Mismatch);
+    }
+    Ok(bytes)
+}
+
 fn digest_text(pins: &toml::Table, key: &str) -> Result<String, ProfileError> {
     let value = string(pins, "pins", key)?;
     Sha256Digest::parse(&value).map_err(|_| pin_refusal(key, PinWhy::Digest))?;
@@ -644,6 +762,11 @@ mod tests {
     const ID2: &str = "28e00000-0000-4000-8000-000000000002";
     const HEX: &str = "sha256:0000000000000000000000000000000000000000000000000000000000000000";
     const HEX2: &str = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    /// coreutils `sha256sum` of `EXPECTATION` and `REVIEW`.
+    const EXP: &str = "sha256:7a1f9aa11864adf4fdc42e57bccf14c9721c288f749cf314525c8c183df64f13";
+    const REV: &str = "sha256:7676d865aaf08640fa14c6526535f9e8e47da1a955bdf479688c5f3800423740";
+    const EXPECTATION: &[u8] = b"the frozen expectation\n";
+    const REVIEW: &[u8] = b"its independent review\n";
 
     /// A valid declaration: two workspaces and every pin kind.
     fn valid() -> String {
@@ -675,6 +798,10 @@ runtime_files = [
 namespace_directories = ["/toolchain/lib", "/usr/lib64"]
 busctl_sha256 = "{HEX}"
 systemd_run_sha256 = "{HEX2}"
+
+[reviewed]
+expectation_sha256 = "{EXP}"
+review_sha256 = "{REV}"
 "#
         )
     }
@@ -1164,7 +1291,7 @@ systemd_run_sha256 = "{HEX2}"
             Ok((
                 good.clone(),
                 2,
-                "sha256:3068a2c7453ec408cf5a3d666b27a06112339881f549235963a484a508ec25ba"
+                "sha256:146b45de5f8da3028b197e3c6e0cffd45bdd990c209a31ee947fd2219e3e62d9"
                     .to_owned()
             ))
         );
@@ -1379,6 +1506,119 @@ systemd_run_sha256 = "{HEX2}"
                 "the installed class profile declares no such workspace",
                 "the installed class profile was refused at start"
             )
+        );
+        Ok(())
+    }
+
+    /// B14a-2a · `[reviewed]` is required, holds exactly two digests, and a review naming the
+    /// expectation itself is refused.
+    #[test]
+    fn the_reviewed_table_names_two_distinct_digests() -> Result<(), ProfileError> {
+        let declared = compose(valid().as_bytes())?;
+        assert_eq!(
+            declared.reviewed,
+            Reviewed {
+                expectation: EXP.to_owned(),
+                review: REV.to_owned()
+            }
+        );
+        let without = valid();
+        let without = &without[..without.find("\n[reviewed]").unwrap_or(without.len())];
+        assert_eq!(
+            refused(without),
+            ProfileError::MissingKey {
+                path: "reviewed".into()
+            }
+        );
+        assert_eq!(
+            refused(&format!("{}extra = 1\n", valid())),
+            ProfileError::UnknownKey {
+                path: "reviewed.extra".into()
+            }
+        );
+        assert_eq!(
+            refused(&with(
+                &format!("review_sha256 = \"{REV}\""),
+                "review_sha256 = \"x\""
+            )),
+            ProfileError::Reviewed {
+                name: "review_sha256",
+                why: ReviewedWhy::Digest
+            }
+        );
+        assert_eq!(
+            refused(&with(
+                &format!("expectation_sha256 = \"{EXP}\""),
+                "expectation_sha256 = \"x\""
+            )),
+            ProfileError::Reviewed {
+                name: "expectation_sha256",
+                why: ReviewedWhy::Digest
+            }
+        );
+        assert_eq!(
+            refused(&with(
+                &format!("review_sha256 = \"{REV}\""),
+                &format!("review_sha256 = \"{EXP}\"")
+            )),
+            ProfileError::Reviewed {
+                name: "review_sha256",
+                why: ReviewedWhy::Same
+            }
+        );
+        Ok(())
+    }
+
+    /// B14a-2a · a reviewed record is returned only when its bytes hash to the digest the profile
+    /// names; absence, custody, size and a substituted record are each refused by name.
+    #[test]
+    fn a_reviewed_record_is_read_only_as_the_record_the_profile_names() -> Result<(), ProfileError>
+    {
+        let root = private("reviewed");
+        let profile = Profile {
+            declared: compose(valid().as_bytes())?,
+            directory: root.clone(),
+            digest: String::new(),
+        };
+        assert_eq!(
+            read_reviewed(&profile, Which::Expectation),
+            Err(ReviewedError::NotInstalled)
+        );
+        let store = root.join(REVIEWED_DIRECTORY);
+        assert!(fs::DirBuilder::new().mode(0o700).create(&store).is_ok());
+        let name = |digest: &str| digest.trim_start_matches("sha256:").to_owned();
+        assert_eq!(
+            read_reviewed(&profile, Which::Review),
+            Err(ReviewedError::NotInstalled)
+        );
+        write(&store.join(name(EXP)), EXPECTATION, 0o600);
+        write(&store.join(name(REV)), REVIEW, 0o600);
+        assert_eq!(
+            read_reviewed(&profile, Which::Expectation),
+            Ok(EXPECTATION.to_vec())
+        );
+        assert_eq!(read_reviewed(&profile, Which::Review), Ok(REVIEW.to_vec()));
+        // The review's bytes under the expectation's name: substituted, not the named record.
+        write(&store.join(name(EXP)), REVIEW, 0o600);
+        assert_eq!(
+            read_reviewed(&profile, Which::Expectation),
+            Err(ReviewedError::Mismatch)
+        );
+        write(&store.join(name(EXP)), EXPECTATION, 0o644);
+        assert_eq!(
+            read_reviewed(&profile, Which::Expectation),
+            Err(ReviewedError::Custody)
+        );
+        let big = vec![b'x'; usize::try_from(MAX_REVIEWED_BYTES).unwrap_or(0) + 1];
+        write(&store.join(name(REV)), &big, 0o600);
+        assert_eq!(
+            read_reviewed(&profile, Which::Review),
+            Err(ReviewedError::TooLarge)
+        );
+        assert!(fs::set_permissions(&store, fs::Permissions::from_mode(0o755)).is_ok());
+        assert_eq!(
+            read_reviewed(&profile, Which::Review),
+            Err(ReviewedError::Custody)
         );
         Ok(())
     }

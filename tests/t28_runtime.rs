@@ -219,7 +219,7 @@ fn installed(root: &Path, shape: &Shape<'_>) -> Result<Profile, Box<dyn Error>> 
          protected = \"protected\"\nprotected_digest = \"{}\"\n\n\
          [pins]\ncompiler = {{ host = \"/opt/rustc\", sha256 = \"{zero}\" }}\n\
          shim = {{ host = \"/opt/shim\", sha256 = \"{zero}\" }}\nruntime_files = []\n\
-         namespace_directories = []\nbusctl_sha256 = \"{zero}\"\nsystemd_run_sha256 = \"{zero}\"\n",
+         namespace_directories = []\nbusctl_sha256 = \"{zero}\"\nsystemd_run_sha256 = \"{zero}\"\n[reviewed]\nexpectation_sha256 = \"sha256:7a1f9aa11864adf4fdc42e57bccf14c9721c288f749cf314525c8c183df64f13\"\nreview_sha256 = \"sha256:7676d865aaf08640fa14c6526535f9e8e47da1a955bdf479688c5f3800423740\"\n",
         shape.declared,
         shape.baseline_digest.unwrap_or(&base_digest),
         shape.protected_digest.unwrap_or(&protected_digest),
