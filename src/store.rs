@@ -1320,6 +1320,29 @@ impl Store {
         Ok(events)
     }
 
+    /// The id of task `id`'s latest event, by `sequence` (B14a-1c): the anchor a writer reads
+    /// [`Store::events_after`] from before its own first write.
+    ///
+    /// # Errors
+    /// `NotFound` when the task is not the principal's; `Corrupt` for a task with no event.
+    pub fn last_event(
+        &self,
+        principal: &Principal,
+        id: UuidV4<'_>,
+        deadline: Instant,
+    ) -> Result<String> {
+        schema::bound(&self.connection, deadline)?;
+        visible_head(&self.connection, principal, id)?;
+        self.connection
+            .query_row(
+                "SELECT id FROM events WHERE task_id=? ORDER BY sequence DESC LIMIT 1",
+                [id.as_str()],
+                |row| row.get(0),
+            )
+            .optional()?
+            .ok_or(Error::Corrupt)
+    }
+
     /// Reserve a unique attempt before dispatch. Previous uncertain attempts block reuse.
     /// # Errors
     /// Refuses stale task revision, cancellation, exhausted allocations or unsettled ownership.

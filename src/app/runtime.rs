@@ -125,15 +125,13 @@ pub enum Error {
     Store(store::Error),
     /// The ledger's owner panicked while holding it.
     Poisoned,
-    /// Another writer moved the task other than by one cancellation or an instance observation
+    /// Another writer touched the task other than by one cancellation or an instance observation
     /// (B14a-R2.1, R3 G1): a second dispatcher or a restart overlap, detected, never absorbed.
     ConcurrentWriter,
     /// A stored value the runtime wrote or reads is not the shape it must be.
     Identity,
     /// No entropy for a fresh identity before the deadline.
     Entropy,
-    /// A candidate's retained path could not be removed and read back as gone.
-    Cleanup(workspace::Error),
     /// The driver's own policy refused (criteria cardinality, or an undeclared bit).
     Policy(LoopRefusal),
 }
@@ -147,6 +145,33 @@ impl From<store::Error> for Error {
 impl From<Poisoned> for Error {
     fn from(_: Poisoned) -> Self {
         Self::Poisoned
+    }
+}
+
+/// A port's failure: an error, or a stop the driver has no port to express — a begin that meets a
+/// cancellation committed after the driver's last read, or a work reservation spent before an
+/// attempt could begin. [`dispatch`] takes the stop, so neither strands the task (review M4).
+#[derive(Debug)]
+enum Fault {
+    Error(Error),
+    Stop(StopReason),
+}
+
+impl From<Error> for Fault {
+    fn from(error: Error) -> Self {
+        Self::Error(error)
+    }
+}
+
+impl From<store::Error> for Fault {
+    fn from(error: store::Error) -> Self {
+        Self::Error(Error::Store(error))
+    }
+}
+
+impl From<Poisoned> for Fault {
+    fn from(_: Poisoned) -> Self {
+        Self::Error(Error::Poisoned)
     }
 }
 
@@ -167,12 +192,20 @@ pub struct Evidence {
 struct Begun {
     id: String,
     generation: String,
-    began: Instant,
+    /// Where this attempt's measured cost starts: the origin for the first (preparation is
+    /// charged to it, B14a-R2.5), its begin for later ones.
+    charged_from: Instant,
+    /// The end of this attempt's work window: its charge start plus what the reservation held at
+    /// its begin, less the teardown share (B14a-R1.8, re-read at every begin).
+    work_until: Instant,
     applied: Option<Snapshot>,
     /// A candidate the class refused, and the refusal's name.
     refused: Option<(Vec<u8>, &'static str)>,
+    /// The work settled with a known cost and settled cleanup.
     settled: bool,
     verified: bool,
+    /// The check, once recorded, had a known cost and settled cleanup (review H1).
+    check_settled: bool,
 }
 
 /// The attempt lifecycle for one task over the real ledger.
@@ -185,10 +218,11 @@ struct StoreRuntime<'a, C, V> {
     digests: [String; 3],
     origin: Instant,
     deadline: Instant,
-    reserved_work_ms: u64,
+    /// The generation after the runtime's own last write (at dispatch: the one it read).
     own: u64,
-    last_event: Option<String>,
-    cancelled_at_start: bool,
+    /// The runtime's own last event (at dispatch: the task's latest), the anchor every
+    /// second-writer check reads from.
+    last_event: String,
     attempts: Vec<Begun>,
     previous: Option<Previous>,
 }
@@ -210,16 +244,18 @@ pub fn dispatch<C: CandidateSource, V: Verifier>(
 ) -> Result<Outcome, Error> {
     let origin = Instant::now();
     let deadline = origin + crate::task::TASK_LIMIT;
-    let head =
-        tasks.with_store(|store| store.get(dispatch.principal, dispatch.task, deadline))??;
+    let (head, anchor) = tasks.with_store(|store| -> Result<_, Error> {
+        let head = store.get(dispatch.principal, dispatch.task, deadline)?;
+        let anchor = store.last_event(dispatch.principal, dispatch.task, deadline)?;
+        Ok((head, anchor))
+    })??;
     let prepared = match prepare(&head, profile, &dispatch, origin, deadline) {
         Ok(prepared) => prepared,
         Err(refusal) => {
-            refuse(tasks, &dispatch, &head, refusal, origin, deadline)?;
+            refuse(tasks, &dispatch, refusal, origin, deadline)?;
             return Ok(Outcome::Refused(refusal));
         }
     };
-    let own = number(&head.generation)?;
     let mut runtime = StoreRuntime {
         tasks,
         dispatch,
@@ -229,20 +265,24 @@ pub fn dispatch<C: CandidateSource, V: Verifier>(
         digests: prepared.digests,
         origin,
         deadline,
-        reserved_work_ms: head.reserved_work_ms,
-        own,
-        last_event: None,
-        cancelled_at_start: head.cancellation,
+        own: number(&head.generation)?,
+        last_event: anchor,
         attempts: Vec::new(),
         previous: None,
     };
     let count = u8::try_from(U64_CRITERIA.len()).map_err(|_| Error::Identity)?;
-    driver::run(&mut runtime, count)
-        .map(Outcome::Driven)
-        .map_err(|error| match error {
-            driver::Error::Runtime(error) => error,
-            driver::Error::Policy(refusal) => Error::Policy(refusal),
-        })
+    match driver::run(&mut runtime, count) {
+        Ok(outcome) => Ok(Outcome::Driven(outcome)),
+        Err(driver::Error::Runtime(Fault::Stop(reason))) => {
+            Ok(Outcome::Driven(if runtime.stop_task(reason)? {
+                driver::Outcome::Stopped(reason)
+            } else {
+                driver::Outcome::NeedsSettlement(reason)
+            }))
+        }
+        Err(driver::Error::Runtime(Fault::Error(error))) => Err(error),
+        Err(driver::Error::Policy(refusal)) => Err(Error::Policy(refusal)),
+    }
 }
 
 struct Prepared {
@@ -315,11 +355,11 @@ fn binding_digests(baseline: &str, protected: &str, profile: &Profile) -> [Strin
 }
 
 /// Stop a task refused before dispatch through `finish_preparation`, charging the time since the
-/// origin; no attempt row is written.
+/// origin; no attempt row is written. The head is read in the stop's own hold (review M1): a
+/// cancellation committed during the captures is stopped with it, not stranded.
 fn refuse(
     tasks: &StoreTasks,
     dispatch: &Dispatch<'_>,
-    head: &TaskHead,
     refusal: Refusal,
     origin: Instant,
     deadline: Instant,
@@ -332,22 +372,21 @@ fn refuse(
     .map_err(|_| Error::Identity)?;
     let (staging, event) = (fresh(deadline)?, fresh(deadline)?);
     let reason = Name::new(refusal.name()).map_err(|_| Error::Identity)?;
-    let generation = parse_generation(&head.generation)?;
-    let used_ms = millis(origin.elapsed());
     tasks.with_store(|store| -> Result<(), Error> {
+        let head = store.get(dispatch.principal, dispatch.task, deadline)?;
         let object = store.publish(&bytes, uuid(&staging)?, deadline)?;
         store.finish_preparation(
             dispatch.principal,
             Stop {
                 task: dispatch.task,
-                generation,
+                generation: parse_generation(&head.generation)?,
                 reason: &reason,
                 evidence: &object,
                 event: uuid(&event)?,
             },
             Settlement {
                 effect: Effect::None,
-                used_ms: Some(used_ms),
+                used_ms: Some(millis(origin.elapsed())),
                 cleanup_settled: true,
                 ready_to_verify: false,
             },
@@ -357,43 +396,44 @@ fn refuse(
     })?
 }
 
+/// Remove a refused candidate's retained path and read it back as absent: `true` only when the
+/// removal succeeded and the name no longer resolves (`NotFound`, never any other error). A
+/// failure is a cleanup that did not settle, not an error of the runtime (review M4a).
+fn remove(failure: &Failure, deadline: Instant) -> bool {
+    let Some(path) = &failure.partial_path else {
+        return true;
+    };
+    workspace::remove_owned(path, deadline).is_ok()
+        && matches!(
+            std::fs::symlink_metadata(path),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound
+        )
+}
+
 impl<C: CandidateSource, V: Verifier> StoreRuntime<'_, C, V> {
-    /// The head, admitted only if every write since the runtime's own last one is a single
-    /// cancellation or an instance observation, and its generation accounts for exactly those
-    /// (B14a-R2.1, R3 G1). Called inside the hold of the write it guards.
+    /// The head, admitted only if every task event after the runtime's own last one (or, before
+    /// its first write, after the task's latest at dispatch) is one cancellation or an instance
+    /// observation, and the generation accounts for exactly those (B14a-R2.1, R3 G1). Events are
+    /// always read, so a foreign write at the current generation is seen too (review M3). Called
+    /// inside the hold of the write it guards.
     fn current(&self, store: &Store) -> Result<TaskHead, Error> {
         let head = store.get(self.dispatch.principal, self.dispatch.task, self.deadline)?;
-        let generation = number(&head.generation)?;
-        if generation == self.own {
-            return Ok(head);
-        }
-        let cancellations = match &self.last_event {
-            // Before its first write only a cancellation can move the task (an observation writes
-            // at the current generation).
-            None => u64::from(head.cancellation && !self.cancelled_at_start),
-            Some(event) => {
-                let events = store.events_after(
-                    self.dispatch.principal,
-                    self.dispatch.task,
-                    uuid(event)?,
-                    EVENTS_LIMIT,
-                    self.deadline,
-                )?;
-                let mut cancellations = 0_u64;
-                for event in &events {
-                    match event.kind.as_str() {
-                        "cancellation_requested" => cancellations += 1,
-                        "roster.instance_observed" => {}
-                        _ => return Err(Error::ConcurrentWriter),
-                    }
-                }
-                if cancellations > 1 {
-                    return Err(Error::ConcurrentWriter);
-                }
-                cancellations
+        let events = store.events_after(
+            self.dispatch.principal,
+            self.dispatch.task,
+            uuid(&self.last_event)?,
+            EVENTS_LIMIT,
+            self.deadline,
+        )?;
+        let mut cancellations = 0_u64;
+        for event in &events {
+            match event.kind.as_str() {
+                "cancellation_requested" => cancellations += 1,
+                "roster.instance_observed" => {}
+                _ => return Err(Error::ConcurrentWriter),
             }
-        };
-        if generation != self.own + cancellations {
+        }
+        if cancellations > 1 || number(&head.generation)? != self.own + cancellations {
             return Err(Error::ConcurrentWriter);
         }
         Ok(head)
@@ -401,7 +441,7 @@ impl<C: CandidateSource, V: Verifier> StoreRuntime<'_, C, V> {
 
     fn written(&mut self, generation: &str, event: String) -> Result<(), Error> {
         self.own = number(generation)?;
-        self.last_event = Some(event);
+        self.last_event = event;
         Ok(())
     }
 
@@ -409,16 +449,9 @@ impl<C: CandidateSource, V: Verifier> StoreRuntime<'_, C, V> {
         self.attempts.get(attempt.index).ok_or(Error::Identity)
     }
 
-    /// The work deadline: the reservation from the origin, less the teardown share.
-    fn work_deadline(&self) -> Instant {
-        let work = self
-            .reserved_work_ms
-            .saturating_sub(self.dispatch.teardown_ms);
-        self.deadline.min(self.origin + Duration::from_millis(work))
-    }
-
     /// One settle of the current attempt, in one hold with its head read. `used_ms` is `None`
-    /// when the measured time overran the reservation (an overrun is not a clean failure).
+    /// when the measured time overran what the reservation holds now (an overrun is not a clean
+    /// failure).
     fn settle(
         &mut self,
         index: usize,
@@ -426,11 +459,10 @@ impl<C: CandidateSource, V: Verifier> StoreRuntime<'_, C, V> {
         ready_to_verify: bool,
     ) -> Result<(), Error> {
         let begun = self.attempts.get(index).ok_or(Error::Identity)?;
-        let used = millis(begun.began.elapsed());
+        let used = millis(begun.charged_from.elapsed());
         let event = fresh(self.deadline)?;
         let (generation, known) = self.tasks.with_store(|store| -> Result<_, Error> {
             let head = self.current(store)?;
-            // An overrun of what the reservation holds now is an unknown cost, never a clean one.
             let used_ms = (used <= head.reserved_work_ms).then_some(used);
             let generation = store.settle_attempt(
                 &expected(&head, begun)?,
@@ -452,58 +484,158 @@ impl<C: CandidateSource, V: Verifier> StoreRuntime<'_, C, V> {
         Ok(())
     }
 
-    /// Record one verification of the current attempt and remember it for the next candidate.
+    /// Record one check of the current attempt, in one hold with its head read, and remember it
+    /// for the next candidate. A cost past what the verify reservation holds is recorded unknown
+    /// (B14a-R1.8, review M4c); a `Cancelled` verdict for a task nobody cancelled is the
+    /// verifier's error, never a cancellation. Returns the evidence and whether the check settled.
     fn record(
         &mut self,
         index: usize,
         check: &Check,
         subject: &str,
-    ) -> Result<Option<Object>, Error> {
+    ) -> Result<(Object, VerificationVerdict, bool), Error> {
         let begun = self.attempts.get(index).ok_or(Error::Identity)?;
         let (staging, event) = (fresh(self.deadline)?, fresh(self.deadline)?);
-        let (generation, object) =
-            self.tasks
-                .with_store(|store| -> Result<(String, Object), Error> {
-                    let head = self.current(store)?;
-                    let object = store.publish(&check.evidence, uuid(&staging)?, self.deadline)?;
-                    let generation = store.record_verification(
-                        &expected(&head, begun)?,
-                        &Verification {
-                            verdict: check.verdict,
-                            subject: Sha256Digest::parse(subject).map_err(|_| Error::Identity)?,
-                            evidence: object.clone(),
-                            used_ms: check.used_ms,
-                            cleanup_settled: check.cleanup_settled,
-                        },
-                        uuid(&event)?,
-                        self.deadline,
-                    )?;
-                    Ok((generation, object))
-                })??;
+        let (generation, object, verdict, reconciled) =
+            self.tasks.with_store(|store| -> Result<_, Error> {
+                let head = self.current(store)?;
+                let used_ms = check
+                    .used_ms
+                    .filter(|used| *used <= head.reserved_verify_ms);
+                let verdict =
+                    if check.verdict == VerificationVerdict::Cancelled && !head.cancellation {
+                        VerificationVerdict::Error
+                    } else {
+                        check.verdict
+                    };
+                let object = store.publish(&check.evidence, uuid(&staging)?, self.deadline)?;
+                let generation = store.record_verification(
+                    &expected(&head, begun)?,
+                    &Verification {
+                        verdict,
+                        subject: Sha256Digest::parse(subject).map_err(|_| Error::Identity)?,
+                        evidence: object.clone(),
+                        used_ms,
+                        cleanup_settled: check.cleanup_settled,
+                    },
+                    uuid(&event)?,
+                    self.deadline,
+                )?;
+                Ok((
+                    generation,
+                    object,
+                    verdict,
+                    used_ms.is_some() && check.cleanup_settled,
+                ))
+            })??;
         self.written(&generation, event)?;
         if let Some(begun) = self.attempts.get_mut(index) {
             begun.verified = true;
+            begun.check_settled = reconciled;
         }
         self.previous = Some(Previous {
-            verdict: check.verdict,
+            verdict,
             criteria: check.criteria,
             evidence: check.evidence.clone(),
         });
-        Ok(Some(object))
+        Ok((object, verdict, reconciled))
     }
 
-    /// Remove a refused candidate's retained path and read it back as gone (B14a-R2.4).
-    fn remove(&self, failure: &Failure) -> Result<bool, Error> {
-        let Some(path) = &failure.partial_path else {
-            return Ok(true);
+    /// Stop the task, deciding and writing in one hold (review M2). (b) An attempt whose work or
+    /// check did not settle stops nothing: its obligations and reservations stay (R1.4). (a) A
+    /// cancellation with no check of the last attempt records the check as not started, at no
+    /// cost, before the stop. (c) `finish_preparation` exactly when no attempt row exists.
+    fn stop_task(&mut self, reason: StopReason) -> Result<bool, Error> {
+        if self
+            .attempts
+            .last()
+            .is_some_and(|begun| !begun.settled || !begun.check_settled)
+        {
+            return Ok(false);
+        }
+        let name = stop_name(reason);
+        let stop_bytes = serde_json::to_vec(&serde_json::json!({
+            "kind": "hee3.task-stop/1", "reason": name, "attempts": self.attempts.len(),
+        }))
+        .map_err(|_| Error::Identity)?;
+        let idle_bytes = serde_json::to_vec(&serde_json::json!({
+            "kind": "verification_not_started", "durable_cancellation": true,
+        }))
+        .map_err(|_| Error::Identity)?;
+        let ids = [
+            fresh(self.deadline)?,
+            fresh(self.deadline)?,
+            fresh(self.deadline)?,
+            fresh(self.deadline)?,
+        ];
+        let reason = Name::new(name).map_err(|_| Error::Identity)?;
+        let last = self.attempts.last();
+        let idle_subject = match last {
+            Some(begun) => Some(match (&begun.applied, &begun.refused) {
+                (Some(applied), _) => applied.content_digest().ok_or(Error::Identity)?,
+                (None, Some((candidate, _))) => digest(candidate),
+                (None, None) => self.digests[0].clone(),
+            }),
+            None => None,
         };
-        workspace::remove_owned(path, self.work_deadline()).map_err(Error::Cleanup)?;
-        Ok(std::fs::symlink_metadata(path).is_err())
+        let stopped = self.tasks.with_store(|store| -> Result<_, Error> {
+            let head = self.current(store)?;
+            let mut generation = head.generation.clone();
+            if head.cancellation
+                && let (Some(begun), Some(subject)) = (last, &idle_subject)
+                && !begun.verified
+            {
+                let object = store.publish(&idle_bytes, uuid(&ids[0])?, self.deadline)?;
+                generation = store.record_verification(
+                    &Expected {
+                        task: self.dispatch.task,
+                        task_generation: parse_generation(&generation)?,
+                        attempt: uuid(&begun.id)?,
+                        attempt_generation: parse_generation(&begun.generation)?,
+                    },
+                    &Verification {
+                        verdict: VerificationVerdict::Cancelled,
+                        subject: Sha256Digest::parse(subject).map_err(|_| Error::Identity)?,
+                        evidence: object,
+                        used_ms: Some(0),
+                        cleanup_settled: true,
+                    },
+                    uuid(&ids[1])?,
+                    self.deadline,
+                )?;
+            }
+            let object = store.publish(&stop_bytes, uuid(&ids[2])?, self.deadline)?;
+            let stop = Stop {
+                task: self.dispatch.task,
+                generation: parse_generation(&generation)?,
+                reason: &reason,
+                evidence: &object,
+                event: uuid(&ids[3])?,
+            };
+            Ok(if last.is_none() {
+                store.finish_preparation(
+                    self.dispatch.principal,
+                    stop,
+                    Settlement {
+                        effect: Effect::None,
+                        used_ms: Some(millis(self.origin.elapsed())),
+                        cleanup_settled: true,
+                        ready_to_verify: false,
+                    },
+                    self.deadline,
+                )?
+            } else {
+                store.finish_unaccepted(self.dispatch.principal, stop, self.deadline)?
+            })
+        })??;
+        let [_, _, _, event] = ids;
+        self.written(&stopped.generation, event)?;
+        Ok(true)
     }
 }
 
 impl<C: CandidateSource, V: Verifier> driver::Runtime for StoreRuntime<'_, C, V> {
-    type Error = Error;
+    type Error = Fault;
     type Attempt = Attempt;
     type Evidence = Evidence;
 
@@ -522,21 +654,38 @@ impl<C: CandidateSource, V: Verifier> driver::Runtime for StoreRuntime<'_, C, V>
             fresh(self.deadline)?,
             fresh(self.deadline)?,
         );
-        let lease_ms = millis(
-            self.work_deadline()
-                .saturating_duration_since(Instant::now()),
-        );
         let [baseline, protected, profile] = &self.digests;
         let binding = Binding {
             baseline: Sha256Digest::parse(baseline).map_err(|_| Error::Identity)?,
             protected: Sha256Digest::parse(protected).map_err(|_| Error::Identity)?,
             profile: Sha256Digest::parse(profile).map_err(|_| Error::Identity)?,
         };
-        let began = Instant::now();
-        let roster = self.tasks.with_store(|store| -> Result<_, Error> {
+        // The first attempt's settle charges the preparation too (B14a-R2.5).
+        let charged_from = if self.attempts.is_empty() {
+            self.origin
+        } else {
+            Instant::now()
+        };
+        let begun = self.tasks.with_store(|store| -> Result<_, Error> {
             let head = self.current(store)?;
+            // A cancellation committed after the driver's last read is a stop, not an error.
+            if head.cancellation {
+                return Ok(Err(StopReason::Cancelled));
+            }
+            // The work window re-reads the reservation at every begin (R1.8); a spent one cannot
+            // begin, and the task stops by policy rather than failing with a zero lease.
+            let window = head
+                .reserved_work_ms
+                .saturating_sub(self.dispatch.teardown_ms);
+            let work_until = self
+                .deadline
+                .min(charged_from + Duration::from_millis(window));
+            let lease_ms = millis(work_until.saturating_duration_since(Instant::now()));
+            if lease_ms == 0 {
+                return Ok(Err(StopReason::Policy(LoopRefusal::Deadline)));
+            }
             let workspace = head.workspace_id.as_deref().ok_or(Error::Identity)?;
-            Ok(store.begin_bound_attempt(
+            let roster = store.begin_bound_attempt(
                 RosterStart {
                     principal: self.dispatch.principal,
                     task: self.dispatch.task,
@@ -551,25 +700,24 @@ impl<C: CandidateSource, V: Verifier> driver::Runtime for StoreRuntime<'_, C, V>
                 },
                 &binding,
                 self.deadline,
-            )?)
+            )?;
+            Ok(Ok((roster, work_until)))
         })??;
+        let (roster, work_until) = begun.map_err(Fault::Stop)?;
         if roster.attempt.generation != ordinal.to_string() {
-            return Err(Error::Identity);
+            return Err(Error::Identity.into());
         }
         self.written(&roster.attempt.task_generation, event)?;
         self.attempts.push(Begun {
             id: roster.attempt.id,
             generation: roster.attempt.generation,
-            // The first attempt's settle charges the preparation too (B14a-R2.5).
-            began: if self.attempts.is_empty() {
-                self.origin
-            } else {
-                began
-            },
+            charged_from,
+            work_until,
             applied: None,
             refused: None,
             settled: false,
             verified: false,
+            check_settled: true,
         });
         Ok(Attempt {
             index: self.attempts.len() - 1,
@@ -578,7 +726,10 @@ impl<C: CandidateSource, V: Verifier> driver::Runtime for StoreRuntime<'_, C, V>
 
     fn execute(&mut self, attempt: &Self::Attempt) -> Result<Work, Self::Error> {
         let index = attempt.index;
-        let id = self.begun(attempt)?.id.clone();
+        let (id, work_until) = {
+            let begun = self.begun(attempt)?;
+            (begun.id.clone(), begun.work_until)
+        };
         match self.source.next(self.previous.as_ref()) {
             // Exhaustion after begin is truthful (B14a-R2.3): the attempt is not ready to verify.
             Candidate::Exhausted => {
@@ -597,7 +748,7 @@ impl<C: CandidateSource, V: Verifier> driver::Runtime for StoreRuntime<'_, C, V>
                     U64_BOUNDS,
                     self.dispatch.attempts,
                     &id,
-                    self.work_deadline(),
+                    work_until,
                 );
                 let cleanup_settled = match applied {
                     Ok(snapshot) => {
@@ -607,7 +758,7 @@ impl<C: CandidateSource, V: Verifier> driver::Runtime for StoreRuntime<'_, C, V>
                         true
                     }
                     Err(failure) => {
-                        let removed = self.remove(&failure)?;
+                        let removed = remove(&failure, work_until);
                         if let Some(begun) = self.attempts.get_mut(index) {
                             begun.refused = Some((bytes, refusal_name(failure.error)));
                         }
@@ -650,13 +801,12 @@ impl<C: CandidateSource, V: Verifier> driver::Runtime for StoreRuntime<'_, C, V>
             let subject = applied.content_digest().ok_or(Error::Identity)?;
             (self.verifier.check(applied, self.deadline), subject)
         };
-        let object = self
-            .record(index, &check, &subject)?
-            .ok_or(Error::Identity)?;
-        if check.used_ms.is_none() || !check.cleanup_settled {
+        let (object, verdict, reconciled) = self.record(index, &check, &subject)?;
+        // An unknown cost or unsettled cleanup is an obligation the stop must keep (review H1).
+        if !reconciled {
             return Ok(DriverChecked::Unsettled);
         }
-        Ok(match check.verdict {
+        Ok(match verdict {
             VerificationVerdict::Passed => DriverChecked::Passed {
                 evidence: Evidence { object, subject },
                 criteria: check.criteria,
@@ -667,7 +817,9 @@ impl<C: CandidateSource, V: Verifier> driver::Runtime for StoreRuntime<'_, C, V>
             VerificationVerdict::Invalid => DriverChecked::Invalid,
             VerificationVerdict::Error => DriverChecked::Error,
             VerificationVerdict::Timeout => DriverChecked::Timeout,
-            VerificationVerdict::Cancelled => DriverChecked::Unsettled,
+            // The task was cancelled (`record` turned any other `Cancelled` into `Error`): nothing
+            // was satisfied, and the driver's next cancellation read stops it as cancelled.
+            VerificationVerdict::Cancelled => DriverChecked::Failed { criteria: 0 },
         })
     }
 
@@ -715,76 +867,7 @@ impl<C: CandidateSource, V: Verifier> driver::Runtime for StoreRuntime<'_, C, V>
     }
 
     fn stop(&mut self, reason: StopReason) -> Result<bool, Self::Error> {
-        // (b) An unsettled attempt stops nothing: its obligations and reservations stay (R1.4).
-        if self.attempts.last().is_some_and(|begun| !begun.settled) {
-            return Ok(false);
-        }
-        let cancelled = self
-            .tasks
-            .with_store(|store| self.current(store))??
-            .cancellation;
-        // (a) A cancellation with no verification of the last attempt records the check as not
-        // started, at no cost, before the stop.
-        let last = self.attempts.len().checked_sub(1);
-        if cancelled
-            && let Some(index) = last
-            && let Some(begun) = self.attempts.get(index)
-            && !begun.verified
-        {
-            let subject = match (&begun.applied, &begun.refused) {
-                (Some(applied), _) => applied.content_digest().ok_or(Error::Identity)?,
-                (None, Some((candidate, _))) => digest(candidate),
-                (None, None) => self.digests[0].clone(),
-            };
-            let evidence = serde_json::to_vec(&serde_json::json!({
-                "kind": "verification_not_started", "durable_cancellation": true,
-            }))
-            .map_err(|_| Error::Identity)?;
-            let check = Check {
-                verdict: VerificationVerdict::Cancelled,
-                criteria: 0,
-                evidence,
-                used_ms: Some(0),
-                cleanup_settled: true,
-            };
-            self.record(index, &check, &subject)?;
-        }
-        let name = stop_name(reason);
-        let bytes = serde_json::to_vec(&serde_json::json!({
-            "kind": "hee3.task-stop/1", "reason": name, "attempts": self.attempts.len(),
-        }))
-        .map_err(|_| Error::Identity)?;
-        let (staging, event) = (fresh(self.deadline)?, fresh(self.deadline)?);
-        let reason = Name::new(name).map_err(|_| Error::Identity)?;
-        let preparation = self.attempts.is_empty().then(|| Settlement {
-            effect: Effect::None,
-            used_ms: Some(millis(self.origin.elapsed())),
-            cleanup_settled: true,
-            ready_to_verify: false,
-        });
-        let stopped = self.tasks.with_store(|store| -> Result<_, Error> {
-            let head = self.current(store)?;
-            let object = store.publish(&bytes, uuid(&staging)?, self.deadline)?;
-            let stop = Stop {
-                task: self.dispatch.task,
-                generation: parse_generation(&head.generation)?,
-                reason: &reason,
-                evidence: &object,
-                event: uuid(&event)?,
-            };
-            // (c) `finish_preparation` exactly when no attempt row exists.
-            Ok(match preparation {
-                Some(preparation) => store.finish_preparation(
-                    self.dispatch.principal,
-                    stop,
-                    preparation,
-                    self.deadline,
-                )?,
-                None => store.finish_unaccepted(self.dispatch.principal, stop, self.deadline)?,
-            })
-        })??;
-        self.written(&stopped.generation, event)?;
-        Ok(true)
+        Ok(self.stop_task(reason)?)
     }
 }
 

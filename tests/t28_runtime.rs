@@ -44,7 +44,7 @@ type Outcome_ = Result<(), Box<dyn Error>>;
 /// What the candidate source was handed, per request.
 type Asked = Rc<RefCell<Vec<Option<Previous>>>>;
 /// What the verifier was handed, per check: the snapshot's content digest and its editable bytes.
-type Handed = Rc<RefCell<Vec<(String, Vec<u8>)>>>;
+type Handed = Rc<RefCell<Vec<(String, Vec<u8>, Instant)>>>;
 
 const TASK: &str = "28f10000-0000-4000-8000-000000000001";
 const KEY: &str = "28f10000-0000-4000-8000-000000000002";
@@ -92,6 +92,9 @@ struct Shape<'a> {
     work_ms: u64,
     declared: &'a str,
     baseline_digest: Option<&'a str>,
+    protected_digest: Option<&'a str>,
+    /// A workspace directory removed after its digest is declared, so its capture fails.
+    removed: Option<&'static str>,
     teardown_ms: u64,
 }
 
@@ -102,6 +105,8 @@ impl Default for Shape<'_> {
             work_ms: 600_000,
             declared: WORKSPACE,
             baseline_digest: None,
+            protected_digest: None,
+            removed: None,
             teardown_ms: 1_000,
         }
     }
@@ -211,13 +216,17 @@ fn installed(root: &Path, shape: &Shape<'_>) -> Result<Profile, Box<dyn Error>> 
     let text = format!(
         "schema = \"hee3.class-profile/1\"\nclass = \"rust-library-change/1\"\n\n\
          [[workspace]]\nid = \"{}\"\nbaseline = \"base\"\nbaseline_digest = \"{}\"\n\
-         protected = \"protected\"\nprotected_digest = \"{protected_digest}\"\n\n\
+         protected = \"protected\"\nprotected_digest = \"{}\"\n\n\
          [pins]\ncompiler = {{ host = \"/opt/rustc\", sha256 = \"{zero}\" }}\n\
          shim = {{ host = \"/opt/shim\", sha256 = \"{zero}\" }}\nruntime_files = []\n\
          namespace_directories = []\nbusctl_sha256 = \"{zero}\"\nsystemd_run_sha256 = \"{zero}\"\n",
         shape.declared,
         shape.baseline_digest.unwrap_or(&base_digest),
+        shape.protected_digest.unwrap_or(&protected_digest),
     );
+    if let Some(name) = shape.removed {
+        fs::remove_dir_all(class.join(name))?;
+    }
     Ok(Profile {
         declared: class_profile::compose(text.as_bytes()).map_err(|error| format!("{error:?}"))?,
         directory: class,
@@ -299,7 +308,7 @@ struct Oracle<'h> {
 }
 
 impl Verifier for Oracle<'_> {
-    fn check(&mut self, subject: &Snapshot, _deadline: Instant) -> Check {
+    fn check(&mut self, subject: &Snapshot, deadline: Instant) -> Check {
         let editable = subject
             .entries()
             .find(|entry| entry.path == "src/lib.rs")
@@ -310,9 +319,11 @@ impl Verifier for Oracle<'_> {
                 habitat_engine::worker::workspace::Content::Directory => None,
             })
             .unwrap_or_default();
-        self.seen
-            .borrow_mut()
-            .push((subject.content_digest().unwrap_or_default(), editable));
+        self.seen.borrow_mut().push((
+            subject.content_digest().unwrap_or_default(),
+            editable,
+            deadline,
+        ));
         if let Some(hook) = self.hook.as_mut() {
             hook();
         }
@@ -458,12 +469,39 @@ fn a_failed_check_is_repaired_and_the_second_attempt_is_accepted() -> Outcome_ {
     assert_eq!(
         handed
             .iter()
-            .map(|(_, bytes)| bytes.as_slice())
+            .map(|(_, bytes, _)| bytes.as_slice())
             .collect::<Vec<_>>(),
         [FIRST, SECOND],
         "the verifier was handed each applied candidate, in order"
     );
     assert_ne!(handed[0].0, handed[1].0);
+    // Each check was handed the task's deadline: in the future when read, within the task limit.
+    for (_, _, handed_deadline) in handed.iter() {
+        assert!(*handed_deadline <= Instant::now() + habitat_engine::task::TASK_LIMIT);
+        assert!(*handed_deadline > Instant::now());
+    }
+    assert_eq!(
+        rows(
+            &rig,
+            "SELECT state,effect,cleanup,used_ms IS NOT NULL FROM attempts WHERE task_id=? \
+             ORDER BY CAST(generation AS INTEGER)",
+        )?,
+        vec![
+            vec![
+                "settled".to_owned(),
+                "none".to_owned(),
+                "settled".to_owned(),
+                "1".to_owned()
+            ],
+            vec![
+                "settled".to_owned(),
+                "none".to_owned(),
+                "settled".to_owned(),
+                "1".to_owned()
+            ],
+        ],
+        "both attempts settled with a known cost and no effect"
+    );
     assert_eq!(
         verifications(&rig)?,
         vec![
@@ -574,7 +612,48 @@ fn a_refused_candidate_is_recorded_failed_without_a_verifier_call() -> Outcome_ 
 fn pre_dispatch_refusals_stop_the_task_before_any_attempt() -> Outcome_ {
     let other_criteria = format!("sha256:{}", "c".repeat(64));
     let wrong = format!("sha256:{}", "d".repeat(64));
-    let cases: [(Shape<'_>, u64, Refusal); 5] = [
+    let cases: [(Shape<'_>, u64, Refusal); 10] = [
+        (
+            Shape {
+                work_ms: 0,
+                ..Shape::default()
+            },
+            5_000,
+            Refusal::ReservationEmpty,
+        ),
+        // The boundary itself: 6,000 = 5,000 capture + 1,000 teardown leaves no work time.
+        (
+            Shape {
+                work_ms: 6_000,
+                ..Shape::default()
+            },
+            5_000,
+            Refusal::ReservationTooSmall,
+        ),
+        (
+            Shape {
+                protected_digest: Some(&wrong),
+                ..Shape::default()
+            },
+            5_000,
+            Refusal::ProtectedMismatch,
+        ),
+        (
+            Shape {
+                removed: Some("base"),
+                ..Shape::default()
+            },
+            5_000,
+            Refusal::BaselineCapture,
+        ),
+        (
+            Shape {
+                removed: Some("protected"),
+                ..Shape::default()
+            },
+            5_000,
+            Refusal::ProtectedCapture,
+        ),
         (
             Shape {
                 criteria: other_criteria,
@@ -746,7 +825,13 @@ fn a_second_writer_is_refused_as_a_concurrent_writer() -> Outcome_ {
         "28f10000-0000-4000-8000-0000000000e1",
         "28f10000-0000-4000-8000-0000000000e2",
     ];
-    let cases: [(&str, String, bool); 4] = [
+    let cases: [(&str, String, bool); 5] = [
+        // A foreign event at the current generation, with no bump (review M3).
+        (
+            "unbumped foreign kind",
+            foreign(e[0], "reconciliation_recorded"),
+            false,
+        ),
         (
             "foreign kind",
             format!("{BUMP}{}", foreign(e[0], "disposition_recorded")),
@@ -834,5 +919,132 @@ fn an_overrun_is_recorded_as_an_unknown_cost() -> Outcome_ {
     assert!(handed.borrow().is_empty());
     assert!(verifications(&rig)?.is_empty());
     assert_eq!(rig.reserved_work_ms, 40);
+    Ok(())
+}
+
+/// B14a-1c review H1 · a check with an unknown cost is an obligation the stop keeps: the task
+/// waits `effect_unknown`, the check's cost is not recorded, and the outcome needs settlement.
+#[test]
+fn an_unsettled_check_needs_settlement() -> Outcome_ {
+    let rig = rig(&Shape::default())?;
+    let principal = owner();
+    let (source, _) = script(vec![Candidate::Replacement(SECOND.to_vec())]);
+    let mut unknown = check(VerificationVerdict::Passed, 1, b"exact, cost lost");
+    unknown.used_ms = None;
+    let (verifier, _) = oracle(vec![unknown]);
+    let outcome = run(&rig, &principal, source, verifier, 5_000).map_err(|e| format!("{e:?}"))?;
+    assert_eq!(
+        outcome,
+        Outcome::Driven(Driven::NeedsSettlement(StopReason::Unsettled))
+    );
+    assert_eq!(state(&rig)?, "effect_unknown");
+    assert_eq!(verifications(&rig)?[0][2], "NULL");
+    assert!(rows(&rig, "SELECT reason FROM task_stops WHERE task_id=?")?.is_empty());
+    Ok(())
+}
+
+/// B14a-1c review M4c · a check costing more than the verify reservation holds is recorded as an
+/// unknown cost (R1.8), never refused into an error: 300,001 ms against a 300,000 ms reservation.
+#[test]
+fn a_check_past_the_verify_reservation_is_an_unknown_cost() -> Outcome_ {
+    let rig = rig(&Shape::default())?;
+    let principal = owner();
+    let (source, _) = script(vec![Candidate::Replacement(SECOND.to_vec())]);
+    let mut over = check(VerificationVerdict::Passed, 1, b"exact, too slow");
+    over.used_ms = Some(300_001);
+    let (verifier, _) = oracle(vec![over]);
+    let outcome = run(&rig, &principal, source, verifier, 5_000).map_err(|e| format!("{e:?}"))?;
+    assert_eq!(
+        outcome,
+        Outcome::Driven(Driven::NeedsSettlement(StopReason::Unsettled))
+    );
+    assert_eq!(state(&rig)?, "effect_unknown");
+    assert_eq!(verifications(&rig)?[0][2], "NULL");
+    Ok(())
+}
+
+/// B14a-1c review M4b · a work reservation spent before the next attempt can begin stops the task
+/// by policy instead of failing with a zero lease. The first attempt sleeps past its work window,
+/// so its candidate is refused at the deadline; what remains is below the teardown share.
+#[test]
+fn a_spent_work_reservation_stops_the_task_by_policy() -> Outcome_ {
+    let rig = rig(&Shape {
+        work_ms: 1_500,
+        ..Shape::default()
+    })?;
+    let principal = owner();
+    let (mut source, asked) = script(vec![
+        Candidate::Replacement(FIRST.to_vec()),
+        Candidate::Replacement(SECOND.to_vec()),
+    ]);
+    source.hook = Some(Box::new(|| std::thread::sleep(Duration::from_millis(700))));
+    let (verifier, handed) = oracle(vec![]);
+    let outcome = run(&rig, &principal, source, verifier, 10).map_err(|e| format!("{e:?}"))?;
+    assert_eq!(
+        outcome,
+        Outcome::Driven(Driven::Stopped(StopReason::Policy(
+            habitat_engine::task::LoopRefusal::Deadline
+        )))
+    );
+    assert_eq!(state(&rig)?, "failed");
+    assert_eq!(asked.borrow().len(), 1, "no second attempt began");
+    assert!(handed.borrow().is_empty());
+    assert_eq!(
+        rows(&rig, "SELECT id FROM attempts WHERE task_id=?")?.len(),
+        1
+    );
+    assert_eq!(
+        rows(&rig, "SELECT reason FROM task_stops WHERE task_id=?")?,
+        vec![vec!["task_policy_stop".to_owned()]]
+    );
+    Ok(())
+}
+
+/// B14a-1c review (mislabelled stop) · a verifier's `Cancelled` for a task nobody cancelled is the
+/// verifier's error, recorded `error`; for a cancelled task it is recorded `cancelled` and the task
+/// stops as a cancellation, never as an unsettled obligation.
+#[test]
+fn a_verifier_s_cancelled_is_a_cancellation_only_when_the_task_was_cancelled() -> Outcome_ {
+    let uncancelled = rig(&Shape::default())?;
+    let principal = owner();
+    let (source, _) = script(vec![Candidate::Replacement(SECOND.to_vec())]);
+    let (verifier, _) = oracle(vec![check(VerificationVerdict::Cancelled, 0, b"stopped")]);
+    let outcome =
+        run(&uncancelled, &principal, source, verifier, 5_000).map_err(|e| format!("{e:?}"))?;
+    assert_eq!(
+        outcome,
+        Outcome::Driven(Driven::Stopped(StopReason::VerifierError))
+    );
+    assert_eq!(verifications(&uncancelled)?[0][0], "error");
+    assert_eq!(
+        rows(
+            &uncancelled,
+            "SELECT reason FROM task_stops WHERE task_id=?"
+        )?,
+        vec![vec!["verifier_error".to_owned()]]
+    );
+
+    let cancelled = rig(&Shape::default())?;
+    let (source, _) = script(vec![Candidate::Replacement(SECOND.to_vec())]);
+    let (mut verifier, _) = oracle(vec![check(VerificationVerdict::Cancelled, 0, b"stopped")]);
+    verifier.hook = Some(Box::new(|| {
+        cancel(
+            &cancelled,
+            &principal,
+            "28f10000-0000-4000-8000-0000000000c5",
+        );
+    }));
+    let outcome =
+        run(&cancelled, &principal, source, verifier, 5_000).map_err(|e| format!("{e:?}"))?;
+    assert_eq!(
+        outcome,
+        Outcome::Driven(Driven::Stopped(StopReason::Cancelled))
+    );
+    assert_eq!(state(&cancelled)?, "cancelled");
+    assert_eq!(verifications(&cancelled)?[0][0], "cancelled");
+    assert_eq!(
+        rows(&cancelled, "SELECT reason FROM task_stops WHERE task_id=?")?,
+        vec![vec!["durable_cancellation".to_owned()]]
+    );
     Ok(())
 }
