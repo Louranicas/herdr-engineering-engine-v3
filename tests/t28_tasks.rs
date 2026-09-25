@@ -2606,7 +2606,8 @@ fn a_list_passes_over_a_task_whose_admitted_bytes_name_no_class() -> Outcome {
 
 /// B06: a filter is one filter whatever order its states are named in. A cursor issued for
 /// `[cancellation_requested, admitted]` binds the digest computed here independently (the states
-/// sorted), and resumes the same listing named `[admitted, cancellation_requested]`.
+/// sorted), and resumes the same listing named `[admitted, cancellation_requested]` -- but not
+/// under another class or another parent, which are the filter too.
 #[test]
 fn a_list_filter_is_one_filter_whatever_the_order_of_its_states() -> Outcome {
     let scratch = Scratch::new()?;
@@ -2647,6 +2648,41 @@ fn a_list_filter_is_one_filter_whatever_the_order_of_its_states() -> Outcome {
         json!("2"),
         "{reordered}"
     );
-    conforms(&[("task.list", &named), ("task.list", &reordered)])?;
+    // The class and the parent are the filter too: the same cursor presented under another class or
+    // another parent is refused at its filter digest.
+    let mut refused = Vec::new();
+    for (no, class, parent) in [
+        (6, json!("rust-library-change/1"), Value::Null),
+        (
+            7,
+            Value::Null,
+            json!("28d00000-0000-4000-8000-0000000000cc"),
+        ),
+    ] {
+        let reply = serve(
+            &tasks,
+            &operator,
+            &list_frame(
+                no,
+                &json!({"states": ["admitted", "cancellation_requested"], "task_class": class,
+                        "parent_task_id": parent, "page": {"limit": 1, "cursor": issued}}),
+            ),
+        )?;
+        assert_eq!(
+            (&reply["code"], &reply["details"]["field"]),
+            (
+                &json!("invalid_argument"),
+                &json!("/body/page/cursor/filter_sha256")
+            ),
+            "class {class} parent {parent}: {reply}"
+        );
+        refused.push(reply);
+    }
+    conforms(&[
+        ("task.list", &named),
+        ("task.list", &reordered),
+        ("task.list", &refused[0]),
+        ("task.list", &refused[1]),
+    ])?;
     Ok(())
 }
