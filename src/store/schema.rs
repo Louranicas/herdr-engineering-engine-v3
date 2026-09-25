@@ -15,16 +15,19 @@ pub(super) struct Migration {
     pub(super) preserves: &'static [Preserved],
 }
 
-/// A table a migration rebuilds, with the order its rows are digested in: its primary key.
+/// A table a migration rebuilds or extends, with the order its rows are digested in (its primary
+/// key) and the columns compared: `*` for a rebuild, which must keep every column, or the pre-step
+/// columns for a step that adds one (B14-P2c: `SELECT *` would count the new column and refuse).
 pub(super) struct Preserved {
     pub(super) table: &'static str,
     pub(super) order: &'static str,
+    pub(super) columns: &'static str,
 }
 
 /// THE ordered migration chain (A25; RC06/T04): the one door for migration identity. Version `k`
 /// is `MIGRATIONS[k - 1]`; a ledger records `k` rows linked by their predecessor columns and
 /// `user_version = k`. Only an appended entry may follow a released one.
-const MIGRATIONS: [Migration; 3] = [
+const MIGRATIONS: [Migration; 4] = [
     Migration {
         sql: include_str!("../../migrations/001.sql"),
         body: "sha256:ac5916feaee05749404dd7d87d98cde7e2ae93048e8b07e133ba7868fc1ee9f2",
@@ -36,6 +39,7 @@ const MIGRATIONS: [Migration; 3] = [
         preserves: &[Preserved {
             table: "operations",
             order: "principal_uid,principal_role,action,version,request_key",
+            columns: "*",
         }],
     },
     Migration {
@@ -45,17 +49,29 @@ const MIGRATIONS: [Migration; 3] = [
             Preserved {
                 table: "operations",
                 order: "principal_uid,principal_role,action,version,request_key",
+                columns: "*",
             },
             Preserved {
                 table: "task_stops",
                 order: "task_id",
+                columns: "*",
             },
         ],
+    },
+    Migration {
+        sql: include_str!("../../migrations/004.sql"),
+        body: "sha256:8476c3229448ef8da34f62e8fe75391bf4246e2a6cb73f04c81f0aba3f13382f",
+        preserves: &[Preserved {
+            table: "tasks",
+            order: "id",
+            columns: "id,principal_uid,principal_role,spec,criteria_digest,generation,state,\
+                      cancellation,accepted_event,limit_ms,spent_ms,reserved_work_ms,reserved_verify_ms",
+        }],
     },
 ];
 
 /// The version a current ledger records: the chain's length.
-pub(super) const CURRENT: u32 = 3;
+pub(super) const CURRENT: u32 = 4;
 const _: () = assert!(MIGRATIONS.len() == CURRENT as usize);
 
 /// Which clause of the migration chain a ledger (or this binary) fails, at which version (A25).
@@ -135,8 +151,8 @@ fn record(connection: &Connection, version: u32) -> Result<()> {
 /// value tagged with its storage type so no two different rows can hash alike.
 fn preserved_state(connection: &Connection, table: &Preserved) -> Result<(u64, String)> {
     let mut statement = connection.prepare(&format!(
-        "SELECT * FROM {} ORDER BY {}",
-        table.table, table.order
+        "SELECT {} FROM {} ORDER BY {}",
+        table.columns, table.table, table.order
     ))?;
     let width = statement.column_count();
     let mut rows = statement.query([])?;

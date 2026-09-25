@@ -612,6 +612,9 @@ pub struct Submission<'a> {
     pub request_bytes: &'a [u8],
     pub criteria: Sha256Digest<'a>,
     pub allocation: Allocation,
+    /// The installed workspace the task is admitted for (B14-P2c). Not optional: the one writer of
+    /// a task row cannot write NULL, the only NOT NULL an added column admits.
+    pub workspace_id: UuidV4<'a>,
 }
 
 /// Why `task.resolve` refuses (B08), by what decided it. Each maps to its own wire member.
@@ -732,6 +735,8 @@ pub struct TaskHead {
     pub spent_ms: u64,
     pub reserved_work_ms: u64,
     pub reserved_verify_ms: u64,
+    /// The workspace admission bound (B14-P2c); `None` for a task admitted before migration 4.
+    pub workspace_id: Option<String>,
 }
 
 /// Attempt generation is independent of the task's compare-and-set revision.
@@ -1128,8 +1133,8 @@ impl Store {
                 if prior_digest != request_digest { return Err(Error::Conflict); }
                 return Ok(serde_json::from_slice(&result)?);
             }
-            tx.execute("INSERT INTO tasks(id,principal_uid,principal_role,spec,criteria_digest,generation,state,limit_ms,reserved_work_ms,reserved_verify_ms) VALUES(?,?,?,?,?,'1','admitted',?,?,?)",
-                params![input.task.as_str(),input.principal.uid(),input.principal.role(),input.request_bytes,input.criteria.as_str(),number(input.allocation.limit_ms)?,number(input.allocation.work_ms)?,number(input.allocation.verify_ms)?])?;
+            tx.execute("INSERT INTO tasks(id,principal_uid,principal_role,spec,criteria_digest,generation,state,limit_ms,reserved_work_ms,reserved_verify_ms,workspace_id) VALUES(?,?,?,?,?,'1','admitted',?,?,?,?)",
+                params![input.task.as_str(),input.principal.uid(),input.principal.role(),input.request_bytes,input.criteria.as_str(),number(input.allocation.limit_ms)?,number(input.allocation.work_ms)?,number(input.allocation.verify_ms)?,input.workspace_id.as_str()])?;
             cut_point!(fault, CutPoint::TaskWrite);
             let sequence = event(tx,input.event.as_str(),input.task.as_str(),"1","admitted")?;
             let result = Admission { task:input.task.as_str().to_owned(),generation:"1".to_owned(),epoch,sequence };
@@ -2111,6 +2116,12 @@ fn same_generation(head: &TaskHead, expected: Generation) -> Result<()> {
         Err(Error::Conflict)
     }
 }
+/// The columns every task-head read selects, in [`task_row`]'s order: the one list, so the two
+/// head reads and recovery's inventory cannot select differently (review P2c-6).
+pub(crate) const HEAD_COLUMNS: &str = "id,generation,state,cancellation,accepted_event,criteria_digest,spent_ms,reserved_work_ms,reserved_verify_ms,workspace_id";
+/// How many columns [`HEAD_COLUMNS`] names: a reader of more columns starts after them.
+pub(crate) const HEAD_WIDTH: usize = 10;
+
 fn task_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TaskHead> {
     Ok(TaskHead {
         id: row.get(0)?,
@@ -2122,6 +2133,7 @@ fn task_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TaskHead> {
         spent_ms: read_number(row, 6)?,
         reserved_work_ms: read_number(row, 7)?,
         reserved_verify_ms: read_number(row, 8)?,
+        workspace_id: row.get(9)?,
     })
 }
 /// The one door by which a principal sees a task head: `Store::get` and `Store::task_view` both
@@ -2131,11 +2143,18 @@ fn visible_head(
     principal: &Principal,
     id: UuidV4<'_>,
 ) -> Result<TaskHead> {
-    connection.query_row("SELECT id,generation,state,cancellation,accepted_event,criteria_digest,spent_ms,reserved_work_ms,reserved_verify_ms FROM tasks WHERE id=? AND principal_uid=? AND principal_role=?",
+    connection.query_row(&format!("SELECT {HEAD_COLUMNS} FROM tasks WHERE id=? AND principal_uid=? AND principal_role=?"),
         params![id.as_str(),principal.uid(),principal.role()], task_row).optional()?.ok_or(Error::NotFound)
 }
 fn head(connection: &Connection, id: &str) -> Result<TaskHead> {
-    connection.query_row("SELECT id,generation,state,cancellation,accepted_event,criteria_digest,spent_ms,reserved_work_ms,reserved_verify_ms FROM tasks WHERE id=?",[id],task_row).optional()?.ok_or(Error::NotFound)
+    connection
+        .query_row(
+            &format!("SELECT {HEAD_COLUMNS} FROM tasks WHERE id=?"),
+            [id],
+            task_row,
+        )
+        .optional()?
+        .ok_or(Error::NotFound)
 }
 fn event(tx: &Transaction<'_>, id: &str, task: &str, generation: &str, kind: &str) -> Result<u64> {
     event_with(tx, id, task, generation, kind, b"{}")
@@ -2238,7 +2257,7 @@ fn begin_attempt_in(
     let generation = (count + 1).to_string();
     let task_generation = next(expected)?;
     tx.execute(
-        "INSERT INTO attempts VALUES(?,?,?,'running','pending','pending',NULL)",
+        "INSERT INTO attempts(id,task_id,generation,state,effect,cleanup,used_ms) VALUES(?,?,?,'running','pending','pending',NULL)",
         params![attempt.as_str(), task.as_str(), generation],
     )?;
     cut_point!(fault, CutPoint::AttemptWrite);

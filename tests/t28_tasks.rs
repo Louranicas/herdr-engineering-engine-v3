@@ -4,13 +4,14 @@ use habitat_engine::actions::control::{
     self, Composed, Grants, Recorded, Reply, TaskRequest, Tasks,
 };
 use habitat_engine::actions::{Caller, Effect, Owner};
+use habitat_engine::app::class_profile::{self, Profile};
 use habitat_engine::app::tasks::{StoreTasks, cleanup_of, delivery_of, submit_readback};
 use habitat_engine::check::consistency::U64_CRITERIA;
 use habitat_engine::contracts::UuidV4;
 use habitat_engine::contracts::control::{
     ErrorCode, EvidenceView, criteria_digest, request_sha256,
 };
-use habitat_engine::store::{Principal, Store};
+use habitat_engine::store::{Error as StoreError, Principal, Store};
 use habitat_engine::task::control::{Selector, get, submission};
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
@@ -1174,6 +1175,7 @@ fn begun(store: &mut Store, operator: &Principal, index: u16) -> Result<(), Box<
                 task: UuidV4::parse(&task)?,
                 event: UuidV4::parse(&nth(0x05b3, index))?,
                 request_bytes: b"stage fixture",
+                workspace_id: UuidV4::parse("28d00000-0000-4000-8000-0000000000bb")?,
                 criteria,
                 allocation: Allocation {
                     limit_ms: 1_200_000,
@@ -2947,6 +2949,7 @@ fn a_list_selects_by_parent_and_scopes_by_the_whole_principal() -> Outcome {
                     task: UuidV4::parse(&nth(0x08b1, index))?,
                     event: UuidV4::parse(&nth(0x08b2, index))?,
                     request_bytes: &request_bytes,
+                    workspace_id: UuidV4::parse("28d00000-0000-4000-8000-0000000000bb")?,
                     criteria,
                     allocation: Allocation {
                         limit_ms: 1_200_000,
@@ -4542,5 +4545,149 @@ fn an_unsettled_observation_keeps_a_quarantine() -> Outcome {
         (head.state.as_str(), head.generation.as_str()),
         ("blocked", "5")
     );
+    Ok(())
+}
+
+/// The class profile a test ledger screens against: one workspace, `declared`.
+fn profile_declaring(declared: &str) -> Result<Profile, Box<dyn Error>> {
+    let digest = format!("sha256:{}", "0".repeat(64));
+    let text = format!(
+        "schema = \"hee3.class-profile/1\"\nclass = \"rust-library-change/1\"\n\n\
+         [[workspace]]\nid = \"{declared}\"\nbaseline = \"base\"\nbaseline_digest = \"{digest}\"\n\
+         protected = \"protected\"\nprotected_digest = \"{digest}\"\n\n\
+         [pins]\ncompiler = {{ host = \"/opt/rustc\", sha256 = \"{digest}\" }}\n\
+         shim = {{ host = \"/opt/shim\", sha256 = \"{digest}\" }}\nruntime_files = []\n\
+         namespace_directories = []\nbusctl_sha256 = \"{digest}\"\nsystemd_run_sha256 = \"{digest}\"\n"
+    );
+    Ok(Profile {
+        declared: class_profile::compose(text.as_bytes()).map_err(|error| format!("{error:?}"))?,
+        directory: PathBuf::from("/nonexistent/profile"),
+    })
+}
+
+/// Reopen a test ledger's store for inspection, its owner dropped.
+fn inspect(scratch: &Scratch) -> Result<Store, Box<dyn Error>> {
+    Store::open_inspection(
+        &scratch.0.join("state"),
+        UuidV4::parse(GENERATION)?,
+        UuidV4::parse(EPOCH)?,
+        Instant::now() + Duration::from_secs(10),
+    )
+    .map_err(|error| format!("{error:?}").into())
+}
+
+/// B14-P2c · admission binds the workspace a task names: under an installed profile that declares
+/// it, the task is admitted and the ledger records the id; one it does not declare, and any task
+/// under a refused profile, is refused `unavailable` at `/body/spec/workspace_id`, each by its own
+/// constraint, and writes nothing. With no profile, admission is as before (every other case here).
+#[test]
+fn admission_binds_the_workspace_the_installed_profile_declares() -> Outcome {
+    let operator = Principal::new(1000, "operator").map_err(|error| format!("{error:?}"))?;
+    let named = spec()["workspace_id"]
+        .as_str()
+        .ok_or("workspace")?
+        .to_owned();
+    let submit = request("task.submit", 1, Some(KEY), &json!({"spec": spec()}));
+    let scratch = Scratch::new()?;
+    let tasks = ledger(&scratch)?.with_class_profile(Ok(profile_declaring(&named)?));
+    let admitted = serve(&tasks, &operator, &submit)?;
+    assert_eq!(admitted["effect"], json!("committed"), "{admitted}");
+    let task = admitted["body"]["task"]["task_id"]
+        .as_str()
+        .ok_or("task")?
+        .to_owned();
+    drop(tasks);
+    let head = inspect(&scratch)?
+        .get(
+            &operator,
+            UuidV4::parse(&task)?,
+            Instant::now() + Duration::from_secs(10),
+        )
+        .map_err(|error| format!("{error:?}"))?;
+    assert_eq!(head.workspace_id.as_deref(), Some(named.as_str()));
+    for (profile, constraint) in [
+        (
+            Ok(profile_declaring("28d00000-0000-4000-8000-0000000000cc")?),
+            "workspace not installed",
+        ),
+        (
+            Err(class_profile::Unready::Refused(
+                class_profile::ProfileError::Encoding,
+            )),
+            "class profile refused",
+        ),
+    ] {
+        let scratch = Scratch::new()?;
+        let tasks = ledger(&scratch)?.with_class_profile(profile);
+        let refused = serve(&tasks, &operator, &submit)?;
+        assert_eq!(
+            (
+                &refused["code"],
+                &refused["details"]["field"],
+                &refused["details"]["constraint"]
+            ),
+            (
+                &json!("unavailable"),
+                &json!("/body/spec/workspace_id"),
+                &json!(constraint)
+            ),
+            "{refused}"
+        );
+        drop(tasks);
+        assert!(
+            matches!(
+                inspect(&scratch)?.get_by_key(
+                    &operator,
+                    UuidV4::parse(KEY)?,
+                    Instant::now() + Duration::from_secs(10)
+                ),
+                Err(StoreError::NotFound)
+            ),
+            "a refused admission writes nothing"
+        );
+    }
+    Ok(())
+}
+
+/// B14-P2c · only a first submission is screened (RC03 section 6): after the profile stops
+/// declaring the workspace, an exact replay still returns the stored admission, and other bytes
+/// under the same key still conflict — neither is answered by the screen.
+#[test]
+fn a_replay_is_answered_by_its_record_not_by_the_screen() -> Outcome {
+    let operator = Principal::new(1000, "operator").map_err(|error| format!("{error:?}"))?;
+    let named = spec()["workspace_id"]
+        .as_str()
+        .ok_or("workspace")?
+        .to_owned();
+    let submit = request("task.submit", 1, Some(KEY), &json!({"spec": spec()}));
+    let scratch = Scratch::new()?;
+    let tasks = ledger(&scratch)?.with_class_profile(Ok(profile_declaring(&named)?));
+    let first = serve(&tasks, &operator, &submit)?;
+    assert_eq!(first["effect"], json!("committed"), "{first}");
+    let tasks = tasks.with_class_profile(Ok(profile_declaring(
+        "28d00000-0000-4000-8000-0000000000cc",
+    )?));
+    let replay = serve(&tasks, &operator, &submit)?;
+    assert_eq!(
+        (
+            &replay["kind"],
+            &replay["replayed"],
+            &replay["body"]["task"]["task_id"]
+        ),
+        (
+            &json!("result"),
+            &json!(true),
+            &first["body"]["task"]["task_id"]
+        ),
+        "{replay}"
+    );
+    let other = request(
+        "task.submit",
+        2,
+        Some(KEY),
+        &json!({"spec": with(&["intent"], json!("Another intent."))}),
+    );
+    let conflict = serve(&tasks, &operator, &other)?;
+    assert_eq!(conflict["code"], json!("conflict"), "{conflict}");
     Ok(())
 }

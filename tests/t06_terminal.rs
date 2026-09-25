@@ -152,6 +152,7 @@ impl Rig {
                     task: id(TASK),
                     event: id(ADMITTED),
                     request_bytes: b"terminal nonacceptance fixture",
+                    workspace_id: id("28f00000-0000-4000-8000-00000000000a"),
                     criteria: Sha256Digest::parse(CRITERIA).unwrap(),
                     allocation: Allocation {
                         limit_ms: 1000,

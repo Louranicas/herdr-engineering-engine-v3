@@ -299,6 +299,7 @@ fn cancellation_commits_while_scoped_worker_retains_artifact_custody() {
                 task: id(TASK),
                 event: id(EVENT),
                 request_bytes: b"request",
+                workspace_id: id("28f00000-0000-4000-8000-00000000000a"),
                 criteria: Sha256Digest::parse(ABC).unwrap(),
                 allocation: Allocation {
                     limit_ms: 1000,

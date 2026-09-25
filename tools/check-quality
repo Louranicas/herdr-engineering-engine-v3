@@ -91,12 +91,12 @@ UNTRACKED_BY_DESIGN = (
 T03_IMPLEMENTATION_PATHS = ("src/worker/mod.rs", "src/worker/inference.rs")
 T04_IMPLEMENTATION_PATHS = ("src/store.rs", "src/store/artifact.rs", "src/store/backup.rs",
                             "src/store/schema.rs", "migrations/001.sql", "migrations/002.sql",
-                            "migrations/003.sql",
+                            "migrations/003.sql", "migrations/004.sql",
                             "tests/t04_store.rs")
 # Reviewed independent T04 unit suite: 81 cases (68 + store-lane A01-A03 and A24, 2026-09-24; B02's
-# unwritable-ledger read-back, 2026-09-25; B03's four task_view cases, 2026-09-25; B03b's closure-predicate case; A25's six migration-chain cases). Source discovery or emitted
+# unwritable-ledger read-back, 2026-09-25; B03's four task_view cases, 2026-09-25; B03b's closure-predicate case; A25's six migration-chain cases; B14-P2c's workspace CHECK case). Source discovery or emitted
 # counts cannot lower this gate; None remains an explicit pending-state refusal.
-T04_TEST_COUNT = 92
+T04_TEST_COUNT = 93
 # Cargo build parallelism for every gate build (operator decisions 2026-09-24: raised from 2 to 8,
 # then "utilise the full capacity of all hardware"): every CPU this process may run on, taken from
 # the affinity mask so a pinned or containerised habitat is respected. One owner: the store and pi
@@ -145,7 +145,7 @@ T06_UNIT_COUNTS = {
     "store::staging_tests::": 13, "check::u64_oracle::tests::": 22,
     "app::capture::tests::": 6, "app::durable_control::tests::": 6,
     "app::repair::tests::": 7, "worker::namespace::": 8,
-    "check::patch::tests::": 6, "app::class_profile::tests::": 9,
+    "check::patch::tests::": 6, "app::class_profile::tests::": 10,
 }
 
 
@@ -229,7 +229,7 @@ CONTEXT_INPUTS = ("src/context.rs",)
 COHORT_TARGET_COUNTS = {"t22_cohort": 67}
 COHORT_INPUTS = ("src/cohort.rs", "evaluation/cohorts/claim-overlap-v1.json",
                  "tests/fixtures/t22/C01.json", "tests/fixtures/t22/C02.json")
-ACTIONS_TARGET_COUNTS = {"t28_actions": 209}
+ACTIONS_TARGET_COUNTS = {"t28_actions": 211}
 # The control receiver (review coordinator step 1) is served from the catalogue: its wire half in
 # contracts, its catalogue half in actions, and the independent Python oracle its cases run.
 ACTIONS_INPUTS = ("src/actions.rs", "src/worker/tools.rs", "src/actions/control.rs",

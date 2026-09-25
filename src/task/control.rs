@@ -45,6 +45,9 @@ pub struct Spec {
     pub work_ms: u64,
     /// The verification and cleanup reserve.
     pub verify_ms: u64,
+    /// The installed workspace the task names (a validated `UuidV4` text; B14-P2c binds it at
+    /// admission).
+    pub workspace_id: String,
 }
 
 fn text<'a>(
@@ -211,10 +214,12 @@ fn spec(value: Option<&Value>) -> Result<Spec, Fault> {
             ));
         }
     }
-    spec.get("workspace_id")
+    let workspace_id = spec
+        .get("workspace_id")
         .and_then(Value::as_str)
         .filter(|id| UuidV4::parse(id).is_ok())
-        .ok_or(Fault::invalid("/body/spec/workspace_id", "UuidV4"))?;
+        .ok_or(Fault::invalid("/body/spec/workspace_id", "UuidV4"))?
+        .to_owned();
     let (limit_ms, work_ms, verify_ms) = budget(object(spec.get("budget"), "/body/spec/budget")?)?;
     match spec.get("parent") {
         Some(Value::Null) => {}
@@ -237,6 +242,7 @@ fn spec(value: Option<&Value>) -> Result<Spec, Fault> {
         limit_ms,
         work_ms,
         verify_ms,
+        workspace_id,
     })
 }
 

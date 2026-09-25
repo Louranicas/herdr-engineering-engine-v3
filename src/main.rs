@@ -260,11 +260,12 @@ fn socket_path() -> Result<PathBuf, control_socket::Error> {
     Ok(root.join(RUNTIME_DIRECTORY).join(SOCKET_NAME))
 }
 
-/// Read the class profile dispatch will use (B14-P2b) and say it in one line: declaration only,
-/// no capture before the socket binds. Its value is held by the dispatcher that reads it (B14b).
-fn say_class_profile(home: &Path) {
+/// Read the class profile (B14-P2b), say it in one line — declaration only, no capture before the
+/// socket binds — and return it: admission screens a task's workspace against it (B14-P2c).
+fn say_class_profile(home: &Path) -> Result<class_profile::Profile, class_profile::Unready> {
     let class = home.join(class_profile::CLASS_DIRECTORY);
-    match class_profile::read(&class) {
+    let read = class_profile::read(&class);
+    match &read {
         Ok(profile) => eprintln!(
             "habitat-engine: class profile read from {} ({} workspaces declared)",
             class.display(),
@@ -276,6 +277,7 @@ fn say_class_profile(home: &Path) {
             class.display()
         ),
     }
+    read
 }
 
 /// `habitat-engine serve`: take single-instance custody of IPC01, reconcile the active
@@ -356,8 +358,8 @@ fn serve() -> ExitCode {
                     routes.display()
                 ),
             }
-            say_class_profile(&home);
-            Some(tasks.with_routing(routing))
+            let profile = say_class_profile(&home);
+            Some(tasks.with_routing(routing).with_class_profile(profile))
         }
         Some(Err(why)) => {
             eprintln!("habitat-engine: task actions unavailable: {why}");

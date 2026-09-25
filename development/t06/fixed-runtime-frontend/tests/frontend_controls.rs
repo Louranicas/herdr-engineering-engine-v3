@@ -258,6 +258,7 @@ impl PrepRig {
                         task: UuidV4::parse(PREP_TASK).unwrap(),
                         event: UuidV4::parse("20000000-0000-4000-8000-000000000005").unwrap(),
                         request_bytes: b"frontend preparation failure fixture",
+                        workspace_id: UuidV4::parse("28f00000-0000-4000-8000-00000000000a").unwrap(),
                         criteria: Sha256Digest::parse(&format!("sha256:{}", "a".repeat(64)))
                             .unwrap(),
                         allocation: Allocation {

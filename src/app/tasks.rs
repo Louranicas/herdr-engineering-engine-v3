@@ -36,6 +36,7 @@
 //!   are rendered by one function per action.
 
 use crate::actions::control::{CURSOR_LIFETIME_MS, Recorded, TaskRequest, Tasks};
+use crate::app::class_profile::{self, Profile};
 use crate::app::evidence::fresh_id;
 use crate::app::routing::{self, Routing, Unready};
 use crate::contracts::control::{
@@ -65,6 +66,8 @@ pub struct StoreTasks {
     store: Mutex<Store>,
     epoch: String,
     routing: Result<Routing, Unready>,
+    /// The class profile admission screens a task's workspace against (B14-P2c), read at start.
+    class_profile: Result<Profile, class_profile::Unready>,
 }
 
 impl StoreTasks {
@@ -76,6 +79,7 @@ impl StoreTasks {
             store: Mutex::new(store),
             epoch,
             routing: Err(Unready::NotInstalled),
+            class_profile: Err(class_profile::Unready::NotInstalled),
         }
     }
 
@@ -84,6 +88,19 @@ impl StoreTasks {
     #[must_use]
     pub fn with_routing(self, routing: Result<Routing, Unready>) -> Self {
         Self { routing, ..self }
+    }
+
+    /// The class profile admission screens a task's workspace against, read once at start
+    /// (B14-P2c): a workspace installed after start is admitted only after a restart.
+    #[must_use]
+    pub fn with_class_profile(
+        self,
+        class_profile: Result<Profile, class_profile::Unready>,
+    ) -> Self {
+        Self {
+            class_profile,
+            ..self
+        }
     }
 
     fn cursor(&self, sequence: u64, task: &str, now_unix_ms: u64) -> Value {
@@ -485,6 +502,7 @@ impl Tasks for StoreTasks {
             .map_err(|_| Fault::invalid("/idempotency_key", "UuidV4"))?;
         let criteria_digest = criteria_digest(&spec.criteria);
         let criteria = Sha256Digest::parse(&criteria_digest).map_err(|_| internal())?;
+        let workspace_id = UuidV4::parse(&spec.workspace_id).map_err(|_| internal())?;
         let task_id = fresh_id(until).map_err(|_| unavailable("no entropy for a task identity"))?;
         let event_id =
             fresh_id(until).map_err(|_| unavailable("no entropy for an event identity"))?;
@@ -499,6 +517,16 @@ impl Tasks for StoreTasks {
             Err(StoreError::NotFound) => false,
             Err(error) => return Err(store_fault(&error)),
         };
+        // Only a first submission is screened, under the same guard: an exact replay returns its
+        // stored admission and different bytes under a used key its conflict, whatever the
+        // profile says now (RC03 section 6; review P2c-4).
+        if !replayed {
+            class_profile::screen(&self.class_profile, &spec.workspace_id).map_err(|why| {
+                unavailable("the installed class profile does not admit this workspace")
+                    .at("/body/spec/workspace_id")
+                    .because(why.constraint())
+            })?;
+        }
         let admission = store
             .submit(
                 Submission {
@@ -508,6 +536,7 @@ impl Tasks for StoreTasks {
                     event,
                     request_bytes: request.payload,
                     criteria,
+                    workspace_id,
                     allocation: Allocation {
                         limit_ms: spec.limit_ms,
                         work_ms: spec.work_ms,

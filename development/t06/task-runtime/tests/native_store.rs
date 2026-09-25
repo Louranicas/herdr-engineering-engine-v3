@@ -174,6 +174,7 @@ fn admit(store: &mut Store) {
                 task: uuid(TASK),
                 event: uuid(ADMITTED),
                 request_bytes: b"fixed native Store control",
+                workspace_id: uuid("28f00000-0000-4000-8000-00000000000a"),
                 criteria: Sha256Digest::parse(CRITERIA).unwrap(),
                 allocation: Allocation {
                     limit_ms: 1_200_000,

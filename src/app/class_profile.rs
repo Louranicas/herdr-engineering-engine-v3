@@ -186,6 +186,52 @@ impl Unready {
     }
 }
 
+/// Why admission refuses the workspace a task names (B14-P2c).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Screen {
+    /// A profile is read and declares no workspace by that id.
+    WorkspaceNotInstalled,
+    /// A profile is installed and refused: a broken install admits nothing it cannot dispatch.
+    ProfileRefused,
+}
+
+impl Screen {
+    /// The refusal's constraint text, one per reason.
+    #[must_use]
+    pub const fn constraint(self) -> &'static str {
+        match self {
+            Self::WorkspaceNotInstalled => "workspace not installed",
+            Self::ProfileRefused => "class profile refused",
+        }
+    }
+}
+
+/// The one rule admission screens a task's `workspace_id` by, for every door that screens it
+/// (submit now, preview in B14-P2c-2), so two doors cannot keep it differently. A declared id is
+/// admitted; an undeclared one, under a profile that was read, is not; a refused profile admits
+/// nothing. With no profile installed a task is admitted, as before any profile existed — admission
+/// without dispatch, which the dispatcher stops `no_workspace` (decision P2c-R1.5, recorded to
+/// revisit when the dispatcher lands).
+///
+/// # Errors
+/// [`Screen::WorkspaceNotInstalled`] and [`Screen::ProfileRefused`], as above.
+pub fn screen(profile: &Result<Profile, Unready>, workspace_id: &str) -> Result<(), Screen> {
+    match profile {
+        Ok(read)
+            if read
+                .declared
+                .workspaces
+                .iter()
+                .any(|workspace| workspace.id == workspace_id) =>
+        {
+            Ok(())
+        }
+        Ok(_) => Err(Screen::WorkspaceNotInstalled),
+        Err(Unready::Refused(_)) => Err(Screen::ProfileRefused),
+        Err(Unready::NotInstalled) => Ok(()),
+    }
+}
+
 /// Read and compose `directory`/[`PROFILE_FILE`] under custody (the only I/O here).
 ///
 /// # Errors
@@ -1272,5 +1318,34 @@ systemd_run_sha256 = "{HEX2}"
                 }
             )
         );
+    }
+
+    /// B14-P2c · the one screen over its four states: declared admits, undeclared under a read
+    /// profile and anything under a refused profile do not, and no profile admits.
+    #[test]
+    fn screen_decides_by_the_profile_s_state() -> Result<(), ProfileError> {
+        let read = Ok(Profile {
+            declared: compose(valid().as_bytes())?,
+            directory: PathBuf::from("/p"),
+        });
+        assert_eq!(screen(&read, ID), Ok(()));
+        assert_eq!(screen(&read, ID2), Ok(()));
+        assert_eq!(
+            screen(&read, "28e00000-0000-4000-8000-000000000003"),
+            Err(Screen::WorkspaceNotInstalled)
+        );
+        assert_eq!(
+            screen(&Err(Unready::Refused(ProfileError::Encoding)), ID),
+            Err(Screen::ProfileRefused)
+        );
+        assert_eq!(screen(&Err(Unready::NotInstalled), ID), Ok(()));
+        assert_eq!(
+            (
+                Screen::WorkspaceNotInstalled.constraint(),
+                Screen::ProfileRefused.constraint()
+            ),
+            ("workspace not installed", "class profile refused")
+        );
+        Ok(())
     }
 }

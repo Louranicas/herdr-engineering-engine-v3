@@ -1152,6 +1152,7 @@ pub(super) fn fail_task(
                 task: UuidV4::parse(&task)?,
                 event: UuidV4::parse(&nth(0x28d3))?,
                 request_bytes: b"restart past the wall",
+                workspace_id: UuidV4::parse("28d00000-0000-4000-8000-0000000000bb")?,
                 criteria,
                 allocation: Allocation {
                     limit_ms: 1_200_000,

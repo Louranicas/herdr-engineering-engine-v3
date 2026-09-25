@@ -1,8 +1,8 @@
 //! Bounded readback of durable task obligations, without reconciliation authority.
 
 use super::{
-    Error, Principal, Result, Store, TaskHead, read_number, read_optional_number, remaining,
-    schema, task_row, visible_head,
+    Error, HEAD_COLUMNS, HEAD_WIDTH, Principal, Result, Store, TaskHead, read_number,
+    read_optional_number, remaining, schema, task_row, visible_head,
 };
 use crate::contracts::rc01::MAX_ATTEMPTS;
 use crate::contracts::{
@@ -258,7 +258,11 @@ fn flag(row: &Row<'_>, index: usize) -> Result<bool> {
     }
 }
 
-const TASK_COLUMNS: &str = "SELECT id,generation,state,cancellation,accepted_event,criteria_digest,spent_ms,reserved_work_ms,reserved_verify_ms,principal_uid,principal_role,limit_ms FROM tasks";
+/// Recovery's task read: the one head column list, then the three columns only recovery reads,
+/// from [`HEAD_WIDTH`] on (review P2c-6).
+fn task_columns() -> String {
+    format!("SELECT {HEAD_COLUMNS},principal_uid,principal_role,limit_ms FROM tasks")
+}
 const ATTEMPT_COLUMNS: &str =
     "SELECT id,task_id,generation,state,effect,cleanup,used_ms FROM attempts";
 const VERIFICATION_COLUMNS: &str = "SELECT attempt_id,event_id,subject_digest,evidence_digest,verdict,used_ms,cleanup_settled FROM verifications";
@@ -295,10 +299,13 @@ fn durable_task_row(row: &Row<'_>) -> Result<DurableTask> {
     if (head.state == "accepted") != head.accepted_event.is_some() {
         return Err(Error::Corrupt);
     }
-    let principal_uid = row.get(9)?;
-    let principal_role: String = row.get(10)?;
+    if let Some(workspace) = &head.workspace_id {
+        uuid(workspace)?;
+    }
+    let principal_uid = row.get(HEAD_WIDTH)?;
+    let principal_role: String = row.get(HEAD_WIDTH + 1)?;
     super::Principal::new(principal_uid, &principal_role).map_err(|_| Error::Corrupt)?;
-    let limit_ms = read_number(row, 11)?;
+    let limit_ms = read_number(row, HEAD_WIDTH + 2)?;
     if limit_ms == 0
         || head
             .spent_ms
@@ -925,7 +932,7 @@ fn collect_open(
     })?;
     let (epoch, generation, mode, event_high_water) = metadata.pop().ok_or(Error::Corrupt)?;
     let attempts = budget.read(db, &format!("{selected}{ATTEMPT_COLUMNS} WHERE id IN (SELECT id FROM selected) ORDER BY task_id,id LIMIT ?"), attempt_row)?;
-    let tasks = budget.read(db, &format!("{selected}{TASK_COLUMNS} WHERE id IN (SELECT a.task_id FROM attempts a WHERE a.id IN (SELECT id FROM selected)) ORDER BY id LIMIT ?"), durable_task_row)?;
+    let tasks = budget.read(db, &format!("{selected}{} WHERE id IN (SELECT a.task_id FROM attempts a WHERE a.id IN (SELECT id FROM selected)) ORDER BY id LIMIT ?", task_columns()), durable_task_row)?;
     let verifications = budget.read(db, &format!("{selected}{VERIFICATION_COLUMNS} WHERE attempt_id IN (SELECT id FROM selected) ORDER BY attempt_id LIMIT ?"), verification_row)?;
     let instances = budget.read(db, &format!("{selected}{INSTANCE_COLUMNS} WHERE attempt_id IN (SELECT id FROM selected) ORDER BY id LIMIT ?"), instance_row)?;
     let pins = budget.read(db, &format!("{selected}{PIN_COLUMNS} WHERE attempt_id IN (SELECT id FROM selected) ORDER BY attempt_id,record_id LIMIT ?"), pin_row)?;
@@ -984,7 +991,7 @@ fn collect(
     let (epoch, generation, mode, event_high_water) = metadata.pop().ok_or(Error::Corrupt)?;
     let tasks = budget.read(
         db,
-        &format!("{TASK_COLUMNS} ORDER BY id LIMIT ?"),
+        &format!("{} ORDER BY id LIMIT ?", task_columns()),
         durable_task_row,
     )?;
     let attempts = budget.read(

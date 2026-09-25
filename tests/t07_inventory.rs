@@ -124,6 +124,7 @@ impl Rig {
                     task: id(TASK),
                     event: id(ADMIT),
                     request_bytes: b"recovery inventory fixture",
+                    workspace_id: id("28f00000-0000-4000-8000-00000000000a"),
                     criteria: Sha256Digest::parse(DIGEST).unwrap(),
                     allocation: Allocation {
                         limit_ms: 1_200_000,
@@ -292,8 +293,9 @@ fn empty_inventory_is_complete_and_epoch_bound() {
 fn admitted_reopen_keeps_exact_reserved_budget() {
     let mut r = Rig::admitted();
     let v = r.reopen();
-    // Metadata86 + fixed admitted task projection172; not derived from inventory.
-    assert_eq!((v.rows, v.payload_bytes), (2, 258));
+    // Metadata86 + fixed admitted task projection172 + its bound workspace id, one literal36-byte
+    // UUID (B14-P2c); not derived from inventory.
+    assert_eq!((v.rows, v.payload_bytes), (2, 294));
     assert_eq!(
         (
             v.tasks[0].head.spent_ms,

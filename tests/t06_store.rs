@@ -104,6 +104,7 @@ fn register_unrelated_evidence(store: &mut Store) {
                 task: id(&ids[1]),
                 event: id(&ids[2]),
                 request_bytes: b"unrelated task consumes one registered artifact slot",
+                workspace_id: id("28f00000-0000-4000-8000-00000000000a"),
                 criteria: Sha256Digest::parse(CRITERIA).unwrap(),
                 allocation: Allocation {
                     limit_ms: 1000,
@@ -449,6 +450,7 @@ fn started() -> (Area, Store, Object) {
                 task: id(TASK),
                 event: id(ADMITTED),
                 request_bytes: b"independent T06 verification fixture",
+                workspace_id: id("28f00000-0000-4000-8000-00000000000a"),
                 criteria: Sha256Digest::parse(CRITERIA).unwrap(),
                 allocation: Allocation {
                     limit_ms: 1000,

@@ -291,6 +291,7 @@ fn admit(store: &mut Store) {
                 task: uuid(TASK),
                 event: uuid(ADMITTED),
                 request_bytes: b"T05 independent task fixture",
+                workspace_id: uuid("28f00000-0000-4000-8000-00000000000a"),
                 criteria: Sha256Digest::parse(CRITERIA).unwrap(),
                 allocation: Allocation {
                     limit_ms: 1000,
@@ -1371,6 +1372,7 @@ fn disabling_one_profile_does_not_cancel_an_unrelated_owned_attempt() {
                 task: uuid(&other_task),
                 event: uuid(&other_event),
                 request_bytes: b"second independent task",
+                workspace_id: uuid("28f00000-0000-4000-8000-00000000000a"),
                 criteria: Sha256Digest::parse(CRITERIA).unwrap(),
                 allocation: Allocation {
                     limit_ms: 1000,

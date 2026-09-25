@@ -412,6 +412,7 @@ impl Rig {
                     task: id(TASK),
                     event: id(ADMIT),
                     request_bytes: b"startup reconciliation fixture",
+                    workspace_id: id("28f00000-0000-4000-8000-00000000000a"),
                     criteria: Sha256Digest::parse(DIGEST).unwrap(),
                     allocation: Allocation {
                         limit_ms: 1_200_000,
@@ -3889,6 +3890,7 @@ fn fail_tasks(r: &mut Rig, n: u32) {
                     task: id(&task),
                     event: id(&admit),
                     request_bytes: b"startup reconciliation fixture",
+                    workspace_id: id("28f00000-0000-4000-8000-00000000000a"),
                     criteria: Sha256Digest::parse(DIGEST).unwrap(),
                     allocation: Allocation {
                         limit_ms: 1_200_000,
@@ -4067,6 +4069,7 @@ fn more_open_attempts_than_the_bound_are_refused_with_both_numbers() {
                     task: id(&task),
                     event: id(&nth(0x28c3, index)),
                     request_bytes: b"startup reconciliation fixture",
+                    workspace_id: id("28f00000-0000-4000-8000-00000000000a"),
                     criteria: Sha256Digest::parse(DIGEST).unwrap(),
                     allocation: Allocation {
                         limit_ms: 1_200_000,
@@ -4290,6 +4293,7 @@ fn accept_tasks(r: &mut Rig, n: u32, base: u16) {
                     task: id(&task),
                     event: id(&role(3)),
                     request_bytes: b"startup reconciliation fixture",
+                    workspace_id: id("28f00000-0000-4000-8000-00000000000a"),
                     criteria: Sha256Digest::parse(DIGEST).unwrap(),
                     allocation: Allocation {
                         limit_ms: 1_200_000,

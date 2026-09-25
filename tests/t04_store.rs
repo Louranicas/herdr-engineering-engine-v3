@@ -32,8 +32,14 @@ const MIGRATION_2_BODY: &str =
     "sha256:bcd3de842dddb090ba6ef208b825d7764ca7d7b8326e0a18394fcc784ce24d4a";
 /// Migration 3's body digest (B08), by the same method (`awk` after the end marker, `sha256sum`), and
 /// independently by Python's `hashlib`; both reproduce `MIGRATION_2_BODY`.
+/// The workspace every fixture task is admitted for (B14-P2c).
+const WORKSPACE: &str = "28f00000-0000-4000-8000-00000000000a";
 const MIGRATION_3_BODY: &str =
     "sha256:4b4e9a7e06fa50f26bc8e74af58cd444fe8a6cfca47b7b85e4a598743bbf2d7d";
+/// Migration 4's body digest, computed from the file by Python's hashlib over the text below the
+/// anchor block (the same rule reproduces 3's pinned value), not by the store's own `identity`.
+const MIGRATION_4_BODY: &str =
+    "sha256:8476c3229448ef8da34f62e8fe75391bf4246e2a6cb73f04c81f0aba3f13382f";
 static NEXT_ROOT: AtomicU64 = AtomicU64::new(0);
 
 struct Area {
@@ -134,6 +140,7 @@ fn submission(owner: &Principal) -> Submission<'_> {
         task: uuid(TASK),
         event: uuid(ADMITTED),
         request_bytes: b"canonical request",
+        workspace_id: uuid(WORKSPACE),
         criteria: Sha256Digest::parse(CRITERIA).unwrap(),
         allocation: allocation(),
     }
@@ -284,7 +291,7 @@ fn fresh_ledger_has_exact_runtime_profile_and_migration() {
     assert_eq!(
         db.query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
             .unwrap(),
-        3,
+        4,
         "a fresh create goes straight to the last migration (A25)"
     );
     let mut rows = db
@@ -313,10 +320,36 @@ fn fresh_ledger_has_exact_runtime_profile_and_migration() {
                 2,
                 Some(MIGRATION_2_BODY.to_owned())
             ),
+            (
+                4,
+                MIGRATION_4_BODY.to_owned(),
+                3,
+                Some(MIGRATION_3_BODY.to_owned())
+            ),
         ],
         "each row names its body and links its predecessor"
     );
     no_admission(&area);
+}
+
+/// B14-P2c: migration 4's CHECK admits NULL or a 36-character id and refuses any other length,
+/// whoever writes the row.
+#[test]
+fn a_workspace_id_is_null_or_thirty_six_characters() {
+    let area = Area::new();
+    let mut store = area.open();
+    admit(&mut store);
+    drop(store);
+    let db = rusqlite::Connection::open(area.database()).unwrap();
+    for (value, admitted) in [
+        (Some("28f00000-0000-4000-8000-00000000000b"), true),
+        (None, true),
+        (Some("28f00000-0000-4000-8000-0000000000b"), false),
+        (Some("28f00000-0000-4000-8000-00000000000bb"), false),
+    ] {
+        let result = db.execute("UPDATE tasks SET workspace_id=?", [value]);
+        assert_eq!(result.is_ok(), admitted, "{value:?}: {result:?}");
+    }
 }
 
 /// Restart preserves committed admission, allocation and epoch.
@@ -330,6 +363,8 @@ fn reopening_preserves_admission_and_allocations() {
     let head = head_of(&reopened);
     assert_eq!(admission.epoch, EPOCH);
     assert_eq!(head.generation, "1");
+    // B14-P2c: admission recorded the workspace the task names, and a restart reads it back.
+    assert_eq!(head.workspace_id.as_deref(), Some(WORKSPACE));
     assert_eq!(
         (
             head.spent_ms,
@@ -511,19 +546,19 @@ fn unrelated_version_zero_database_is_preserved_and_refused() {
 fn future_schema_refuses_without_downgrade() {
     let area = Area::new();
     drop(area.open());
-    area.edit_closed("PRAGMA user_version=4;");
+    area.edit_closed("PRAGMA user_version=5;");
     assert!(matches!(
         Store::open(&area.path, uuid(GEN), uuid(EPOCH), false, deadline()),
         Err(Error::Chain(Chain::Newer {
-            recorded: 4,
-            current: 3
+            recorded: 5,
+            current: 4
         }))
     ));
     assert_eq!(
         area.inspect()
             .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
             .unwrap(),
-        4
+        5
     );
 }
 
@@ -1052,7 +1087,7 @@ fn unexpected_trigger_refuses_exact_schema_compatibility() {
     area.edit_closed("CREATE TRIGGER surprise AFTER INSERT ON events BEGIN SELECT 1; END;");
     assert!(matches!(
         Store::open(&area.path, uuid(GEN), uuid(EPOCH), false, deadline()),
-        Err(Error::Chain(Chain::Schema { version: 3 }))
+        Err(Error::Chain(Chain::Schema { version: 4 }))
     ));
 }
 
@@ -2490,7 +2525,7 @@ fn v1_ddl(head: &str) -> &'static str {
 /// forward only).
 fn downgrade_to_v1(area: &Area) {
     area.edit_closed(&format!(
-        "BEGIN; DROP TABLE task_dispositions; \
+        "BEGIN; ALTER TABLE tasks DROP COLUMN workspace_id; DROP TABLE task_dispositions; \
          CREATE TEMP TABLE stops AS SELECT * FROM task_stops; DROP TABLE task_stops; {} \
          INSERT INTO task_stops SELECT * FROM stops; DROP TABLE stops; \
          CREATE TEMP TABLE kept AS SELECT * FROM operations; DROP TABLE operations; {} \
@@ -2587,7 +2622,7 @@ fn a_migration_one_ledger_upgrades_behind_a_verified_backup_and_reopens() {
         Store::open(&area.path, uuid(GEN), uuid(EPOCH), false, deadline()),
         Err(Error::UpgradeRequired {
             recorded: 1,
-            current: 3
+            current: 4
         })
     ));
     assert_eq!(
@@ -2598,7 +2633,7 @@ fn a_migration_one_ledger_upgrades_behind_a_verified_backup_and_reopens() {
     let backup = Area::new();
     let upgrade =
         Store::upgrade(&area.path, uuid(GEN), uuid(EPOCH), &backup.path, deadline()).unwrap();
-    assert_eq!((upgrade.from, upgrade.to), (1, 3));
+    assert_eq!((upgrade.from, upgrade.to), (1, 4));
     let report = upgrade.backup.expect("a step was taken, so a backup was");
     assert_eq!(inspect_backup(&backup).unwrap(), report);
     assert_eq!(report.counts.get("operations"), Some(&2));
@@ -2622,7 +2657,17 @@ fn a_migration_one_ledger_upgrades_behind_a_verified_backup_and_reopens() {
         stops,
         "every stop row survives the rebuild"
     );
-    assert_eq!(user_version(&area.inspect()), 3);
+    assert_eq!(user_version(&area.inspect()), 4);
+    // Migration 4 adds `workspace_id`: every task admitted before it names no bound workspace.
+    let unbound: (i64, i64) = area
+        .inspect()
+        .query_row(
+            "SELECT count(*), count(workspace_id) FROM tasks",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(unbound, (2, 0), "two fixture tasks, neither bound");
     let store = area.reopen();
     assert_eq!(
         store
@@ -2671,7 +2716,7 @@ fn a_failed_upgrade_step_leaves_the_ledger_byte_identical() {
     let retry = Area::new();
     let upgrade =
         Store::upgrade(&area.path, uuid(GEN), uuid(EPOCH), &retry.path, deadline()).unwrap();
-    assert_eq!((upgrade.from, upgrade.to), (1, 3));
+    assert_eq!((upgrade.from, upgrade.to), (1, 4));
     assert_eq!(operations_rows(&area), rows);
 }
 
@@ -2684,7 +2729,7 @@ fn a_current_ledger_upgrades_to_itself_without_a_backup() {
     let backup = Area::new();
     let upgrade =
         Store::upgrade(&area.path, uuid(GEN), uuid(EPOCH), &backup.path, deadline()).unwrap();
-    assert_eq!((upgrade.from, upgrade.to), (3, 3));
+    assert_eq!((upgrade.from, upgrade.to), (4, 4));
     assert!(upgrade.backup.is_none());
     assert_eq!(fs::read_dir(&backup.path).unwrap().count(), 0);
     assert_eq!(fs::read(area.database()).unwrap(), before);
@@ -2697,24 +2742,24 @@ fn each_migration_chain_clause_refuses_by_its_own_name() {
     let cases: [(&str, String, Chain); 10] = [
         (
             "newer than this binary",
-            "PRAGMA user_version=4;".into(),
+            "PRAGMA user_version=5;".into(),
             Chain::Newer {
-                recorded: 4,
-                current: 3,
+                recorded: 5,
+                current: 4,
             },
         ),
         (
             "missing history row",
             "DELETE FROM migration_history WHERE version=2;".into(),
             Chain::History {
-                recorded: 3,
-                rows: 2,
+                recorded: 4,
+                rows: 3,
             },
         ),
         (
             "a gap in the versions",
-            "UPDATE migration_history SET version=4 WHERE version=3;".into(),
-            Chain::Sequence { position: 3 },
+            "UPDATE migration_history SET version=5 WHERE version=4;".into(),
+            Chain::Sequence { position: 4 },
         ),
         (
             "wrong 002 digest",
@@ -2757,7 +2802,7 @@ fn each_migration_chain_clause_refuses_by_its_own_name() {
         (
             "schema differs from applying the chain",
             "CREATE INDEX surplus ON tasks(state);".into(),
-            Chain::Schema { version: 3 },
+            Chain::Schema { version: 4 },
         ),
     ];
     for (case, edit, expected) in cases {
@@ -2774,6 +2819,7 @@ fn each_migration_chain_clause_refuses_by_its_own_name() {
 static OPERATIONS_PRESERVED: [schema::Preserved; 1] = [schema::Preserved {
     table: "operations",
     order: "principal_uid,principal_role,action,version,request_key",
+    columns: "*",
 }];
 
 /// A25 pin: a step whose migration changes a table it must preserve is refused by name and
@@ -2843,6 +2889,6 @@ fn a_migration_file_that_lost_its_pinned_body_is_refused() {
         .map(|entry| entry.unwrap().file_name().into_string().unwrap())
         .collect();
     files.sort();
-    assert_eq!(files, ["001.sql", "002.sql", "003.sql"]);
+    assert_eq!(files, ["001.sql", "002.sql", "003.sql", "004.sql"]);
     assert_eq!(files.len(), usize::try_from(schema::CURRENT).unwrap());
 }

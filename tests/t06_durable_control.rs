@@ -52,6 +52,7 @@ mod actual_store_controls {
                     task,
                     event: id("55555555-5555-4555-8555-555555555555"),
                     request_bytes: b"fixed request",
+                    workspace_id: id("66666666-6666-4666-8666-666666666666"),
                     criteria: Sha256Digest::parse(
                         "sha256:0000000000000000000000000000000000000000000000000000000000000000",
                     )

@@ -500,6 +500,7 @@ fn admit(
             task: uuid(&m.identities.task)?,
             event: uuid(&m.identities.submit_event)?,
             request_bytes: &request,
+            workspace_id: uuid("28f00000-0000-4000-8000-00000000000a")?,
             criteria: checked(Sha256Digest::parse(&criteria))?,
             allocation: Allocation {
                 limit_ms: 1_200_000,
@@ -843,6 +844,7 @@ mod cancellation_controls {
                     task: uuid(TASK).unwrap(),
                     event: uuid("c0000000-0000-4000-8000-000000000005").unwrap(),
                     request_bytes: b"preparation cancellation fixture",
+                    workspace_id: uuid("28f00000-0000-4000-8000-00000000000a").unwrap(),
                     criteria: Sha256Digest::parse(&format!("sha256:{}", "a".repeat(64))).unwrap(),
                     allocation: Allocation {
                         limit_ms: 1_200_000,
