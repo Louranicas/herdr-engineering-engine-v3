@@ -35,6 +35,8 @@ pub const REVIEWED_DIRECTORY: &str = "reviewed";
 /// A reviewed record's acquisition bound: the profile's own. The class records it holds measured
 /// 794 B (the expectation) and 8,888 B (its review provenance) in `fixed-task-execution-003`.
 pub const MAX_REVIEWED_BYTES: u64 = MAX_PROFILE_BYTES;
+// The bound holds the largest record it was measured against, at compile time.
+const _: () = assert!(MAX_REVIEWED_BYTES >= 8_888);
 
 const SCHEMA: &str = "hee3.class-profile/1";
 const CLASS: &str = "rust-library-change/1";
@@ -68,12 +70,13 @@ pub struct RuntimeFile {
 }
 
 /// The independently reviewed records a task's receipt binds (B14a-R8/R9): the expectation and its
-/// review, each named by its `sha256:` digest; the objects are in [`REVIEWED_DIRECTORY`] and are
-/// read only through [`read_reviewed`], which verifies them.
+/// review — the review provenance record, which carries the reviewer's verdict over the
+/// expectation — each as the 32 bytes of its sha256. The objects are in [`REVIEWED_DIRECTORY`] and
+/// are read through [`read_reviewed`], which returns only bytes hashing to the digest asked for.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Reviewed {
-    pub expectation: String,
-    pub review: String,
+    pub expectation: [u8; 32],
+    pub review: [u8; 32],
 }
 
 /// What a profile declares, typed and shape-checked, before any of it is used.
@@ -671,13 +674,11 @@ fn reviewed(table: &toml::Table) -> Result<Reviewed, ProfileError> {
         "reviewed",
         &["expectation_sha256", "review_sha256"],
     )?;
-    let digest = |name: &'static str| -> Result<String, ProfileError> {
-        let value = string(reviewed, "reviewed", name)?;
-        Sha256Digest::parse(&value).map_err(|_| ProfileError::Reviewed {
+    let digest = |name: &'static str| -> Result<[u8; 32], ProfileError> {
+        digest_bytes(&string(reviewed, "reviewed", name)?).ok_or(ProfileError::Reviewed {
             name,
             why: ReviewedWhy::Digest,
-        })?;
-        Ok(value)
+        })
     };
     let (expectation, review) = (digest("expectation_sha256")?, digest("review_sha256")?);
     if expectation == review {
@@ -714,8 +715,10 @@ pub enum ReviewedError {
 }
 
 /// Read the reviewed record `which` names under custody, at most [`MAX_REVIEWED_BYTES`], and return
-/// it only if its bytes hash to the digest the profile declares for it (B14a-2a). The profile's
-/// digest is the only name a caller can ask for: there is no door to read an arbitrary record.
+/// it only if its bytes hash to the digest `profile` declares for it (B14a-2a). What comes back
+/// always hashes to what was asked for; which digest is asked for is the profile's, and a profile
+/// is composed only from the file [`read`] read — a hand-built one (as tests build) can name any
+/// record in the store, never forge one.
 ///
 /// # Errors
 /// Each [`ReviewedError`], named.
@@ -724,26 +727,35 @@ pub fn read_reviewed(profile: &Profile, which: Which) -> Result<Vec<u8>, Reviewe
         Which::Expectation => &profile.declared.reviewed.expectation,
         Which::Review => &profile.declared.reviewed.review,
     };
-    let name = declared
-        .strip_prefix("sha256:")
-        .ok_or(ReviewedError::Mismatch)?;
+    let name = hex(declared);
     let held = match PrivateDirectory::open(&profile.directory.join(REVIEWED_DIRECTORY)) {
         Ok(held) => held,
         Err(DirectoryError::NotFound) => return Err(ReviewedError::NotInstalled),
         Err(DirectoryError::Custody) => return Err(ReviewedError::Custody),
         Err(DirectoryError::Io(_)) => return Err(ReviewedError::Io),
     };
-    let bytes = match held.read(name, MAX_REVIEWED_BYTES) {
+    let bytes = match held.read(&name, MAX_REVIEWED_BYTES) {
         Ok(bytes) => bytes,
         Err(FileError::NotFound) => return Err(ReviewedError::NotInstalled),
         Err(FileError::Custody) => return Err(ReviewedError::Custody),
         Err(FileError::TooLarge) => return Err(ReviewedError::TooLarge),
         Err(FileError::Io(_)) => return Err(ReviewedError::Io),
     };
-    if super::evidence::digest(&bytes) != *declared {
+    if super::evidence::digest(&bytes) != format!("sha256:{name}") {
         return Err(ReviewedError::Mismatch);
     }
     Ok(bytes)
+}
+
+/// The 64 lowercase hex of a digest's bytes: a reviewed record's file name.
+fn hex(bytes: &[u8; 32]) -> String {
+    use std::fmt::Write as _;
+    bytes
+        .iter()
+        .fold(String::with_capacity(64), |mut text, byte| {
+            let _ = write!(text, "{byte:02x}");
+            text
+        })
 }
 
 fn digest_text(pins: &toml::Table, key: &str) -> Result<String, ProfileError> {
@@ -1516,10 +1528,28 @@ review_sha256 = "{REV}"
     fn the_reviewed_table_names_two_distinct_digests() -> Result<(), ProfileError> {
         let declared = compose(valid().as_bytes())?;
         assert_eq!(
-            declared.reviewed,
-            Reviewed {
-                expectation: EXP.to_owned(),
-                review: REV.to_owned()
+            (
+                hex(&declared.reviewed.expectation),
+                hex(&declared.reviewed.review)
+            ),
+            (
+                EXP.trim_start_matches("sha256:").to_owned(),
+                REV.trim_start_matches("sha256:").to_owned()
+            )
+        );
+        assert_eq!(
+            refused(&with(&format!("expectation_sha256 = \"{EXP}\"\n"), "")),
+            ProfileError::MissingKey {
+                path: "reviewed.expectation_sha256".into()
+            }
+        );
+        assert_eq!(
+            refused(&with(
+                &format!("expectation_sha256 = \"{EXP}\""),
+                "expectation_sha256 = 1"
+            )),
+            ProfileError::WrongType {
+                path: "reviewed.expectation_sha256".into()
             }
         );
         let without = valid();
@@ -1615,11 +1645,30 @@ review_sha256 = "{REV}"
             read_reviewed(&profile, Which::Review),
             Err(ReviewedError::TooLarge)
         );
+        // A symlink under the record's name is not followed, whatever it points at.
+        assert!(fs::remove_file(store.join(name(REV))).is_ok());
+        write(&root.join("review-elsewhere"), REVIEW, 0o600);
+        assert!(
+            std::os::unix::fs::symlink(root.join("review-elsewhere"), store.join(name(REV)))
+                .is_ok()
+        );
+        assert_eq!(
+            read_reviewed(&profile, Which::Review),
+            Err(ReviewedError::Custody)
+        );
         assert!(fs::set_permissions(&store, fs::Permissions::from_mode(0o755)).is_ok());
         assert_eq!(
             read_reviewed(&profile, Which::Review),
             Err(ReviewedError::Custody)
         );
+        let _ = fs::remove_dir_all(&root);
         Ok(())
+    }
+
+    /// The reviewed bound is the reviewed decision's value (F122: pinned beside its reason, the
+    /// 794 B and 8,888 B records it must hold), not merely whatever the profile's bound becomes.
+    #[test]
+    fn the_reviewed_bound_is_sixty_four_kibibytes() {
+        assert_eq!(MAX_REVIEWED_BYTES, 65_536);
     }
 }
