@@ -411,7 +411,7 @@ fn exhausted(payload: &[u8], now_unix_ms: u64, rule: &'static str) -> Reply {
             request_sha256,
             ..
         } => Reply::Frame(fault.frame(&request_id, &request_sha256)),
-        Received::Admitted(envelope) => {
+        Received::Admitted(envelope) | Received::Expired(envelope) => {
             Reply::Frame(fault.frame(&envelope.request_id, &envelope.request_sha256))
         }
     }

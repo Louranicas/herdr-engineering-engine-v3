@@ -290,13 +290,23 @@ pub(super) fn serve(
     principal: &Principal,
     payload: &[u8],
 ) -> Result<Value, Box<dyn Error>> {
+    serve_at(tasks, principal, payload, NOW)
+}
+
+/// Serve `payload` at receiver wall time `now_unix_ms`.
+fn serve_at(
+    tasks: &StoreTasks,
+    principal: &Principal,
+    payload: &[u8],
+    now_unix_ms: u64,
+) -> Result<Value, Box<dyn Error>> {
     let composed = Composed {
         grants: &Open,
         health: None,
         tasks: Some(tasks),
         draining: None,
     };
-    match control::serve_composed(payload, NOW, principal, composed) {
+    match control::serve_composed(payload, now_unix_ms, principal, composed) {
         Reply::Frame(bytes) => Ok(serde_json::from_slice(&bytes)?),
         Reply::Close(fault) => Err(format!("closed: {}", fault.name()).into()),
     }
@@ -1418,5 +1428,226 @@ fn a_cancel_of_a_task_that_already_stopped_is_refused() -> Outcome {
     );
     assert_eq!(head_of(&tasks, &operator, &task)?, before);
     conforms(&[("task.cancel", &refused)])?;
+    Ok(())
+}
+
+// --- B05 deferred (a) · RC03 §6: "For an already-recorded key, return its stored disposition even if
+// the original deadline has since passed; this is readback, not new execution." ------------------
+
+/// The request frames carry `deadline_unix_ms = NOW + 5_000`: at that instant the deadline has passed
+/// (the wire's rule is `deadline <= now`), and an hour later it is far outside any admitted window.
+const AT_DEADLINE: u64 = NOW + 5_000;
+const AN_HOUR_LATE: u64 = NOW + 3_600_000;
+
+/// B05 (a): an exact replay after its deadline answers the stored result -- the whole frame the first
+/// reply carried, with `replayed: true` -- for both actions that record one. A submit's engine cursor
+/// is issued at the replay's own receipt, as it is on a replay inside the deadline.
+#[test]
+fn an_exact_replay_after_its_deadline_returns_the_stored_result() -> Outcome {
+    let scratch = Scratch::new()?;
+    let tasks = ledger(&scratch)?;
+    let operator = Principal::new(1000, "operator").map_err(|error| format!("{error:?}"))?;
+    let submit = request("task.submit", 1, Some(KEY), &json!({"spec": spec()}));
+    let first = serve(&tasks, &operator, &submit)?;
+    assert_eq!(first["replayed"], json!(false), "{first}");
+    let task = first["body"]["task"]["task_id"]
+        .as_str()
+        .ok_or("task id")?
+        .to_owned();
+    let cancel = cancel_frame(
+        2,
+        CANCEL_KEY,
+        &task,
+        "1",
+        &json!({"reason": "deadline", "note": "past its window"}),
+    )?;
+    let cancelled = serve(&tasks, &operator, &cancel)?;
+    assert_eq!(
+        (&cancelled["replayed"], &cancelled["observed_generation"]),
+        (&json!(false), &json!("2")),
+        "{cancelled}"
+    );
+    let mut replies = vec![
+        ("task.submit", first.clone()),
+        ("task.cancel", cancelled.clone()),
+    ];
+    for now in [AT_DEADLINE, AN_HOUR_LATE] {
+        let mut expected = first.clone();
+        expected["replayed"] = json!(true);
+        expected["body"]["engine_cursor"]["issued_unix_ms"] = json!(now.to_string());
+        expected["body"]["engine_cursor"]["expires_unix_ms"] =
+            json!((now + 86_400_000).to_string());
+        let again = serve_at(&tasks, &operator, &submit, now)?;
+        assert_eq!(again, expected, "task.submit replayed at {now}");
+        replies.push(("task.submit", again));
+        let mut expected = cancelled.clone();
+        expected["replayed"] = json!(true);
+        let again = serve_at(&tasks, &operator, &cancel, now)?;
+        assert_eq!(again, expected, "task.cancel replayed at {now}");
+        replies.push(("task.cancel", again));
+    }
+    // A replay is readback, not new execution: the task did not move.
+    assert_eq!(
+        head_of(&tasks, &operator, &task)?,
+        cancelled["body"]["task"]
+    );
+    let rows: Vec<(&str, &Value)> = replies
+        .iter()
+        .map(|(action, reply)| (*action, reply))
+        .collect();
+    conforms(&rows)?;
+    Ok(())
+}
+
+/// Expired requests that are not an exact replay of a recorded one, each with the action it names
+/// and the principal that sends it, after `task` was submitted under `KEY` and cancelled under
+/// `CANCEL_KEY` to generation 2.
+type Case<'a> = (&'static str, &'static str, &'a Principal, Vec<u8>);
+
+fn expired_cases<'a>(
+    task: &str,
+    operator: &'a Principal,
+    other: &'a Principal,
+) -> Result<Vec<Case<'a>>, Box<dyn Error>> {
+    let why = json!({"reason": "operator_request", "note": null});
+    Ok(vec![
+        (
+            "unseen submit key",
+            "task.submit",
+            operator,
+            request(
+                "task.submit",
+                3,
+                Some(CANCEL_KEY_2),
+                &json!({"spec": spec()}),
+            ),
+        ),
+        (
+            "other bytes under a recorded submit key",
+            "task.submit",
+            operator,
+            request("task.submit", 4, Some(KEY), &json!({"spec": spec()})),
+        ),
+        (
+            "another principal's recorded submit",
+            "task.submit",
+            other,
+            request("task.submit", 1, Some(KEY), &json!({"spec": spec()})),
+        ),
+        (
+            "unseen cancel key",
+            "task.cancel",
+            operator,
+            cancel_frame(5, CANCEL_KEY_2, task, "2", &why)?,
+        ),
+        (
+            "other bytes under a recorded cancel key",
+            "task.cancel",
+            operator,
+            cancel_frame(6, CANCEL_KEY, task, "2", &why)?,
+        ),
+        (
+            "another action's recorded key",
+            "task.cancel",
+            operator,
+            cancel_frame(8, KEY, task, "2", &why)?,
+        ),
+        (
+            "no idempotency key",
+            "task.submit",
+            operator,
+            request("task.submit", 9, None, &json!({"spec": spec()})),
+        ),
+        (
+            "a body that is not an object",
+            "task.submit",
+            operator,
+            request("task.submit", 10, Some(CANCEL_KEY_2), &json!(1)),
+        ),
+        (
+            "a read",
+            "task.get",
+            operator,
+            request(
+                "task.get",
+                7,
+                None,
+                &json!({"selector": {"task_id": task}, "evidence": "none"}),
+            ),
+        ),
+    ])
+}
+
+/// B05 (a), the other half of the rule: an expired request that is NOT an exact replay of a recorded
+/// one is refused `deadline_exceeded` before dispatch, as before -- an unseen key, other bytes under a
+/// recorded key, another principal's recorded key, another action's recorded key, a read, a request
+/// the catalogue would refuse and one malformed past its deadline -- and nothing is written. A key is
+/// bound per action (RC03 §6), so a live cancel under the submit's key then commits.
+#[test]
+fn an_expired_request_that_is_not_a_recorded_replay_is_refused_and_writes_nothing() -> Outcome {
+    let scratch = Scratch::new()?;
+    let tasks = ledger(&scratch)?;
+    let operator = Principal::new(1000, "operator").map_err(|error| format!("{error:?}"))?;
+    let other = Principal::new(1001, "operator").map_err(|error| format!("{error:?}"))?;
+    let task = submitted(&tasks, &operator)?;
+    let why = json!({"reason": "operator_request", "note": null});
+    let recorded = cancel_frame(2, CANCEL_KEY, &task, "1", &why)?;
+    let cancelled = serve(&tasks, &operator, &recorded)?;
+    assert_eq!(cancelled["observed_generation"], json!("2"), "{cancelled}");
+    let cases = expired_cases(&task, &operator, &other)?;
+    let mut replies = Vec::new();
+    for (case, action, principal, frame) in &cases {
+        let refused = serve_at(&tasks, principal, frame, AN_HOUR_LATE)?;
+        assert_eq!(
+            (
+                &refused["kind"],
+                &refused["code"],
+                &refused["effect"],
+                &refused["details"]["field"]
+            ),
+            (
+                &json!("error"),
+                &json!("deadline_exceeded"),
+                &json!("none"),
+                &json!("/deadline_unix_ms")
+            ),
+            "{case}: {refused}"
+        );
+        replies.push((*action, refused));
+    }
+    // Nothing was written: the task is where the cancel left it, and the unseen submit key names no
+    // task -- read back inside a live window.
+    assert_eq!(
+        head_of(&tasks, &operator, &task)?,
+        cancelled["body"]["task"]
+    );
+    let by_key = serve(
+        &tasks,
+        &operator,
+        &request(
+            "task.get",
+            8,
+            None,
+            &json!({"selector": {"source_action": "task.submit", "idempotency_key": CANCEL_KEY_2},
+                    "evidence": "none"}),
+        ),
+    )?;
+    assert_eq!(by_key["code"], json!("not_found"), "{by_key}");
+    let live = serve(&tasks, &operator, &cancel_frame(11, KEY, &task, "2", &why)?)?;
+    assert_eq!(
+        (
+            &live["effect"],
+            &live["replayed"],
+            &live["observed_generation"]
+        ),
+        (&json!("committed"), &json!(false), &json!("2")),
+        "{live}"
+    );
+    replies.push(("task.cancel", live));
+    let rows: Vec<(&str, &Value)> = replies
+        .iter()
+        .map(|(action, reply)| (*action, reply))
+        .collect();
+    conforms(&rows)?;
     Ok(())
 }

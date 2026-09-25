@@ -596,6 +596,19 @@ impl Fault {
         }
     }
 
+    /// `deadline_exceeded` at `/deadline_unix_ms`: the request's deadline had passed at receipt, and
+    /// it is not an exact replay of a recorded request (RC03 §6: an unseen expired request is refused
+    /// before dispatch). The one spelling of this refusal, for the wire and the catalogue alike.
+    #[must_use]
+    pub const fn expired() -> Self {
+        Self::of(
+            ErrorCode::DeadlineExceeded,
+            Retry::Never,
+            "the request deadline has passed",
+        )
+        .at("/deadline_unix_ms")
+    }
+
     /// `stale_generation` at `field`: the precondition names a generation the resource has moved
     /// past, and `current` is the one the caller can now see (RC03 §6: "with current visible
     /// generation where authorized"). `retry: never`, because a generation only grows: the same
@@ -784,7 +797,8 @@ pub struct Envelope {
     pub action_version: u64,
     /// The idempotency key, when one was sent.
     pub idempotency_key: Option<String>,
-    /// The deadline, already inside the admitted window.
+    /// The deadline: inside the admitted window in [`Received::Admitted`], passed in
+    /// [`Received::Expired`].
     pub deadline_unix_ms: u64,
     /// The server-side grant the request is made under.
     pub grant_id: String,
@@ -812,6 +826,11 @@ pub enum Received {
     },
     /// An envelope ready for the catalogue.
     Admitted(Envelope),
+    /// A well-formed envelope whose deadline had passed at receipt. RC03 §6: it may be answered only
+    /// as the readback of a request already recorded under its key; anything else is refused
+    /// [`Fault::expired`] before dispatch. A variant of its own, so no consumer can dispatch one by
+    /// matching on `Admitted`.
+    Expired(Envelope),
 }
 
 const ENVELOPE_MEMBERS: [&str; 11] = [
@@ -848,6 +867,9 @@ pub fn receive(payload: &[u8], now_unix_ms: u64) -> Received {
     };
     let request_sha256 = request_sha256(payload);
     match envelope(&members, now_unix_ms) {
+        Ok(parts) if parts.expired => {
+            Received::Expired(parts.identified(request_id, request_sha256))
+        }
         Ok(parts) => Received::Admitted(parts.identified(request_id, request_sha256)),
         Err(fault) => Received::Refused {
             request_id: request_id.to_owned(),
@@ -859,6 +881,7 @@ pub fn receive(payload: &[u8], now_unix_ms: u64) -> Received {
 
 /// An envelope's members before the identity it is correlated by is attached.
 struct Parts {
+    expired: bool,
     action: String,
     action_version: u64,
     idempotency_key: Option<String>,
@@ -936,29 +959,32 @@ fn envelope(members: &Map<String, Value>, now_unix_ms: u64) -> Result<Parts, Fau
         .as_str()
         .and_then(|text| parse_u64_decimal(text).ok())
         .ok_or(Fault::invalid("/deadline_unix_ms", "U64Decimal"))?;
-    if deadline_unix_ms <= now_unix_ms {
-        return Err(Fault::of(
-            ErrorCode::DeadlineExceeded,
-            Retry::Never,
-            "the request deadline has passed",
-        )
-        .at("/deadline_unix_ms"));
-    }
-    if deadline_unix_ms - now_unix_ms > MAX_DEADLINE_AHEAD_MS {
+    let expired = deadline_unix_ms <= now_unix_ms;
+    if !expired && deadline_unix_ms - now_unix_ms > MAX_DEADLINE_AHEAD_MS {
         return Err(Fault::invalid(
             "/deadline_unix_ms",
             "at most 60000 ms after receipt",
         ));
     }
-    let (grant_id, scope_sha256) = authority(&members["authority"])?;
-    let precondition = match &members["precondition"] {
-        Value::Null => None,
-        value => Some(precondition(value)?),
-    };
-    let Value::Object(body) = &members["body"] else {
-        return Err(Fault::invalid("/body", "object"));
+    // An expired request is read whole, because an exact replay is answered from its record; one
+    // that is malformed past its deadline is refused for the deadline, as the order above says.
+    let tail = authority(&members["authority"]).and_then(|(grant_id, scope_sha256)| {
+        let precondition = match &members["precondition"] {
+            Value::Null => None,
+            value => Some(precondition(value)?),
+        };
+        let Value::Object(body) = &members["body"] else {
+            return Err(Fault::invalid("/body", "object"));
+        };
+        Ok((grant_id, scope_sha256, precondition, body))
+    });
+    let (grant_id, scope_sha256, precondition, body) = match tail {
+        Ok(tail) => tail,
+        Err(_) if expired => return Err(Fault::expired()),
+        Err(fault) => return Err(fault),
     };
     Ok(Parts {
+        expired,
         action: action.to_owned(),
         action_version,
         idempotency_key,

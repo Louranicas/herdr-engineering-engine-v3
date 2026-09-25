@@ -1027,10 +1027,7 @@ impl Store {
         let fault = self.fault();
         let epoch = self.epoch.clone();
         self.transaction(deadline, |tx| {
-            let prior: Option<(String, Vec<u8>)> = tx.query_row(
-                "SELECT request_digest,result FROM operations WHERE principal_uid=? AND principal_role=? AND action='task.submit' AND version=1 AND request_key=?",
-                params![input.principal.uid(),input.principal.role(),input.key.as_str()], |row| Ok((row.get(0)?,row.get(1)?))).optional()?;
-            if let Some((prior_digest, result)) = prior {
+            if let Some((prior_digest, result)) = recorded(tx, input.principal, "task.submit", input.key)? {
                 if prior_digest != request_digest { return Err(Error::Conflict); }
                 return Ok(serde_json::from_slice(&result)?);
             }
@@ -1043,6 +1040,50 @@ impl Store {
                 params![input.principal.uid(),input.principal.role(),input.key.as_str(),request_digest,input.task.as_str(),serde_json::to_vec(&result)?])?;
             Ok(result)
         })
+    }
+
+    /// RC03 §6 readback of an exact `task.submit` replay: the admission stored under (principal,
+    /// `task.submit`, v1, key) when `request_bytes` are the bytes it recorded, else `None` -- other
+    /// bytes under the key are not a replay. Reads only, so it answers after the request's deadline.
+    /// # Errors
+    /// A ledger read failure or a stored result outside its own contract.
+    pub fn replayed_submit(
+        &self,
+        principal: &Principal,
+        key: UuidV4<'_>,
+        request_bytes: &[u8],
+        deadline: Instant,
+    ) -> Result<Option<Admission>> {
+        self.replayed("task.submit", principal, key, request_bytes, deadline)
+    }
+
+    /// RC03 §6 readback of an exact `task.cancel` replay; [`Store::replayed_submit`]'s rule.
+    /// # Errors
+    /// A ledger read failure or a stored result outside its own contract.
+    pub fn replayed_cancel(
+        &self,
+        principal: &Principal,
+        key: UuidV4<'_>,
+        request_bytes: &[u8],
+        deadline: Instant,
+    ) -> Result<Option<Cancellation>> {
+        self.replayed("task.cancel", principal, key, request_bytes, deadline)
+    }
+
+    fn replayed<T: serde::de::DeserializeOwned>(
+        &self,
+        action: &'static str,
+        principal: &Principal,
+        key: UuidV4<'_>,
+        request_bytes: &[u8],
+        deadline: Instant,
+    ) -> Result<Option<T>> {
+        schema::bound(&self.connection, deadline)?;
+        let request_digest = digest(request_bytes);
+        recorded(&self.connection, principal, action, key)?
+            .filter(|(prior_digest, _)| *prior_digest == request_digest)
+            .map(|(_, result)| serde_json::from_slice(&result).map_err(Error::from))
+            .transpose()
     }
 
     /// Recover admission using values known before a possibly lost first reply.
@@ -1170,10 +1211,7 @@ impl Store {
         }
         let request_digest = digest(input.request_bytes);
         self.transaction(deadline, |tx| {
-            let prior: Option<(String, Vec<u8>)> = tx.query_row(
-                "SELECT request_digest,result FROM operations WHERE principal_uid=? AND principal_role=? AND action='task.cancel' AND version=1 AND request_key=?",
-                params![input.principal.uid(),input.principal.role(),input.key.as_str()], |row| Ok((row.get(0)?,row.get(1)?))).optional()?;
-            if let Some((prior_digest, result)) = prior {
+            if let Some((prior_digest, result)) = recorded(tx, input.principal, "task.cancel", input.key)? {
                 if prior_digest != request_digest { return Err(Error::Conflict); }
                 return Ok((serde_json::from_slice(&result)?, true));
             }
@@ -1559,6 +1597,21 @@ fn request_cancellation(
 /// accepted, or its terminal stop committed (a `task_stops` row). A verification that ended the task
 /// `failed` is NOT a terminal commit: a cancellation recorded before the stop wins, and the stop
 /// records `cancelled` (T06, `cancellation_after_failed_verification_wins_before_terminal_commit`).
+/// The (request digest, stored result) bound to (principal, `action`, v1, key), if any: the one read
+/// of the idempotency record, for a live request and for the readback of an expired one alike.
+fn recorded(
+    connection: &Connection,
+    principal: &Principal,
+    action: &'static str,
+    key: UuidV4<'_>,
+) -> Result<Option<(String, Vec<u8>)>> {
+    Ok(connection.query_row(
+        "SELECT request_digest,result FROM operations WHERE principal_uid=? AND principal_role=? AND action=? AND version=1 AND request_key=?",
+        params![principal.uid(), principal.role(), action, key.as_str()],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    ).optional()?)
+}
+
 fn outcome_decided(tx: &Transaction<'_>, head: &TaskHead) -> Result<bool> {
     if head.accepted_event.is_some() {
         return Ok(true);

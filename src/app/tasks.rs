@@ -23,15 +23,20 @@
 //!   principal's own door before its generation (an invisible task names none). The result names
 //!   the intent's obligation and what the cancel found of the worker; a lost commit reads back by
 //!   `task.get` on the precondition's task.
+//! * **A recorded request answers after its deadline (RC03 §6).** An expired envelope reaches this
+//!   owner only through [`Tasks::replay`], which reads the stored result of an exact replay (same
+//!   principal, key and bytes) and writes nothing; anything else is refused `deadline_exceeded` by
+//!   the catalogue. The first reply and every replay are rendered by one function per action.
 
-use crate::actions::control::{TaskRequest, Tasks};
+use crate::actions::control::{Recorded, TaskRequest, Tasks};
 use crate::app::evidence::fresh_id;
 use crate::contracts::control::{
     ErrorCode, Fault, Outcome, Precondition, ResultEffect, Retry, request_sha256,
 };
 use crate::contracts::{Sha256Digest, UuidV4};
 use crate::store::{
-    Allocation, CancelIntent, Error as StoreError, Principal, Store, Submission, TaskHead,
+    Admission, Allocation, CancelIntent, Cancellation, Error as StoreError, Principal, Store,
+    Submission, TaskHead,
 };
 use crate::task::control::{Cancel, Selector, Spec};
 use serde_json::{Value, json};
@@ -74,6 +79,59 @@ impl StoreTasks {
             "expires_unix_ms": now_unix_ms.saturating_add(ENGINE_CURSOR_LIFETIME_MS).to_string(),
         })
     }
+
+    /// The `task.submit` result for a stored admission: the one rendering of a first reply and of
+    /// every replay of it.
+    fn admitted(
+        &self,
+        admission: &Admission,
+        idempotency_key: &str,
+        now_unix_ms: u64,
+        replayed: bool,
+    ) -> Result<Outcome, Fault> {
+        UuidV4::parse(&admission.task).map_err(|_| internal())?;
+        Ok(Outcome {
+            effect: ResultEffect::Committed,
+            replayed,
+            observed_generation: Some(admission.generation.clone()),
+            readback: Some(submit_readback(idempotency_key)),
+            body: json!({
+                "task": {
+                    "task_id": admission.task,
+                    "generation": admission.generation,
+                    "state": "admitted",
+                    "current_attempt_id": null,
+                    "unresolved_obligations": 0,
+                },
+                "engine_cursor": self.cursor(admission.sequence, &admission.task, now_unix_ms),
+            }),
+        })
+    }
+}
+
+/// The `task.cancel` result for a stored cancellation: the one rendering of a first reply and of
+/// every replay of it.
+fn cancelled(record: &Cancellation, replayed: bool) -> Result<Outcome, Fault> {
+    UuidV4::parse(&record.task).map_err(|_| internal())?;
+    UuidV4::parse(&record.obligation).map_err(|_| internal())?;
+    let obligations = u32::try_from(record.unresolved_obligations).map_err(|_| internal())?;
+    Ok(Outcome {
+        effect: ResultEffect::Committed,
+        replayed,
+        observed_generation: Some(record.generation.clone()),
+        readback: Some(cancel_readback(&record.task)),
+        body: json!({
+            "task": {
+                "task_id": record.task,
+                "generation": record.generation,
+                "state": record.state,
+                "current_attempt_id": record.current_attempt,
+                "unresolved_obligations": obligations,
+            },
+            "cancellation_obligation_id": record.obligation,
+            "worker_settlement": record.worker_settlement,
+        }),
+    })
 }
 
 /// The receiver's remaining deadline as a monotonic instant.
@@ -222,23 +280,12 @@ impl Tasks for StoreTasks {
                 other => store_fault(&other),
             })?;
         drop(store);
-        UuidV4::parse(&admission.task).map_err(|_| internal())?;
-        Ok(Outcome {
-            effect: ResultEffect::Committed,
+        self.admitted(
+            &admission,
+            request.idempotency_key,
+            request.now_unix_ms,
             replayed,
-            observed_generation: Some(admission.generation.clone()),
-            readback: Some(submit_readback(request.idempotency_key)),
-            body: json!({
-                "task": {
-                    "task_id": admission.task,
-                    "generation": admission.generation,
-                    "state": "admitted",
-                    "current_attempt_id": null,
-                    "unresolved_obligations": 0,
-                },
-                "engine_cursor": self.cursor(admission.sequence, &admission.task, request.now_unix_ms),
-            }),
-        })
+        )
     }
 
     fn get(
@@ -358,26 +405,36 @@ impl Tasks for StoreTasks {
                 other => store_fault(&other),
             })?;
         drop(store);
-        UuidV4::parse(&record.task).map_err(|_| internal())?;
-        UuidV4::parse(&record.obligation).map_err(|_| internal())?;
-        let obligations = u32::try_from(record.unresolved_obligations).map_err(|_| internal())?;
-        Ok(Outcome {
-            effect: ResultEffect::Committed,
-            replayed,
-            observed_generation: Some(record.generation.clone()),
-            readback: Some(cancel_readback(&record.task)),
-            body: json!({
-                "task": {
-                    "task_id": record.task,
-                    "generation": record.generation,
-                    "state": record.state,
-                    "current_attempt_id": record.current_attempt,
-                    "unresolved_obligations": obligations,
-                },
-                "cancellation_obligation_id": record.obligation,
-                "worker_settlement": record.worker_settlement,
-            }),
-        })
+        cancelled(&record, replayed)
+    }
+
+    fn replay(&self, request: &TaskRequest<'_>, of: Recorded) -> Result<Option<Outcome>, Fault> {
+        let until = deadline(request.deadline_unix_ms, request.now_unix_ms);
+        let key = UuidV4::parse(request.idempotency_key)
+            .map_err(|_| Fault::invalid("/idempotency_key", "UuidV4"))?;
+        let store = self
+            .store
+            .lock()
+            .map_err(|_| unavailable("the ledger's owner panicked"))?;
+        match of {
+            Recorded::Submit => store
+                .replayed_submit(request.principal, key, request.payload, until)
+                .map_err(|error| store_fault(&error))?
+                .map(|admission| {
+                    self.admitted(
+                        &admission,
+                        request.idempotency_key,
+                        request.now_unix_ms,
+                        true,
+                    )
+                })
+                .transpose(),
+            Recorded::Cancel => store
+                .replayed_cancel(request.principal, key, request.payload, until)
+                .map_err(|error| store_fault(&error))?
+                .map(|record| cancelled(&record, true))
+                .transpose(),
+        }
     }
 }
 

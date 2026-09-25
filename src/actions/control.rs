@@ -80,10 +80,33 @@ pub struct TaskRequest<'a> {
     pub idempotency_key: &'a str,
     /// The request's exact bytes: the durable replay digest names these (RC03 §6).
     pub payload: &'a [u8],
-    /// The request deadline, already inside the admitted window.
+    /// The request deadline, already inside the admitted window. For the readback of an expired
+    /// request's record ([`Tasks::replay`]) it is the widest window the wire admits, from receipt.
     pub deadline_unix_ms: u64,
     /// Receiver wall time at receipt.
     pub now_unix_ms: u64,
+}
+
+/// The actions whose owner records a result under the idempotency key, so that an exact replay can
+/// be answered from the record after the request's deadline (RC03 §6).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Recorded {
+    /// `task.submit`.
+    Submit,
+    /// `task.cancel`.
+    Cancel,
+}
+
+impl Recorded {
+    /// The recorded kind of catalogue action `id`, or `None` for an action that records nothing.
+    #[must_use]
+    pub fn of(id: &str) -> Option<Self> {
+        match id {
+            "task.submit" => Some(Self::Submit),
+            "task.cancel" => Some(Self::Cancel),
+            _ => None,
+        }
+    }
 }
 
 /// The task owner behind the receiver: admission and readback through the ledger.
@@ -123,6 +146,15 @@ pub trait Tasks {
         target: &Precondition,
         body: &task_body::Cancel,
     ) -> Result<Outcome, Fault>;
+
+    /// RC03 §6 readback: the stored result, with `replayed: true`, when `request` is an exact replay
+    /// of a recorded `of` request -- the same principal, key and exact bytes -- or `None` when it is
+    /// not (an unseen key, or other bytes under it). Nothing is written.
+    ///
+    /// # Errors
+    ///
+    /// `unavailable` when the ledger cannot be read.
+    fn replay(&self, request: &TaskRequest<'_>, of: Recorded) -> Result<Option<Outcome>, Fault>;
 }
 
 /// What the coordinator has composed behind the receiver: the grant store, the health it observed
@@ -188,6 +220,16 @@ pub fn serve_composed(
             fault,
         } => return Reply::Frame(fault.frame(&request_id, &request_sha256)),
         Received::Admitted(envelope) => envelope,
+        Received::Expired(envelope) => {
+            return Reply::Frame(
+                match replay_expired(&envelope, payload, now_unix_ms, principal, composed) {
+                    Ok(outcome) => {
+                        result_frame(&envelope.request_id, &envelope.request_sha256, &outcome)
+                    }
+                    Err(fault) => fault.frame(&envelope.request_id, &envelope.request_sha256),
+                },
+            );
+        }
     };
     let context = Context {
         envelope: &envelope,
@@ -202,6 +244,42 @@ pub fn serve_composed(
         Ok(outcome) => result_frame(&envelope.request_id, &envelope.request_sha256, &outcome),
         Err(fault) => fault.frame(&envelope.request_id, &envelope.request_sha256),
     })
+}
+
+/// An envelope whose deadline passed before receipt (RC03 §6). Only an exact replay of a request the
+/// owner recorded is answered, from that record; everything else -- an unseen key, other bytes under
+/// a recorded key, an action that records nothing, a request the catalogue or the grant refuses --
+/// is refused [`Fault::expired`] before dispatch, exactly as the wire refused it before replay was
+/// possible. The grant is still resolved: a stored result is read only for the principal and grant
+/// that may read it. The record's read is bounded by the widest window the wire admits.
+fn replay_expired(
+    envelope: &Envelope,
+    payload: &[u8],
+    now_unix_ms: u64,
+    principal: &Principal,
+    composed: Composed<'_>,
+) -> Result<Outcome, Fault> {
+    let (action, _) =
+        admit(envelope, now_unix_ms, principal, composed.grants).map_err(|_| Fault::expired())?;
+    let (Some(of), Some(tasks), Some(key)) = (
+        Recorded::of(action.id),
+        composed.tasks,
+        envelope.idempotency_key.as_deref(),
+    ) else {
+        return Err(Fault::expired());
+    };
+    tasks
+        .replay(
+            &TaskRequest {
+                principal,
+                idempotency_key: key,
+                payload,
+                deadline_unix_ms: now_unix_ms.saturating_add(MAX_DEADLINE_AHEAD_MS),
+                now_unix_ms,
+            },
+            of,
+        )?
+        .ok_or_else(Fault::expired)
 }
 
 fn admit(
