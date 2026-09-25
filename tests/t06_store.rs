@@ -725,46 +725,67 @@ fn a_cancellation_is_named_before_the_generation_it_bumped() {
     no_delivery(&store);
 }
 
-/// B14a-1a cargo-mutants survivor (`||` → `&&` in `accept`). No door today moves a `verifying`,
-/// uncancelled task's generation or criteria (each other writer sets cancellation, changes the state
-/// or needs a decided outcome), so the compare-and-set is the defence against the next writer. Its
-/// contract is pinned on an injected ledger: either half moved alone refuses `Conflict`.
+/// B14a-1a cargo-mutants survivor (`||` → `&&` in `accept`), generation half, through real doors
+/// (re-review G1): an acceptance prepared at generation 3, then a passing verification moves the
+/// task to generation 4 — still `verifying`, uncancelled and undecided — and the stale acceptance
+/// is refused `Conflict` with nothing written.
 #[test]
-fn an_acceptance_refuses_a_moved_generation_or_criteria_alone() {
-    for column in ["generation='5'", "criteria_digest='sha256:{}'"] {
-        let (area, mut store, evidence) = ready();
-        record(&mut store, &evidence, VerificationVerdict::Passed);
-        let prepared = proof(&store, &evidence, "4");
-        let db = rusqlite::Connection::open(
-            area.path
-                .join("generations")
-                .join(GEN)
-                .join("ledger.sqlite3"),
+fn an_acceptance_prepared_before_a_verification_is_stale() {
+    let (_area, mut store, evidence) = ready();
+    let prepared = store
+        .prepare_acceptance(
+            &expected("3"),
+            id(ACCEPTED),
+            std::slice::from_ref(&evidence),
+            deadline(),
         )
         .unwrap();
-        let set = column.replace("{}", &"b".repeat(64));
-        assert_eq!(
-            db.execute(&format!("UPDATE tasks SET {set} WHERE id='{TASK}'"), [])
-                .unwrap(),
-            1
-        );
-        drop(db);
-        let before = head(&store);
-        assert!(!before.cancellation && before.state == "verifying");
-        assert!(
-            matches!(
-                store.accept(&prepared, 0, deadline()),
-                Err(habitat_engine::store::Error::Conflict)
-            ),
-            "{set}"
-        );
-        assert_eq!(
-            head(&store),
-            before,
-            "{set}: a stale acceptance writes nothing"
-        );
-        no_delivery(&store);
-    }
+    assert_eq!(
+        record(&mut store, &evidence, VerificationVerdict::Passed),
+        "4"
+    );
+    let before = head(&store);
+    assert!(!before.cancellation && before.state == "verifying" && before.accepted_event.is_none());
+    assert!(matches!(
+        store.accept(&prepared, 0, deadline()),
+        Err(habitat_engine::store::Error::Conflict)
+    ));
+    assert_eq!(head(&store), before, "a stale acceptance writes nothing");
+    no_delivery(&store);
+}
+
+/// The same survivor, criteria half. No door updates `criteria_digest`, so the compare-and-set's
+/// criteria half is the defence against the next writer; it is pinned on an injected ledger.
+#[test]
+fn an_acceptance_refuses_moved_criteria() {
+    let (area, mut store, evidence) = ready();
+    record(&mut store, &evidence, VerificationVerdict::Passed);
+    let prepared = proof(&store, &evidence, "4");
+    let db = rusqlite::Connection::open(
+        area.path
+            .join("generations")
+            .join(GEN)
+            .join("ledger.sqlite3"),
+    )
+    .unwrap();
+    let moved = format!("sha256:{}", "b".repeat(64));
+    assert_eq!(
+        db.execute(
+            "UPDATE tasks SET criteria_digest=? WHERE id=?",
+            [moved.as_str(), TASK]
+        )
+        .unwrap(),
+        1
+    );
+    drop(db);
+    let before = head(&store);
+    assert!(!before.cancellation && before.state == "verifying");
+    assert!(matches!(
+        store.accept(&prepared, 0, deadline()),
+        Err(habitat_engine::store::Error::Conflict)
+    ));
+    assert_eq!(head(&store), before, "a stale acceptance writes nothing");
+    no_delivery(&store);
 }
 
 #[test]

@@ -2161,7 +2161,7 @@ fn a_bound_task_refuses_an_unbound_attempt() {
             uuid(TASK),
             generation(3),
             uuid(BIND_OTHER),
-            uuid(STARTED),
+            uuid(BIND_RESTARTED),
             deadline()
         ),
         Err(Error::Conflict)
@@ -2200,6 +2200,7 @@ fn an_unbound_task_refuses_a_bound_attempt() {
     let mut second = bound_start(&owner, &profile.head, &selections);
     second.expected = generation(3);
     second.attempt = uuid(BIND_OTHER);
+    second.event = uuid(BIND_RESTARTED);
     assert!(matches!(
         store.begin_bound_attempt(second, &binding(), deadline()),
         Err(Error::Conflict)
@@ -2219,8 +2220,9 @@ fn an_unbound_task_refuses_a_bound_attempt() {
     );
 }
 
-/// B14a-1a · a cancelled task is named `Cancelled` at the wrong begin door too: cancellation is
-/// checked before the mixing rule, which would otherwise answer `Conflict` (review F3).
+/// B14a-1a · a cancelled task is named `Cancelled` at the wrong begin door too, in both directions:
+/// cancellation is checked before the mixing rule, which would otherwise answer `Conflict` (review
+/// F3; re-review G2 added the bound task at the plain door).
 #[test]
 fn a_cancelled_task_meets_either_begin_door_as_cancelled() {
     let owner = principal();
@@ -2245,6 +2247,38 @@ fn a_cancelled_task_meets_either_begin_door_as_cancelled() {
     second.event = uuid(BIND_RESTARTED);
     assert!(matches!(
         store.begin_bound_attempt(second, &binding(), deadline()),
+        Err(Error::Cancelled)
+    ));
+    assert_eq!(ledger(&area), before, "a refused begin writes nothing");
+
+    // A cancelled bound task at the plain door.
+    let area = Area::new();
+    let mut store = area.open();
+    clock(&mut store, 100);
+    let profile = create(&mut store, 1);
+    observe(&mut store, &profile.head);
+    admit(&mut store);
+    let selections = [choose(&profile.head)];
+    store
+        .begin_bound_attempt(
+            bound_start(&owner, &profile.head, &selections),
+            &binding(),
+            deadline(),
+        )
+        .unwrap();
+    repair_pending(&mut store);
+    store
+        .cancel(uuid(TASK), generation(3), uuid(BIND_CANCELLED), deadline())
+        .unwrap();
+    let before = ledger(&area);
+    assert!(matches!(
+        store.begin_attempt(
+            uuid(TASK),
+            generation(4),
+            uuid(BIND_OTHER),
+            uuid(BIND_RESTARTED),
+            deadline()
+        ),
         Err(Error::Cancelled)
     ));
     assert_eq!(ledger(&area), before, "a refused begin writes nothing");
