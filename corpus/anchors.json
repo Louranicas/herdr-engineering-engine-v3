@@ -54716,8 +54716,8 @@
       "bytes": 6019
     },
     "tools/check-quality": {
-      "sha256": "1b2ae5177fe674f789bbfe6b03eb14c07ddb7861689f7c0154a14b9493852d31",
-      "bytes": 82044
+      "sha256": "bc8fb23896032aabf9055ef66d7920bcd51aa114e55fcb0341bc7af8274f6f17",
+      "bytes": 82860
     },
     "tools/development_process.py": {
       "sha256": "e76e3a794193e5df7ee96fabf700113d718527745a0f9a9dba1e04fd5c7baaf3",
@@ -54728,8 +54728,8 @@
       "bytes": 10433
     },
     "tests/t25_quality.py": {
-      "sha256": "f5ab12efaf74aee92e6e53cf5494c26d490c6923b47a0b2bbe47538f65b296f6",
-      "bytes": 144820
+      "sha256": "54eae2d4e1a17eef895bf3f80f2d11163e462ce49dd8d5aeb2ceb5d19f158d04",
+      "bytes": 145124
     },
     "julia/Manifest.toml": {
       "sha256": "097d5028df4e1667a970a8297d41eedb908e0319a0b4154c7ec12548140a9f79",
@@ -55480,8 +55480,8 @@
       "bytes": 10139
     },
     "tools/check-store-mutations": {
-      "sha256": "edc768a9f0d033a372fafd79ef0189e9576e9ea5bbf6e3ef6bc578e6bb86c268",
-      "bytes": 19330
+      "sha256": "e49dc1220576278ff890ba46b9888947ab499a1b69ef78df604224ff19a56310",
+      "bytes": 19730
     },
     "tools/sqlite-inputs/sqlite-amalgamation-3530400.zip": {
       "sha256": "1e71ddf93849c6a6ecf58b827c0692073d2dd7ee40196158068f7b29f422e87d",
@@ -55588,8 +55588,8 @@
       "bytes": 4058
     },
     "src/contracts/roster.rs": {
-      "sha256": "ed932a5e24425da36c2c74e540bc6fc478280456933cb0442e2c151eb5900b93",
-      "bytes": 13375
+      "sha256": "bdde6efe1ee29cf620b521b8b8ddce051f73cc86dcac05ec46f35193440a4710",
+      "bytes": 14706
     },
     "src/store/roster.rs": {
       "sha256": "651055d27603bee5bc42ea57fc5c4ee1597a15d55c01a54ecad12d2f4322830a",
@@ -55824,8 +55824,8 @@
       "bytes": 9861
     },
     "src/app/mod.rs": {
-      "sha256": "a6d16637b33945acf8ed66632f632c4a67c820804ab2a1ac8393ee653d8cb3d6",
-      "bytes": 317
+      "sha256": "4dd4418aff37cfec52567cbbde262004edd0d76a55ea0575ef6021811b2b5e5f",
+      "bytes": 351
     },
     "src/app/receipt_import.rs": {
       "sha256": "393bd6b147ebe968ffe29532665c1e542972d9f1ea9708699cc6ef962ba0735d",
@@ -55892,8 +55892,8 @@
       "bytes": 26561
     },
     "src/main.rs": {
-      "sha256": "49c91ae256aa5f8311510adb3ae42357daab60b4a3f6d40f26bc4dc6276ea35d",
-      "bytes": 36116
+      "sha256": "3eb625e89f98e3ec4fba7060d6f36cb496e48d80f48aad24bec4cfe1e209f231",
+      "bytes": 36904
     },
     "src/store/staging.rs": {
       "sha256": "8bb17b5598550fd2c002dc7063ddfa56cf4a6e0a51566264b908ba655acce5d3",
@@ -56080,8 +56080,8 @@
       "bytes": 25388
     },
     "tests/t09_route.rs": {
-      "sha256": "61e3db79cd4f04546534d7f7286ca494588cba9a9fea08b7f8eb29497885be91",
-      "bytes": 131188
+      "sha256": "e7573a0d1e4322f2ae79149b10f8551797f9a50ad033c7cd8dfe66665d25d5ad",
+      "bytes": 150595
     },
     "tests/t11_notify.rs": {
       "sha256": "4b3e726cbe34d6f9b9bd6b6884698dd562c7e621cdabff248ece2fc85ebb5a26",
@@ -56096,8 +56096,8 @@
       "bytes": 52275
     },
     "tests/t28_actions.rs": {
-      "sha256": "d6d2bdaf933ee588148951eeeeff64f2e2400b638d2e35c5b687adedc5445b2a",
-      "bytes": 51466
+      "sha256": "8295b641ed9f4e97446cad50d5ef3b05a7cb77cc549edbd463e5ea97c713c26e",
+      "bytes": 51599
     },
     "tests/t16_herdr.rs": {
       "sha256": "a64eaffd50e1ed79c2c6c8a39d259237cca70a98cf17ab31e4619051a109d132",
