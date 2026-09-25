@@ -866,7 +866,10 @@ def rust_test_expectations(root):
         for path in T06_INPUTS:
             if not (root / path).is_file() or (root / path).is_symlink():
                 raise ValueError("Missing or substituted required T06 fixture: " + path)
-        counts = [184, 0, 0, 26, 27, 60, 34, 29, 12, *T06_TARGET_COUNTS.values()]
+        # The library target's own count is the sum of its reviewed unit namespaces, never a second
+        # literal beside them: a literal here went stale when T05_STORE_TEST_COUNT moved (B05e).
+        library = T04_TEST_COUNT + T05_STORE_TEST_COUNT + sum(T06_UNIT_COUNTS.values())
+        counts = [library, 0, 0, 26, 27, 60, 34, 29, 12, *T06_TARGET_COUNTS.values()]
         unit_counts.update(T06_UNIT_COUNTS)
         if has_t07(root):
             counts.extend(T07_TARGET_COUNTS.values())
