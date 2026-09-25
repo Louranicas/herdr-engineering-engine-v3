@@ -386,8 +386,8 @@ pub enum Error {
     StaleGeneration {
         current: Generation,
     },
-    /// The task already stopped (accepted, failed or abandoned) without a cancellation: there is no
-    /// intent left to record, and its outcome stays historical (B05, RC03 §6).
+    /// The task's outcome is already decided without a cancellation (accepted, or its terminal stop
+    /// committed): there is no intent left to record, and its outcome stays historical (B05, RC03 §6).
     AlreadyStopped,
     /// A writable open could not take the ledger's write lock: SQLite opened the ledger, or its
     /// WAL index, read-only whatever the flags asked for (see `require_write_lock`).
@@ -1143,10 +1143,10 @@ impl Store {
         self.transaction(deadline, |tx| {
             let head = head(tx, task.as_str())?;
             same_generation(&head, expected)?;
-            if head.cancellation || head.accepted_event.is_some() || stopped(tx, task)? {
+            if head.cancellation || outcome_decided(tx, &head)? {
                 return Ok(head.generation);
             }
-            request_cancellation(tx, task, expected, event_id, b"{}")
+            request_cancellation(tx, &head, task, expected, event_id, b"{}")
         })
     }
 
@@ -1183,11 +1183,11 @@ impl Store {
                 return Err(Error::StaleGeneration { current });
             }
             if !head.cancellation {
-                if head.accepted_event.is_some() || stopped(tx, input.task)? {
+                if outcome_decided(tx, &head)? {
                     return Err(Error::AlreadyStopped);
                 }
                 let body = serde_json::to_vec(&serde_json::json!({"reason": input.reason, "note": input.note}))?;
-                request_cancellation(tx, input.task, input.expected, input.event, &body)?;
+                request_cancellation(tx, &head, input.task, input.expected, input.event, &body)?;
             }
             let obligation: String = tx.query_row(
                 "SELECT id FROM events WHERE task_id=? AND kind='cancellation_requested' ORDER BY sequence DESC LIMIT 1",
@@ -1520,20 +1520,31 @@ fn next(generation: Generation) -> Result<String> {
         .map(|next| next.to_string())
         .map_err(|_| Error::Bound)
 }
-/// The one cancellation transition a caller can ask for, by `Store::cancel` or by `task.cancel`: the
-/// next generation, `cancellation_requested`, and the event that holds the intent (its obligation).
+/// The cancellation transition a caller can ask for, by `Store::cancel` or by `task.cancel`: the
+/// next generation and the event that holds the intent (its obligation). The state becomes
+/// `cancellation_requested` -- except that an `effect_unknown` task keeps its state, the precedence
+/// `settle_attempt` and `record_verification` already apply: an unknown effect is never masked by a
+/// cancellation, and the `cancellation` flag still carries the intent.
 fn request_cancellation(
     tx: &Transaction<'_>,
+    head: &TaskHead,
     task: UuidV4<'_>,
     expected: Generation,
     event_id: UuidV4<'_>,
     body: &[u8],
 ) -> Result<String> {
     let generation = next(expected)?;
-    tx.execute(
-        "UPDATE tasks SET cancellation=1,state='cancellation_requested',generation=? WHERE id=?",
-        params![generation, task.as_str()],
-    )?;
+    if head.state == "effect_unknown" {
+        tx.execute(
+            "UPDATE tasks SET cancellation=1,generation=? WHERE id=?",
+            params![generation, task.as_str()],
+        )?;
+    } else {
+        tx.execute(
+            "UPDATE tasks SET cancellation=1,state='cancellation_requested',generation=? WHERE id=?",
+            params![generation, task.as_str()],
+        )?;
+    }
     event_with(
         tx,
         event_id.as_str(),
@@ -1544,10 +1555,17 @@ fn request_cancellation(
     )?;
     Ok(generation)
 }
-fn stopped(tx: &Transaction<'_>, task: UuidV4<'_>) -> Result<bool> {
+/// Whether the task's outcome is already decided, so no cancellation intent can be recorded: it was
+/// accepted, or its terminal stop committed (a `task_stops` row). A verification that ended the task
+/// `failed` is NOT a terminal commit: a cancellation recorded before the stop wins, and the stop
+/// records `cancelled` (T06, `cancellation_after_failed_verification_wins_before_terminal_commit`).
+fn outcome_decided(tx: &Transaction<'_>, head: &TaskHead) -> Result<bool> {
+    if head.accepted_event.is_some() {
+        return Ok(true);
+    }
     Ok(tx.query_row(
         "SELECT EXISTS(SELECT 1 FROM task_stops WHERE task_id=?)",
-        [task.as_str()],
+        [head.id.as_str()],
         |row| row.get(0),
     )?)
 }

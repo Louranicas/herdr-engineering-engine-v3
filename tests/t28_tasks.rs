@@ -980,137 +980,390 @@ fn a_cancel_body_is_checked_member_by_member() -> Outcome {
     Ok(())
 }
 
-/// Three tasks, each with one attempt: index 1 running, 2 settled, 3 settled as unknown.
-fn settlement_fixture(scratch: &Scratch, operator: &Principal) -> Result<Store, Box<dyn Error>> {
-    use habitat_engine::store::{Allocation, Effect, Expected, Settlement, Submission};
-    let root = scratch.0.join("state");
-    DirBuilder::new().mode(0o700).create(&root)?;
-    let until = Instant::now() + Duration::from_secs(10);
-    let mut store = Store::open(
-        &root,
-        UuidV4::parse(GENERATION)?,
-        UuidV4::parse(EPOCH)?,
-        true,
-        until,
-    )
-    .map_err(|error| format!("{error:?}"))?;
-    let criteria_text = format!("sha256:{}", "5".repeat(64));
-    let criteria = habitat_engine::contracts::Sha256Digest::parse(&criteria_text)?;
-    let fault = |error: habitat_engine::store::Error| format!("{error:?}");
-    // index 1: running attempt · 2: settled attempt · 3: attempt whose settlement is unknown.
-    for index in 1..=3_u16 {
-        let task = nth(0x05b1, index);
-        let attempt = nth(0x05b2, index);
-        store
-            .submit(
-                Submission {
-                    principal: operator,
-                    key: UuidV4::parse(&nth(0x05b0, index))?,
-                    task: UuidV4::parse(&task)?,
-                    event: UuidV4::parse(&nth(0x05b3, index))?,
-                    request_bytes: b"settlement fixture",
-                    criteria,
-                    allocation: Allocation {
-                        limit_ms: 1_200_000,
-                        work_ms: 900_000,
-                        verify_ms: 300_000,
-                    },
-                },
-                until,
-            )
-            .map_err(fault)?;
-        store
-            .begin_attempt(
-                UuidV4::parse(&task)?,
-                "1".parse()?,
-                UuidV4::parse(&attempt)?,
-                UuidV4::parse(&nth(0x05b4, index))?,
-                until,
-            )
-            .map_err(fault)?;
-        if index > 1 {
-            let now = store
-                .get(operator, UuidV4::parse(&task)?, until)
-                .map_err(fault)?
-                .generation;
-            let known = index == 2;
-            store
-                .settle_attempt(
-                    &Expected {
-                        task: UuidV4::parse(&task)?,
-                        task_generation: now.parse()?,
-                        attempt: UuidV4::parse(&attempt)?,
-                        attempt_generation: "1".parse()?,
-                    },
-                    Settlement {
-                        effect: if known { Effect::None } else { Effect::Unknown },
-                        used_ms: if known { Some(10) } else { None },
-                        cleanup_settled: known,
-                        ready_to_verify: false,
-                    },
-                    UuidV4::parse(&nth(0x05b5, index))?,
-                    until,
-                )
-                .map_err(fault)?;
-        }
-    }
-    Ok(store)
+/// How far a fixture task is taken through the public ledger API before the cancel.
+#[derive(Clone, Copy, PartialEq)]
+enum Stage {
+    /// One attempt, queued: generation 2.
+    Running,
+    /// Its attempt settled cleanly, not ready to verify: generation 3.
+    Settled,
+    /// Its attempt's settlement unknown: `effect_unknown`, generation 3.
+    Unknown,
+    /// Verified `Invalid`: state `failed` with no stop row yet, generation 4.
+    Failed,
+    /// Verified and accepted: generation 5.
+    Accepted,
 }
 
 fn nth(role: u16, index: u16) -> String {
     format!("{role:08x}-0000-4000-8000-{index:012x}")
 }
 
-/// B05: `worker_settlement` is read from the task's attempts in the cancel's own transaction: none
-/// is `not_started`, an unsettled attempt `pending` (and it is the current attempt), one whose
-/// settlement is unknown `unknown`, and only settled ones `settled`.
+/// A writable ledger in `scratch`, as `ledger` opens it but without the task owner around it.
+fn raw_store(scratch: &Scratch) -> Result<Store, Box<dyn Error>> {
+    let root = scratch.0.join("state");
+    if !root.exists() {
+        DirBuilder::new().mode(0o700).create(&root)?;
+    }
+    Ok(Store::open(
+        &root,
+        UuidV4::parse(GENERATION)?,
+        UuidV4::parse(EPOCH)?,
+        true,
+        Instant::now() + Duration::from_secs(10),
+    )
+    .map_err(|error| format!("{error:?}"))?)
+}
+
+/// Task `index` submitted and its one attempt begun (queued): generation 2.
+fn begun(store: &mut Store, operator: &Principal, index: u16) -> Result<(), Box<dyn Error>> {
+    use habitat_engine::store::{Allocation, Submission};
+    let until = Instant::now() + Duration::from_secs(10);
+    let fault = |error: habitat_engine::store::Error| format!("{index}: {error:?}");
+    let criteria_text = format!("sha256:{}", "5".repeat(64));
+    let criteria = habitat_engine::contracts::Sha256Digest::parse(&criteria_text)?;
+    let (task, attempt) = (nth(0x05b1, index), nth(0x05b2, index));
+    store
+        .submit(
+            Submission {
+                principal: operator,
+                key: UuidV4::parse(&nth(0x05b0, index))?,
+                task: UuidV4::parse(&task)?,
+                event: UuidV4::parse(&nth(0x05b3, index))?,
+                request_bytes: b"stage fixture",
+                criteria,
+                allocation: Allocation {
+                    limit_ms: 1_200_000,
+                    work_ms: 900_000,
+                    verify_ms: 300_000,
+                },
+            },
+            until,
+        )
+        .map_err(fault)?;
+    store
+        .begin_attempt(
+            UuidV4::parse(&task)?,
+            "1".parse()?,
+            UuidV4::parse(&attempt)?,
+            UuidV4::parse(&nth(0x05b4, index))?,
+            until,
+        )
+        .map_err(fault)?;
+    Ok(())
+}
+
+/// Task `index`, taken to `stage` through the store's own API; returns its identity.
+fn staged(
+    store: &mut Store,
+    operator: &Principal,
+    index: u16,
+    stage: Stage,
+) -> Result<String, Box<dyn Error>> {
+    use habitat_engine::store::{Effect, Expected, Settlement, Verification, VerificationVerdict};
+    let until = Instant::now() + Duration::from_secs(10);
+    let fault = |error: habitat_engine::store::Error| format!("{index}: {error:?}");
+    let criteria_text = format!("sha256:{}", "5".repeat(64));
+    let criteria = habitat_engine::contracts::Sha256Digest::parse(&criteria_text)?;
+    let (task, attempt) = (nth(0x05b1, index), nth(0x05b2, index));
+    begun(store, operator, index)?;
+    if stage == Stage::Running {
+        return Ok(task);
+    }
+    let expected = |store: &Store| -> Result<Expected<'_>, Box<dyn Error>> {
+        let now = store
+            .get(operator, UuidV4::parse(&task)?, until)
+            .map_err(fault)?
+            .generation;
+        Ok(Expected {
+            task: UuidV4::parse(&task)?,
+            task_generation: now.parse()?,
+            attempt: UuidV4::parse(&attempt)?,
+            attempt_generation: "1".parse()?,
+        })
+    };
+    let known = stage != Stage::Unknown;
+    let settle = expected(store)?;
+    store
+        .settle_attempt(
+            &settle,
+            Settlement {
+                effect: if known { Effect::None } else { Effect::Unknown },
+                used_ms: known.then_some(10),
+                cleanup_settled: known,
+                ready_to_verify: matches!(stage, Stage::Failed | Stage::Accepted),
+            },
+            UuidV4::parse(&nth(0x05b5, index))?,
+            until,
+        )
+        .map_err(fault)?;
+    if matches!(stage, Stage::Settled | Stage::Unknown) {
+        return Ok(task);
+    }
+    let evidence = store
+        .publish(b"stage fixture evidence", UuidV4::parse(EPOCH)?, until)
+        .map_err(fault)?;
+    let verify = expected(store)?;
+    store
+        .record_verification(
+            &verify,
+            &Verification {
+                verdict: if stage == Stage::Failed {
+                    VerificationVerdict::Invalid
+                } else {
+                    VerificationVerdict::Passed
+                },
+                subject: criteria,
+                evidence: evidence.clone(),
+                used_ms: Some(20),
+                cleanup_settled: true,
+            },
+            UuidV4::parse(&nth(0x05b7, index))?,
+            until,
+        )
+        .map_err(fault)?;
+    if stage == Stage::Failed {
+        return Ok(task);
+    }
+    let accept = expected(store)?;
+    let publication = store
+        .prepare_verified_acceptance(
+            &accept,
+            UuidV4::parse(&nth(0x05b8, index))?,
+            criteria,
+            &evidence,
+            std::slice::from_ref(&evidence),
+            until,
+        )
+        .map_err(fault)?;
+    store.accept(&publication, 0, until).map_err(fault)?;
+    Ok(task)
+}
+
+/// Obligations the ledger file itself holds for `task`: attempts whose effect or cleanup is pending
+/// or unknown, plus undelivered outbox rows -- counted in SQL here, not through the engine's view.
+fn ledger_obligations(scratch: &Scratch, task: &str) -> Result<u64, Box<dyn Error>> {
+    let file = scratch
+        .0
+        .join("state/generations")
+        .join(GENERATION)
+        .join("ledger.sqlite3");
+    let db =
+        rusqlite::Connection::open_with_flags(file, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    Ok(db.query_row(
+        "SELECT (SELECT count(*) FROM attempts WHERE task_id=?1 AND (effect IN ('pending','unknown') OR cleanup IN ('pending','unknown'))) \
+         + (SELECT count(*) FROM outbox o JOIN events e ON e.id=o.event_id WHERE e.task_id=?1 AND o.delivered=0)",
+        [task],
+        |row| row.get::<_, u32>(0),
+    )
+    .map(u64::from)?)
+}
+
+/// B05: `worker_settlement` and the head are read from the task in the cancel's own transaction,
+/// each pinned whole against literals and the ledger file: a live attempt is `pending` (and is the
+/// current attempt), a settled one `settled`, one whose settlement is unknown `unknown` -- and an
+/// `effect_unknown` task KEEPS that state (the store's precedence: an unknown effect is never
+/// masked by a cancellation), while the intent is still recorded at a new generation.
 #[test]
 fn worker_settlement_is_read_from_the_attempts_the_cancel_found() -> Outcome {
     let scratch = Scratch::new()?;
     let operator = Principal::new(1000, "operator").map_err(|error| format!("{error:?}"))?;
-    let store = settlement_fixture(&scratch, &operator)?;
+    let mut store = raw_store(&scratch)?;
+    let cases = [
+        (
+            1_u16,
+            Stage::Running,
+            "2",
+            "3",
+            "cancellation_requested",
+            "pending",
+        ),
+        (
+            2,
+            Stage::Settled,
+            "3",
+            "4",
+            "cancellation_requested",
+            "settled",
+        ),
+        (3, Stage::Unknown, "3", "4", "effect_unknown", "unknown"),
+    ];
+    for (index, stage, _, _, _, _) in cases {
+        staged(&mut store, &operator, index, stage)?;
+    }
     let tasks = StoreTasks::new(store, EPOCH.to_owned());
     let why = json!({"reason": "deadline", "note": null});
     let mut replies = Vec::new();
-    for (index, settlement) in [(1_u16, "pending"), (2, "settled"), (3, "unknown")] {
+    let mut owed = 0;
+    for (index, _, before, after, state, settlement) in cases {
         let task = nth(0x05b1, index);
-        let generation = head_of(&tasks, &operator, &task)?["generation"]
-            .as_str()
-            .ok_or("generation")?
-            .to_owned();
-        let key = nth(0x05b6, index);
+        assert_eq!(
+            head_of(&tasks, &operator, &task)?["generation"],
+            json!(before)
+        );
         let reply = serve(
             &tasks,
             &operator,
-            &cancel_frame(2, &key, &task, &generation, &why)?,
+            &cancel_frame(2, &nth(0x05b6, index), &task, before, &why)?,
         )?;
-        assert_eq!(
-            reply["body"]["worker_settlement"],
-            json!(settlement),
-            "{index}: {reply}"
-        );
+        let obligations = ledger_obligations(&scratch, &task)?;
+        owed += obligations;
         let current = if index == 1 {
             json!(nth(0x05b2, 1))
         } else {
             Value::Null
         };
         assert_eq!(
-            reply["body"]["task"]["current_attempt_id"], current,
-            "{reply}"
+            (
+                &reply["observed_generation"],
+                &reply["body"]["worker_settlement"]
+            ),
+            (&json!(after), &json!(settlement)),
+            "{index}: {reply}"
         );
         assert_eq!(
             reply["body"]["task"],
-            head_of(&tasks, &operator, &task)?,
-            "the cancel's head is the readback's"
+            json!({"task_id": task, "generation": after, "state": state,
+                   "current_attempt_id": current, "unresolved_obligations": obligations}),
+            "{index}: {reply}"
         );
         replies.push(reply);
     }
+    assert!(
+        owed > 0,
+        "some fixture must owe an obligation, or the count is pinned only at 0"
+    );
     conforms(
         &replies
             .iter()
             .map(|reply| ("task.cancel", reply))
             .collect::<Vec<_>>(),
     )?;
+    Ok(())
+}
+
+/// B05: an accepted task's outcome is decided: the cancel is refused `conflict` at `/precondition`
+/// and writes nothing. A task `failed` by verification has NOT stopped yet -- T06 pins that a
+/// cancellation recorded before the stop wins -- so its cancel commits intent at the next
+/// generation, and the stop will record `cancelled`.
+#[test]
+fn a_cancel_of_an_accepted_task_is_refused_and_of_a_failed_one_wins() -> Outcome {
+    let scratch = Scratch::new()?;
+    let operator = Principal::new(1000, "operator").map_err(|error| format!("{error:?}"))?;
+    let mut store = raw_store(&scratch)?;
+    staged(&mut store, &operator, 4, Stage::Failed)?;
+    staged(&mut store, &operator, 5, Stage::Accepted)?;
+    let tasks = StoreTasks::new(store, EPOCH.to_owned());
+    let why = json!({"reason": "superseded", "note": null});
+    let accepted = nth(0x05b1, 5);
+    let before = head_of(&tasks, &operator, &accepted)?;
+    assert_eq!(
+        (&before["state"], &before["generation"]),
+        (&json!("accepted"), &json!("5")),
+        "{before}"
+    );
+    let refused = serve(
+        &tasks,
+        &operator,
+        &cancel_frame(2, &nth(0x05b6, 5), &accepted, "5", &why)?,
+    )?;
+    assert_eq!(
+        (
+            &refused["code"],
+            &refused["effect"],
+            &refused["details"]["field"]
+        ),
+        (&json!("conflict"), &json!("none"), &json!("/precondition")),
+        "{refused}"
+    );
+    assert_eq!(head_of(&tasks, &operator, &accepted)?, before);
+    let failed = nth(0x05b1, 4);
+    assert_eq!(
+        head_of(&tasks, &operator, &failed)?["state"],
+        json!("failed")
+    );
+    let wins = serve(
+        &tasks,
+        &operator,
+        &cancel_frame(3, &nth(0x05b6, 4), &failed, "4", &why)?,
+    )?;
+    assert_eq!(
+        (
+            &wins["effect"],
+            &wins["body"]["task"]["generation"],
+            &wins["body"]["task"]["state"],
+            &wins["body"]["worker_settlement"]
+        ),
+        (
+            &json!("committed"),
+            &json!("5"),
+            &json!("cancellation_requested"),
+            &json!("settled")
+        ),
+        "{wins}"
+    );
+    conforms(&[("task.cancel", &refused), ("task.cancel", &wins)])?;
+    Ok(())
+}
+
+/// B05, RC03 §6: an exact replay returns the STORED result even after the task has moved on -- here
+/// its attempt settles after the cancel -- never a result recomputed from the task as it now is.
+#[test]
+fn a_replay_returns_the_stored_result_after_the_task_moves_on() -> Outcome {
+    use habitat_engine::store::{Effect, Expected, Settlement};
+    let scratch = Scratch::new()?;
+    let operator = Principal::new(1000, "operator").map_err(|error| format!("{error:?}"))?;
+    let mut store = raw_store(&scratch)?;
+    let task = staged(&mut store, &operator, 1, Stage::Running)?;
+    let tasks = StoreTasks::new(store, EPOCH.to_owned());
+    let frame = cancel_frame(
+        2,
+        CANCEL_KEY,
+        &task,
+        "2",
+        &json!({"reason": "operator_request", "note": null}),
+    )?;
+    let first = serve(&tasks, &operator, &frame)?;
+    assert_eq!(
+        (
+            &first["body"]["task"]["generation"],
+            &first["body"]["worker_settlement"]
+        ),
+        (&json!("3"), &json!("pending")),
+        "{first}"
+    );
+    drop(tasks);
+    let mut store = raw_store(&scratch)?;
+    store
+        .settle_attempt(
+            &Expected {
+                task: UuidV4::parse(&task)?,
+                task_generation: "3".parse()?,
+                attempt: UuidV4::parse(&nth(0x05b2, 1))?,
+                attempt_generation: "1".parse()?,
+            },
+            Settlement {
+                effect: Effect::None,
+                used_ms: Some(10),
+                cleanup_settled: true,
+                ready_to_verify: false,
+            },
+            UuidV4::parse(&nth(0x05b9, 1))?,
+            Instant::now() + Duration::from_secs(10),
+        )
+        .map_err(|error| format!("{error:?}"))?;
+    let tasks = StoreTasks::new(store, EPOCH.to_owned());
+    assert_eq!(head_of(&tasks, &operator, &task)?["generation"], json!("4"));
+    let again = serve(&tasks, &operator, &frame)?;
+    assert_eq!(
+        (
+            &again["replayed"],
+            &again["body"],
+            &again["observed_generation"]
+        ),
+        (&json!(true), &first["body"], &json!("3")),
+        "{again}"
+    );
     Ok(())
 }
 
