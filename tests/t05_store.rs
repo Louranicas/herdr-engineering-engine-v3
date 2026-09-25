@@ -2079,39 +2079,44 @@ const PRE_ROSTER_SHA256: &str =
     "sha256:14c3efd534517403866229f898748ab0685bdad58e0d1da23b6aa6e96140c044";
 const PRE_ROSTER_PACKAGE: &str = "hee3-draft-schema1/0.1.0";
 
-/// B14a-1a · a bound begin records the attempt's baseline, protected and profile digests in the
-/// same transaction, and a task's attempts are all bound or all unbound: an unbound begin of a
-/// bound task, and a bound begin of a task with an unbound attempt, are each refused `Conflict`
-/// before anything is written.
-#[test]
-fn a_task_s_attempts_are_all_bound_or_all_unbound() {
-    const BASE: &str = "sha256:1111111111111111111111111111111111111111111111111111111111111111";
-    const PROT: &str = "sha256:2222222222222222222222222222222222222222222222222222222222222222";
-    const PROF: &str = "sha256:3333333333333333333333333333333333333333333333333333333333333333";
-    const OTHER: &str = "00000000-0000-4000-8000-0000000000b2";
-    fn start<'a>(
-        owner: &'a Principal,
-        agent: &'a RosterHeadV1,
-        selections: &'a [Selection],
-    ) -> RosterStart<'a> {
-        RosterStart {
-            principal: owner,
-            task: uuid(TASK),
-            expected: generation(1),
-            attempt: uuid(ATTEMPT),
-            event: uuid(STARTED),
-            agent_record_id: &agent.record_id,
-            session: uuid(SESSION),
-            workspace: uuid(WORKSPACE),
-            selections,
-            lease_ms: 500,
-        }
+/// The digests and ids the binding tests use (B14a-1a).
+const BIND_BASE: &str = "sha256:1111111111111111111111111111111111111111111111111111111111111111";
+const BIND_PROT: &str = "sha256:2222222222222222222222222222222222222222222222222222222222222222";
+const BIND_PROF: &str = "sha256:3333333333333333333333333333333333333333333333333333333333333333";
+const BIND_OTHER: &str = "00000000-0000-4000-8000-0000000000b2";
+const BIND_RESTARTED: &str = "00000000-0000-4000-8000-0000000000b3";
+fn bound_start<'a>(
+    owner: &'a Principal,
+    agent: &'a RosterHeadV1,
+    selections: &'a [Selection],
+) -> RosterStart<'a> {
+    RosterStart {
+        principal: owner,
+        task: uuid(TASK),
+        expected: generation(1),
+        attempt: uuid(ATTEMPT),
+        event: uuid(STARTED),
+        agent_record_id: &agent.record_id,
+        session: uuid(SESSION),
+        workspace: uuid(WORKSPACE),
+        selections,
+        lease_ms: 500,
     }
-    let binding = Binding {
-        baseline: Sha256Digest::parse(BASE).unwrap(),
-        protected: Sha256Digest::parse(PROT).unwrap(),
-        profile: Sha256Digest::parse(PROF).unwrap(),
-    };
+}
+
+fn binding() -> Binding<'static> {
+    Binding {
+        baseline: Sha256Digest::parse(BIND_BASE).unwrap(),
+        protected: Sha256Digest::parse(BIND_PROT).unwrap(),
+        profile: Sha256Digest::parse(BIND_PROF).unwrap(),
+    }
+}
+
+/// B14a-1a · a bound begin records the attempt's baseline, protected and profile digests in the
+/// same transaction, and a bound task refuses an unbound begin `Conflict` — from a state where the
+/// same begin, bound, is admitted — writing nothing.
+#[test]
+fn a_bound_task_refuses_an_unbound_attempt() {
     let owner = principal();
     // Bound first: the row holds exactly the three digests, and an unbound begin is refused.
     let area = Area::new();
@@ -2123,8 +2128,8 @@ fn a_task_s_attempts_are_all_bound_or_all_unbound() {
     let selections = [choose(&profile.head)];
     store
         .begin_bound_attempt(
-            start(&owner, &profile.head, &selections),
-            &binding,
+            bound_start(&owner, &profile.head, &selections),
+            &binding(),
             deadline(),
         )
         .unwrap();
@@ -2141,23 +2146,43 @@ fn a_task_s_attempts_are_all_bound_or_all_unbound() {
         (
             ATTEMPT.into(),
             TASK.into(),
-            BASE.into(),
-            PROT.into(),
-            PROF.into()
+            BIND_BASE.into(),
+            BIND_PROT.into(),
+            BIND_PROF.into()
         )
     );
+    // Settle the first attempt to `repair_pending`, so every other begin predicate passes and only
+    // the mixing rule can refuse (F140: Conflict is shared by many sites).
+    repair_pending(&mut store);
     let before = ledger(&area);
     assert!(matches!(
         store.begin_attempt(
             uuid(TASK),
-            generation(2),
-            uuid(OTHER),
+            generation(3),
+            uuid(BIND_OTHER),
             uuid(STARTED),
             deadline()
         ),
         Err(Error::Conflict)
     ));
     assert_eq!(ledger(&area), before, "a refused begin writes nothing");
+    let mut again = bound_start(&owner, &profile.head, &selections);
+    again.expected = generation(3);
+    again.attempt = uuid(BIND_OTHER);
+    again.event = uuid(BIND_RESTARTED);
+    assert!(
+        store
+            .begin_bound_attempt(again, &binding(), deadline())
+            .is_ok(),
+        "the same begin, bound, is admitted from that state"
+    );
+}
+
+/// B14a-1a · a task with an unbound attempt refuses a bound begin `Conflict` — from a state where
+/// the same begin, unbound, is admitted — writing nothing.
+#[test]
+fn an_unbound_task_refuses_a_bound_attempt() {
+    let owner = principal();
     // Unbound first: a bound begin is refused.
     let area = Area::new();
     let mut store = area.open();
@@ -2167,14 +2192,15 @@ fn a_task_s_attempts_are_all_bound_or_all_unbound() {
     admit(&mut store);
     let selections = [choose(&profile.head)];
     store
-        .begin_rostered_attempt(start(&owner, &profile.head, &selections), deadline())
+        .begin_rostered_attempt(bound_start(&owner, &profile.head, &selections), deadline())
         .unwrap();
+    repair_pending(&mut store);
     let before = ledger(&area);
-    let mut second = start(&owner, &profile.head, &selections);
-    second.expected = generation(2);
-    second.attempt = uuid(OTHER);
+    let mut second = bound_start(&owner, &profile.head, &selections);
+    second.expected = generation(3);
+    second.attempt = uuid(BIND_OTHER);
     assert!(matches!(
-        store.begin_bound_attempt(second, &binding, deadline()),
+        store.begin_bound_attempt(second, &binding(), deadline()),
         Err(Error::Conflict)
     ));
     assert_eq!(
@@ -2182,4 +2208,35 @@ fn a_task_s_attempts_are_all_bound_or_all_unbound() {
         before,
         "a refused bound begin writes nothing"
     );
+    let mut again = bound_start(&owner, &profile.head, &selections);
+    again.expected = generation(3);
+    again.attempt = uuid(BIND_OTHER);
+    again.event = uuid(BIND_RESTARTED);
+    assert!(
+        store.begin_rostered_attempt(again, deadline()).is_ok(),
+        "the same begin, unbound, is admitted from that state"
+    );
+}
+
+/// Settle the fixture's first attempt as not ready to verify: the task returns to
+/// `repair_pending` at generation 3, where a second attempt may begin.
+fn repair_pending(store: &mut Store) {
+    store
+        .settle_attempt(
+            &Expected {
+                task: uuid(TASK),
+                task_generation: generation(2),
+                attempt: uuid(ATTEMPT),
+                attempt_generation: generation(1),
+            },
+            Settlement {
+                effect: Effect::None,
+                used_ms: Some(30),
+                cleanup_settled: true,
+                ready_to_verify: false,
+            },
+            uuid(SETTLED),
+            deadline(),
+        )
+        .unwrap();
 }

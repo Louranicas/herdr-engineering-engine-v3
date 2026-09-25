@@ -1388,3 +1388,38 @@ fn a_bound_task_is_accepted_only_on_a_bound_attempt() {
         Err(habitat_engine::store::Error::Corrupt)
     ));
 }
+
+/// B14a-1a · a binding names its own attempt's task: a ledger whose binding row names another
+/// task — here one of the fixture's unrelated admitted tasks — no longer opens. Nothing is mixed,
+/// so only this clause can refuse it.
+#[test]
+fn a_binding_naming_another_task_is_corrupt() {
+    let (area, mut store, _evidence) = ready();
+    register_unrelated_evidence(&mut store);
+    drop(store);
+    let digest = format!("sha256:{}", "1".repeat(64));
+    // The unrelated task and its one attempt (`register_unrelated_evidence`'s ids 1 and 3). That
+    // attempt is bound to its own task too, so neither task is mixed.
+    let (other, its_attempt) = (
+        "06000000-3000-4000-8000-000000000001",
+        "06000000-3000-4000-8000-000000000003",
+    );
+    let db = rusqlite::Connection::open(
+        area.path
+            .join("generations")
+            .join(GEN)
+            .join("ledger.sqlite3"),
+    )
+    .unwrap();
+    db.execute_batch(&format!(
+        "INSERT INTO attempt_bindings(attempt_id,task_id,baseline_digest,protected_digest,profile_digest) \
+         VALUES('{ATTEMPT}','{other}','{digest}','{digest}','{digest}'), \
+         ('{its_attempt}','{other}','{digest}','{digest}','{digest}');"
+    ))
+    .unwrap();
+    drop(db);
+    assert!(matches!(
+        Store::open(&area.path, id(GEN), id(EPOCH), false, deadline()),
+        Err(habitat_engine::store::Error::Corrupt)
+    ));
+}
