@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generation": "20260925T142821-291812ee",
+  "generation": "20260925T155522-22ba7a54",
   "status": "complete",
   "roots": {
     "source": {
@@ -63,7 +63,7 @@
   "roots_drift": [],
   "roots_changed": null,
   "scope": "documentation anchors and declared observation consistency only",
-  "journal": "/var/mnt/STORAGE-10TB/Louranicas-ssd-offload/planning/herdr-engine-vault-20260915/ultra-map-review/publications/20260925T142821-291812ee",
+  "journal": "/var/mnt/STORAGE-10TB/Louranicas-ssd-offload/planning/herdr-engine-vault-20260915/ultra-map-review/publications/20260925T155522-22ba7a54",
   "previous_diary_navigation_blocks": {
     "/var/mnt/STORAGE-10TB/fedora-obsidian-vaults/my-diary.vault/Reflections/Assertions Measured Against the Code.md": "16ffa47077b2267b12162913a9582150bb1f0b6b1d7ed6dec35d907c77d72da3",
     "/var/mnt/STORAGE-10TB/fedora-obsidian-vaults/my-diary.vault/Reflections/Mistakes I Made.md": "8b3a6c8db053155fb5bdd64c403bbe4f216fa2edd48a9e3e1f15e27dfd823bb5",
@@ -129,8 +129,8 @@
     ]
   },
   "prior_publication_snapshot": {
-    "path": "/var/mnt/STORAGE-10TB/Louranicas-ssd-offload/planning/herdr-engine-vault-20260915/ultra-map-review/prior-records/20260925T142821-291812ee.json",
-    "sha256": "bf72243a868b6489bae424e543e5c9dc3e11e1457476c4a50002cf1f179016d4"
+    "path": "/var/mnt/STORAGE-10TB/Louranicas-ssd-offload/planning/herdr-engine-vault-20260915/ultra-map-review/prior-records/20260925T155522-22ba7a54.json",
+    "sha256": "da83b4b4f4e1b953a879b22a94df01e70c89b33aaeb36cba78403b7d7e3bb74f"
   },
   "diary_navigation_blocks": {
     "/var/mnt/STORAGE-10TB/fedora-obsidian-vaults/my-diary.vault/Reflections/Assertions Measured Against the Code.md": "16ffa47077b2267b12162913a9582150bb1f0b6b1d7ed6dec35d907c77d72da3",
@@ -149,7 +149,7 @@
     "/var/mnt/STORAGE-10TB/fedora-obsidian-vaults/my-diary.vault/00 - Diary Index.md": "dc9771a488347e7af68061955829674ce77e01ede1b61d99429cb376c1b93675",
     "/var/mnt/STORAGE-10TB/fedora-obsidian-vaults/my-diary.vault/00 - Master Index.md": "dc9771a488347e7af68061955829674ce77e01ede1b61d99429cb376c1b93675"
   },
-  "at": "2026-09-25T14:37:21.047386+00:00",
+  "at": "2026-09-25T16:29:43.954075+00:00",
   "checks": {
     "module_context_cards": 22,
     "module_context_workflow": true,
@@ -194,7 +194,7 @@
     "interactive_model_selection": "not performed by corpus publication"
   },
   "live_navigation": {
-    "files_indexed_by_obsidian": 7090,
+    "files_indexed_by_obsidian": 7091,
     "native_notes": 557,
     "obsidian_cli_orphan_files": 168,
     "obsidian_cli_orphan_paths": [
@@ -894,7 +894,7 @@
   },
   "build": {
     "generated_native_notes": 543,
-    "copied_files": 6519,
+    "copied_files": 6520,
     "ultra_map": {
       "modules": 22,
       "branches": 6,
@@ -905,17 +905,17 @@
     }
   },
   "plan_sha256": "e62091172c60c391bbd5221dd7d3a9bfa398c8a89a1b66c8c5de97c4ddc88d0c",
-  "source_anchor_map_sha256": "99893e6eb1e218de9612cd4c09b6717ca607ad59ad4a7cdaa5459051ce190c6f",
+  "source_anchor_map_sha256": "8bc008140549e2f2c75d8da51b53b2d009a7129befa23a5c4871eaeed0067be1",
   "publication_outputs_journal": {
-    "path": "/var/mnt/STORAGE-10TB/Louranicas-ssd-offload/planning/herdr-engine-vault-20260915/ultra-map-review/publications/20260925T142821-291812ee/publication-outputs.json",
+    "path": "/var/mnt/STORAGE-10TB/Louranicas-ssd-offload/planning/herdr-engine-vault-20260915/ultra-map-review/publications/20260925T155522-22ba7a54/publication-outputs.json",
     "fallback_path": "/var/home/herdr-engineering-engine-v3/corpus/publication-outputs.json",
-    "count": 10230,
-    "sha256": "ac0b0a2d1d03499f927853ed0048ee72f194a4d1c16a6519266e45cb085b25d9",
-    "fallback_sha256": "ac0b0a2d1d03499f927853ed0048ee72f194a4d1c16a6519266e45cb085b25d9"
+    "count": 10231,
+    "sha256": "4f125cf71f8f96fb7000fdfe7c77bf807a198e3595715453bb16eaf306a8208e",
+    "fallback_sha256": "4f125cf71f8f96fb7000fdfe7c77bf807a198e3595715453bb16eaf306a8208e"
   },
   "final_qa": {
-    "/var/mnt/STORAGE-10TB/fedora-obsidian-vaults/herdr-engineering-engine-v3.vault/Maintenance/alignment-qa.json": "98731df683f49c1c86185730de51a2b370ec7e69fba907251de2daa1f7ee24cf",
-    "/var/mnt/STORAGE-10TB/fedora-obsidian-vaults/herdr-engineering-engine-v3.vault/Maintenance/navigation-qa.json": "784f41296780f94caeb78b466eb81d10774619d92333558167331d8203e063bc"
+    "/var/mnt/STORAGE-10TB/fedora-obsidian-vaults/herdr-engineering-engine-v3.vault/Maintenance/alignment-qa.json": "b310e2d1c4587e8e194c8af7a1c169d5a65eca69835b41b0a823885e74333f4f",
+    "/var/mnt/STORAGE-10TB/fedora-obsidian-vaults/herdr-engineering-engine-v3.vault/Maintenance/navigation-qa.json": "4ac372b7d5f60ea4dd2389d5f363644ef3ac73e18eba1ee962797f3fb143f71b"
   },
   "limits": [
     "No engine validators, deployment commands or provider calls executed.",
