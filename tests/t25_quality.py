@@ -1561,7 +1561,7 @@ class T06QualityInventoryControls(unittest.TestCase):
         expected = quality.rust_test_expectations(ROOT)
         self.assertEqual(sum(expected["test_counts"]), 1976)
         self.assertEqual(len(expected["test_counts"]), 44)
-        # t13_service also holds 51, so the census carries two 51-rows.
+        # t13_service holds 51; t07_inventory moved to 52 (B14-P2c), so one 51-row remains.
         self.assertEqual(expected["test_counts"].count(51), 1)
         self.assertEqual(expected["test_counts"].count(43), 0)
         self.assertEqual(sum(expected["unit_test_counts"].values()), 221)

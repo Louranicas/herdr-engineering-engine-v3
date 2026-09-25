@@ -96,6 +96,9 @@ pub enum Chain {
     Schema { version: u32 },
     /// Upgrade step `version` changed the rows of a table it must preserve.
     Preserved { version: u32 },
+    /// Upgrade step `version`'s declared column list is not the table's pre-step columns: a fault
+    /// in this binary's own declaration, not in the ledger's data (review P2c-1 re-review 5).
+    Columns { version: u32 },
 }
 
 fn chain(fault: Chain) -> Error {
@@ -248,7 +251,7 @@ pub(super) fn step_with(
     bound(connection, deadline)?;
     let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     if !named_columns_are_whole(&tx, migration)? {
-        return Err(chain(Chain::Preserved { version }));
+        return Err(chain(Chain::Columns { version }));
     }
     let before = preserved_states(&tx, migration)?;
     tx.execute_batch(migration.sql)?;

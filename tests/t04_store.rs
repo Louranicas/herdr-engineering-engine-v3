@@ -2837,25 +2837,25 @@ static TASKS_ID_ONLY: [schema::Preserved; 1] = [schema::Preserved {
 }];
 
 /// B14-P2c pin: an added column is checked over the table's pre-step columns — an ADD alone
-/// passes; one that also changes a row is refused; and a column list short of the table is
-/// refused before anything runs, since it would compare only what it names.
+/// passes; one that also changes a row is refused `Preserved`; and a column list short of the
+/// table is refused `Columns` before anything runs, since it would compare only what it names.
 #[test]
 fn an_added_column_step_preserves_the_whole_pre_step_row() {
     for (sql, preserves, refused) in [
         (
             "ALTER TABLE tasks ADD COLUMN planted TEXT; UPDATE tasks SET spec=x'01';",
             &TASKS_PRESERVED,
-            true,
+            Some(Chain::Preserved { version: 2 }),
         ),
         (
             "ALTER TABLE tasks ADD COLUMN planted TEXT;",
             &TASKS_ID_ONLY,
-            true,
+            Some(Chain::Columns { version: 2 }),
         ),
         (
             "ALTER TABLE tasks ADD COLUMN planted TEXT;",
             &TASKS_PRESERVED,
-            false,
+            None,
         ),
     ] {
         let area = Area::new();
@@ -2872,11 +2872,13 @@ fn an_added_column_step_preserves_the_whole_pre_step_row() {
             preserves,
         };
         let result = schema::step_with(&mut db, 2, &step, NO_FAULT, deadline());
-        assert_eq!(
-            matches!(result, Err(Error::Chain(Chain::Preserved { version: 2 }))),
-            refused,
-            "{sql}: {result:?}"
-        );
+        match refused {
+            Some(expected) => assert!(
+                matches!(&result, Err(Error::Chain(actual)) if *actual == expected),
+                "{sql}: {result:?}"
+            ),
+            None => assert!(result.is_ok(), "{sql}: {result:?}"),
+        }
     }
 }
 

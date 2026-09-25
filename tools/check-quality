@@ -156,7 +156,7 @@ def has_t06(root):
             or any(str(t.get("name", "")).startswith("t06_") for t in manifest.get("test", [])))
 
 
-# Reviewed current T07 inventory target: 51 controls (the earlier 43-control
+# Reviewed current T07 inventory target: 52 controls (51 + B14-P2c's workspace case; the earlier 43-control
 # inventory is superseded; this recipe does not accept it).
 T07_TARGET_COUNTS = {"t07_inventory": 52}
 T07_INPUTS = ("src/store/recovery.rs", "tests/t07_inventory.rs")

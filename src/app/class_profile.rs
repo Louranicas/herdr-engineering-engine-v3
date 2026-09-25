@@ -1355,6 +1355,16 @@ systemd_run_sha256 = "{HEX2}"
             ),
             ("workspace not installed", "class profile refused")
         );
+        assert_eq!(
+            (
+                Screen::WorkspaceNotInstalled.message(),
+                Screen::ProfileRefused.message()
+            ),
+            (
+                "the installed class profile declares no such workspace",
+                "the installed class profile was refused at start"
+            )
+        );
         Ok(())
     }
 }

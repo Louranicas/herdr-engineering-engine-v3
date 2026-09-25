@@ -296,6 +296,12 @@ fn admitted_reopen_keeps_exact_reserved_budget() {
     // Metadata86 + fixed admitted task projection172 + its bound workspace id, one literal36-byte
     // UUID (B14-P2c); not derived from inventory.
     assert_eq!((v.rows, v.payload_bytes), (2, 294));
+    // Recovery reads the principal after the head columns, not from them (P2c mutants: a role
+    // read one column early would be the workspace id).
+    assert_eq!(
+        (v.tasks[0].principal_uid, v.tasks[0].principal_role.as_str()),
+        (1000, "operator")
+    );
     assert_eq!(
         (
             v.tasks[0].head.spent_ms,
@@ -646,11 +652,11 @@ fn a_task_workspace_is_a_uuid_or_unbound() {
         let read = r
             .store()
             .recovery_inventory(id(EPOCH), limits(), deadline());
-        assert_eq!(
-            matches!(read, Err(Error::Corrupt)),
-            corrupt,
-            "{value:?}: {read:?}"
-        );
+        if corrupt {
+            assert!(matches!(read, Err(Error::Corrupt)), "{value:?}: {read:?}");
+        } else {
+            assert!(read.is_ok(), "{value:?}: {read:?}");
+        }
     }
 }
 #[test]
