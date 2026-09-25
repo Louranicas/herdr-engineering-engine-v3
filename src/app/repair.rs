@@ -570,6 +570,29 @@ mod tests {
             BASE,
             false
         ));
+        // The edited entry's executable bit is the baseline's, and it is compared.
+        assert!(!same_but_candidate(
+            &result,
+            &base,
+            "src/lib.rs",
+            CANDIDATE,
+            true
+        ));
+        // Any other entry that differs from the baseline is refused, however the edit looks.
+        let (elsewhere, _, _) = baseline(
+            "apply-other",
+            &[
+                ("src/lib.rs", CANDIDATE),
+                ("Cargo.toml", b"[package]\nname = \"y\"\n"),
+            ],
+        );
+        assert!(!same_but_candidate(
+            &elsewhere,
+            &base,
+            "src/lib.rs",
+            CANDIDATE,
+            false
+        ));
     }
 
     /// B14-P3 · every class bound refuses before anything is created (no partial path): bytes one
