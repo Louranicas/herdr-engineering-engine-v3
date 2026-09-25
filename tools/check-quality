@@ -264,7 +264,7 @@ ACTIONS_INPUTS = ("src/actions.rs", "src/worker/tools.rs", "src/actions/control.
                   # RC03's published C01 example: the receiver's known-answer digest.
                   "tests/fixtures/native/control-v1/C01-control-valid-cancel.jsonl",
                   "tests/fixtures/native/control-v1/C01-metadata.json")
-HERDR_TARGET_COUNTS = {"t16_herdr": 71}
+HERDR_TARGET_COUNTS = {"t16_herdr": 76}
 HERDR_INPUTS = ("src/herdr.rs",)
 
 T09_TARGET_COUNTS = {"t09_route": 77}

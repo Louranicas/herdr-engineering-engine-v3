@@ -8,8 +8,9 @@
 use std::error::Error;
 
 use habitat_engine::herdr::{
-    Admitted, EngineReceipt, Epoch, Freshness, IntentKey, MAX_BUFFERED_EVENTS, MAX_RECONNECTS,
-    Refusal, Snapshot, Status, View, render,
+    Admitted, EngineReceipt, Epoch, Freshness, IntentKey, MAX_BUFFERED_EVENTS,
+    MAX_EVENT_TEXT_BYTES, MAX_EVIDENCE_REFS, MAX_RECONNECTS, MAX_TASKS, Refusal, Snapshot, Status,
+    View, render,
 };
 
 type Outcome = Result<(), Box<dyn Error>>;
@@ -589,6 +590,9 @@ fn refusal_names_are_distinct_and_non_overlapping() {
         Refusal::MalformedSequence(ScalarError::LeadingZero),
         Refusal::ContinuityBroken,
         Refusal::UnknownTaskState,
+        Refusal::TaskLimit { limit: 1 },
+        Refusal::EvidenceLimit { found: 2, limit: 1 },
+        Refusal::EventTooLarge { bytes: 2, limit: 1 },
     ];
     for (i, a) in all.iter().enumerate() {
         assert!(!a.name().is_empty());
@@ -1433,6 +1437,121 @@ fn a_stale_passed_task_renders_as_stale() -> Result<(), Box<dyn Error>> {
             "status passed (settled)",
             "freshness stale: held from before the last reconnect",
         ]
+    );
+    Ok(())
+}
+
+// ------------------------------------------- acquisition bounds (review §5 item 2)
+
+/// T16-HD-72 · a view presents at most [`MAX_TASKS`] tasks: the last one is admitted, the next
+/// distinct one is refused with the bound and nothing is stored; an already-presented task is
+/// still updated at the bound.
+#[test]
+fn the_task_bound_refuses_a_new_task_before_storing() -> Outcome {
+    let mut view = view(1)?;
+    for index in 0..MAX_TASKS {
+        assert!(view.present(snapshot(&id(index), Status::Running, 1)?)?);
+    }
+    assert_eq!(view.tasks(), MAX_TASKS);
+    assert_eq!(
+        view.present(snapshot(&id(MAX_TASKS), Status::Running, 1)?),
+        Err(Refusal::TaskLimit { limit: MAX_TASKS })
+    );
+    assert_eq!(view.tasks(), MAX_TASKS);
+    assert!(view.present(snapshot(&id(0), Status::Running, 2)?)?);
+    Ok(())
+}
+
+/// T16-HD-73 · the submissions a view remembers are bounded the same way: one per task.
+#[test]
+fn the_submission_bound_refuses_a_new_intent_before_storing() -> Outcome {
+    let mut view = view(1)?;
+    for index in 0..MAX_TASKS {
+        let task = id(index);
+        view.submit(
+            &key(index)?,
+            Admitted::from_engine(EngineReceipt::issue(&task, EPOCH_1, "1")?),
+        )?;
+    }
+    let task = id(MAX_TASKS);
+    assert_eq!(
+        view.submit(
+            &key(MAX_TASKS)?,
+            Admitted::from_engine(EngineReceipt::issue(&task, EPOCH_1, "1")?),
+        )
+        .map(|_| ()),
+        Err(Refusal::TaskLimit { limit: MAX_TASKS })
+    );
+    assert_eq!(view.submitted(&key(MAX_TASKS)?), None);
+    Ok(())
+}
+
+/// T16-HD-74 · a snapshot with more evidence references than the engine serves is refused whole,
+/// with both numbers; at the bound it is presented.
+#[test]
+fn the_evidence_bound_refuses_the_whole_snapshot() -> Outcome {
+    let mut view = view(1)?;
+    let refs = |count: usize| {
+        (0..count)
+            .map(|index| format!("ref-{index}"))
+            .collect::<Vec<_>>()
+    };
+    let mut full = snapshot(&id(1), Status::Running, 1)?;
+    full.evidence = refs(MAX_EVIDENCE_REFS);
+    assert!(view.present(full)?);
+    let mut over = snapshot(&id(2), Status::Running, 1)?;
+    over.evidence = refs(MAX_EVIDENCE_REFS + 1);
+    assert_eq!(
+        view.present(over),
+        Err(Refusal::EvidenceLimit {
+            found: MAX_EVIDENCE_REFS + 1,
+            limit: MAX_EVIDENCE_REFS
+        })
+    );
+    assert_eq!(view.task(&id(2)).map(|_| ()), Err(Refusal::UnknownTask));
+    Ok(())
+}
+
+/// T16-HD-75 · an event text larger than any frame is refused before it is copied, and the cursor
+/// does not move; at the bound it is stored.
+#[test]
+fn the_event_text_bound_refuses_before_copying() -> Outcome {
+    let mut view = view(1)?;
+    let epoch = ep(1)?;
+    view.observe(&epoch, 1, 0, &"x".repeat(MAX_EVENT_TEXT_BYTES))?;
+    assert_eq!(
+        view.observe(&epoch, 2, 1, &"x".repeat(MAX_EVENT_TEXT_BYTES + 1)),
+        Err(Refusal::EventTooLarge {
+            bytes: MAX_EVENT_TEXT_BYTES + 1,
+            limit: MAX_EVENT_TEXT_BYTES
+        })
+    );
+    assert_eq!((view.cursor(), view.buffered()), (1, 1));
+    Ok(())
+}
+
+/// T16-HD-76 · each bound is the engine's published one, read from the schemas the engine serves
+/// (an independent source: the generated contract, not this module's constants).
+#[test]
+fn the_view_bounds_are_the_published_wire_bounds() -> Outcome {
+    let read = |name: &str| -> Result<serde_json::Value, Box<dyn Error>> {
+        Ok(serde_json::from_str(&std::fs::read_to_string(format!(
+            "schemas/actions/control-v1.result.{name}.schema.json"
+        ))?)?)
+    };
+    let subscribe = read("events.subscribe")?;
+    let get = read("task.get")?;
+    assert_eq!(
+        subscribe["$defs"]["BodyResult_events_subscribe"]["properties"]["snapshot"]["maxItems"],
+        serde_json::json!(MAX_TASKS)
+    );
+    assert_eq!(
+        get["$defs"]["BodyResult_task_get"]["properties"]["evidence"]["maxItems"],
+        serde_json::json!(MAX_EVIDENCE_REFS)
+    );
+    assert_eq!(
+        MAX_EVENT_TEXT_BYTES,
+        habitat_engine::contracts::control::MAX_FRAME_BYTES
     );
     Ok(())
 }

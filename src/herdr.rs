@@ -317,10 +317,25 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
+use crate::contracts::control::MAX_FRAME_BYTES;
 use crate::contracts::{ScalarError, UuidV4, parse_u64_decimal};
 
 /// The most events one client buffers before it must reconnect by cursor.
 pub const MAX_BUFFERED_EVENTS: usize = 1024;
+
+/// The most tasks one view presents or remembers a submission for: the engine's own snapshot bound,
+/// the published `events.subscribe` result's `snapshot` `maxItems` (256). A view never holds more
+/// than the engine could have told it in one resynchronisation.
+pub const MAX_TASKS: usize = 256;
+
+/// The most evidence references one snapshot carries: the published `task.get` result's `evidence`
+/// `maxItems` (64), the store's own view bound.
+pub const MAX_EVIDENCE_REFS: usize = 64;
+
+/// The largest event text one observation stores: the control frame that carried it
+/// ([`MAX_FRAME_BYTES`]); nothing larger can have arrived, so anything larger is refused before it
+/// is copied.
+pub const MAX_EVENT_TEXT_BYTES: usize = MAX_FRAME_BYTES;
 
 /// The most reconnect attempts recorded for one client.
 pub const MAX_RECONNECTS: u32 = 1024;
@@ -352,6 +367,12 @@ pub enum Refusal {
     IntentConflict,
     /// A task state outside the engine's `TaskStateV1` vocabulary.
     UnknownTaskState,
+    /// The view already presents or remembers [`MAX_TASKS`] tasks; refused before storing.
+    TaskLimit { limit: usize },
+    /// A snapshot carries more evidence references than the engine serves; refused whole.
+    EvidenceLimit { found: usize, limit: usize },
+    /// An event text larger than any frame could carry; refused before it is copied.
+    EventTooLarge { bytes: usize, limit: usize },
 }
 
 impl Refusal {
@@ -370,6 +391,9 @@ impl Refusal {
             Self::CursorAhead => "cursor follows the engine sequence",
             Self::IntentConflict => "a different task under an intent key already submitted",
             Self::UnknownTaskState => "task state outside the engine vocabulary",
+            Self::TaskLimit { .. } => "view task bound reached",
+            Self::EvidenceLimit { .. } => "snapshot evidence bound exceeded",
+            Self::EventTooLarge { .. } => "event text exceeds the frame bound",
         }
     }
 }
@@ -379,6 +403,13 @@ impl fmt::Display for Refusal {
         match self {
             Self::MalformedIdentity(error) | Self::MalformedSequence(error) => {
                 write!(f, "{}: {error}", self.name())
+            }
+            Self::TaskLimit { limit } => write!(f, "{}: limit {limit}", self.name()),
+            Self::EvidenceLimit { found, limit } => {
+                write!(f, "{}: {found} > {limit}", self.name())
+            }
+            Self::EventTooLarge { bytes, limit } => {
+                write!(f, "{}: {bytes} > {limit} bytes", self.name())
             }
             other => f.write_str(other.name()),
         }
@@ -811,7 +842,9 @@ impl View {
     /// # Errors
     ///
     /// * [`Refusal::EpochMismatch`] when the receipt belongs to another epoch;
-    /// * [`Refusal::IntentConflict`] when `key` was already submitted for a different task.
+    /// * [`Refusal::IntentConflict`] when `key` was already submitted for a different task;
+    /// * [`Refusal::TaskLimit`] when a new key would exceed [`MAX_TASKS`], refused before it is
+    ///   stored.
     pub fn submit<'a>(
         &mut self,
         key: &IntentKey,
@@ -834,6 +867,9 @@ impl View {
             };
         }
         if let Some(acceptance) = outcome.acceptance() {
+            if self.submitted.len() >= MAX_TASKS {
+                return Err(Refusal::TaskLimit { limit: MAX_TASKS });
+            }
             self.submitted.insert(
                 key.as_str().to_owned(),
                 acceptance.task().as_str().to_owned(),
@@ -863,7 +899,9 @@ impl View {
     ///   resynchronise rather than present a history with a hole in it. (`sequence >
     ///   previous` then follows from the stale check, so it needs no clause of its own.)
     /// * [`Refusal::BufferFull`] at [`MAX_BUFFERED_EVENTS`], refused before the event is
-    ///   stored so a slow renderer cannot make the client grow without bound.
+    ///   stored so a slow renderer cannot make the client grow without bound;
+    /// * [`Refusal::EventTooLarge`] when `text` exceeds [`MAX_EVENT_TEXT_BYTES`], refused before
+    ///   it is copied. (The caller's decoder owns the bound on its own read.)
     pub fn observe(
         &mut self,
         epoch: &Epoch,
@@ -882,6 +920,12 @@ impl View {
         }
         if self.buffered.len() >= MAX_BUFFERED_EVENTS {
             return Err(Refusal::BufferFull);
+        }
+        if text.len() > MAX_EVENT_TEXT_BYTES {
+            return Err(Refusal::EventTooLarge {
+                bytes: text.len(),
+                limit: MAX_EVENT_TEXT_BYTES,
+            });
         }
         self.buffered.push((sequence, text.to_owned()));
         self.cursor = sequence;
@@ -906,11 +950,23 @@ impl View {
     ///
     /// * [`Refusal::MalformedIdentity`] when the snapshot's task is not a `UUIDv4`;
     /// * [`Refusal::EpochMismatch`] when the snapshot was read in another epoch — a late
-    ///   snapshot from before an epoch change describes a world that no longer exists.
+    ///   snapshot from before an epoch change describes a world that no longer exists;
+    /// * [`Refusal::EvidenceLimit`] when the snapshot carries more than [`MAX_EVIDENCE_REFS`]
+    ///   evidence references — more than the engine serves;
+    /// * [`Refusal::TaskLimit`] when a new task would exceed [`MAX_TASKS`].
     pub fn present(&mut self, snapshot: Snapshot) -> Result<bool, Refusal> {
         let task = UuidV4::parse(snapshot.task.as_str()).map_err(Refusal::MalformedIdentity)?;
         if snapshot.epoch != self.epoch {
             return Err(Refusal::EpochMismatch);
+        }
+        if snapshot.evidence.len() > MAX_EVIDENCE_REFS {
+            return Err(Refusal::EvidenceLimit {
+                found: snapshot.evidence.len(),
+                limit: MAX_EVIDENCE_REFS,
+            });
+        }
+        if !self.snapshots.contains_key(task.as_str()) && self.snapshots.len() >= MAX_TASKS {
+            return Err(Refusal::TaskLimit { limit: MAX_TASKS });
         }
         let freshness = if snapshot.sequence >= self.resynced_at {
             Freshness::Current
