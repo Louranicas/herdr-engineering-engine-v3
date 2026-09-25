@@ -847,6 +847,15 @@ systemd_run_sha256 = "{HEX2}"
             field,
             why,
         };
+        // The lowest byte a name may hold is 0x20: a space is a name, 0x1f is not (P2b mutants).
+        assert!(compose(with("baseline = \"base-1\"", "baseline = \"base 1\"").as_bytes()).is_ok());
+        assert_eq!(
+            refused(&with(
+                "baseline = \"base-1\"",
+                "baseline = \"base\\u001f1\""
+            )),
+            at(0, ID, Field::Baseline, WorkspaceWhy::Component)
+        );
         let none: String = valid()
             .split("[[workspace]]")
             .enumerate()
@@ -1208,6 +1217,15 @@ systemd_run_sha256 = "{HEX2}"
                 ProfileError::WrongType { path: path.into() }
             );
         }
+    }
+
+    /// The declared directory count and the derived set's, each at its bound, with both numbers.
+    #[test]
+    fn the_declared_and_derived_directory_counts_are_bounded() {
+        let pin = |name: &str, why| ProfileError::Pin {
+            name: name.to_owned(),
+            why,
+        };
         let declared = |count: usize| {
             let rows: Vec<String> = (0..count)
                 .map(|index| format!("\"/usr/lib64/d{index}\""))
@@ -1232,6 +1250,18 @@ systemd_run_sha256 = "{HEX2}"
         // (/toolchain/lib, /usr/bin, /usr), so n declared directories derive n + 9: 503 fit
         // exactly, 504 do not.
         assert!(compose(declared(503).as_bytes()).is_ok());
+        // Exactly the mounts declared: not the declared list's refusal (it admits 512), but the
+        // derived set's, 512 + 9 (P2b mutants: `>` against `>=` at the declared bound).
+        assert_eq!(
+            refused(&declared(MAX_MOUNTS)),
+            pin(
+                "namespace_directories",
+                PinWhy::Count {
+                    found: MAX_MOUNTS + 9,
+                    limit: MAX_MOUNTS
+                }
+            )
+        );
         assert_eq!(
             refused(&declared(504)),
             pin(
