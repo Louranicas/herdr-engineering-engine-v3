@@ -4730,6 +4730,15 @@ fn every_catalogue_action_is_dispatched_or_named_unserved() -> Result<(), Box<dy
             return Err(format!("{}: closed", action.id).into());
         };
         let reply: Value = serde_json::from_slice(&bytes)?;
+        // Past admission (review G4): every admission refusal names an envelope field outside
+        // `/body`, or is `unknown_action`; a row refused there would make the checks below vacuous.
+        let field = reply["details"]["field"].as_str().unwrap_or("");
+        assert!(
+            reply["code"] != json!("unknown_action")
+                && (field.is_empty() || field.starts_with("/body")),
+            "{}: refused at admission, so dispatch was never reached: {reply}",
+            action.id
+        );
         assert_ne!(
             reply["details"]["constraint"],
             json!("action has no dispatch arm"),
@@ -4748,11 +4757,15 @@ fn every_catalogue_action_is_dispatched_or_named_unserved() -> Result<(), Box<dy
                 assert_eq!(
                     (
                         &reply["code"],
+                        &reply["retry"],
+                        &reply["effect"],
                         &reply["details"]["constraint"],
                         &reply["message"]
                     ),
                     (
                         &json!("unavailable"),
+                        &json!("after_condition"),
+                        &json!("none"),
                         &json!("owner not composed"),
                         &json!(message)
                     ),
