@@ -364,16 +364,18 @@ fn refuse(
     origin: Instant,
     deadline: Instant,
 ) -> Result<(), Error> {
-    let bytes = serde_json::to_vec(&serde_json::json!({
-        "kind": "hee3.pre-dispatch-refusal/1",
-        "task": dispatch.task.as_str(),
-        "refusal": refusal.name(),
-    }))
-    .map_err(|_| Error::Identity)?;
     let (staging, event) = (fresh(deadline)?, fresh(deadline)?);
     let reason = Name::new(refusal.name()).map_err(|_| Error::Identity)?;
     tasks.with_store(|store| -> Result<(), Error> {
         let head = store.get(dispatch.principal, dispatch.task, deadline)?;
+        let observed_ms = millis(origin.elapsed());
+        let bytes = serde_json::to_vec(&serde_json::json!({
+            "kind": "hee3.pre-dispatch-refusal/1",
+            "task": dispatch.task.as_str(),
+            "refusal": refusal.name(),
+            "observed_ms": observed_ms,
+        }))
+        .map_err(|_| Error::Identity)?;
         let object = store.publish(&bytes, uuid(&staging)?, deadline)?;
         store.finish_preparation(
             dispatch.principal,
@@ -386,7 +388,7 @@ fn refuse(
             },
             Settlement {
                 effect: Effect::None,
-                used_ms: Some(millis(origin.elapsed())),
+                used_ms: Some(preparation_charge(observed_ms, head.reserved_work_ms)),
                 cleanup_settled: true,
                 ready_to_verify: false,
             },
@@ -502,12 +504,15 @@ impl<C: CandidateSource, V: Verifier> StoreRuntime<'_, C, V> {
                 let used_ms = check
                     .used_ms
                     .filter(|used| *used <= head.reserved_verify_ms);
-                let verdict =
-                    if check.verdict == VerificationVerdict::Cancelled && !head.cancellation {
-                        VerificationVerdict::Error
-                    } else {
-                        check.verdict
-                    };
+                let verdict = if check.criteria & !declared_criteria() != 0 {
+                    // Bits outside the class's criteria are an invalid check, never a stranded
+                    // task (re-review LOW-3), recorded as such.
+                    VerificationVerdict::Invalid
+                } else if check.verdict == VerificationVerdict::Cancelled && !head.cancellation {
+                    VerificationVerdict::Error
+                } else {
+                    check.verdict
+                };
                 let object = store.publish(&check.evidence, uuid(&staging)?, self.deadline)?;
                 let generation = store.record_verification(
                     &expected(&head, begun)?,
@@ -618,7 +623,10 @@ impl<C: CandidateSource, V: Verifier> StoreRuntime<'_, C, V> {
                     stop,
                     Settlement {
                         effect: Effect::None,
-                        used_ms: Some(millis(self.origin.elapsed())),
+                        used_ms: Some(preparation_charge(
+                            millis(self.origin.elapsed()),
+                            head.reserved_work_ms,
+                        )),
                         cleanup_settled: true,
                         ready_to_verify: false,
                     },
@@ -758,7 +766,10 @@ impl<C: CandidateSource, V: Verifier> driver::Runtime for StoreRuntime<'_, C, V>
                         true
                     }
                     Err(failure) => {
-                        let removed = remove(&failure, work_until);
+                        let removed = remove(
+                            &failure,
+                            teardown_deadline(work_until, self.dispatch.teardown_ms, self.deadline),
+                        );
                         if let Some(begun) = self.attempts.get_mut(index) {
                             begun.refused = Some((bytes, refusal_name(failure.error)));
                         }
@@ -896,6 +907,32 @@ const fn refusal_name(error: repair::Error) -> &'static str {
     }
 }
 
+/// What a stop before any attempt charges: the observed preparation time, never more than the work
+/// reservation holds (review MEDIUM-1). The store refuses a charge past the reservation, so an
+/// honest refusal of an empty or tiny reservation would otherwise strand the task; the observed
+/// figure travels in the stop's evidence.
+const fn preparation_charge(observed_ms: u64, reserved_ms: u64) -> u64 {
+    if observed_ms < reserved_ms {
+        observed_ms
+    } else {
+        reserved_ms
+    }
+}
+
+/// The deadline a refused candidate's removal is given: its work window plus the teardown share
+/// held back for exactly this, never past the task's deadline (review MEDIUM-2).
+fn teardown_deadline(work_until: Instant, teardown_ms: u64, task_deadline: Instant) -> Instant {
+    task_deadline.min(work_until + Duration::from_millis(teardown_ms))
+}
+
+/// Every criterion bit the class declares.
+fn declared_criteria() -> u64 {
+    match U64_CRITERIA.len() {
+        64.. => u64::MAX,
+        count => (1_u64 << count) - 1,
+    }
+}
+
 fn expected<'b>(head: &'b TaskHead, begun: &'b Begun) -> Result<Expected<'b>, Error> {
     Ok(Expected {
         task: uuid(&head.id)?,
@@ -925,4 +962,43 @@ fn number(value: &str) -> Result<u64, Error> {
 
 fn millis(duration: Duration) -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{declared_criteria, preparation_charge, teardown_deadline};
+    use std::time::{Duration, Instant};
+
+    /// Review MEDIUM-1 · the charge is the observed time below the reservation and the reservation
+    /// at and above it: an empty reservation charges 0 whatever was observed.
+    #[test]
+    fn a_preparation_charge_never_exceeds_the_reservation() {
+        assert_eq!(
+            [(0, 0), (7, 0), (7, 9), (9, 9), (12, 9), (u64::MAX, 3)]
+                .map(|(observed, reserved)| preparation_charge(observed, reserved)),
+            [0, 0, 7, 9, 9, 3]
+        );
+    }
+
+    /// Review MEDIUM-2 · removal gets the teardown share past the work window, capped at the task
+    /// deadline.
+    #[test]
+    fn a_removal_gets_the_teardown_share_within_the_task_deadline() {
+        let now = Instant::now();
+        let work_until = now + Duration::from_millis(500);
+        assert_eq!(
+            teardown_deadline(work_until, 250, now + Duration::from_secs(60)),
+            now + Duration::from_millis(750)
+        );
+        assert_eq!(
+            teardown_deadline(work_until, 250, now + Duration::from_millis(600)),
+            now + Duration::from_millis(600)
+        );
+    }
+
+    /// The class declares one criterion: bit 0 alone.
+    #[test]
+    fn the_class_declares_exactly_its_criteria_bits() {
+        assert_eq!(declared_criteria(), 1);
+    }
 }

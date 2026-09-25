@@ -147,6 +147,7 @@ T06_UNIT_COUNTS = {
     "app::capture::tests::": 6, "app::durable_control::tests::": 6,
     "app::repair::tests::": 7, "worker::namespace::": 8,
     "check::patch::tests::": 6, "app::class_profile::tests::": 10,
+    "app::runtime::tests::": 3,
 }
 
 
@@ -230,7 +231,7 @@ CONTEXT_INPUTS = ("src/context.rs",)
 COHORT_TARGET_COUNTS = {"t22_cohort": 67}
 COHORT_INPUTS = ("src/cohort.rs", "evaluation/cohorts/claim-overlap-v1.json",
                  "tests/fixtures/t22/C01.json", "tests/fixtures/t22/C02.json")
-ACTIONS_TARGET_COUNTS = {"t28_actions": 223}
+ACTIONS_TARGET_COUNTS = {"t28_actions": 224}
 # The control receiver (review coordinator step 1) is served from the catalogue: its wire half in
 # contracts, its catalogue half in actions, and the independent Python oracle its cases run.
 ACTIONS_INPUTS = ("src/actions.rs", "src/worker/tools.rs", "src/actions/control.rs",

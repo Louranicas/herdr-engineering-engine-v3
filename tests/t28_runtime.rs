@@ -1048,3 +1048,29 @@ fn a_verifier_s_cancelled_is_a_cancellation_only_when_the_task_was_cancelled() -
     );
     Ok(())
 }
+
+/// B14a-1c re-review LOW-3 · a check reporting a criterion bit the class does not declare is an
+/// invalid check, recorded `invalid`, and stops the task as one — never a stranded task.
+#[test]
+fn an_undeclared_criterion_bit_is_an_invalid_check() -> Outcome_ {
+    let rig = rig(&Shape::default())?;
+    let principal = owner();
+    let (source, _) = script(vec![Candidate::Replacement(SECOND.to_vec())]);
+    let (verifier, _) = oracle(vec![check(
+        VerificationVerdict::Failed,
+        0b10,
+        b"a bit of its own",
+    )]);
+    let outcome = run(&rig, &principal, source, verifier, 5_000).map_err(|e| format!("{e:?}"))?;
+    assert_eq!(
+        outcome,
+        Outcome::Driven(Driven::Stopped(StopReason::InvalidCheck))
+    );
+    assert_eq!(state(&rig)?, "failed");
+    assert_eq!(verifications(&rig)?[0][0], "invalid");
+    assert_eq!(
+        rows(&rig, "SELECT reason FROM task_stops WHERE task_id=?")?,
+        vec![vec!["invalid_check".to_owned()]]
+    );
+    Ok(())
+}
