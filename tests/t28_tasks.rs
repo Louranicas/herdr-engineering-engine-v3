@@ -4692,3 +4692,88 @@ fn a_replay_is_answered_by_its_record_not_by_the_screen() -> Outcome {
     assert_eq!(conflict["code"], json!("conflict"), "{conflict}");
     Ok(())
 }
+
+/// DS5 · every catalogue row is dispatched or named unserved — the world (`Catalogue::all()`), not a
+/// list. With no owner composed, each `UNSERVED` action answers `unavailable / owner not composed`
+/// with its own message naming the owner and slice; each dispatched action never answers with an
+/// `UNSERVED` message; and no row reaches the receiver's `action has no dispatch arm` defect.
+#[test]
+fn every_catalogue_action_is_dispatched_or_named_unserved() -> Result<(), Box<dyn Error>> {
+    use habitat_engine::actions::control::UNSERVED;
+    use habitat_engine::actions::{Catalogue, PreconditionRule};
+    let operator = Principal::new(1000, "operator").map_err(|error| format!("{error:?}"))?;
+    let unserved: std::collections::BTreeMap<&str, &str> = UNSERVED.into_iter().collect();
+    assert_eq!(unserved.len(), UNSERVED.len(), "each unserved id once");
+    for (index, action) in Catalogue::all().iter().enumerate() {
+        let composed = Composed {
+            grants: &Open,
+            health: None,
+            tasks: None,
+            draining: None,
+        };
+        // The envelope each row's own declarations require (the shape of the case above): a key
+        // when it changes state, the precondition its rule names, its wire version.
+        let key = action.effect.mutates().then_some(KEY);
+        let serial = u8::try_from(index).map_err(|_| "index")? + 0x40;
+        let mut frame: Value =
+            serde_json::from_slice(&request(action.id, serial, key, &json!({})))?;
+        frame["action_version"] = json!(action.wire_version().ok_or("action version")?);
+        frame["precondition"] = match action.precondition {
+            PreconditionRule::Forbidden | PreconditionRule::Optional(_) => Value::Null,
+            PreconditionRule::Required(kind) => json!({
+                "resource": kind.name(), "id": "28d00000-0000-4000-8000-0000000000cc",
+                "generation": "1"}),
+        };
+        let Reply::Frame(bytes) =
+            control::serve_composed(&serde_json::to_vec(&frame)?, NOW, &operator, composed)
+        else {
+            return Err(format!("{}: closed", action.id).into());
+        };
+        let reply: Value = serde_json::from_slice(&bytes)?;
+        assert_ne!(
+            reply["details"]["constraint"],
+            json!("action has no dispatch arm"),
+            "{}: declared, neither dispatched nor named unserved",
+            action.id
+        );
+        match unserved.get(action.id) {
+            Some(message) => {
+                // The owner a message names is the catalogue row's declared owner — an independent
+                // source, not the table the answer came from (a wrong owner is otherwise invisible).
+                assert!(
+                    message.starts_with(&format!("served by {} (", action.owner.name())),
+                    "{}: names an owner the catalogue does not declare: {message}",
+                    action.id
+                );
+                assert_eq!(
+                    (
+                        &reply["code"],
+                        &reply["details"]["constraint"],
+                        &reply["message"]
+                    ),
+                    (
+                        &json!("unavailable"),
+                        &json!("owner not composed"),
+                        &json!(message)
+                    ),
+                    "{}",
+                    action.id
+                );
+            }
+            None => assert!(
+                !UNSERVED
+                    .iter()
+                    .any(|(_, message)| reply["message"] == json!(message)),
+                "{}: a dispatched action answered with an unserved message",
+                action.id
+            ),
+        }
+    }
+    assert!(
+        unserved
+            .keys()
+            .all(|id| Catalogue::all().iter().any(|action| action.id == *id)),
+        "every unserved id is a catalogue row"
+    );
+    Ok(())
+}

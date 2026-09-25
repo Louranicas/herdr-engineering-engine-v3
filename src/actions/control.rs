@@ -411,6 +411,61 @@ fn admit(
     Ok((dispatch.action(), caller))
 }
 
+/// The declared actions no owner serves behind this receiver yet, each with the owner and the route
+/// slice that will compose it (DS5, `HEE3_MASTER_PLAN_20260926.md` §4). An exclusion list with
+/// reasons, not a catch-all: every catalogue row is either dispatched below or named here, and a row
+/// that is neither is `internal` (`every_catalogue_action_is_dispatched_or_named_unserved`).
+pub const UNSERVED: [(&str, &str); 12] = [
+    (
+        "thread.get",
+        "served by cohort (C06), not composed behind this receiver",
+    ),
+    (
+        "thread.list",
+        "served by cohort (C06), not composed behind this receiver",
+    ),
+    (
+        "roster.list",
+        "served by roster (C01), not composed behind this receiver",
+    ),
+    (
+        "roster.inspect",
+        "served by roster (C01), not composed behind this receiver",
+    ),
+    (
+        "roster.update",
+        "served by roster (C01), not composed behind this receiver",
+    ),
+    (
+        "roster.disable",
+        "served by roster (C01), not composed behind this receiver",
+    ),
+    (
+        "service.inspect",
+        "served by service (C02), not composed behind this receiver",
+    ),
+    (
+        "service.probe",
+        "served by service (C02), not composed behind this receiver",
+    ),
+    (
+        "service.action",
+        "served by service (C03), not composed behind this receiver",
+    ),
+    (
+        "events.subscribe",
+        "served by notify (B20), not composed behind this receiver",
+    ),
+    (
+        "analysis.request",
+        "served by numerical (C04), not composed behind this receiver",
+    ),
+    (
+        "analysis.get",
+        "served by numerical (C04), not composed behind this receiver",
+    ),
+];
+
 fn dispatch(action: Action, caller: &Caller, context: &Context<'_>) -> Result<Outcome, Fault> {
     let body = &context.envelope.body;
     let owner_absent = || {
@@ -495,7 +550,21 @@ fn dispatch(action: Action, caller: &Caller, context: &Context<'_>) -> Result<Ou
         }
         "tools.inspect" => tools_inspect(caller, body).map(Outcome::read),
         "health" => health(context),
-        _ => Err(owner_absent()),
+        id => match UNSERVED.iter().find(|(unserved, _)| *unserved == id) {
+            Some((_, message)) => Err(Fault::of(
+                ErrorCode::Unavailable,
+                Retry::AfterCondition,
+                message,
+            )
+            .because("owner not composed")),
+            // A catalogue row with no dispatch arm and no reason: the receiver's own defect.
+            None => Err(Fault::of(
+                ErrorCode::Internal,
+                Retry::Never,
+                "the catalogue declares an action this receiver neither dispatches nor names unserved",
+            )
+            .because("action has no dispatch arm")),
+        },
     }
 }
 
