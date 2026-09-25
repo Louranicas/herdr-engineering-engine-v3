@@ -1195,10 +1195,14 @@ impl Routing {
     /// any roster fact is known.
     #[must_use]
     pub fn carries_ranking(&self, recipe: &DeclaredRecipe) -> bool {
-        self.ranking.iter().all(|key| match key {
-            Key::Cost => recipe.cost_microunits.is_some(),
-            Key::Quality => recipe.quality_basis_points.is_some(),
-            Key::Latency => recipe.latency_ms.is_some(),
+        self.ranking.iter().all(|key| {
+            key_figure(
+                *key,
+                recipe.cost_microunits,
+                recipe.quality_basis_points,
+                recipe.latency_ms,
+            )
+            .is_some()
         })
     }
 
@@ -1646,10 +1650,28 @@ fn capabilities_valid(values: &[&str]) -> bool {
 
 /// The figure a ranking key reads from a recipe, if the recipe carries it.
 fn ranking_figure(recipe: &Recipe<'_>, key: Key) -> Option<u64> {
-    match key {
-        Key::Cost => recipe.cost_microunits,
-        Key::Quality => recipe.quality_basis_points.map(u64::from),
-        Key::Latency => recipe.latency_ms,
+    key_figure(
+        key,
+        recipe.cost_microunits,
+        recipe.quality_basis_points,
+        recipe.latency_ms,
+    )
+}
+
+/// The one Key → figure mapping: which of a recipe's three ranking figures `key` reads. Both
+/// [`Policy::declare`]'s baseline check (through [`ranking_figure`]) and
+/// [`Routing::carries_ranking`] read it, so the two cannot disagree about which field a key needs.
+const fn key_figure(
+    key: Key,
+    cost_microunits: Option<u64>,
+    quality_basis_points: Option<u16>,
+    latency_ms: Option<u64>,
+) -> Option<u64> {
+    match (key, quality_basis_points) {
+        (Key::Cost, _) => cost_microunits,
+        (Key::Quality, Some(quality)) => Some(quality as u64),
+        (Key::Quality, None) => None,
+        (Key::Latency, _) => latency_ms,
     }
 }
 

@@ -1350,29 +1350,44 @@ fn without_a_grant_directory_the_engine_serves_and_refuses_every_request() -> Ou
 }
 
 /// B07 · `serve` reads its route configuration once, at start, under custody, and composes it
-/// behind the task owner (the one wiring no library test reaches). With none installed, preview
-/// answers "not installed"; with the shipped `routes.toml` installed (its baseline names no
-/// declared recipe) it answers "refused" — which only a read of the file can produce — and the
-/// engine's log names the reason and the directory. Through the binary and the bash wrapper.
+/// behind the task owner (the one wiring no library test reaches). Three installs, three answers:
+/// none installed is "not installed"; the shipped `routes.toml` (its baseline names no declared
+/// recipe) is "refused"; a composable configuration whose baseline names a roster record this
+/// ledger does not hold answers "the route baseline's roster record is not available to this
+/// caller" — reachable only after custody, the read, the parse and composition all succeeded
+/// (review R4: "refused" alone is also what a custody failure produces). The engine's log names
+/// each outcome once. Through the binary and the bash wrapper.
 #[test]
 fn the_engine_reads_its_route_configuration_at_start() -> Outcome {
-    for (installed, expected) in [
-        (false, "route configuration not installed"),
-        (true, "route configuration refused"),
+    const SHIPPED: &str = include_str!("../config/routes.toml");
+    let composable = SHIPPED
+        .replacen(
+            "recipes = []",
+            "recipes = [{ id = \"base\", version = 1, \
+             adapter = \"28c00000-0000-4000-8000-0000000000e1\", actual_model_required = true, \
+             roster_record = \"28c00000-0000-4000-8000-0000000000e2\", \
+             serves = [\"rust-library-change/1\"], context_limit_tokens = 32768, \
+             cost_microunits = 0, quality_basis_points = 5000, latency_ms = 1000 }]",
+            1,
+        )
+        .replacen("09000000-0000-4000-8000-00000000000b", "base", 1);
+    for (installed, expected, read) in [
+        (None, "route configuration not installed", false),
+        (Some(SHIPPED), "route configuration refused", false),
+        (
+            Some(composable.as_str()),
+            "the route baseline's roster record is not available to this caller",
+            true,
+        ),
     ] {
         let world = World::granting(&["task"], &["read-only planning"])?;
         commission(&world.home)?;
         let routes = world
             .home
             .join(".config/herdr-engineering-engine-v3/routing");
-        if installed {
+        if let Some(source) = installed {
             DirBuilder::new().mode(0o700).create(&routes)?;
-            write_grant(
-                &routes,
-                "routes.toml",
-                include_bytes!("../config/routes.toml"),
-                0o600,
-            )?;
+            write_grant(&routes, "routes.toml", source.as_bytes(), 0o600)?;
         }
         let log = world.home.join("engine.log");
         let _engine = Engine::start_logged(&world.run, &world.home, &log)?;
@@ -1393,10 +1408,17 @@ fn the_engine_reads_its_route_configuration_at_start() -> Outcome {
             (&json!("unavailable"), &json!(expected)),
             "{refused}\n{log}"
         );
-        let line = format!(
-            "habitat-engine: task.preview unavailable: {expected} ({})",
-            routes.display()
-        );
+        let line = if read {
+            format!(
+                "habitat-engine: route configuration read from {}",
+                routes.display()
+            )
+        } else {
+            format!(
+                "habitat-engine: task.preview unavailable: {expected} ({})",
+                routes.display()
+            )
+        };
         assert_eq!(log.lines().filter(|seen| *seen == line).count(), 1, "{log}");
     }
     Ok(())

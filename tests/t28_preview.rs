@@ -294,8 +294,9 @@ fn expected(
 /// B07-P1 · one preview over eighteen declared recipes: every exclusion code and both eligibility
 /// paths (every filter passed; every filter passed but a ranking figure missing), the equality
 /// boundaries (context 32,768 passes, 32,767 does not; latency at the work share passes, one past
-/// it does not), a record with duplicate and control-byte capabilities (screened, never `internal`),
-/// an absent, a disabled and another principal's record — whole, against the independent oracle's
+/// it does not), a record whose roster labels repeat and hold a control byte (roster labels are not
+/// read under RC01 — review G1 — so it screens as any local recipe does), an absent, a disabled and
+/// another principal's record — whole, against the independent oracle's
 /// table, through the schema oracle.
 #[test]
 fn a_preview_screens_every_declared_recipe_as_the_independent_oracle_does() -> Outcome {

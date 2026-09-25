@@ -133,7 +133,8 @@ ROSTER_MUTATIONS = (
         "src/contracts/roster.rs",
         "unavailable_required_proof_refuses_before_any_attempt_instance_or_pin_write",
         # B07: the declared-and-observed rule moved into `evidenced_capabilities`, the one door
-        # `Selection::permits` and route composition share; the fault is planted where it lives.
+        # `Selection::permits` reads (route composition will, once a task requires a roster
+        # capability); the fault is planted where the rule lives.
         ".filter(|capability| observed.contains(capability))",
         # Always true, and still reads `observed` so the mutant compiles (a compile error is not a kill).
         ".filter(|_| observed.len() < usize::MAX)",
