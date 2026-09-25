@@ -40,9 +40,16 @@ pub const AGGREGATE_LIMITS: ScopeLimits = ScopeLimits {
     tasks: 256,
 };
 
+/// The aggregate slice's IO weight (systemd `IOWeight=`; the cgroup reads it back as `default <w>`).
+pub const AGGREGATE_IO_WEIGHT: u64 = 25;
+
 /// The grace between SIGTERM and SIGKILL, for both enforcers: systemd's `TimeoutStopSec=` on the
 /// scope and the process owner's own escalation (`worker::process`) — one value, two doors made one.
 pub const TERM_GRACE: Duration = Duration::from_secs(5);
+
+// systemd's `TimeoutStopSec=` is rendered in whole seconds; a sub-second grace would make the two
+// enforcers disagree silently (B14a-2b-i review LOW-4).
+const _: () = assert!(TERM_GRACE.subsec_nanos() == 0);
 
 /// The cgroup v2 CPU period systemd applies, in microseconds.
 const CPU_PERIOD_US: u64 = 100_000;
@@ -57,6 +64,33 @@ pub fn scope_properties(limits: ScopeLimits) -> [String; 5] {
         format!("--property=MemorySwapMax={}", limits.swap_bytes),
         format!("--property=TasksMax={}", limits.tasks),
         format!("--property=TimeoutStopSec={}s", TERM_GRACE.as_secs()),
+    ]
+}
+
+/// The aggregate slice's `StartTransientUnit` properties as `(name, type, value)` triples flattened,
+/// in the order systemd receives them: the limits, the IO weight and the collect mode.
+#[must_use]
+pub fn aggregate_properties() -> [String; 18] {
+    let limits = AGGREGATE_LIMITS;
+    [
+        "CPUQuotaPerSecUSec".into(),
+        "t".into(),
+        limits.cpu_quota_per_sec_usec().to_string(),
+        "MemoryMax".into(),
+        "t".into(),
+        limits.memory_bytes.to_string(),
+        "MemorySwapMax".into(),
+        "t".into(),
+        limits.swap_bytes.to_string(),
+        "TasksMax".into(),
+        "t".into(),
+        limits.tasks.to_string(),
+        "IOWeight".into(),
+        "t".into(),
+        AGGREGATE_IO_WEIGHT.to_string(),
+        "CollectMode".into(),
+        "s".into(),
+        "inactive-or-failed".into(),
     ]
 }
 
@@ -442,7 +476,7 @@ fn validate_limits(value: &Limits, parent: bool) -> Result<(), Error> {
         || value.memory_max != limits.memory_bytes.to_string()
         || value.memory_swap_max != limits.swap_bytes.to_string()
         || value.pids_max != limits.tasks.to_string()
-        || (parent && value.io_weight.as_deref() != Some("default 25"))
+        || (parent && value.io_weight != Some(format!("default {AGGREGATE_IO_WEIGHT}")))
     {
         return Err(Error::Limits);
     }
@@ -464,7 +498,10 @@ fn parse_population(events: &str) -> Result<Population, Error> {
 
 #[cfg(test)]
 mod limit_tests {
-    use super::{AGGREGATE_LIMITS, ATTEMPT_LIMITS, TERM_GRACE, scope_properties};
+    use super::{
+        AGGREGATE_IO_WEIGHT, AGGREGATE_LIMITS, ATTEMPT_LIMITS, TERM_GRACE, aggregate_properties,
+        scope_properties,
+    };
 
     /// The readbacks are what the kernel reported for a real run's scopes
     /// (`~/hee3-evidence/T06/fixed-task-execution-003/run`, 12 readbacks of each): an independent
@@ -517,5 +554,36 @@ mod limit_tests {
         );
         assert_eq!(AGGREGATE_LIMITS.cpu_quota_per_sec_usec(), 4_000_000);
         assert_eq!(TERM_GRACE.as_secs(), 5);
+    }
+
+    /// The aggregate's D-Bus properties, pinned whole against the reviewed literals the request
+    /// carried before B14a-2b-i (so a mislabelled or reordered property cannot pass), and its IO
+    /// weight against the cgroup's own `io.weight` readback from the same real run (`default 25`).
+    #[test]
+    fn the_aggregate_request_is_pinned_whole_and_its_io_weight_reads_back() {
+        assert_eq!(
+            aggregate_properties(),
+            [
+                "CPUQuotaPerSecUSec",
+                "t",
+                "4000000",
+                "MemoryMax",
+                "t",
+                "17179869184",
+                "MemorySwapMax",
+                "t",
+                "0",
+                "TasksMax",
+                "t",
+                "256",
+                "IOWeight",
+                "t",
+                "25",
+                "CollectMode",
+                "s",
+                "inactive-or-failed",
+            ]
+        );
+        assert_eq!(format!("default {AGGREGATE_IO_WEIGHT}"), "default 25");
     }
 }

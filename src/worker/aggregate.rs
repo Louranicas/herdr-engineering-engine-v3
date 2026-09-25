@@ -201,33 +201,16 @@ impl Aggregate {
             }
         }
         self.phase = Phase::CreateRequested;
-        let args = vec![
+        let properties = resources::aggregate_properties();
+        // D-Bus `a(sv)`: the count of (name, value) pairs precedes them, derived from the one vector.
+        let mut args = vec![
             "ssa(sv)a(sa(sv))".into(),
             self.unit.clone(),
             "fail".into(),
-            "6".into(),
-            "CPUQuotaPerSecUSec".into(),
-            "t".into(),
-            resources::AGGREGATE_LIMITS
-                .cpu_quota_per_sec_usec()
-                .to_string(),
-            "MemoryMax".into(),
-            "t".into(),
-            resources::AGGREGATE_LIMITS.memory_bytes.to_string(),
-            "MemorySwapMax".into(),
-            "t".into(),
-            resources::AGGREGATE_LIMITS.swap_bytes.to_string(),
-            "TasksMax".into(),
-            "t".into(),
-            resources::AGGREGATE_LIMITS.tasks.to_string(),
-            "IOWeight".into(),
-            "t".into(),
-            "25".into(),
-            "CollectMode".into(),
-            "s".into(),
-            "inactive-or-failed".into(),
-            "0".into(),
+            (properties.len() / 3).to_string(),
         ];
+        args.extend(properties);
+        args.push("0".into());
         job(&self.method("StartTransientUnit", args, deadline, cancelled)?)?;
         self.phase = Phase::SliceCreated;
         self.slice_fd = Some(self.capture_slice(deadline, cancelled)?);
@@ -659,7 +642,7 @@ fn aggregate_limits(fd: &File, deadline: Instant) -> Result<resources::Limits, E
         || limits.memory_max != declared.memory_bytes.to_string()
         || limits.memory_swap_max != declared.swap_bytes.to_string()
         || limits.pids_max != declared.tasks.to_string()
-        || limits.io_weight.as_deref() != Some("default 25")
+        || limits.io_weight != Some(format!("default {}", resources::AGGREGATE_IO_WEIGHT))
     {
         return Err(Error::Limits);
     }
