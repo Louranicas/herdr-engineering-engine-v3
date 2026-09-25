@@ -3041,6 +3041,7 @@ type Refusal<'a> = (&'static str, &'a Principal, Vec<u8>, &'static str, Value);
 fn resolve_refusals<'a>(
     operator: &'a Principal,
     reviewer: &'a Principal,
+    stranger: &'a Principal,
     ids: &[String],
     intent: &str,
 ) -> Result<Vec<Refusal<'a>>, Box<dyn Error>> {
@@ -3053,6 +3054,13 @@ fn resolve_refusals<'a>(
             resolve_frame(1, RESOLVE_KEY, &ids[0], "3", &unknown)?,
             "forbidden",
             Value::Null,
+        ),
+        (
+            "another operator's task",
+            stranger,
+            resolve_frame(8, RESOLVE_KEY, &ids[0], "3", &unknown)?,
+            "not_found",
+            json!("/precondition/id"),
         ),
         (
             "an unknown task",
@@ -3119,6 +3127,7 @@ fn a_resolve_needs_the_operator_the_task_its_generation_and_an_open_obligation()
     let scratch = Scratch::new()?;
     let operator = Principal::new(1000, "operator").map_err(|error| format!("{error:?}"))?;
     let reviewer = Principal::new(1000, "reviewer").map_err(|error| format!("{error:?}"))?;
+    let stranger = Principal::new(1001, "operator").map_err(|error| format!("{error:?}"))?;
     let (tasks, ids, _) = resolve_ledger(
         &scratch,
         &operator,
@@ -3140,7 +3149,7 @@ fn a_resolve_needs_the_operator_the_task_its_generation_and_an_open_obligation()
         .ok_or("obligation")?;
     let mut replies = Vec::new();
     for (case, principal, frame, code, field) in
-        resolve_refusals(&operator, &reviewer, &ids, intent)?
+        resolve_refusals(&operator, &reviewer, &stranger, &ids, intent)?
     {
         let reply = serve(&tasks, principal, &frame)?;
         assert_eq!(code_at(&reply), (&json!(code), &field), "{case}: {reply}");
@@ -3319,7 +3328,25 @@ fn an_acknowledged_task_is_abandoned_through_the_stop_door() -> Outcome {
         (&json!("conflict"), &json!("/precondition")),
         "{too_late}"
     );
-    conforms(&[("task.resolve", &abandoned), ("task.cancel", &too_late)])?;
+    // Its attempts are no longer an operator's to dispose of: the outcome is decided.
+    let decided = resolve_with(
+        &tasks,
+        &operator,
+        (4, RESOLVE_KEY_3, task, "6"),
+        &attempt,
+        "quarantine",
+        &json!([]),
+    )?;
+    assert_eq!(
+        code_at(&decided),
+        (&json!("conflict"), &json!("/precondition")),
+        "{decided}"
+    );
+    conforms(&[
+        ("task.resolve", &abandoned),
+        ("task.cancel", &too_late),
+        ("task.resolve", &decided),
+    ])?;
     Ok(())
 }
 
@@ -3678,5 +3705,130 @@ fn a_quarantine_survives_a_cancel_and_the_cancel_decides_the_stop() -> Outcome {
         ("task.cancel", &cancelled),
         ("task.resolve", &stopped),
     ])?;
+    Ok(())
+}
+
+/// B08: the edges of the table. A cancel pending before a quarantine keeps `effect_unknown` (the
+/// quarantine never renames a liability away); an abandonment whose every usage is known releases
+/// the reservations and leaves the measured spend.
+#[test]
+fn a_resolve_keeps_a_pending_cancel_and_releases_known_usage() -> Outcome {
+    let scratch = Scratch::new()?;
+    let operator = Principal::new(1000, "operator").map_err(|error| format!("{error:?}"))?;
+    let (tasks, ids, evidence) = resolve_ledger(
+        &scratch,
+        &operator,
+        &[Stage::Unknown, Stage::UnknownEffectOnly],
+    )?;
+    let refs = json!([evidence_of(&evidence)]);
+    let cancelled = serve(
+        &tasks,
+        &operator,
+        &cancel_frame(
+            1,
+            CANCEL_KEY,
+            &ids[0],
+            "3",
+            &json!({"reason": "safety", "note": null}),
+        )?,
+    )?;
+    assert_eq!(
+        cancelled["body"]["task"]["state"],
+        json!("effect_unknown"),
+        "{cancelled}"
+    );
+    let quarantined = resolve_with(
+        &tasks,
+        &operator,
+        (2, RESOLVE_KEY, &ids[0], "4"),
+        &nth(0x05b2, 1),
+        "quarantine",
+        &json!([]),
+    )?;
+    assert_eq!(
+        quarantined["body"]["task"]["state"],
+        json!("effect_unknown"),
+        "{quarantined}"
+    );
+    let (second, acknowledge) = (nth(0x05b2, 2), "acknowledge_external_effect");
+    resolve_with(
+        &tasks,
+        &operator,
+        (3, RESOLVE_KEY_2, &ids[1], "3"),
+        &second,
+        acknowledge,
+        &refs,
+    )?;
+    let spent = ledger_value(&scratch, "SELECT spent_ms FROM tasks WHERE id=?", &ids[1])?;
+    let abandoned = resolve_with(
+        &tasks,
+        &operator,
+        (4, RESOLVE_KEY_3, &ids[1], "4"),
+        &second,
+        "abandon",
+        &refs,
+    )?;
+    assert_eq!(
+        abandoned["body"]["task"]["state"],
+        json!("abandoned"),
+        "{abandoned}"
+    );
+    assert_eq!(
+        (
+            ledger_value(
+                &scratch,
+                "SELECT reserved_work_ms+reserved_verify_ms FROM tasks WHERE id=?",
+                &ids[1]
+            )?,
+            ledger_value(&scratch, "SELECT spent_ms FROM tasks WHERE id=?", &ids[1])?
+        ),
+        (json!(0), spent),
+        "every usage is known: reservations released, spend unchanged"
+    );
+    conforms(&[
+        ("task.cancel", &cancelled),
+        ("task.resolve", &quarantined),
+        ("task.resolve", &abandoned),
+    ])?;
+    Ok(())
+}
+
+/// B08: a delivery already acknowledged is no obligation: naming it is `not_found`.
+#[test]
+fn a_delivered_notification_is_no_obligation() -> Outcome {
+    let scratch = Scratch::new()?;
+    let operator = Principal::new(1000, "operator").map_err(|error| format!("{error:?}"))?;
+    let (tasks, ids, _) = resolve_ledger(&scratch, &operator, &[Stage::Accepted])?;
+    let event = ledger_value(
+        &scratch,
+        "SELECT o.event_id FROM outbox o JOIN events e ON e.id=o.event_id WHERE e.task_id=? AND o.delivered=0",
+        &ids[0],
+    )?;
+    let event = event.as_str().ok_or("delivery event")?.to_owned();
+    drop(tasks);
+    let mut store = raw_store(&scratch)?;
+    // The recipient key the store addresses this principal's events to (`<uid>:<role>`).
+    store
+        .acknowledge_delivery(
+            UuidV4::parse(&event)?,
+            "1000:operator",
+            Instant::now() + Duration::from_secs(10),
+        )
+        .map_err(|error| format!("{error:?}"))?;
+    let tasks = StoreTasks::new(store, EPOCH.to_owned());
+    let delivered = resolve_with(
+        &tasks,
+        &operator,
+        (5, "28d00000-0000-4000-8000-0000000009a4", &ids[0], "5"),
+        &event,
+        "abandon",
+        &json!([]),
+    )?;
+    assert_eq!(
+        code_at(&delivered),
+        (&json!("not_found"), &json!("/body/obligation_id")),
+        "{delivered}"
+    );
+    conforms(&[("task.resolve", &delivered)])?;
     Ok(())
 }
