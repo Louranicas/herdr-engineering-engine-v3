@@ -290,6 +290,43 @@ impl Snapshot {
     pub fn entries(&self) -> impl Iterator<Item = &Entry> {
         self.entries.values()
     }
+
+    /// The snapshot's content, as one digest (B14-P2a): `sha256:` over a text manifest of one line
+    /// per entry in the byte order of its path — `<path>\td\n` for a directory,
+    /// `<path>\tf\t<x|->\t<sha256 hex>\n` for a file, `x` when any execute bit is set. The root and
+    /// every inode stamp are excluded, so two captures of equal trees agree wherever they live.
+    /// The manifest is what a coreutils pipeline emits (`tests/fixtures/digest/`), so the value is
+    /// reproducible outside this program. `None` for a path holding a C0 control or DEL: the
+    /// manifest's order would then disagree with the path order (a tab sorts above 0x01–0x08).
+    #[must_use]
+    pub fn content_digest(&self) -> Option<String> {
+        let alphabet = b"0123456789abcdef";
+        let mut manifest = Vec::new();
+        for entry in self.entries.values() {
+            if entry.path.bytes().any(|byte| byte < 0x20 || byte == 0x7f) {
+                return None;
+            }
+            manifest.extend_from_slice(entry.path.as_bytes());
+            match &entry.content {
+                Content::Directory => manifest.extend_from_slice(b"\td\n"),
+                Content::File {
+                    sha256, executable, ..
+                } => {
+                    manifest.extend_from_slice(if *executable {
+                        b"\tf\tx\t"
+                    } else {
+                        b"\tf\t-\t"
+                    });
+                    for byte in sha256 {
+                        manifest.push(alphabet[usize::from(byte >> 4)]);
+                        manifest.push(alphabet[usize::from(byte & 15)]);
+                    }
+                    manifest.push(b'\n');
+                }
+            }
+        }
+        Some(crate::contracts::control::request_sha256(&manifest))
+    }
     #[must_use]
     pub const fn total_bytes(&self) -> u64 {
         self.bytes

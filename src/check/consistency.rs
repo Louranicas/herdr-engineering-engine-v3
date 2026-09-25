@@ -55,6 +55,9 @@ pub struct Editable {
 /// The one frozen WL-U64 case and the criterion it credits.
 pub const U64_CASE_ID: &str = "WL-U64-PARSE-001-v1";
 pub const U64_CRITERION_ID: &str = "u64-frozen-exact-output";
+/// The class's whole criteria list, in the order a task binds it by (`criteria_digest`): the one
+/// credited criterion, so the class's criteria are this check's, never a second description.
+pub const U64_CRITERIA: [&str; 1] = [U64_CRITERION_ID];
 const U64_MODULE_ID: &str = "check";
 /// The WL-U64 class's one editable file (`TASK.md`: "Change only `src/lib.rs`") and its bounds:
 /// R1's 200 changed lines, and 64 KiB against a 751-byte reference. B14-P2's profile takes them over.
@@ -103,7 +106,13 @@ pub fn prepare_u64(attempt: U64Attempt) -> Result<Prepared, Error> {
         return Err(Error::Binding);
     }
     let name = |value: &str| Name::new(value).map_err(|_| Error::Encoding);
-    let criteria = List::new(vec![name(U64_CRITERION_ID)?]).map_err(|_| Error::Encoding)?;
+    let criteria = List::new(
+        U64_CRITERIA
+            .iter()
+            .map(|criterion| name(criterion))
+            .collect::<Result<Vec<_>, _>>()?,
+    )
+    .map_err(|_| Error::Encoding)?;
     let case = CasePlan {
         case_id: name(U64_CASE_ID)?,
         primary_module_id: name(U64_MODULE_ID)?,

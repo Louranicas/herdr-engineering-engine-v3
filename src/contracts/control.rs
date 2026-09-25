@@ -173,6 +173,22 @@ impl<R: Read> FrameReader<R> {
     }
 }
 
+/// The digest a task binds its acceptance criteria by: `request_sha256` of the criteria's compact
+/// JSON array, strings in the order given, duplicates kept. The one door for it — submit records it
+/// and the dispatcher compares a class's criteria with it (B14-P2a) — so the two cannot encode the
+/// same list differently. It is over the re-serialised strings, so two wire spellings of one string
+/// bind the same.
+#[must_use]
+pub fn criteria_digest<S: AsRef<str>>(criteria: &[S]) -> String {
+    let array = serde_json::Value::Array(
+        criteria
+            .iter()
+            .map(|criterion| serde_json::Value::String(criterion.as_ref().to_owned()))
+            .collect(),
+    );
+    request_sha256(array.to_string().as_bytes())
+}
+
 /// `sha256:` over the exact payload bytes, excluding the terminal LF (RC03 §3).
 #[must_use]
 pub fn request_sha256(payload: &[u8]) -> String {

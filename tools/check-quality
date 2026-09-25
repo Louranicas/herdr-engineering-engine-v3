@@ -114,7 +114,7 @@ T05_STORE_TEST_COUNT = 36
 # Fixed reviewed T06 development inventory. Profile repetition earns no new cases.
 T06_TARGET_COUNTS = {
     "t06_receipts": 64, "t06_store": 39, "t06_graph": 32,
-    "t06_driver": 29, "t06_consistency": 50, "t06_workspace": 35,
+    "t06_driver": 29, "t06_consistency": 50, "t06_workspace": 36,
     "t06_terminal": 39, "t06_evidence": 26, "t06_collector": 29,
     "t06_availability": 22, "t06_decision": 40, "t06_staging": 20,
     "t06_subjects": 8, "t06_process_timing": 3, "t06_workspace_export": 9,
@@ -136,6 +136,8 @@ T06_INPUTS = (
     # t06_collector pins prepare_u64's editable binding to the class's own TASK.md.
     "evaluation/tasks/WL-U64-PARSE-001/v1/TASK.md",
     "tests/fixtures/patch/cases.json",
+    # t06_workspace's content-digest known answer and t28_tasks's criteria-digest known answer (B14-P2a).
+    "tests/fixtures/digest/cases.json",
 )
 T06_UNIT_COUNTS = {
     "store::staging_tests::": 13, "check::u64_oracle::tests::": 22,
@@ -225,7 +227,7 @@ CONTEXT_INPUTS = ("src/context.rs",)
 COHORT_TARGET_COUNTS = {"t22_cohort": 67}
 COHORT_INPUTS = ("src/cohort.rs", "evaluation/cohorts/claim-overlap-v1.json",
                  "tests/fixtures/t22/C01.json", "tests/fixtures/t22/C02.json")
-ACTIONS_TARGET_COUNTS = {"t28_actions": 207}
+ACTIONS_TARGET_COUNTS = {"t28_actions": 208}
 # The control receiver (review coordinator step 1) is served from the catalogue: its wire half in
 # contracts, its catalogue half in actions, and the independent Python oracle its cases run.
 ACTIONS_INPUTS = ("src/actions.rs", "src/worker/tools.rs", "src/actions/control.rs",

@@ -1,0 +1,142 @@
+{
+ "generator": "tests/fixtures/digest/gen-digest-fixtures.sh",
+ "generator_sha256": "0e03a4acdf2d7a7a6872162641d4c779a4334456ac6a712d832d2579402a31c3",
+ "tools": [
+  "find (GNU findutils) 4.10.0",
+  "sha256sum (GNU coreutils) 9.10",
+  "sort (GNU coreutils) 9.10"
+ ],
+ "tree": {
+  "entries": [
+   {
+    "path": "a",
+    "kind": "directory",
+    "mode": 448
+   },
+   {
+    "path": "a b",
+    "kind": "file",
+    "mode": 384,
+    "content": "s\n"
+   },
+   {
+    "path": "a!",
+    "kind": "file",
+    "mode": 384,
+    "content": "b\n"
+   },
+   {
+    "path": "a-b",
+    "kind": "file",
+    "mode": 384,
+    "content": "x\n"
+   },
+   {
+    "path": "a/b",
+    "kind": "file",
+    "mode": 384,
+    "content": "y\n"
+   },
+   {
+    "path": "a\\b",
+    "kind": "file",
+    "mode": 384,
+    "content": "k\n"
+   },
+   {
+    "path": "dir",
+    "kind": "directory",
+    "mode": 448
+   },
+   {
+    "path": "dir.rs",
+    "kind": "file",
+    "mode": 384,
+    "content": "z"
+   },
+   {
+    "path": "dir/sub",
+    "kind": "directory",
+    "mode": 448
+   },
+   {
+    "path": "dir/sub/deep.rs",
+    "kind": "file",
+    "mode": 384,
+    "content": "pub fn f() {}\n"
+   },
+   {
+    "path": "empty",
+    "kind": "directory",
+    "mode": 448
+   },
+   {
+    "path": "empty.txt",
+    "kind": "file",
+    "mode": 384,
+    "content": ""
+   },
+   {
+    "path": "run.sh",
+    "kind": "file",
+    "mode": 448,
+    "content": "#!/bin/sh\necho\n"
+   },
+   {
+    "path": "é",
+    "kind": "file",
+    "mode": 384,
+    "content": "e\n"
+   }
+  ],
+  "manifest": "a\td\na b\tf\t-\tcbc80bb5c0c0f8944bf73b3a429505ac5cde16644978bc9a1e74c5755f8ca556\na!\tf\t-\t0263829989b6fd954f72baaf2fc64bc2e2f01d692d4de72986ea808f6e99813f\na-b\tf\t-\t73cb3858a687a8494ca3323053016282f3dad39d42cf62ca4e79dda2aac7d9ac\na/b\tf\t-\t3bb2abb69ebb27fbfe63c7639624c6ec5e331b841a5bc8c3ebc10b9285e90877\na\\b\tf\t-\t19732980d68fbd00358a0a4d98246c960400b87e4fa2a2e155db98be2b42ed6c\ndir\td\ndir.rs\tf\t-\t594e519ae499312b29433b7dd8a97ff068defcba9755b6d5d00e84c524d67b06\ndir/sub\td\ndir/sub/deep.rs\tf\t-\t16c2fca9e371936458d01576b4ca311c22d166a45539ccbc9104823d0b10db47\nempty\td\nempty.txt\tf\t-\te3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\nrun.sh\tf\tx\tc4e7139bd31ca16a1f860625e8be1f560a2e0b0459f3610975a73a61ce60ade1\né\tf\t-\ta2bbdb2de53523b8099b37013f251546f3d65dbe7a0774fa41af0a4176992fd4\n",
+  "digest": "9fa162ca5de0d9c657efcba059c44128389db9edacb63de42c2eb2122fc8d3f8"
+ },
+ "empty": {
+  "manifest": "",
+  "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+ },
+ "criteria": [
+  {
+   "criteria": [
+    "u64-frozen-exact-output"
+   ],
+   "json": "[\"u64-frozen-exact-output\"]",
+   "digest": "sha256:e524509cbb4482343ab3fb5f8edf4d36c4de811ab77e8456bf940532c35f4a06"
+  },
+  {
+   "criteria": [
+    "a \"quote\"",
+    "back\\slash",
+    "tab\there",
+    "ctl\u0001x",
+    "slash/ok",
+    "😀 non-BMP",
+    "é"
+   ],
+   "json": "[\"a \\\"quote\\\"\",\"back\\\\slash\",\"tab\\there\",\"ctl\\u0001x\",\"slash/ok\",\"😀 non-BMP\",\"é\"]",
+   "digest": "sha256:62fcc463e5bfdcac6c2bb3cb30ed052e20e2565c0441091f54983ab811f5f6d4"
+  },
+  {
+   "criteria": [
+    "dup",
+    "dup"
+   ],
+   "json": "[\"dup\",\"dup\"]",
+   "digest": "sha256:c6290edde76c60981d1eb6e68b6a17cb3d8eb7779e7bb92ac457c13125aedb0e"
+  },
+  {
+   "criteria": [],
+   "json": "[]",
+   "digest": "sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+  },
+  {
+   "criteria": [
+    "unit\u001fseparator",
+    "del"
+   ],
+   "json": "[\"unit\\u001fseparator\",\"del\"]",
+   "digest": "sha256:b30709be8a9e6fa74a51d403e792e22b3abe87257da7e4df2b69bd31172ab852"
+  }
+ ]
+}

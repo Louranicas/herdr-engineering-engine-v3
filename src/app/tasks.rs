@@ -40,7 +40,7 @@ use crate::app::evidence::fresh_id;
 use crate::app::routing::{self, Routing, Unready};
 use crate::contracts::control::{
     ErrorCode, EvidenceRef, EvidenceView, Fault, Outcome, PageCursor, Precondition, ResultEffect,
-    Retry, request_sha256,
+    Retry, criteria_digest, request_sha256,
 };
 use crate::contracts::parse_u64_decimal;
 use crate::contracts::{Sha256Digest, UuidV4};
@@ -483,8 +483,7 @@ impl Tasks for StoreTasks {
         let until = deadline(request.deadline_unix_ms, request.now_unix_ms);
         let key = UuidV4::parse(request.idempotency_key)
             .map_err(|_| Fault::invalid("/idempotency_key", "UuidV4"))?;
-        let criteria_text = serde_json::to_string(&spec.criteria).map_err(|_| internal())?;
-        let criteria_digest = request_sha256(criteria_text.as_bytes());
+        let criteria_digest = criteria_digest(&spec.criteria);
         let criteria = Sha256Digest::parse(&criteria_digest).map_err(|_| internal())?;
         let task_id = fresh_id(until).map_err(|_| unavailable("no entropy for a task identity"))?;
         let event_id =

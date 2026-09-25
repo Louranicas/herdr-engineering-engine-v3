@@ -5,8 +5,11 @@ use habitat_engine::actions::control::{
 };
 use habitat_engine::actions::{Caller, Effect, Owner};
 use habitat_engine::app::tasks::{StoreTasks, cleanup_of, delivery_of, submit_readback};
+use habitat_engine::check::consistency::U64_CRITERIA;
 use habitat_engine::contracts::UuidV4;
-use habitat_engine::contracts::control::{ErrorCode, EvidenceView, request_sha256};
+use habitat_engine::contracts::control::{
+    ErrorCode, EvidenceView, criteria_digest, request_sha256,
+};
 use habitat_engine::store::{Principal, Store};
 use habitat_engine::task::control::{Selector, get, submission};
 use serde_json::{Map, Value, json};
@@ -529,6 +532,61 @@ fn a_submission_reads_back_by_key_and_identity_to_its_principal_only() -> Outcom
 
 /// task-G09 / APP-08: `task.get` reads one task, not the ledger. With more unrelated tasks than
 /// the whole-ledger recovery inventory will read (its 1,024-row bound), one task still reads back.
+/// B14-P2a · the digest a task binds its criteria by is the world's: Python's `json.dumps(c,
+/// separators=(',', ':'), ensure_ascii=False)` hashed (tests/fixtures/digest/cases.json), over
+/// lists with a quote, a backslash, a tab, controls with and without a short escape, DEL, `/`,
+/// non-BMP text and a duplicate. Submit records exactly it for every list it admits (the same
+/// door the dispatcher compares a class's criteria by), and the WL-U64 class's list is the check's
+/// one credited criterion.
+#[test]
+fn a_task_binds_its_criteria_by_their_compact_json_digest() -> Outcome {
+    let fixture: Value = serde_json::from_str(include_str!("fixtures/digest/cases.json"))?;
+    let cases = fixture["criteria"].as_array().ok_or("criteria")?;
+    assert_eq!(cases.len(), 5, "the generated set, whole");
+    let scratch = Scratch::new()?;
+    let tasks = ledger(&scratch)?;
+    let operator = Principal::new(1000, "operator").map_err(|error| format!("{error:?}"))?;
+    let mut submitted = 0;
+    for (index, case) in cases.iter().enumerate() {
+        let criteria: Vec<String> = serde_json::from_value(case["criteria"].clone())?;
+        let expected = case["digest"].as_str().ok_or("digest")?;
+        assert_eq!(criteria_digest(&criteria), expected, "{criteria:?}");
+        if criteria.is_empty() {
+            continue; // RC01 admits 1..=64 criteria; the function still has the world's answer.
+        }
+        let key = format!("28d00000-0000-4000-8000-00000000c0{index:02x}");
+        let body = json!({"spec": with(&["criteria"], json!(criteria))});
+        let first = serve(
+            &tasks,
+            &operator,
+            &request("task.submit", 1, Some(&key), &body),
+        )?;
+        assert_eq!(first["kind"], json!("result"), "{first}");
+        let read = serve(
+            &tasks,
+            &operator,
+            &request(
+                "task.get",
+                2,
+                None,
+                &json!({"selector": {"source_action": "task.submit", "idempotency_key": key}, "evidence": "none"}),
+            ),
+        )?;
+        assert_eq!(
+            read["body"]["criteria_sha256"],
+            json!(expected),
+            "{criteria:?}"
+        );
+        submitted += 1;
+    }
+    assert_eq!(submitted, 4, "every admissible list went through submit");
+    assert_eq!(
+        criteria_digest(&U64_CRITERIA),
+        cases[0]["digest"].as_str().ok_or("u64")?
+    );
+    Ok(())
+}
+
 #[test]
 fn a_task_reads_back_in_a_ledger_past_the_inventory_bound() -> Outcome {
     let scratch = Scratch::new()?;

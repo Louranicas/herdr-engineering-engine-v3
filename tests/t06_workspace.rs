@@ -843,3 +843,115 @@ fn child_umask_077_preserves_successful_private_modes() {
     assert_eq!(mode(&parent.join("copy/plain")), 0o600);
     assert_eq!(mode(&parent.join("copy/directory/tool")), 0o500);
 }
+
+/// Build the digest fixture's tree (tests/fixtures/digest/cases.json) under a fresh private root.
+fn digest_tree(area: &Area, name: &str, entries: &serde_json::Value) -> PathBuf {
+    let root = area.root(name);
+    for entry in entries.as_array().unwrap() {
+        let path = root.join(entry["path"].as_str().unwrap());
+        let mode = u32::try_from(entry["mode"].as_u64().unwrap()).unwrap();
+        if entry["kind"] == "directory" {
+            private_dir(&path);
+        } else {
+            file(&path, entry["content"].as_str().unwrap().as_bytes(), mode);
+        }
+    }
+    root
+}
+
+fn sha256_text(text: &str) -> String {
+    use sha2::Digest;
+    let digest = sha2::Sha256::digest(text.as_bytes());
+    digest
+        .iter()
+        .fold(String::from("sha256:"), |mut text, byte| {
+            use std::fmt::Write as _;
+            // Writing to a `String` cannot fail.
+            let _ = write!(text, "{byte:02x}");
+            text
+        })
+}
+
+/// B14-P2a · a snapshot's content digest is the one a coreutils pipeline gives the same tree
+/// (`gen-digest-fixtures.sh`: find, sha256sum, `LC_ALL=C sort`), never this module's reading of
+/// its own rule: equal over two roots (stamps and the root are not content), the empty tree's is
+/// the digest of no text, and each field — contents, the execute bit, a name, an empty directory —
+/// moves it exactly as editing that line of the world's manifest does. A name holding a C0 control
+/// has no digest.
+#[test]
+fn the_content_digest_is_the_coreutils_manifest_s() {
+    let fixture: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/digest/cases.json")).unwrap();
+    let (entries, manifest) = (
+        &fixture["tree"]["entries"],
+        fixture["tree"]["manifest"].as_str().unwrap(),
+    );
+    let expected = format!("sha256:{}", fixture["tree"]["digest"].as_str().unwrap());
+    assert_eq!(
+        sha256_text(manifest),
+        expected,
+        "the fixture's digest is its manifest's"
+    );
+    let area = Area::new();
+    let one = digest_tree(&area, "one", entries);
+    let two = digest_tree(&area, "two", entries);
+    assert_eq!(capture(&one).content_digest(), Some(expected.clone()));
+    assert_eq!(capture(&two).content_digest(), Some(expected));
+    assert_eq!(
+        capture(&area.root("none")).content_digest(),
+        Some(format!(
+            "sha256:{}",
+            fixture["empty"]["digest"].as_str().unwrap()
+        ))
+    );
+    let line = |path: &str| {
+        manifest
+            .lines()
+            .find(|line| line.split('\t').next() == Some(path))
+            .unwrap()
+            .to_owned()
+    };
+    // Contents: `a b` holds other bytes.
+    let changed = digest_tree(&area, "contents", entries);
+    file(&changed.join("a b"), b"other\n", 0o600);
+    let other = sha256_text("other\n");
+    let edited = manifest.replace(
+        &line("a b"),
+        &format!("a b\tf\t-\t{}", &other["sha256:".len()..]),
+    );
+    assert_eq!(
+        capture(&changed).content_digest(),
+        Some(sha256_text(&edited))
+    );
+    // The execute bit: run.sh loses it.
+    let plain = digest_tree(&area, "mode", entries);
+    fs::set_permissions(plain.join("run.sh"), fs::Permissions::from_mode(0o600)).unwrap();
+    let edited = manifest.replace(
+        &line("run.sh"),
+        &line("run.sh").replace("\tf\tx\t", "\tf\t-\t"),
+    );
+    assert_eq!(capture(&plain).content_digest(), Some(sha256_text(&edited)));
+    // A name: `é` becomes `ê` (0xc3 0xaa, still the last line, so only the name moves).
+    let renamed = digest_tree(&area, "name", entries);
+    fs::rename(renamed.join("é"), renamed.join("ê")).unwrap();
+    let edited = manifest.replace(&line("é"), &line("é").replacen('é', "ê", 1));
+    assert_eq!(
+        capture(&renamed).content_digest(),
+        Some(sha256_text(&edited))
+    );
+    // An empty directory: `empty` removed, its line gone.
+    let fewer = digest_tree(&area, "directory", entries);
+    fs::remove_dir(fewer.join("empty")).unwrap();
+    let edited = manifest.replace(&format!("{}\n", line("empty")), "");
+    assert_eq!(capture(&fewer).content_digest(), Some(sha256_text(&edited)));
+    // A control byte in a name: no digest.
+    let control = digest_tree(&area, "control", entries);
+    file(&control.join("a\u{1}"), b"c\n", 0o600);
+    assert_eq!(capture(&control).content_digest(), None);
+    let del = digest_tree(&area, "del", entries);
+    file(&del.join("a\u{7f}"), b"c\n", 0o600);
+    assert_eq!(capture(&del).content_digest(), None);
+    let space = digest_tree(&area, "space", entries);
+    file(&space.join("a\u{1f}b"), b"c\n", 0o600);
+    assert_eq!(capture(&space).content_digest(), None);
+}
