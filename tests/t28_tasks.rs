@@ -2551,7 +2551,8 @@ fn a_list_body_is_checked_member_by_member() -> Outcome {
 /// B06: a task whose admitted bytes are not a JSON request (one staged through the store's own API,
 /// never the wire) is listed like any other -- with the head `task.get` reads, here generation 2
 /// with its queued attempt current -- and simply has no class or parent to select it by: a class
-/// filter passes over it rather than failing the listing.
+/// filter passes over it rather than failing the listing. A last page that is exactly full issues
+/// no cursor.
 #[test]
 fn a_list_passes_over_a_task_whose_admitted_bytes_name_no_class() -> Outcome {
     let scratch = Scratch::new()?;
@@ -2574,14 +2575,16 @@ fn a_list_passes_over_a_task_whose_admitted_bytes_name_no_class() -> Outcome {
         (&json!("2"), &json!(nth(0x05b2, 1))),
         "{staged_head}"
     );
+    // Exactly a full page with nothing after it: no cursor to an empty page.
     let all = serve(
         &tasks,
         &operator,
-        &list_frame(1, &unfiltered(100, &Value::Null)),
+        &list_frame(1, &unfiltered(2, &Value::Null)),
     )?;
     assert_eq!(
-        all["body"]["page"]["items"],
-        json!([staged_head, head_of(&tasks, &operator, &wire_task)?]),
+        all["body"]["page"],
+        json!({"items": [staged_head, head_of(&tasks, &operator, &wire_task)?],
+               "next_cursor": null, "snapshot_revision": "3"}),
         "{all}"
     );
     let classed = serve(
