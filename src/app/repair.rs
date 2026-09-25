@@ -10,7 +10,9 @@ use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-const MAX_REPLACEMENT: usize = 16 * 1024 * 1024;
+/// The largest replacement text: the check lane's text bound, one constant for the candidate's
+/// apply and the receipt's patch binding (B14-P4 mutants: two spellings of one bound).
+const MAX_REPLACEMENT: usize = crate::check::patch::MAX_TEXT;
 const OPEN_DIRECTORY: OFlags = OFlags::RDONLY
     .union(OFlags::DIRECTORY)
     .union(OFlags::NOFOLLOW)

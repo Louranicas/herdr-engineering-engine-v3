@@ -5,8 +5,9 @@
 //!
 //! Allocations, each bounded before it is made: a text past [`MAX_TEXT`] is refused before it is
 //! split; the line views are one 16-byte slice per line (at most `MAX_TEXT` lines a side); the
-//! search's trace holds `2·d + 1` `usize` cells for each round `d` actually run, `d ≤` the caller's
-//! limit, itself at most [`MAX_EDITS`] (so at most `(MAX_EDITS + 1)²` cells); the edit script is
+//! search's trace holds `d + 1` `usize` cells for each round `d` actually run (that round's own
+//! diagonals), `d ≤` the caller's limit, itself at most [`MAX_EDITS`] (so at most
+//! `(MAX_EDITS + 1)(MAX_EDITS + 2) / 2` cells); the edit script is
 //! one 16-byte `Edit` per line of both texts; the rendering is at most both texts plus two bytes
 //! and one marker a line, plus one header a hunk. The search is `O((n + m) · limit)`; everything
 //! after it is linear. A deadline, when given, is read every search round — the only
@@ -87,7 +88,7 @@ pub fn distance(
 }
 
 /// The bounded Myers search: the distance, if at most `limit` (clamped to [`MAX_EDITS`]), and —
-/// when `trace` is given — the `furthest` vector's live span after every round, which is what a
+/// when `trace` is given — each round's own diagonals of the `furthest` vector, which is what a
 /// backtrack reads. The trace grows one round at a time, only as rounds are actually run.
 fn search(
     before: &[&[u8]],
@@ -131,7 +132,15 @@ fn search(
             }
         }
         if let Some(trace) = trace.as_deref_mut() {
-            trace.push(furthest[limit + 1 - distance..=limit + 1 + distance].to_vec());
+            // Only this round's own diagonals (k ≡ distance mod 2): the other parity's cells are
+            // the previous round's, and storing them would let a backtrack read either round.
+            trace.push(
+                furthest[limit + 1 - distance..=limit + 1 + distance]
+                    .iter()
+                    .step_by(2)
+                    .copied()
+                    .collect(),
+            );
         }
         if done {
             return Ok(Some(distance));
@@ -159,10 +168,14 @@ fn script(
     trace: &[Vec<usize>],
     distance: usize,
 ) -> Option<Vec<Edit>> {
-    // In round `round`'s stored span, diagonal `diagonal` sits at `diagonal + round`.
+    // Round `round` stores only its own diagonals, `diagonal + round` even, at `(diagonal + round) / 2`:
+    // a diagonal of the other parity is no cell of that round, so reading the wrong round refuses.
     let furthest = |round: usize, diagonal: isize| -> Option<usize> {
-        let slot = usize::try_from(diagonal.checked_add(isize::try_from(round).ok()?)?).ok()?;
-        trace.get(round)?.get(slot).copied()
+        let offset = usize::try_from(diagonal.checked_add(isize::try_from(round).ok()?)?).ok()?;
+        if offset % 2 != 0 {
+            return None;
+        }
+        trace.get(round)?.get(offset / 2).copied()
     };
     let (mut old_at, mut new_at) = (old_len, new_len);
     let mut edits = Vec::with_capacity(old_len + new_len);
@@ -180,14 +193,12 @@ fn script(
         } else {
             (previous_old + 1, previous_new)
         };
-        while old_at > from_old && new_at > from_new {
-            old_at -= 1;
-            new_at -= 1;
-            edits.push(Edit::Keep(old_at));
-        }
-        if (old_at, new_at) != (from_old, from_new) {
+        // The snake back to the move: one run on one diagonal, the same length on both sides.
+        let run = old_at.checked_sub(from_old)?;
+        if new_at.checked_sub(from_new)? != run {
             return None;
         }
+        edits.extend((from_old..old_at).rev().map(Edit::Keep));
         edits.push(if down {
             Edit::Insert(previous_new)
         } else {
@@ -195,14 +206,11 @@ fn script(
         });
         (old_at, new_at) = (previous_old, previous_new);
     }
-    while old_at > 0 && new_at > 0 {
-        old_at -= 1;
-        new_at -= 1;
-        edits.push(Edit::Keep(old_at));
-    }
-    if (old_at, new_at) != (0, 0) {
+    // Round 0's snake from the origin: diagonal 0, so both sides stand at one position.
+    if old_at != new_at {
         return None;
     }
+    edits.extend((0..old_at).rev().map(Edit::Keep));
     edits.reverse();
     Some(edits)
 }
@@ -701,6 +709,8 @@ mod tests {
     #[test]
     fn the_search_never_exceeds_its_ceiling() {
         assert_eq!((MAX_CHANGED_LINES, MAX_EDITS), (4096, 4098));
+        // 16 MiB: the candidate replacement's reviewed bound (B14-P3), and the workspace's file bound.
+        assert_eq!(MAX_TEXT, 16_777_216);
         let lines: Vec<Vec<u8>> = (0..MAX_EDITS + 2)
             .map(|i| format!("{i}\n").into_bytes())
             .collect();
