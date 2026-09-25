@@ -1,0 +1,210 @@
+#!/usr/bin/env python3
+"""The flow scoreboard: every declared cross-module flow is proven at L2 or carries its reason.
+
+The WORLD is the CS06 arrows table in `docs/corpus-schematics.md` -- forty directional arrows derived
+from the declared semantic flows -- read by cell, not by pattern over the whole line. Every flow found
+there must have an entry below and every entry must name a flow found there (reconciled both ways,
+so a flow added to the corpus cannot pass silently and a retired one cannot linger).
+
+An entry is either `l2`: the one test that makes the flow done -- a case that crosses both modules'
+real doors through the binary -- named as `<file>::<fn>` and resolved to a `#[test]` in that file;
+or `reason`: why it is not L2 yet and the slice it `lands_with`, optionally naming a `partial` test
+that covers part of it. A partial is never counted as L2 (HEE3_MASTER_PLAN_20260926.md §5).
+
+Prints `flows=N l2=L reasoned=R unexplained=U` and refuses any unexplained flow, any unresolved test
+and an empty world. `--control` proves each refusal fires on its own diagnostic.
+
+Run: python3 tools/check-flow-scoreboard [--control]
+"""
+
+import re
+import sys
+import tempfile
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+SCHEMATICS = "docs/corpus-schematics.md"
+
+SOCKET = "tests/t28_socket.rs"
+
+# Measured 2026-09-26 against main's tests: L2 means the binary crosses both modules' doors.
+FLOWS = {
+    "F01": {"reason": "no client door drives the engine yet; the view model is L1", "lands_with": "C08d (after B20)"},
+    "F02": {"l2": SOCKET + "::an_admission_survives_a_kill_after_commit_and_its_exact_bytes_replay"},
+    "F03": {"reason": "route is consulted by task.preview only; no dispatch consumes an eligible recipe",
+            "lands_with": "C01, B15"},
+    "F04": {"reason": "roster facts reach route in the preview; no dispatcher refuses a disabled record",
+            "lands_with": "C01c"},
+    "F05": {"reason": "budget is not composed into settle_attempt (DS3 ruled the overrun rule)", "lands_with": "B18"},
+    "F06": {"reason": "no production dispatcher runs a worker from the binary", "lands_with": "B14b + B14a-4"},
+    "F07": {"reason": "check is not composed behind dispatch", "lands_with": "B16"},
+    "F08": {"reason": "cohort has no durable owner (DS7) and thread.* is unserved", "lands_with": "C06"},
+    "F09": {"reason": "cohort and context meet only in the library", "lands_with": "C07"},
+    "F10": {"reason": "notify is not composed over store rows (DS8)", "lands_with": "B19"},
+    "F11": {"reason": "startup recovery runs through the binary, but no running attempt with a pending effect is "
+                      "reconciled through it", "lands_with": "B21",
+            "partial": SOCKET + "::the_engine_restarts_ready_past_the_old_inventory_wall"},
+    "F12": {"reason": "the numerical/julia library pair is not reached from main", "lands_with": "C04"},
+    "F13": {"reason": "analysis.request/get are unserved (DS5 names them); owner is O-13", "lands_with": "C04"},
+    "F14": {"reason": "service.probe is unserved behind the receiver", "lands_with": "C02"},
+    "F15": {"reason": "submit/get/preview cross the binary; cancel/list/resolve have no binary half yet",
+            "lands_with": "the actions slice",
+            "partial": SOCKET + "::the_engine_admits_and_reads_back_a_task_through_the_wrapper"},
+    "F16": {"l2": SOCKET + "::the_engine_admits_and_reads_back_a_task_through_the_wrapper"},
+    "F17": {"reason": "no host fixture registers a Pi tool (O-5/O-6); the render return context is DS16",
+            "lands_with": "after O-5/O-6"},
+    "F18": {"reason": "skills and context meet only in the library; one omission vocabulary is DS9", "lands_with": "C07"},
+    "F19": {"reason": "a workflow's steps run through the chain wrapper; interrupt, read back, resume and a repaired "
+                      "parent join are not yet one binary case", "lands_with": "B16 + C06",
+            "partial": SOCKET + "::a_chain_submits_and_reads_back_through_the_engine_and_stops_at_a_refusal"},
+    "F20": {"reason": "service.action is unserved behind the receiver", "lands_with": "C03"},
+}
+
+FLOW_CELL = re.compile(r"^(F\d\d) (\S+) → (\S+):")
+
+
+def cs06_section(text):
+    """The lines of the `## CS06` section only: every schematic has an arrows table of the same
+    shape, and the flows are CS06's (measured: the first arrows table in the file is CS01's)."""
+    lines = text.splitlines()
+    start = next((index for index, line in enumerate(lines) if line.startswith("## CS06 ")), None)
+    if start is None:
+        return []
+    end = next((index for index in range(start + 1, len(lines)) if lines[index].startswith("## ")), len(lines))
+    return lines[start + 1:end]
+
+
+def world(text):
+    """{flow: {(from, to)}} from the CS06 arrows table, read cell by cell."""
+    flows = {}
+    in_table = False
+    for line in cs06_section(text):
+        cells = [cell.strip() for cell in line.strip().strip("|").split("|")] if line.startswith("|") else None
+        if cells and cells[:4] == ["Arrow", "From → to", "Meaning", "Condition / evidence"]:
+            in_table = True
+            continue
+        if not in_table:
+            continue
+        if cells is None:
+            break
+        if len(cells) < 4 or not re.fullmatch(r"E\d\d", cells[0]):
+            continue
+        found = FLOW_CELL.match(cells[3])
+        if found:
+            flows.setdefault(found.group(1), set()).add(tuple(sorted((found.group(2), found.group(3)))))
+    return flows
+
+
+def test_resolves(root, spec):
+    """Whether `<file>::<fn>` names a `#[test]` function in that file."""
+    if "::" not in spec:
+        return False
+    file, name = spec.split("::", 1)
+    path = root / file
+    if not path.is_file():
+        return False
+    lines = path.read_text(errors="replace").splitlines()
+    for index, line in enumerate(lines):
+        if re.match(rf"^\s*(?:async\s+)?fn {re.escape(name)}\(", line):
+            # The attribute block directly above this fn: attributes and doc comments only, so a
+            # `#[test]` belonging to an earlier function cannot be credited to a helper.
+            above = index - 1
+            while above >= 0 and lines[above].strip().startswith(("#[", "///", "//")):
+                if lines[above].strip() == "#[test]":
+                    return True
+                above -= 1
+            return False
+    return False
+
+
+def judge(root, text, flows):
+    """(problems, counts). Pure over its inputs, so the control can reach every branch."""
+    found = world(text)
+    problems = []
+    if not found:
+        problems.append("the CS06 arrows table yielded no flow; the world is unreadable")
+    for flow in sorted(set(found) - set(flows)):
+        problems.append(f"unexplained {flow}: in CS06 with no l2 test and no reason")
+    for flow in sorted(set(flows) - set(found)):
+        problems.append(f"stale {flow}: named here but not in CS06")
+    l2 = reasoned = 0
+    for flow in sorted(set(flows) & set(found)):
+        entry = flows[flow]
+        if "l2" in entry:
+            if test_resolves(root, entry["l2"]):
+                l2 += 1
+            else:
+                problems.append(f"{flow}: l2 names {entry['l2']}, which is not a #[test] in the tree")
+        elif str(entry.get("reason", "")).strip() and str(entry.get("lands_with", "")).strip():
+            reasoned += 1
+            if "partial" in entry and not test_resolves(root, entry["partial"]):
+                problems.append(f"{flow}: partial names {entry['partial']}, which is not a #[test] in the tree")
+        else:
+            problems.append(f"unexplained {flow}: an entry needs an l2 test, or a reason and lands_with")
+    unexplained = len(found) - l2 - reasoned
+    return problems, {"flows": len(found), "l2": l2, "reasoned": reasoned, "unexplained": unexplained}
+
+
+def report(problems, counts):
+    for problem in problems:
+        print(f"  {problem}")
+    print(f"flows={counts['flows']} l2={counts['l2']} reasoned={counts['reasoned']} "
+          f"unexplained={counts['unexplained']}")
+    print("verdict=" + ("FAIL" if problems else "PASS"))
+    return 1 if problems else 0
+
+
+def control():
+    table = ("## CS05 · earlier\n\n| Arrow | From → to | Meaning | Condition / evidence |\n| --- | --- | --- | --- |\n"
+             "| E01 | K1 → K2 | forward | F05 wrong → section: ignored |\n\n## CS06 · flows\n\n"
+             "| Arrow | From → to | Meaning | Condition / evidence |\n| --- | --- | --- | --- |\n"
+             "| E01 | K1 → K2 | forward | F01 a → b: x |\n| E02 | K2 → K1 | return | F01 b → a: y |\n"
+             "| E03 | K1 → K1 | forward | F02 a → c: z |\n\n| E09 | K1 → K1 | forward | F09 after → table: ignored |\n"
+             "\n## CS07 · later\n\n| Arrow | From → to | Meaning | Condition / evidence |\n| --- | --- | --- | --- |\n"
+             "| E01 | K1 → K2 | forward | F07 wrong → section: ignored |\n")
+    reason = {"reason": "not yet", "lands_with": "S1"}
+    with tempfile.TemporaryDirectory() as raw:
+        root = Path(raw)
+        (root / "tests").mkdir()
+        (root / "tests/t.rs").write_text("#[test]\nfn crosses() {}\n\nfn helper() {}\n")
+        cases = [
+            ("both flows accounted", {"F01": {"l2": "tests/t.rs::crosses"}, "F02": reason},
+             [], (2, 1, 1, 0)),
+            ("an unexplained flow", {"F01": reason},
+             ["unexplained F02: in CS06 with no l2 test and no reason"], (2, 0, 1, 1)),
+            ("a stale entry", {"F01": reason, "F02": reason, "F07": reason},
+             ["stale F07: named here but not in CS06"], (2, 0, 2, 0)),
+            ("an l2 naming a helper, not a test", {"F01": {"l2": "tests/t.rs::helper"}, "F02": reason},
+             ["F01: l2 names tests/t.rs::helper, which is not a #[test] in the tree"], (2, 0, 1, 1)),
+            ("a reason without lands_with", {"F01": {"reason": "later"}, "F02": reason},
+             ["unexplained F01: an entry needs an l2 test, or a reason and lands_with"], (2, 0, 1, 1)),
+            ("a partial naming no test", {"F01": {**reason, "partial": "tests/t.rs::absent"}, "F02": reason},
+             ["F01: partial names tests/t.rs::absent, which is not a #[test] in the tree"], (2, 0, 2, 0)),
+        ]
+        failed = 0
+        for label, flows, want, counts in cases:
+            problems, got = judge(root, table, flows)
+            ok = problems == want and (got["flows"], got["l2"], got["reasoned"], got["unexplained"]) == counts
+            failed += not ok
+            print(f"{'ok  ' if ok else 'FAIL'} {label}: {problems} {got}")
+        problems, _ = judge(root, "no table here\n", {})
+        ok = problems == ["the CS06 arrows table yielded no flow; the world is unreadable"]
+        failed += not ok
+        print(f"{'ok  ' if ok else 'FAIL'} an empty world refuses: {problems}")
+    print(f"control verdict={'FAIL' if failed else 'PASS'} cases={len(cases) + 1}")
+    return 1 if failed else 0
+
+
+def main(argv):
+    if argv == ["--control"]:
+        return control()
+    if argv:
+        raise SystemExit("usage: check-flow-scoreboard [--control]")
+    problems, counts = judge(ROOT, (ROOT / SCHEMATICS).read_text(), FLOWS)
+    for flow in sorted(FLOWS):
+        entry = FLOWS[flow]
+        print(f"  {flow} " + (f"L2 {entry['l2']}" if "l2" in entry else f"reasoned, lands with {entry.get('lands_with')}"))
+    return report(problems, counts)
+
+
+sys.exit(main(sys.argv[1:]))

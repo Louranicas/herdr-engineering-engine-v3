@@ -760,9 +760,11 @@ def quality_subject_paths(root, deadline, rust_only):
                 "tools/development_process.py", "tools/rust-offline.py", "tools/sqlite-static.py", "tools/check-store-mutations", "tests/t25_process.py",
                 "tests/fixtures/rustdoc/lint-help-1.98.0.txt",  # t25's verbatim rustdoc lint world
                 "tests/t25_quality.py", "tools/check-workflow-sites", "tools/check-skill-sites", "tools/check-pi-sites", "tools/check-bash-sites", "tools/site_sweep.py",
-                "tools/check-mutation-survivors",
+                "tools/check-mutation-survivors", "tools/check-flow-scoreboard",
                 # A shell subject the lint must see (review of 46b1e9e, gap 4): the publication launcher.
                 "tools/corpus-sync",
+                # The flow scoreboard's world: the CS06 arrows table (HEE3_MASTER_PLAN_20260926.md §5).
+                "docs/corpus-schematics.md",
                 # tests/t01_contracts.rs pins the RC01 limits to the published decision (include_str!).
                 "docs/contract-decisions.md"]
     required += [name for directory in ("src", "tests") for name in tree_files(root, directory, deadline, ".rs")]
@@ -1342,6 +1344,11 @@ def main():
             required_text="run=69 failures=0 errors=0")
         run("pi-site-sweep", [sys.executable, "tools/check-pi-sites"],
             required_text="sites=19 killed=19 wrong_reason=0 survived=0")
+        # §5: every declared flow is L2 by a named binary test or carries its reason and landing slice.
+        run("flow-scoreboard-control", [sys.executable, "tools/check-flow-scoreboard", "--control"],
+            required_text="control verdict=PASS cases=7")
+        run("flow-scoreboard", [sys.executable, "tools/check-flow-scoreboard"],
+            required_text="flows=20 l2=2 reasoned=18 unexplained=0\nverdict=PASS")
         run("mutation-survivor-audit", [sys.executable, "-W", "error", "tests/mutation_survivors.py"],
             required_text="run=12 failures=0 errors=0")
         run("claim-overlap-table", [sys.executable, "evaluation/cohorts/make-claim-overlap.py", "--check"],
