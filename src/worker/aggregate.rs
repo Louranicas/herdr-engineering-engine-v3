@@ -208,16 +208,18 @@ impl Aggregate {
             "6".into(),
             "CPUQuotaPerSecUSec".into(),
             "t".into(),
-            "4000000".into(),
+            resources::AGGREGATE_LIMITS
+                .cpu_quota_per_sec_usec()
+                .to_string(),
             "MemoryMax".into(),
             "t".into(),
-            "17179869184".into(),
+            resources::AGGREGATE_LIMITS.memory_bytes.to_string(),
             "MemorySwapMax".into(),
             "t".into(),
-            "0".into(),
+            resources::AGGREGATE_LIMITS.swap_bytes.to_string(),
             "TasksMax".into(),
             "t".into(),
-            "256".into(),
+            resources::AGGREGATE_LIMITS.tasks.to_string(),
             "IOWeight".into(),
             "t".into(),
             "25".into(),
@@ -652,10 +654,11 @@ fn aggregate_limits(fd: &File, deadline: Instant) -> Result<resources::Limits, E
         pids_max: value("pids.max")?,
         io_weight: Some(value("io.weight")?),
     };
-    if limits.cpu_max != "400000 100000"
-        || limits.memory_max != "17179869184"
-        || limits.memory_swap_max != "0"
-        || limits.pids_max != "256"
+    let declared = resources::AGGREGATE_LIMITS;
+    if limits.cpu_max != declared.cpu_max()
+        || limits.memory_max != declared.memory_bytes.to_string()
+        || limits.memory_swap_max != declared.swap_bytes.to_string()
+        || limits.pids_max != declared.tasks.to_string()
         || limits.io_weight.as_deref() != Some("default 25")
     {
         return Err(Error::Limits);

@@ -5,6 +5,7 @@
 //! pidfd with waitid before retaining it, and revoke numeric group authority on
 //! ECHILD. Process-group census is observational, not namespace containment.
 
+use super::resources::TERM_GRACE;
 use rustix::event::{PollFd, PollFlags, Timespec, poll};
 use rustix::fs::{Mode, OFlags, fcntl_getfl, fcntl_setfl, open};
 use rustix::process::{
@@ -26,7 +27,6 @@ use std::time::{Duration, Instant};
 const MAX_STREAM: usize = 8 * 1024 * 1024;
 const MAX_INPUT: usize = 1024 * 1024;
 const CLEANUP: Duration = Duration::from_secs(10);
-const TERM_GRACE: Duration = Duration::from_secs(5);
 const WAIT_FLAGS: WaitIdOptions = WaitIdOptions::EXITED
     .union(WaitIdOptions::NOHANG)
     .union(WaitIdOptions::NOWAIT);

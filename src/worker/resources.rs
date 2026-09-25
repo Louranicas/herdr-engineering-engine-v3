@@ -10,7 +10,69 @@ use std::fs::{File, Metadata};
 use std::io::Read;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Component, Path, PathBuf};
-use std::time::Instant;
+use std::time::{Duration, Instant};
+
+/// What one systemd scope is limited to, in one place (B14a-2b-i). The systemd request, the cgroup
+/// readback and the receipt's limits all render these values, so they cannot disagree — before,
+/// each spelled the same numbers by hand (argv, readback, the aggregate's D-Bus properties).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ScopeLimits {
+    /// CPU quota as a percentage of one CPU (systemd `CPUQuota=`).
+    pub cpu_percent: u64,
+    pub memory_bytes: u64,
+    pub swap_bytes: u64,
+    pub tasks: u64,
+}
+
+/// One attempt's scope.
+pub const ATTEMPT_LIMITS: ScopeLimits = ScopeLimits {
+    cpu_percent: 200,
+    memory_bytes: 8_589_934_592,
+    swap_bytes: 0,
+    tasks: 128,
+};
+
+/// The aggregate slice every attempt scope runs under.
+pub const AGGREGATE_LIMITS: ScopeLimits = ScopeLimits {
+    cpu_percent: 400,
+    memory_bytes: 17_179_869_184,
+    swap_bytes: 0,
+    tasks: 256,
+};
+
+/// The grace between SIGTERM and SIGKILL, for both enforcers: systemd's `TimeoutStopSec=` on the
+/// scope and the process owner's own escalation (`worker::process`) — one value, two doors made one.
+pub const TERM_GRACE: Duration = Duration::from_secs(5);
+
+/// The cgroup v2 CPU period systemd applies, in microseconds.
+const CPU_PERIOD_US: u64 = 100_000;
+
+/// The systemd-run `--property=` arguments that apply `limits` and the term grace to a scope, in the
+/// order systemd receives them.
+#[must_use]
+pub fn scope_properties(limits: ScopeLimits) -> [String; 5] {
+    [
+        format!("--property=CPUQuota={}%", limits.cpu_percent),
+        format!("--property=MemoryMax={}", limits.memory_bytes),
+        format!("--property=MemorySwapMax={}", limits.swap_bytes),
+        format!("--property=TasksMax={}", limits.tasks),
+        format!("--property=TimeoutStopSec={}s", TERM_GRACE.as_secs()),
+    ]
+}
+
+impl ScopeLimits {
+    /// The cgroup v2 `cpu.max` line these limits produce: `<quota_us> <period_us>`.
+    #[must_use]
+    pub fn cpu_max(self) -> String {
+        format!("{} {CPU_PERIOD_US}", self.cpu_percent * CPU_PERIOD_US / 100)
+    }
+
+    /// systemd's `CPUQuotaPerSecUSec` for these limits: microseconds of CPU per second.
+    #[must_use]
+    pub const fn cpu_quota_per_sec_usec(self) -> u64 {
+        self.cpu_percent * 10_000
+    }
+}
 
 const DIRECTORY: OFlags = OFlags::RDONLY
     .union(OFlags::DIRECTORY)
@@ -171,20 +233,13 @@ impl Scope {
         ]
         .map(Into::into)
         .to_vec();
-        arguments.extend(
-            [
-                format!("--unit={}", self.unit()?),
-                format!("--slice={}", self.aggregate),
-                "--property=CPUQuota=200%".into(),
-                "--property=MemoryMax=8589934592".into(),
-                "--property=MemorySwapMax=0".into(),
-                "--property=TasksMax=128".into(),
-                "--property=TimeoutStopSec=5s".into(),
-                format!("--property=RuntimeMaxSec={remaining}us"),
-            ]
-            .into_iter()
-            .map(Into::into),
-        );
+        let mut properties = vec![
+            format!("--unit={}", self.unit()?),
+            format!("--slice={}", self.aggregate),
+        ];
+        properties.extend(scope_properties(ATTEMPT_LIMITS));
+        properties.push(format!("--property=RuntimeMaxSec={remaining}us"));
+        arguments.extend(properties.into_iter().map(Into::into));
         arguments.push(child.executable.clone().into_os_string());
         arguments.append(&mut child.arguments);
         child.executable.clone_from(&self.systemd_run);
@@ -378,15 +433,15 @@ fn limits(fd: &File, parent: bool, deadline: Instant) -> Result<Limits, Error> {
     })
 }
 fn validate_limits(value: &Limits, parent: bool) -> Result<(), Error> {
-    let (cpu, memory, tasks) = if parent {
-        ("400000 100000", "17179869184", "256")
+    let limits = if parent {
+        AGGREGATE_LIMITS
     } else {
-        ("200000 100000", "8589934592", "128")
+        ATTEMPT_LIMITS
     };
-    if value.cpu_max != cpu
-        || value.memory_max != memory
-        || value.memory_swap_max != "0"
-        || value.pids_max != tasks
+    if value.cpu_max != limits.cpu_max()
+        || value.memory_max != limits.memory_bytes.to_string()
+        || value.memory_swap_max != limits.swap_bytes.to_string()
+        || value.pids_max != limits.tasks.to_string()
         || (parent && value.io_weight.as_deref() != Some("default 25"))
     {
         return Err(Error::Limits);
@@ -405,4 +460,62 @@ fn parse_population(events: &str) -> Result<Population, Error> {
         }
     }
     populated.ok_or(Error::Invalid)
+}
+
+#[cfg(test)]
+mod limit_tests {
+    use super::{AGGREGATE_LIMITS, ATTEMPT_LIMITS, TERM_GRACE, scope_properties};
+
+    /// The readbacks are what the kernel reported for a real run's scopes
+    /// (`~/hee3-evidence/T06/fixed-task-execution-003/run`, 12 readbacks of each): an independent
+    /// source for what the declared limits must render to.
+    #[test]
+    fn the_declared_limits_render_the_cgroup_values_a_real_run_read_back() {
+        assert_eq!(
+            (
+                ATTEMPT_LIMITS.cpu_max(),
+                ATTEMPT_LIMITS.memory_bytes.to_string(),
+                ATTEMPT_LIMITS.swap_bytes.to_string(),
+                ATTEMPT_LIMITS.tasks.to_string()
+            ),
+            (
+                "200000 100000".to_owned(),
+                "8589934592".to_owned(),
+                "0".to_owned(),
+                "128".to_owned()
+            )
+        );
+        assert_eq!(
+            (
+                AGGREGATE_LIMITS.cpu_max(),
+                AGGREGATE_LIMITS.memory_bytes.to_string(),
+                AGGREGATE_LIMITS.swap_bytes.to_string(),
+                AGGREGATE_LIMITS.tasks.to_string()
+            ),
+            (
+                "400000 100000".to_owned(),
+                "17179869184".to_owned(),
+                "0".to_owned(),
+                "256".to_owned()
+            )
+        );
+    }
+
+    /// The systemd request renders the same values: the reviewed property literals the request
+    /// carried before B14a-2b-i, and the aggregate's `CPUQuotaPerSecUSec` (400 % = 4 s per second).
+    #[test]
+    fn the_systemd_request_carries_the_same_limits_and_the_one_term_grace() {
+        assert_eq!(
+            scope_properties(ATTEMPT_LIMITS),
+            [
+                "--property=CPUQuota=200%",
+                "--property=MemoryMax=8589934592",
+                "--property=MemorySwapMax=0",
+                "--property=TasksMax=128",
+                "--property=TimeoutStopSec=5s",
+            ]
+        );
+        assert_eq!(AGGREGATE_LIMITS.cpu_quota_per_sec_usec(), 4_000_000);
+        assert_eq!(TERM_GRACE.as_secs(), 5);
+    }
 }

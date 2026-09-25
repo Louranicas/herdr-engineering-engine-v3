@@ -302,32 +302,21 @@ impl Snapshot {
     /// conservatively, as one rule.
     #[must_use]
     pub fn content_digest(&self) -> Option<String> {
-        let alphabet = b"0123456789abcdef";
-        let mut manifest = Vec::new();
-        for entry in self.entries.values() {
-            if entry.path.bytes().any(|byte| byte < 0x20 || byte == 0x7f) {
-                return None;
-            }
-            manifest.extend_from_slice(entry.path.as_bytes());
-            match &entry.content {
-                Content::Directory => manifest.extend_from_slice(b"\td\n"),
-                Content::File {
-                    sha256, executable, ..
-                } => {
-                    manifest.extend_from_slice(if *executable {
-                        b"\tf\tx\t"
-                    } else {
-                        b"\tf\t-\t"
-                    });
-                    for byte in sha256 {
-                        manifest.push(alphabet[usize::from(byte >> 4)]);
-                        manifest.push(alphabet[usize::from(byte & 15)]);
-                    }
-                    manifest.push(b'\n');
-                }
-            }
-        }
-        Some(crate::contracts::control::request_sha256(&manifest))
+        manifest_digest(self.entries.values().map(|entry| {
+            (
+                entry.path.as_str(),
+                match &entry.content {
+                    Content::Directory => ManifestKind::Directory,
+                    Content::File {
+                        sha256, executable, ..
+                    } => ManifestKind::File {
+                        executable: *executable,
+                        sha256: *sha256,
+                    },
+                },
+            )
+        }))
+        .ok()
     }
     #[must_use]
     pub const fn total_bytes(&self) -> u64 {
@@ -832,4 +821,122 @@ pub fn export_directory(
         error,
         partial_path,
     })
+}
+
+/// One row of a content manifest: a directory, or a file with its execute bit and content digest.
+/// There is no symlink form — a tree holding one has no content digest (a caller mapping foreign
+/// rows, such as a receipt's subject files, refuses a symlink row before calling
+/// [`manifest_digest`]).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ManifestKind {
+    Directory,
+    File { executable: bool, sha256: [u8; 32] },
+}
+
+/// Why a set of rows has no manifest digest.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ManifestRefusal {
+    /// A path holds a C0 control byte or DEL (the manifest's line and field separators).
+    ControlByte,
+    /// Paths are not strictly ascending by their bytes: out of order, or a duplicate.
+    Unordered,
+}
+
+/// The one rule behind [`Snapshot::content_digest`] (B14a-2b-i), over rows from any source: `sha256:`
+/// of a text manifest, one line per row in the byte order of its path — `<path>\td\n` for a
+/// directory, `<path>\tf\t<x|->\t<sha256 hex>\n` for a file (`x` for any execute bit) — every byte,
+/// the last line's newline included (what `tests/fixtures/digest/gen-digest-fixtures.sh`'s coreutils
+/// pipeline digests). The rows' order is checked here, never assumed: a snapshot's map supplies it,
+/// but rows read from a receipt are world bytes.
+///
+/// # Errors
+/// [`ManifestRefusal::ControlByte`] for a path with a C0 control or DEL; [`ManifestRefusal::Unordered`]
+/// for a path not strictly after the previous one.
+pub fn manifest_digest<'a>(
+    rows: impl IntoIterator<Item = (&'a str, ManifestKind)>,
+) -> Result<String, ManifestRefusal> {
+    let alphabet = b"0123456789abcdef";
+    let mut manifest = Vec::new();
+    let mut previous: Option<&str> = None;
+    for (path, kind) in rows {
+        if path.bytes().any(|byte| byte < 0x20 || byte == 0x7f) {
+            return Err(ManifestRefusal::ControlByte);
+        }
+        if previous.is_some_and(|before| before.as_bytes() >= path.as_bytes()) {
+            return Err(ManifestRefusal::Unordered);
+        }
+        previous = Some(path);
+        manifest.extend_from_slice(path.as_bytes());
+        match kind {
+            ManifestKind::Directory => manifest.extend_from_slice(b"\td\n"),
+            ManifestKind::File { executable, sha256 } => {
+                manifest.extend_from_slice(if executable { b"\tf\tx\t" } else { b"\tf\t-\t" });
+                for byte in sha256 {
+                    manifest.push(alphabet[usize::from(byte >> 4)]);
+                    manifest.push(alphabet[usize::from(byte & 15)]);
+                }
+                manifest.push(b'\n');
+            }
+        }
+    }
+    Ok(crate::contracts::control::request_sha256(&manifest))
+}
+
+#[cfg(test)]
+mod manifest_tests {
+    use super::{ManifestKind, ManifestRefusal, manifest_digest};
+
+    /// coreutils: `sha256sum` of `x\n`.
+    const X: [u8; 32] = [
+        0x73, 0xcb, 0x38, 0x58, 0xa6, 0x87, 0xa8, 0x49, 0x4c, 0xa3, 0x32, 0x30, 0x53, 0x01, 0x62,
+        0x82, 0xf3, 0xda, 0xd3, 0x9d, 0x42, 0xcf, 0x62, 0xca, 0x4e, 0x79, 0xdd, 0xa2, 0xaa, 0xc7,
+        0xd9, 0xac,
+    ];
+
+    /// The known answer is coreutils: `printf 'a\td\na/b\tf\t-\t<x>\na/c\tf\tx\t<x>\n' | sha256sum` — every
+    /// line, the last included, ends in its newline.
+    #[test]
+    fn a_manifest_of_rows_is_the_coreutils_digest_of_its_lines() {
+        let file = |executable| ManifestKind::File {
+            executable,
+            sha256: X,
+        };
+        assert_eq!(
+            manifest_digest([
+                ("a", ManifestKind::Directory),
+                ("a/b", file(false)),
+                ("a/c", file(true)),
+            ]),
+            Ok(
+                "sha256:dd506eacd32f2a6a4566e4302716ce3ed193dc1742ef3e371d3017c267cf2f11"
+                    .to_owned()
+            )
+        );
+    }
+
+    /// Order is checked, not assumed; a duplicate is out of order; a control byte refuses.
+    #[test]
+    fn rows_out_of_order_duplicated_or_holding_a_control_byte_have_no_digest() {
+        let dir = ManifestKind::Directory;
+        assert_eq!(
+            manifest_digest([("b", dir), ("a", dir)]),
+            Err(ManifestRefusal::Unordered)
+        );
+        assert_eq!(
+            manifest_digest([("a", dir), ("a", dir)]),
+            Err(ManifestRefusal::Unordered)
+        );
+        assert_eq!(
+            manifest_digest([("a\tb", dir)]),
+            Err(ManifestRefusal::ControlByte)
+        );
+        assert_eq!(
+            manifest_digest([("a\u{7f}", dir)]),
+            Err(ManifestRefusal::ControlByte)
+        );
+        assert_eq!(
+            manifest_digest([("a", dir), ("b", dir)]).map(|_| ()),
+            Ok(())
+        );
+    }
 }
