@@ -132,8 +132,11 @@ ROSTER_MUTATIONS = (
         "roster-observed-capability-required",
         "src/contracts/roster.rs",
         "unavailable_required_proof_refuses_before_any_attempt_instance_or_pin_write",
-        "&& observed.input.capabilities.contains(cap)",
-        "&& true",
+        # B07: the declared-and-observed rule moved into `evidenced_capabilities`, the one door
+        # `Selection::permits` and route composition share; the fault is planted where it lives.
+        ".filter(|capability| observed.contains(capability))",
+        # Always true, and still reads `observed` so the mutant compiles (a compile error is not a kill).
+        ".filter(|_| observed.len() < usize::MAX)",
         "A fresh confirmed observation with no observed capabilities must refuse the required "
         "capability before creating an attempt, instance or pin; declaration alone is insufficient.",
     ),

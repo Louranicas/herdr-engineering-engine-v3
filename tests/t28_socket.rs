@@ -1349,6 +1349,59 @@ fn without_a_grant_directory_the_engine_serves_and_refuses_every_request() -> Ou
     Ok(())
 }
 
+/// B07 · `serve` reads its route configuration once, at start, under custody, and composes it
+/// behind the task owner (the one wiring no library test reaches). With none installed, preview
+/// answers "not installed"; with the shipped `routes.toml` installed (its baseline names no
+/// declared recipe) it answers "refused" — which only a read of the file can produce — and the
+/// engine's log names the reason and the directory. Through the binary and the bash wrapper.
+#[test]
+fn the_engine_reads_its_route_configuration_at_start() -> Outcome {
+    for (installed, expected) in [
+        (false, "route configuration not installed"),
+        (true, "route configuration refused"),
+    ] {
+        let world = World::granting(&["task"], &["read-only planning"])?;
+        commission(&world.home)?;
+        let routes = world
+            .home
+            .join(".config/herdr-engineering-engine-v3/routing");
+        if installed {
+            DirBuilder::new().mode(0o700).create(&routes)?;
+            write_grant(
+                &routes,
+                "routes.toml",
+                include_bytes!("../config/routes.toml"),
+                0o600,
+            )?;
+        }
+        let log = world.home.join("engine.log");
+        let _engine = Engine::start_logged(&world.run, &world.home, &log)?;
+        let spec = super::tasks::spec().to_string();
+        let refused = error_of(&wrapper(
+            &world.run,
+            &world.scope,
+            &[
+                "task.preview",
+                &format!("spec:={spec}"),
+                "brief_revision=0",
+                "catalogue_revision=1",
+            ],
+        )?)?;
+        let log = fs::read_to_string(&log)?;
+        assert_eq!(
+            (&refused["code"], &refused["details"]["constraint"]),
+            (&json!("unavailable"), &json!(expected)),
+            "{refused}\n{log}"
+        );
+        let line = format!(
+            "habitat-engine: task.preview unavailable: {expected} ({})",
+            routes.display()
+        );
+        assert_eq!(log.lines().filter(|seen| *seen == line).count(), 1, "{log}");
+    }
+    Ok(())
+}
+
 #[test]
 fn an_unwritable_ledger_leaves_task_actions_unavailable() -> Outcome {
     let world = World::granting(&["app", "task"], &["read", "durable admission"])?;
