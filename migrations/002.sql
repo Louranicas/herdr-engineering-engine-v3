@@ -1,7 +1,9 @@
 -- HEE3-ANCHORS-BEGIN
 -- Anchor path: /var/home/herdr-engineering-engine-v3/migrations/002.sql
--- Managed navigation block: the corpus publisher owns every line up to the end marker and may
--- rewrite them. Only `--` comments or blank lines belong here; nothing in this block executes.
+-- Navigation block. This file is an authored implementation path (original task T04): the corpus
+-- publisher inventories its exact bytes and never rewrites them. Only `--` comments or blank lines
+-- belong here; nothing in this block executes, and the store's identity digest covers only the SQL
+-- below the end marker.
 -- HEE3-ANCHORS-END
 
 -- Migration 2 (A25; RC06/T04): `operations` admits `task.cancel` idempotency records, so the one
