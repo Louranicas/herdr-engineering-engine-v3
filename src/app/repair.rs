@@ -232,33 +232,59 @@ pub fn apply(
     })
 }
 
+/// The most changed lines any class may admit: the ceiling a caller's bound is clamped to, so the
+/// shortest-edit search is `O((n+m)·MAX_CHANGED_LINES)` whatever a caller asks (review P3-1).
+pub const MAX_CHANGED_LINES: usize = 4096;
+
 /// What a task class admits of one candidate (B14-P3): at most `bytes` of new text for its editable
-/// file, changing at most `changed_lines` logical lines of the baseline's.
+/// file, changing at most `changed_lines` of the baseline's lines. The class profile (B14-P2)
+/// supplies both, with the editable path; this function trusts its caller for that binding.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CandidateBounds {
-    /// The largest candidate, in bytes.
+    /// The largest candidate, in bytes: the bound on volume.
     pub bytes: usize,
-    /// The most changed logical lines: line insertions plus deletions in a shortest edit, blank
-    /// (whitespace-only) lines not counted.
+    /// The most changed lines: line insertions plus deletions in a shortest edit, every
+    /// newline-delimited line counted, blank or not — the unit the derived patch counts (B14-P4) —
+    /// clamped to [`MAX_CHANGED_LINES`]. The bound on edit scope, not on volume.
     pub changed_lines: usize,
 }
 
-/// The non-blank lines of `text`, the unit a class counts changes in.
-fn logical_lines(text: &[u8]) -> Vec<&[u8]> {
-    text.split(|byte| *byte == b'\n')
-        .filter(|line| !line.iter().all(u8::is_ascii_whitespace))
-        .collect()
+/// The newline-delimited lines of `text` (a final line needs no newline; a final newline adds no
+/// empty line): the unit a class counts changes in (design B14 R2, review P3-3).
+fn lines(text: &[u8]) -> Vec<&[u8]> {
+    let mut parts: Vec<&[u8]> = text.split(|byte| *byte == b'\n').collect();
+    if parts.last().is_some_and(|last| last.is_empty()) {
+        parts.pop();
+    }
+    parts
+}
+
+/// How many lines [`lines`] would yield, counted without allocating (review P3-2).
+fn line_count(text: &[u8]) -> usize {
+    // As many parts as `split` yields, less the one empty part a final newline (or no text) leaves.
+    text.split(|byte| *byte == b'\n').count()
+        - usize::from(text.is_empty() || text.ends_with(b"\n"))
 }
 
 /// The shortest edit distance (line insertions plus deletions) between `before` and `after`, if it
 /// is at most `limit` — a bounded Myers search, so a large rewrite is refused in `O((n+m)·limit)`
-/// without ever computing the whole diff.
-fn changed_lines(before: &[&[u8]], after: &[&[u8]], limit: usize) -> Option<usize> {
+/// without ever computing the whole diff; a distance is at least the length difference, so that is
+/// refused first; the deadline is checked every round.
+fn changed_lines(
+    before: &[&[u8]],
+    after: &[&[u8]],
+    limit: usize,
+    deadline: Instant,
+) -> Result<Option<usize>, Error> {
     let (n, m) = (before.len(), after.len());
-    let limit = limit.min(n + m);
+    if n.abs_diff(m) > limit {
+        return Ok(None);
+    }
+    let limit = limit.min(n + m).min(MAX_CHANGED_LINES);
     // The furthest `x` reached on each diagonal `k = x - y`, indexed `k + limit + 1`.
     let mut furthest = vec![0_usize; 2 * limit + 3];
     for distance in 0..=limit {
+        budget(deadline)?;
         for step in 0..=distance {
             // k runs -distance, -distance + 2, ..., distance: index = k + limit + 1.
             let index = limit + 1 + 2 * step - distance;
@@ -268,9 +294,10 @@ fn changed_lines(before: &[&[u8]], after: &[&[u8]], limit: usize) -> Option<usiz
             } else {
                 furthest[index - 1] + 1
             };
-            // y = x - k, with k = 2·step - distance.
+            // y = x - k, with k = 2·step - distance. Never negative (a down move adds one to a
+            // non-negative y, a right move keeps one); were it ever, refuse rather than guess.
             let Some(mut y) = (x + distance).checked_sub(2 * step) else {
-                continue;
+                return Ok(None);
             };
             while x < n && y < m && before[x] == after[y] {
                 x += 1;
@@ -278,11 +305,11 @@ fn changed_lines(before: &[&[u8]], after: &[&[u8]], limit: usize) -> Option<usiz
             }
             furthest[index] = x;
             if x >= n && y >= m {
-                return Some(distance);
+                return Ok(Some(distance));
             }
         }
     }
-    None
+    Ok(None)
 }
 
 /// Materialize `baseline` (create-new), replace its one `editable_path` with an untrusted
@@ -291,10 +318,15 @@ fn changed_lines(before: &[&[u8]], after: &[&[u8]], limit: usize) -> Option<usiz
 /// predeclared expected result: the candidate is data, bounded by its class before any file is
 /// created, and the only filesystem value is the one this function materializes and freezes.
 ///
+/// The caller owns three bindings this function cannot check: `editable_path` and `bounds` are the
+/// class profile's (B14-P2), and `fresh_parent` is the runtime's one attempts directory, never a
+/// prior attempt's workspace (B14a; `materialize` refuses only a parent inside the baseline).
+///
 /// # Errors
 /// `Path` for an invalid editable path or one the baseline holds no file at; `Bound` past
-/// `bounds.bytes`; `Encoding` for text that is not UTF-8; `Changes` past `bounds.changed_lines`
-/// (all before anything is created); then [`apply`]'s. Retains the fresh owned path on every
+/// `bounds.bytes`; `Encoding` for text that is not UTF-8; `Changes` past `bounds.changed_lines`;
+/// `Deadline` — all before anything is created. Then [`apply`]'s, including a `Workspace` bound when
+/// the recaptured result exceeds the workspace's total. Retains the fresh owned path on every
 /// failure after creation.
 pub fn apply_candidate(
     baseline: &Snapshot,
@@ -324,12 +356,11 @@ pub fn apply_candidate(
                 _ => None,
             })
             .ok_or(Error::Path)?;
-        changed_lines(
-            &logical_lines(seed),
-            &logical_lines(candidate),
-            bounds.changed_lines,
-        )
-        .ok_or(Error::Changes)?;
+        let limit = bounds.changed_lines.min(MAX_CHANGED_LINES);
+        if line_count(seed).abs_diff(line_count(candidate)) > limit {
+            return Err(Error::Changes);
+        }
+        changed_lines(&lines(seed), &lines(candidate), limit, deadline)?.ok_or(Error::Changes)?;
         baseline
             .readback_source(deadline)
             .map_err(Error::Workspace)?;
@@ -467,11 +498,25 @@ mod tests {
         fs::remove_file(subject).unwrap();
         fs::remove_dir(path).unwrap();
     }
-    /// A captured baseline of `files` (path, bytes) under a fresh private root, and a fresh private
-    /// parent for the candidate's materialization.
-    fn baseline(label: &str, files: &[(&str, &[u8])]) -> (Snapshot, PathBuf, PathBuf) {
+    /// A captured baseline of `files` (path, bytes, mode) under a fresh private root, and a fresh
+    /// private parent for the candidate's materialization. Both are removed when the guard drops.
+    struct Fixture {
+        base: Snapshot,
+        fresh: PathBuf,
+        roots: [PathBuf; 2],
+    }
+
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            for root in &self.roots {
+                let _ = fs::remove_dir_all(root);
+            }
+        }
+    }
+
+    fn fixture(label: &str, files: &[(&str, &[u8], u32)]) -> Fixture {
         let source = private_root(&format!("{label}-source"));
-        for (path, bytes) in files {
+        for (path, bytes, mode) in files {
             let file = source.join(path);
             if let Some(parent) = file.parent() {
                 fs::DirBuilder::new()
@@ -481,11 +526,15 @@ mod tests {
                     .unwrap();
             }
             fs::write(&file, bytes).unwrap();
-            fs::set_permissions(&file, Permissions::from_mode(0o600)).unwrap();
+            fs::set_permissions(&file, Permissions::from_mode(*mode)).unwrap();
         }
-        let snapshot =
-            Snapshot::capture(&source, &[], Instant::now() + Duration::from_secs(5)).unwrap();
-        (snapshot, source, private_root(&format!("{label}-fresh")))
+        let base = Snapshot::capture(&source, &[], deadline()).unwrap();
+        let fresh = private_root(&format!("{label}-fresh"));
+        Fixture {
+            base,
+            fresh: fresh.clone(),
+            roots: [source, fresh],
+        }
     }
 
     const WIDE: CandidateBounds = CandidateBounds {
@@ -494,119 +543,200 @@ mod tests {
     };
     const BASE: &[u8] = b"pub fn parse(text: &str) -> u64 {\n    0\n}\n";
     const CANDIDATE: &[u8] = b"pub fn parse(text: &str) -> u64 {\n    text.len() as u64\n}\n";
+    const CARGO: &[u8] = b"[package]\nname = \"x\"\n";
 
     fn deadline() -> Instant {
         Instant::now() + Duration::from_secs(5)
     }
 
-    /// B14-P3 · the line counts, against an independent Python LCS (`len(a) + len(b) - 2·LCS(a, b)`
-    /// over non-blank lines): same 0, one changed line 2, blank-only change 0, two inserted 2, a
-    /// four-line reversal 6; a limit below the distance is refused, at it admitted.
+    /// B14-P3 · the line distances, against an independent Python LCS (`len(a) + len(b) −
+    /// 2·LCS(a, b)` over newline-delimited lines, a final newline adding no empty line; the script
+    /// and its output are in `~/hee3-evidence/T28/B14-store-runtime-20260926/`): even and odd,
+    /// blank lines counted, deletion-only, either side empty, a final line without a newline; each
+    /// admitted at its limit and refused one below it.
     #[test]
     fn changed_lines_are_a_bounded_shortest_edit() {
         for (before, after, expected) in [
             (&b"a\nb\nc\n"[..], &b"a\nb\nc\n"[..], 0),
             (b"fn a() {}\nfn b() {}\n", b"fn a() {}\nfn c() {}\n", 2),
-            (b"a\n\nb\n", b"a\n\n\n   \nb\n", 0),
+            (b"a\n\nb\n", b"a\n\n\n   \nb\n", 2),
             (b"x\ny\n", b"x\np\nq\ny\n", 2),
             (b"1\n2\n3\n4\n", b"4\n3\n2\n1\n", 6),
+            (b"a\nb\nc\n", b"a\nc\n", 1),
+            (b"", b"a\nb\n", 2),
+            (b"a\n", b"", 1),
+            (b"a\nb\nc\nd\n", b"b\nd\n", 2),
+            (b"a\nb", b"a\nb\n", 0),
         ] {
-            let (a, b) = (logical_lines(before), logical_lines(after));
-            assert_eq!(changed_lines(&a, &b, 200), Some(expected), "{before:?}");
+            let (a, b) = (lines(before), lines(after));
             assert_eq!(
-                changed_lines(&a, &b, expected),
-                Some(expected),
+                (line_count(before), line_count(after)),
+                (a.len(), b.len()),
+                "the count is the list's: {before:?} {after:?}"
+            );
+            assert_eq!(
+                changed_lines(&a, &b, 200, deadline()),
+                Ok(Some(expected)),
+                "{before:?}"
+            );
+            assert_eq!(
+                changed_lines(&a, &b, expected, deadline()),
+                Ok(Some(expected)),
                 "at the limit"
             );
             if expected > 0 {
-                assert_eq!(changed_lines(&a, &b, expected - 1), None, "past the limit");
+                assert_eq!(
+                    changed_lines(&a, &b, expected - 1, deadline()),
+                    Ok(None),
+                    "past the limit"
+                );
             }
         }
+        for (text, count) in [
+            (&b""[..], 0),
+            (b"\n", 1),
+            (b"a", 1),
+            (b"a\n", 1),
+            (b"a\n\n", 2),
+            (b"\n\nb", 3),
+        ] {
+            assert_eq!(
+                (lines(text).len(), line_count(text)),
+                (count, count),
+                "{text:?}"
+            );
+        }
+        // A caller's bound is clamped to the ceiling, and an expired deadline stops the search.
+        let long: Vec<&[u8]> = vec![&b"x"[..]; MAX_CHANGED_LINES + 10];
+        assert_eq!(changed_lines(&long, &[], usize::MAX, deadline()), Ok(None));
+        let passed = Instant::now()
+            .checked_sub(Duration::from_millis(1))
+            .unwrap();
+        assert_eq!(
+            changed_lines(&[b"a"], &[b"b"], 10, passed),
+            Err(Error::Deadline)
+        );
     }
 
     /// B14-P3 · a candidate replaces exactly the one editable file: the frozen result holds its
-    /// bytes read-only at the editable path, every other entry as the baseline has it, in a
-    /// directory this call created.
+    /// bytes read-only at the editable path — keeping the baseline's executable bit, here 0700 →
+    /// 0500 — and every other entry as the baseline has it, in a directory this call created.
     #[test]
     fn a_candidate_replaces_exactly_the_editable_file() {
-        let (base, _, fresh) = baseline(
-            "apply",
-            &[
-                ("src/lib.rs", BASE),
-                ("Cargo.toml", b"[package]\nname = \"x\"\n"),
-            ],
+        for (mode, sealed, executable) in [(0o600, 0o400, false), (0o700, 0o500, true)] {
+            let f = fixture(
+                "apply",
+                &[("src/lib.rs", BASE, mode), ("Cargo.toml", CARGO, 0o600)],
+            );
+            let result = apply_candidate(
+                &f.base,
+                "src/lib.rs",
+                CANDIDATE,
+                WIDE,
+                &f.fresh,
+                "attempt",
+                deadline(),
+            )
+            .unwrap();
+            let written = f.fresh.join("attempt/src/lib.rs");
+            assert_eq!(fs::read(&written).unwrap(), CANDIDATE);
+            assert_eq!(
+                fs::metadata(&written).unwrap().permissions().mode() & 0o777,
+                sealed
+            );
+            assert_eq!(fs::read(f.fresh.join("attempt/Cargo.toml")).unwrap(), CARGO);
+            let edited = result
+                .entries()
+                .find(|entry| entry.path == "src/lib.rs")
+                .unwrap();
+            assert!(
+                matches!(&edited.content, Content::File { bytes, executable: is, .. }
+                    if bytes.as_slice() == CANDIDATE && *is == executable),
+                "{mode:o}"
+            );
+            assert!(same_but_candidate(
+                &result,
+                &f.base,
+                "src/lib.rs",
+                CANDIDATE,
+                executable
+            ));
+            assert!(!same_but_candidate(
+                &result,
+                &f.base,
+                "src/lib.rs",
+                BASE,
+                executable
+            ));
+            assert!(!same_but_candidate(
+                &result,
+                &f.base,
+                "src/lib.rs",
+                CANDIDATE,
+                !executable
+            ));
+        }
+    }
+
+    /// B14-P3 · every entry but the edited one must be the baseline's: a differing file, an extra
+    /// trailing entry, a missing trailing entry and a directory where the baseline has a file are
+    /// each refused, however the edit looks.
+    #[test]
+    fn every_other_entry_must_be_the_baselines() {
+        let base = fixture(
+            "entries",
+            &[("src/lib.rs", BASE, 0o600), ("zz.txt", b"z\n", 0o600)],
         );
-        let result = apply_candidate(
-            &base,
-            "src/lib.rs",
-            CANDIDATE,
-            WIDE,
-            &fresh,
-            "attempt",
-            deadline(),
-        )
-        .unwrap();
-        let written = fresh.join("attempt/src/lib.rs");
-        assert_eq!(fs::read(&written).unwrap(), CANDIDATE);
-        assert_eq!(
-            fs::metadata(&written).unwrap().permissions().mode() & 0o777,
-            0o400
-        );
-        assert_eq!(
-            fs::read(fresh.join("attempt/Cargo.toml")).unwrap(),
-            b"[package]\nname = \"x\"\n"
-        );
+        let candidate_at = |label: &str, extra: &[(&str, &[u8], u32)]| {
+            let mut files = vec![("src/lib.rs", CANDIDATE, 0o600)];
+            files.extend_from_slice(extra);
+            fixture(label, &files)
+        };
+        let same = candidate_at("entries-same", &[("zz.txt", b"z\n", 0o600)]);
         assert!(same_but_candidate(
-            &result,
-            &base,
+            &same.base,
+            &base.base,
             "src/lib.rs",
             CANDIDATE,
             false
         ));
-        assert!(!same_but_candidate(
-            &result,
-            &base,
-            "src/lib.rs",
-            BASE,
-            false
-        ));
-        // The edited entry's executable bit is the baseline's, and it is compared.
-        assert!(!same_but_candidate(
-            &result,
-            &base,
-            "src/lib.rs",
-            CANDIDATE,
-            true
-        ));
-        // Any other entry that differs from the baseline is refused, however the edit looks.
-        let (elsewhere, _, _) = baseline(
-            "apply-other",
-            &[
-                ("src/lib.rs", CANDIDATE),
-                ("Cargo.toml", b"[package]\nname = \"y\"\n"),
-            ],
+        for (label, extra) in [
+            ("entries-differs", vec![("zz.txt", &b"y\n"[..], 0o600)]),
+            (
+                "entries-extra",
+                vec![("zz.txt", b"z\n", 0o600), ("zzz.txt", b"extra\n", 0o600)],
+            ),
+            ("entries-missing", vec![]),
+        ] {
+            let other = candidate_at(label, &extra);
+            assert!(
+                !same_but_candidate(&other.base, &base.base, "src/lib.rs", CANDIDATE, false),
+                "{label}"
+            );
+        }
+        let kind = candidate_at("entries-kind", &[("zz.txt/inner", b"z\n", 0o600)]);
+        assert!(
+            !same_but_candidate(&kind.base, &base.base, "src/lib.rs", CANDIDATE, false),
+            "a directory for a file"
         );
-        assert!(!same_but_candidate(
-            &elsewhere,
-            &base,
-            "src/lib.rs",
-            CANDIDATE,
-            false
-        ));
     }
 
     /// B14-P3 · every class bound refuses before anything is created (no partial path): bytes one
     /// past the bound (the bound itself admitted), text that is not UTF-8, changes one past the
-    /// bound (at it admitted), and an editable path the baseline holds no file at.
+    /// bound (at it admitted), a length difference past the bound, and an editable path the
+    /// baseline holds no file at (absent, or a directory).
     #[test]
     fn class_bounds_refuse_before_anything_is_created() {
-        let (base, _, fresh) =
-            baseline("bounds", &[("src/lib.rs", BASE), ("src/other.rs", b"x\n")]);
+        let f = fixture(
+            "bounds",
+            &[("src/lib.rs", BASE, 0o600), ("src/other.rs", b"x\n", 0o600)],
+        );
         let refused = |candidate: &[u8], bounds: CandidateBounds, path: &str, name: &str| {
-            let failure = apply_candidate(&base, path, candidate, bounds, &fresh, name, deadline())
-                .unwrap_err();
+            let failure =
+                apply_candidate(&f.base, path, candidate, bounds, &f.fresh, name, deadline())
+                    .unwrap_err();
             assert!(failure.partial_path.is_none(), "{name}");
-            assert!(!fresh.join(name).exists(), "{name}");
+            assert!(!f.fresh.join(name).exists(), "{name}");
             failure.error
         };
         let exact = CandidateBounds {
@@ -615,11 +745,11 @@ mod tests {
         };
         assert!(
             apply_candidate(
-                &base,
+                &f.base,
                 "src/lib.rs",
                 CANDIDATE,
                 exact,
-                &fresh,
+                &f.fresh,
                 "at-bounds",
                 deadline()
             )
@@ -645,39 +775,39 @@ mod tests {
             refused(CANDIDATE, lines, "src/lib.rs", "changes"),
             Error::Changes
         );
+        let longer = [BASE, b"a\nb\nc\n"].concat();
+        assert_eq!(
+            refused(&longer, lines, "src/lib.rs", "length"),
+            Error::Changes
+        );
         assert_eq!(
             refused(CANDIDATE, WIDE, "src/absent.rs", "absent"),
             Error::Path
         );
         assert_eq!(refused(CANDIDATE, WIDE, "src", "directory"), Error::Path);
-        assert_eq!(
-            refused(CANDIDATE, WIDE, "../src/lib.rs", "escape"),
-            Error::Path
-        );
     }
 
-    /// B14-P3 · never reopen: a destination that exists is refused and left exactly as it was.
+    /// B14-P3 · never reopen: a destination that exists is refused by `materialize`'s create-new
+    /// (`Io`), reports no partial path (so a caller's cleanup cannot remove what it did not create),
+    /// and is left exactly as it was.
     #[test]
     fn an_existing_destination_is_never_reopened() {
-        let (base, _, fresh) = baseline("reopen", &[("src/lib.rs", BASE)]);
-        let taken = fresh.join("attempt");
+        let f = fixture("reopen", &[("src/lib.rs", BASE, 0o600)]);
+        let taken = f.fresh.join("attempt");
         fs::DirBuilder::new().mode(0o700).create(&taken).unwrap();
         fs::write(taken.join("marker"), b"prior").unwrap();
         let failure = apply_candidate(
-            &base,
+            &f.base,
             "src/lib.rs",
             CANDIDATE,
             WIDE,
-            &fresh,
+            &f.fresh,
             "attempt",
             deadline(),
         )
         .unwrap_err();
-        assert!(
-            matches!(failure.error, Error::Workspace(_)),
-            "{:?}",
-            failure.error
-        );
+        assert_eq!(failure.error, Error::Workspace(workspace::Error::Io));
+        assert!(failure.partial_path.is_none());
         assert_eq!(fs::read(taken.join("marker")).unwrap(), b"prior");
         assert!(!taken.join("src").exists());
     }
