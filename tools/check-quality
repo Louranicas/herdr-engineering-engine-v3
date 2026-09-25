@@ -801,6 +801,19 @@ def refuse_ancestor_cargo_configuration(work):
                 raise ValueError("Ambient ancestor Cargo configuration: " + str(path))
 
 
+# Library-unit namespaces that arrive with an extension battery: each one's count is the number of
+# cases the module keeps private (so they live in the library target, not the battery's own target).
+# One home, read by rust_test_expectations and by t25 — never a bare literal beside `counts[0] +=`
+# (S1 review MEDIUM: a count changed in both of its places was pinned by nothing).
+EXTENSION_UNIT_COUNTS = {
+    "context::step_budget_tests::": 6,
+    "app::tasks::uncertain::": 1,
+    "service::probe::tests::": 1,
+    "service::local_probe::tests::": 4,
+    "numerical::process::classify_order_tests::": 1,
+}
+
+
 def rust_test_expectations(root):
     """Fixed reviewed counts; candidate source never determines the test floor."""
     manifest = tomllib.loads((root / "Cargo.toml").read_text())
@@ -927,16 +940,18 @@ def rust_test_expectations(root):
             # Two places, because they are two different claims: the namespace census says
             # which unit names must appear, and counts[0] is the LIBRARY TARGET's own
             # summary line. `has_t13` does the same pair just below for its one case.
-            counts[0] += 6
-            unit_counts["context::step_budget_tests::"] = 6
+            for namespace in ("context::step_budget_tests::",):
+                counts[0] += EXTENSION_UNIT_COUNTS[namespace]
+                unit_counts[namespace] = EXTENSION_UNIT_COUNTS[namespace]
         if has_cohort_battery(root):
             counts.extend(COHORT_TARGET_COUNTS.values())
         if has_actions_battery(root):
             counts.extend(ACTIONS_TARGET_COUNTS.values())
             # APP-07 drives the store's AfterCommit cut point, which exists only in this crate's
             # test build, so its case is a library unit of app::tasks (tests/t28_uncertain.rs).
-            counts[0] += 1
-            unit_counts["app::tasks::uncertain::"] = 1
+            for namespace in ("app::tasks::uncertain::",):
+                counts[0] += EXTENSION_UNIT_COUNTS[namespace]
+                unit_counts[namespace] = EXTENSION_UNIT_COUNTS[namespace]
         if has_herdr_battery(root):
             counts.extend(HERDR_TARGET_COUNTS.values())
         if has_t08_contract(root):
@@ -944,15 +959,16 @@ def rust_test_expectations(root):
         if has_t13(root):
             # One probe case plus the local probe's four exit-classification cases (the
             # classification is private to the module, so its cases live in the library).
-            counts[0] += 5
             counts.extend(T13_TARGET_COUNTS.values())
-            unit_counts["service::probe::tests::"] = 1
-            unit_counts["service::local_probe::tests::"] = 4
+            for namespace in ("service::probe::tests::", "service::local_probe::tests::"):
+                counts[0] += EXTENSION_UNIT_COUNTS[namespace]
+                unit_counts[namespace] = EXTENSION_UNIT_COUNTS[namespace]
         if has_t21(root):
             # The process module's ordering classifier is private; its one case is a library unit.
-            counts[0] += 1
             counts.extend(T21_TARGET_COUNTS.values())
-            unit_counts["numerical::process::classify_order_tests::"] = 1
+            for namespace in ("numerical::process::classify_order_tests::",):
+                counts[0] += EXTENSION_UNIT_COUNTS[namespace]
+                unit_counts[namespace] = EXTENSION_UNIT_COUNTS[namespace]
     return {"has_t02": has_t02, "has_t03": has_t03, "has_t04": store_present, "has_t05": roster_present,
             "test_counts": counts, "unit_test_counts": unit_counts, "doctest_count": (2 if has_t02 else 1) + (1 if has_t21(root) else 0)}
 
@@ -1241,7 +1257,7 @@ def main():
             return texts
 
         run("process-controls", [sys.executable, "-W", "error", "tests/t25_process.py"], required_text="17 tests")
-        run("quality-integration-controls", [sys.executable, "-W", "error", "tests/t25_quality.py"], required_text="Ran 106 tests" if has_t09(ROOT) else "Ran 93 tests" if has_t08_contract(ROOT) or has_recovery(ROOT) else ("Ran 83 tests" if has_t08(ROOT) else ("Ran 73 tests" if has_t07(ROOT) else ("Ran 66 tests" if has_t21(ROOT) or has_t13(ROOT) else ("Ran 47 tests" if has_t06(ROOT) else "Ran 43 tests")))), required_stream="stderr")
+        run("quality-integration-controls", [sys.executable, "-W", "error", "tests/t25_quality.py"], required_text="Ran 107 tests" if has_t09(ROOT) else "Ran 93 tests" if has_t08_contract(ROOT) or has_recovery(ROOT) else ("Ran 83 tests" if has_t08(ROOT) else ("Ran 73 tests" if has_t07(ROOT) else ("Ran 66 tests" if has_t21(ROOT) or has_t13(ROOT) else ("Ran 47 tests" if has_t06(ROOT) else "Ran 43 tests")))), required_stream="stderr")
         run("workflow-procedure-controls", [sys.executable, "-W", "error", "tests/procedure_schema.py"],
             required_text="run=103 failures=0 errors=0")
         run("workflow-site-sweep", [sys.executable, "tools/check-workflow-sites"],

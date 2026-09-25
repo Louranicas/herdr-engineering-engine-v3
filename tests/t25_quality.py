@@ -57,6 +57,8 @@ def summarised_targets(root):
 
 
 # Library-unit namespaces that arrive with a battery (membership, pinned here by name).
+# Which extension namespace arrives with which battery (membership); their counts live in
+# quality.EXTENSION_UNIT_COUNTS, and the union of these groups must be exactly its keys (checked below).
 CONTEXT_UNITS = ("context::step_budget_tests::",)
 ACTIONS_UNITS = ("app::tasks::uncertain::",)
 T13_UNITS = ("service::probe::tests::", "service::local_probe::tests::")
@@ -1198,6 +1200,16 @@ class T06QualityInventoryControls(unittest.TestCase):
             text += "".join(f"test {prefix}case_{i} ... ok\n" for i in range(n))
         return text
 
+    def test_extension_unit_namespaces_are_exactly_the_reviewed_table(self):
+        # Membership: every namespace a battery brings is in the one table, and nothing else is.
+        groups = (*CONTEXT_UNITS, *ACTIONS_UNITS, *T13_UNITS, *T21_UNITS)
+        self.assertEqual(len(groups), len(set(groups)))
+        self.assertEqual(set(groups), set(quality.EXTENSION_UNIT_COUNTS))
+        expected = quality.rust_test_expectations(ROOT)
+        for name in groups:
+            if name in expected["unit_test_counts"]:
+                self.assertEqual(expected["unit_test_counts"][name], quality.EXTENSION_UNIT_COUNTS[name])
+
     def test_t06_fixed_census_and_subject_fixture_coverage(self):
         expected = quality.rust_test_expectations(ROOT)
         self.assert_full_census(expected)
@@ -1875,7 +1887,7 @@ class T06QualityInventoryControls(unittest.TestCase):
         # The recheck reads the pin's own path and digest, after the Rust commands.
         recheck = text.index("Pinned interpreter changed")
         self.assertGreater(recheck, text.index("run_rust_test_partitions(ROOT, run, cargo, common, label, test_expectations, parallel_main)"))
-        self.assertIn("required_text='Ran 106 tests' if has_t09(ROOT) else", text)
+        self.assertIn("required_text='Ran 107 tests' if has_t09(ROOT) else", text)
         self.assertIn("'Ran 93 tests' if has_t08_contract(ROOT) or has_recovery(ROOT) else", text)
 
     def test_t06_partition_holds_every_t06_target_once_and_nothing_else(self):
