@@ -4,6 +4,7 @@
 from importlib.machinery import SourceFileLoader
 from importlib.util import module_from_spec, spec_from_loader
 from pathlib import Path
+import json
 import gzip
 import os
 import ast
@@ -788,6 +789,51 @@ Precompiling packages...
         self.assertEqual(quality.python_lint_argv(Path("/r"), ["a.py", "b"]),
                          ["/r", "check", "--isolated", "--no-cache", "--select", "F,B",
                           "--output-format", "concise", "--", "a.py", "b"])
+
+    def test_shell_lint_names_the_planted_defect_by_its_rule(self):
+        # BASH-G11's negative control asserts on the rule's own diagnostic (F96/F130): a planted
+        # unquoted expansion must fail the step naming SC2086 at its line and column (a code the
+        # plant's source cannot contain), and the benign mirror must print the step's required text.
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            (root / "split.sh").write_text("#!/bin/bash\nx=$1\necho $x\n")
+            (root / "clean.sh").write_text('#!/bin/bash\nx=$1\necho "$x"\n')
+            planted = subprocess.run(quality.shell_lint_argv(quality.SHELLCHECK, ["split.sh"]),
+                                     cwd=root, capture_output=True, text=True, check=False)
+            self.assertEqual(planted.returncode, 1, planted.stderr)
+            found = [(row["file"], row["line"], row["column"], row["code"]) for row in json.loads(planted.stdout)]
+            self.assertEqual(found, [("split.sh", 3, 6, 2086)])
+            clean = subprocess.run(quality.shell_lint_argv(quality.SHELLCHECK, ["clean.sh"]),
+                                   cwd=root, capture_output=True, text=True, check=False)
+            self.assertEqual((clean.returncode, clean.stdout.strip()), (0, quality.SHELLCHECK_CLEAN))
+
+    def test_shell_lint_reads_no_configuration_and_reports_every_severity(self):
+        self.assertEqual(quality.shell_lint_argv(Path("/s"), ["a.sh", "b"]),
+                         ["/s", "--norc", "-S", "style", "-f", "json", "--", "a.sh", "b"])
+        # A .shellcheckrc that disables SC2086 must not quiet the step.
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            (root / ".shellcheckrc").write_text("disable=SC2086\n")
+            (root / "split.sh").write_text("#!/bin/bash\nx=$1\necho $x\n")
+            planted = subprocess.run(quality.shell_lint_argv(quality.SHELLCHECK, ["split.sh"]),
+                                     cwd=root, capture_output=True, text=True, check=False)
+            self.assertEqual([row["code"] for row in json.loads(planted.stdout)], [2086])
+
+    def test_shell_subjects_are_every_sh_file_and_every_shell_script(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            (root / "tools").mkdir()
+            (root / "a.sh").write_text("true\n")
+            (root / "tools/env").write_text("#!/usr/bin/env bash\ntrue\n")
+            (root / "tools/direct").write_text("#!/bin/bash\ntrue\n")
+            (root / "tools/posix").write_text("#!/bin/sh\ntrue\n")
+            (root / "tools/python").write_text("#!/usr/bin/env python3\nx = 1\n")
+            (root / "tools/bashful").write_text("#!/usr/bin/env bashful\ntrue\n")
+            (root / "lib.rs").write_text("fn main() {}\n")
+            self.assertEqual(
+                quality.shell_subjects(root, ["lib.rs", "tools/python", "tools/bashful", "tools/posix",
+                                              "tools/direct", "a.sh", "tools/env"]),
+                ["a.sh", "tools/direct", "tools/env", "tools/posix"])
 
     def test_python_subjects_are_every_py_file_and_every_python3_script(self):
         with tempfile.TemporaryDirectory() as raw:
@@ -1883,11 +1929,11 @@ class T06QualityInventoryControls(unittest.TestCase):
         self.assertIn("if has_t08(ROOT):\n            report['executables']['native-client-interpreter']", text)
         self.assertIn("'resolved': str(Path(sys.executable).resolve(strict=True))", text)
         self.assertIn("Pinned interpreter changed during quality checks", text)
-        self.assertEqual(text.count("for name in ('python', 'native-client-interpreter', 'native-daemon-stand-in', 'contract-client-interpreter', 'contract-daemon-stand-in', 'ruff'):"), 1)
+        self.assertEqual(text.count("for name in ('python', 'native-client-interpreter', 'native-daemon-stand-in', 'contract-client-interpreter', 'contract-daemon-stand-in', 'ruff', 'shellcheck'):"), 1)
         # The recheck reads the pin's own path and digest, after the Rust commands.
         recheck = text.index("Pinned interpreter changed")
         self.assertGreater(recheck, text.index("run_rust_test_partitions(ROOT, run, cargo, common, label, test_expectations, parallel_main)"))
-        self.assertIn("required_text='Ran 107 tests' if has_t09(ROOT) else", text)
+        self.assertIn("required_text='Ran 110 tests' if has_t09(ROOT) else", text)
         self.assertIn("'Ran 93 tests' if has_t08_contract(ROOT) or has_recovery(ROOT) else", text)
 
     def test_t06_partition_holds_every_t06_target_once_and_nothing_else(self):
