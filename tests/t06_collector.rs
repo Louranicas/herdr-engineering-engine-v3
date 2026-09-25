@@ -1272,6 +1272,21 @@ fn u64_plan_binds_the_workload_manifest_and_every_typed_input()
         );
         assert_eq!(plan.schema_sha256, input.schema_sha256);
         assert_eq!(plan.subjects, input.subjects);
+        // The class's editable binding, from the class's own text (review P4 re-review 3): TASK.md
+        // names the one file and the 200 changed lines; 64 KiB is the recorded P4-R2 decision.
+        let task = include_str!("../evaluation/tasks/WL-U64-PARSE-001/v1/TASK.md");
+        assert!(task.contains("Change only `src/lib.rs`"));
+        assert!(task.contains("200 changed logical lines"));
+        assert_eq!(
+            plan.editable,
+            Editable {
+                path: RelPath::new("src/lib.rs")?,
+                bounds: CandidateBounds {
+                    bytes: 65_536,
+                    changed_lines: 200,
+                },
+            }
+        );
         assert_eq!(
             plan.invocation,
             InvocationV1 {

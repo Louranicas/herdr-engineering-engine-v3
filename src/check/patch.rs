@@ -403,8 +403,10 @@ mod tests {
             let row = std::str::from_utf8(row).ok()?;
             let ranges = row.strip_prefix("@@ -")?.strip_suffix(" @@\n")?;
             let (minus, plus) = ranges.split_once(" +")?;
+            // A one-line side is written without its count; an explicit `,1` is not the format.
             let side = |text: &str| match text.split_once(',') {
-                Some((start, count)) => Some((number(start)?, number(count)?)),
+                Some((start, count)) if count != "1" => Some((number(start)?, number(count)?)),
+                Some(_) => None,
                 None => Some((number(text)?, 1)),
             };
             let ((old_start, old_count), (new_start, new_count)) = (side(minus)?, side(plus)?);
@@ -432,10 +434,9 @@ mod tests {
                 let mut body = body.to_vec();
                 let unterminated = rows.peek() == Some(&&b"\\ No newline at end of file\n"[..]);
                 if unterminated {
+                    // Every row is `split_inclusive` on newlines, so the byte removed is one.
                     rows.next();
-                    if body.pop()? != b'\n' {
-                        return None;
-                    }
+                    body.pop()?;
                 }
                 let (old_side, new_side) = match prefix {
                     b' ' => (true, true),
@@ -532,9 +533,9 @@ mod tests {
 
     /// The strict applier refuses what is not an exact patch of `before` — else the random cases,
     /// judged by it alone, would be judged by an applier that accepts anything (review P4-6). Each
-    /// plant differs from a valid patch in one place: the `+` start, a `-` count, a context line, a
-    /// marker after a line that is not its side's last, and a marker's removal of a byte that is
-    /// not a newline.
+    /// plant differs from a valid patch in one place: the `+` start, a `-` count, a context line, an
+    /// explicit `,1` count, and a marker after a line that is not its side's last (once on each
+    /// side).
     #[test]
     fn the_strict_applier_refuses_inexact_patches() {
         let (before, after) = (&b"a\nb\nc\n"[..], &b"a\nB\nc\n"[..]);
@@ -548,6 +549,7 @@ mod tests {
             valid.replace("-1,3 +", "-1,2 +"),
             valid.replace(" a\n", " x\n"),
             valid.replace("-b\n", "-b\n\\ No newline at end of file\n"),
+            "--- a/f\n+++ b/f\n@@ -2,1 +2 @@\n-b\n+B\n".to_owned(),
         ] {
             assert_eq!(
                 apply_patch(before, plant.as_bytes(), "f"),

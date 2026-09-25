@@ -133,6 +133,8 @@ T06_INPUTS = (
     # (B14-P4); the fixture's generator beside it is read by no test and earns no input status.
     "evaluation/tasks/WL-U64-PARSE-001/v1/base/src/lib.rs",
     "evaluation/tasks/WL-U64-PARSE-001/v1/reference.patch",
+    # t06_collector pins prepare_u64's editable binding to the class's own TASK.md.
+    "evaluation/tasks/WL-U64-PARSE-001/v1/TASK.md",
     "tests/fixtures/patch/cases.json",
 )
 T06_UNIT_COUNTS = {
