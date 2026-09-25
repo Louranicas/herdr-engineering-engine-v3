@@ -3629,6 +3629,18 @@ fn a_resolve_replays_exactly_and_abandonment_names_stored_evidence() -> Outcome 
         (&json!("abandoned"), &json!(false)),
         "{first}"
     );
+    // The evidence object is gone now: an exact replay answers from its record, never re-reading it.
+    let hex = &evidence.digest()[7..];
+    let object = scratch
+        .0
+        .join("state/generations")
+        .join(GENERATION)
+        .join("objects/sha256")
+        .join(&hex[..2]);
+    let mut permissions = fs::metadata(&object)?.permissions();
+    std::os::unix::fs::PermissionsExt::set_mode(&mut permissions, 0o700);
+    fs::set_permissions(&object, permissions)?;
+    fs::remove_file(object.join(hex))?;
     for now in [NOW, AN_HOUR_LATE] {
         let mut expected = first.clone();
         expected["replayed"] = json!(true);
@@ -4237,5 +4249,62 @@ fn a_closed_obligation_takes_no_quarantine_and_unknown_usage_keeps_one_open() ->
         "usage unknown: {usage}"
     );
     conforms(&[("task.resolve", &closed), ("task.resolve", &usage)])?;
+    Ok(())
+}
+
+/// B08 (code review): the stop door re-reads the evidence's registered size, for every stop. An
+/// artifact row registered with another size than the object is corruption: the abandonment is
+/// refused and nothing stops.
+#[test]
+fn a_stop_refuses_evidence_registered_with_another_size() -> Outcome {
+    let scratch = Scratch::new()?;
+    let operator = Principal::new(1000, "operator").map_err(|error| format!("{error:?}"))?;
+    let (tasks, ids, evidence) = resolve_ledger(&scratch, &operator, &[Stage::UnknownEffectOnly])?;
+    drop(tasks);
+    let file = scratch
+        .0
+        .join("state/generations")
+        .join(GENERATION)
+        .join("ledger.sqlite3");
+    let db = rusqlite::Connection::open(&file)?;
+    db.execute(
+        "INSERT INTO artifacts(digest,size) VALUES(?,?)",
+        rusqlite::params![evidence.digest(), i64::try_from(evidence.size())? + 1],
+    )?;
+    drop(db);
+    let tasks = StoreTasks::new(raw_store(&scratch)?, EPOCH.to_owned());
+    let refs = json!([evidence_of(&evidence)]);
+    let first = nth(0x05b2, 1);
+    resolve_with(
+        &tasks,
+        &operator,
+        (1, RESOLVE_KEY, &ids[0], "3"),
+        &first,
+        "acknowledge_external_effect",
+        &refs,
+    )?;
+    let refused = resolve_with(
+        &tasks,
+        &operator,
+        (2, RESOLVE_KEY_2, &ids[0], "4"),
+        &first,
+        "abandon",
+        &refs,
+    )?;
+    assert_eq!(
+        (&refused["kind"], &refused["code"]),
+        (&json!("error"), &json!("internal")),
+        "{refused}"
+    );
+    assert_eq!(
+        ledger_value(
+            &scratch,
+            "SELECT count(*) FROM task_stops WHERE task_id=?",
+            &ids[0]
+        )?,
+        json!(0),
+        "nothing stopped"
+    );
+    conforms(&[("task.resolve", &refused)])?;
     Ok(())
 }
