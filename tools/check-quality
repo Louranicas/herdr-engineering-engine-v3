@@ -1343,7 +1343,7 @@ def main():
         run("pi-site-sweep", [sys.executable, "tools/check-pi-sites"],
             required_text="sites=19 killed=19 wrong_reason=0 survived=0")
         run("mutation-survivor-audit", [sys.executable, "-W", "error", "tests/mutation_survivors.py"],
-            required_text="run=11 failures=0 errors=0")
+            required_text="run=12 failures=0 errors=0")
         run("claim-overlap-table", [sys.executable, "evaluation/cohorts/make-claim-overlap.py", "--check"],
             required_text="matches_generator=yes")
         if has_t09(ROOT):

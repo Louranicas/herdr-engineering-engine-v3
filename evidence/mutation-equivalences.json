@@ -40,7 +40,7 @@
    "mutants": [
     "replace Cohort::claims_are_disjoint -> bool with true"
    ],
-   "argument": "Cohort::new is the only constructor, Thread is a private struct, and the sole threads.push is inside Cohort::assign, which refuses a claim overlapping a live one (Refusal::ClaimConflict). Every reachable cohort therefore satisfies the predicate, so the function returns true on every input the public API can produce and a body of `true` computes the same function.",
+   "argument": "Cohort::new is the only constructor, Thread is a private struct, and the sole threads.push is inside Cohort::assign, which refuses a claim overlapping a live one (Refusal::OverlappingClaim). Every reachable cohort therefore satisfies the predicate, so the function returns true on every input the public API can produce and a body of `true` computes the same function.",
    "falsifier": "Any constructor that builds a Cohort without going through assign -- the read-back-from-storage path the docstring is kept for. The moment one exists, the false arm is reachable and this declaration must be deleted rather than amended.",
    "pinned_by": [
     "any_one_conflicting_claim_refuses_the_whole_assignment",

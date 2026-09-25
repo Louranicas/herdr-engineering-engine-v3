@@ -93,6 +93,16 @@ class Audit(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertIn("not in the tree", result.stdout)
 
+    def test_a_declaration_naming_an_absent_identifier_is_refused(self):
+        # COH-15: a rename left an argument describing `Refusal::ClaimConflict` after the variant
+        # became `OverlappingClaim`. The audit must name the path and the file it is missing from.
+        self.edit(lambda body: body["equivalences"][0].update(
+            argument=body["equivalences"][0]["argument"] + " See Refusal::NoSuchVariant."))
+        result = self.audit([DECLARED])
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("names Refusal::NoSuchVariant, which is not in "
+                      + json.loads(self.original)["equivalences"][0]["file"], result.stdout)
+
     def test_a_token_argument_is_refused(self):
         self.edit(lambda body: body["equivalences"][0].__setitem__("argument", "It is fine."))
         result = self.audit([DECLARED])

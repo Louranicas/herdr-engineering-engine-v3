@@ -59,6 +59,17 @@ def main():
             faults.append(f"declaration {entry.get('id')!r}: the argument is too short to be one")
         if not (ROOT / str(entry.get("file", ""))).is_file():
             faults.append(f"declaration {entry.get('id')!r}: names a file that is not in the tree")
+        # Every `Type::member` path the prose names must exist in the declared file (COH-15): a
+        # rename left `Refusal::ClaimConflict` in an argument for a variant spelled
+        # `OverlappingClaim`, so the argument described a refusal the code no longer has.
+        path = ROOT / str(entry.get("file", ""))
+        if path.is_file():
+            text = path.read_text(errors="replace")
+            prose = str(entry.get("argument", "")) + " " + str(entry.get("falsifier", ""))
+            for owner, member in sorted(set(re.findall(r"\b([A-Z][A-Za-z0-9]*)::([A-Za-z_][A-Za-z0-9_]*)", prose))):
+                if not (re.search(rf"\b{owner}\b", text) and re.search(rf"\b{member}\b", text)):
+                    faults.append(f"declaration {entry.get('id')!r}: names {owner}::{member}, "
+                                  f"which is not in {entry.get('file')}")
         for case in entry.get("pinned_by", []):
             if case not in known:
                 faults.append(f"declaration {entry.get('id')!r}: pinned_by names {case!r}, "
