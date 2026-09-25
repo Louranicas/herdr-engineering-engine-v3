@@ -98,17 +98,23 @@ def rustdoc_unforbidden(help_text, manifest):
 
 
 def shell_subjects(root, names):
-    """Every subject that is shell: a `.sh` file, or a file whose first line is a bash or sh shebang.
-    Derived from the gate's own subject set, like `python_subjects`."""
+    """Every subject that is shell: a `.sh` file, or a file whose shebang names bash, sh or dash.
+    Derived from the gate's own subject set, like `python_subjects`. The shebang is parsed, not
+    matched: `#! /bin/bash` (a space after `#!`) and `#!/usr/bin/env -S bash` (env's flags) name
+    the interpreter as surely as `#!/bin/bash` (review of 46b1e9e, gap 3)."""
     found = []
     for name in names:
         if name.endswith(".sh"):
             found.append(name)
             continue
         with (root / name).open("rb") as handle:
-            first = handle.readline(128).split()
-        if first and first[0].startswith(b"#!") and (
-                first[0].endswith((b"/bash", b"/sh")) or (first[0].endswith(b"/env") and first[1:2] in ([b"bash"], [b"sh"]))):
+            first = handle.readline(128)
+        if not first.startswith(b"#!"):
+            continue
+        words = first[2:].split()
+        if words and words[0].rsplit(b"/", 1)[-1] == b"env":
+            words = [word for word in words[1:] if not word.startswith(b"-")]
+        if words and words[0].rsplit(b"/", 1)[-1] in (b"bash", b"sh", b"dash"):
             found.append(name)
     return sorted(found)
 
@@ -752,8 +758,11 @@ def refuse_untracked_inputs(root, names, deadline):
 def quality_subject_paths(root, deadline, rust_only):
     required = ["Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "tools/check-quality",
                 "tools/development_process.py", "tools/rust-offline.py", "tools/sqlite-static.py", "tools/check-store-mutations", "tests/t25_process.py",
+                "tests/fixtures/rustdoc/lint-help-1.98.0.txt",  # t25's verbatim rustdoc lint world
                 "tests/t25_quality.py", "tools/check-workflow-sites", "tools/check-skill-sites", "tools/check-pi-sites", "tools/check-bash-sites", "tools/site_sweep.py",
                 "tools/check-mutation-survivors",
+                # A shell subject the lint must see (review of 46b1e9e, gap 4): the publication launcher.
+                "tools/corpus-sync",
                 # tests/t01_contracts.rs pins the RC01 limits to the published decision (include_str!).
                 "docs/contract-decisions.md"]
     required += [name for directory in ("src", "tests") for name in tree_files(root, directory, deadline, ".rs")]
@@ -1315,13 +1324,15 @@ def main():
             raise ValueError("Python lint needs ruff at " + str(RUFF) + "; the gate has no network fallback")
         report["executables"]["ruff"] = {"path": str(RUFF), "sha256": digest(RUFF)}
         run("ruff-identity", [str(RUFF), "--version"], required_text=RUFF_VERSION + "\n")
-        run("python-lint", python_lint_argv(RUFF, python_subjects(work, subject)),
-            required_text=RUFF_CLEAN)
+        pythons = python_subjects(work, subject)
+        print(f"python-lint subjects={len(pythons)}", flush=True)
+        run("python-lint", python_lint_argv(RUFF, pythons), required_text=RUFF_CLEAN)
         if not SHELLCHECK.is_file() or not os.access(SHELLCHECK, os.X_OK):
             raise ValueError("Shell lint needs shellcheck at " + str(SHELLCHECK) + "; the gate has no network fallback")
         shells = shell_subjects(work, subject)
         if not shells:
             raise ValueError("Shell lint found no shell subject; a lint of nothing measured nothing")
+        print(f"shell-lint subjects={len(shells)}: {' '.join(shells)}", flush=True)
         report["executables"]["shellcheck"] = {"path": str(SHELLCHECK), "sha256": digest(SHELLCHECK)}
         run("shellcheck-identity", [str(SHELLCHECK), "--version"], required_text=SHELLCHECK_VERSION + "\n")
         run("shell-lint", shell_lint_argv(SHELLCHECK, shells), required_text=SHELLCHECK_CLEAN)

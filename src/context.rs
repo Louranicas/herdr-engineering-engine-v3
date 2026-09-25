@@ -346,12 +346,14 @@ pub const MAX_SOURCE_BYTES: u64 = 64 * 1024;
 ///
 /// Registration is caller input the assembly copies — an identity and up to [`MAX_SELECTED`]
 /// dependency identities per source — so the registry is bounded where it is acquired. At the
-/// bound the assembly's own allocation is at most 4096 x (1 + 256) identities of 36 bytes, about
-/// 38 MiB, and a lookup is a logarithmic probe of the index rather than a scan. It is sixteen
-/// packets' worth of [`MAX_SELECTED`], so no packet the walk can build is short of candidates.
+/// bound the assembly holds at most 4096 x (1 + 256) identities: 36 MiB of identity bytes alone,
+/// and with each `String`'s 24-byte header, the index's second copy of every own identity and its
+/// tree nodes, on the order of 60-90 MiB — bounded, not small. A lookup is a logarithmic probe of
+/// the index rather than a scan. It is exactly sixteen packets' worth of [`MAX_SELECTED`], so no
+/// packet the walk can build is short of candidates.
 pub const MAX_SOURCES: usize = 4096;
 
-const _: () = assert!(MAX_SOURCES >= MAX_SELECTED);
+const _: () = assert!(MAX_SOURCES == 16 * MAX_SELECTED);
 
 /// The deepest a dependency chain is followed.
 ///

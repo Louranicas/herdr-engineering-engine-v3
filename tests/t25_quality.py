@@ -791,26 +791,21 @@ Precompiling packages...
                          ["/r", "check", "--isolated", "--no-cache", "--select", "F,B",
                           "--output-format", "concise", "--", "a.py", "b"])
 
-    # Captured verbatim from the pinned rustdoc 1.98.0 `rustdoc -W help` (2026-09-26): the world the
-    # manifest check reads, produced by the toolchain rather than typed from this module's reading.
-    RUSTDOC_HELP = (
-        "                          rustdoc::missing-crate-level-docs  allow    detects crates with no crate-level documentation\n"
-        "                                 rustdoc::private-doc-tests  allow    detects code samples in docs of private items not documented by rustdoc\n"
-        "                                         rustdoc::bare-urls  warn     detects URLs that are not hyperlinks\n"
-        "                            rustdoc::broken-intra-doc-links  warn     failures in resolving intra-doc link targets\n"
-        "                      rustdoc::invalid-codeblock-attributes  warn     codeblock attribute looks a lot like a known one\n"
-        "                                 rustdoc::invalid-html-tags  warn     detects invalid HTML tags in doc comments\n"
-        "                           rustdoc::invalid-rust-codeblocks  warn     codeblock could not be parsed as valid Rust or is empty\n"
-        "                           rustdoc::private-intra-doc-links  warn     linking from a public item to a private one\n"
-        "                          rustdoc::redundant-explicit-links  warn     detects redundant explicit links in doc comments\n"
-        "                                  rustdoc::all  rustdoc::broken-intra-doc-links, rustdoc::private-intra-doc-links\n")
+    # The whole `rustdoc -W help` of the pinned rustdoc 1.98.0, captured verbatim by redirection
+    # (2026-09-26): the world the manifest check reads, produced by the toolchain rather than typed
+    # from this module's reading. It carries the ~120 rustc lints that are also warn-by-default, so the
+    # `rustdoc::` anchor is exercised (review of 5b58ecb: a trimmed excerpt let an optional-anchor
+    # mutant pass).
+    RUSTDOC_HELP = (ROOT / "tests/fixtures/rustdoc/lint-help-1.98.0.txt").read_text()
 
     def test_rustdoc_world_is_the_toolchains_default_warn_lints(self):
         world = ["bare_urls", "broken_intra_doc_links", "invalid_codeblock_attributes", "invalid_html_tags",
                  "invalid_rust_codeblocks", "private_intra_doc_links", "redundant_explicit_links"]
         self.assertEqual(quality.rustdoc_unforbidden(self.RUSTDOC_HELP, {}), world)
-        # allow-by-default lints and the `all` group are not in the world.
+        # allow-by-default lints, the `all` group and rustc's own warn-by-default lints are not in it.
+        self.assertIn("dead-code", self.RUSTDOC_HELP)
         self.assertNotIn("missing_crate_level_docs", quality.rustdoc_unforbidden(self.RUSTDOC_HELP, {}))
+        self.assertNotIn("dead_code", quality.rustdoc_unforbidden(self.RUSTDOC_HELP, {}))
 
     def test_rustdoc_manifest_must_forbid_each_lint_by_name(self):
         every = {name: "forbid" for name in quality.rustdoc_unforbidden(self.RUSTDOC_HELP, {})}
@@ -852,8 +847,7 @@ Precompiling packages...
     def sweep(self, expected, argv=()):
         import contextlib
         import io
-        sys.path.insert(0, str(ROOT / "tools"))
-        import site_sweep
+        import site_sweep  # tools/ is on sys.path from this module's load
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
             (root / "m.py").write_text(self.SWEEP_MODULE)
@@ -937,11 +931,17 @@ Precompiling packages...
             (root / "tools/posix").write_text("#!/bin/sh\ntrue\n")
             (root / "tools/python").write_text("#!/usr/bin/env python3\nx = 1\n")
             (root / "tools/bashful").write_text("#!/usr/bin/env bashful\ntrue\n")
+            (root / "tools/split").write_text("#!/usr/bin/env -S bash -e\ntrue\n")
+            (root / "tools/spaced").write_text("#! /bin/bash\ntrue\n")
+            (root / "tools/dash").write_text("#!/bin/dash\ntrue\n")
+            (root / "tools/pyenv").write_text("#!/usr/bin/env -S python3\nx = 1\n")
             (root / "lib.rs").write_text("fn main() {}\n")
             self.assertEqual(
                 quality.shell_subjects(root, ["lib.rs", "tools/python", "tools/bashful", "tools/posix",
-                                              "tools/direct", "a.sh", "tools/env"]),
-                ["a.sh", "tools/direct", "tools/env", "tools/posix"])
+                                              "tools/direct", "a.sh", "tools/env", "tools/split",
+                                              "tools/spaced", "tools/dash", "tools/pyenv"]),
+                ["a.sh", "tools/dash", "tools/direct", "tools/env", "tools/posix", "tools/spaced",
+                 "tools/split"])
 
     def test_python_subjects_are_every_py_file_and_every_python3_script(self):
         with tempfile.TemporaryDirectory() as raw:

@@ -366,8 +366,9 @@ class Refusals(unittest.TestCase):
         self.assertIn("b", detail)
 
     def test_committed_state_outside_the_vocabulary(self):
-        self.refused(procedure([step("a")]), "identity_mismatch",
-                     committed=record({"a": "finished"}))
+        detail = self.refused(procedure([step("a")]), "identity_mismatch",
+                              committed=record({"a": "finished"}))
+        self.assertIn("unknown committed state 'finished'", detail)
 
     def test_committed_under_another_procedure_identity(self):
         detail = self.refused(procedure([step("a")]), "identity_mismatch",
@@ -768,6 +769,7 @@ class Reconcile(unittest.TestCase):
         body, after = self.lost()
         # One input per refusal site, each asserting its own detail (F140), as for observe.
         for reply, detail in (([], "the readback is not a control result or error"),
+                              ({"kind": "other", "effect": "none"}, "the readback is not a control result or error"),
                               ({"kind": "error"}, "a readback error carries no code"),
                               ({"kind": "result"}, "a readback result carries no body")):
             with self.subTest(reply=reply):
