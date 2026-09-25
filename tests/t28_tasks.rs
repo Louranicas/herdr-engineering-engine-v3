@@ -3832,3 +3832,126 @@ fn a_delivered_notification_is_no_obligation() -> Outcome {
     conforms(&[("task.resolve", &delivered)])?;
     Ok(())
 }
+
+/// `task.resolve` bodies, each one member away from valid, with the member each is refused at.
+fn resolve_body_cases(object: &Value) -> Vec<(&'static str, Value, Option<&'static str>)> {
+    let good = resolve_body(&nth(0x05b2, 1), "quarantine", &json!([object]));
+    let with = |edit: &dyn Fn(&mut Value)| {
+        let mut body = good.clone();
+        edit(&mut body);
+        body
+    };
+    vec![
+        (
+            "an extra member",
+            with(&|b| b["extra"] = json!(1)),
+            Some("/body"),
+        ),
+        (
+            "an obligation that is not a UuidV4",
+            with(&|b| b["obligation_id"] = json!("o")),
+            Some("/body/obligation_id"),
+        ),
+        (
+            "an unknown disposition",
+            with(&|b| b["disposition"] = json!("forget")),
+            Some("/body/disposition"),
+        ),
+        (
+            "an empty reason",
+            with(&|b| b["reason"] = json!("")),
+            Some("/body/reason"),
+        ),
+        (
+            "a 2049-byte reason",
+            with(&|b| b["reason"] = json!("r".repeat(2049))),
+            Some("/body/reason"),
+        ),
+        (
+            "a 2048-byte reason",
+            with(&|b| b["reason"] = json!("é".repeat(1024))),
+            None,
+        ),
+        (
+            "evidence that is not an array",
+            with(&|b| b["evidence"] = json!({})),
+            Some("/body/evidence"),
+        ),
+        (
+            "65 references",
+            with(&|b| b["evidence"] = json!(vec![object.clone(); 65])),
+            Some("/body/evidence"),
+        ),
+        (
+            "64 references",
+            with(&|b| b["evidence"] = json!(vec![object.clone(); 64])),
+            None,
+        ),
+        (
+            "a reference missing a member",
+            with(&|b| {
+                b["evidence"][0]
+                    .as_object_mut()
+                    .map(|o| o.remove("schema_id"));
+            }),
+            Some("/body/evidence"),
+        ),
+        (
+            "a reference with a bad digest",
+            with(&|b| b["evidence"][0]["sha256"] = json!("sha256:zz")),
+            Some("/body/evidence"),
+        ),
+        (
+            "a length past u32",
+            with(&|b| b["evidence"][0]["byte_length"] = json!(4_294_967_296_u64)),
+            Some("/body/evidence"),
+        ),
+        (
+            "a non-ASCII media type",
+            with(&|b| b["evidence"][0]["media_type"] = json!("é")),
+            Some("/body/evidence"),
+        ),
+    ]
+}
+
+/// B08: the body, member by member (contract-decisions.md:344; `EvidenceRefV1` at :322).
+#[test]
+fn a_resolve_body_is_checked_member_by_member() -> Outcome {
+    let scratch = Scratch::new()?;
+    let operator = Principal::new(1000, "operator").map_err(|error| format!("{error:?}"))?;
+    let (tasks, ids, evidence) = resolve_ledger(&scratch, &operator, &[Stage::Unknown])?;
+    let mut replies = Vec::new();
+    // A valid body commits a quarantine, so each later case names the generation it left.
+    let mut generation = "3".to_owned();
+    for (index, (case, body, field)) in resolve_body_cases(&evidence_of(&evidence))
+        .into_iter()
+        .enumerate()
+    {
+        let key = format!("28d00000-0000-4000-8000-0000000009{:02x}", 0xb0 + index);
+        let reply = serve(
+            &tasks,
+            &operator,
+            &resolve_frame(u8::try_from(index)?, &key, &ids[0], &generation, &body)?,
+        )?;
+        if let Some(field) = field {
+            assert_eq!(
+                code_at(&reply),
+                (&json!("invalid_argument"), &json!(field)),
+                "{case}: {reply}"
+            );
+        } else {
+            assert_eq!(reply["kind"], json!("result"), "{case}: {reply}");
+            generation = reply["body"]["task"]["generation"]
+                .as_str()
+                .ok_or("generation")?
+                .to_owned();
+        }
+        replies.push(reply);
+    }
+    let rows: Vec<(&str, &Value)> = replies
+        .iter()
+        .map(|reply| ("task.resolve", reply))
+        .collect();
+    conforms(&rows)?;
+    Ok(())
+}
