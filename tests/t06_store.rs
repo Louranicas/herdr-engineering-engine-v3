@@ -31,7 +31,7 @@
 use habitat_engine::contracts::{Generation, Sha256Digest, UuidV4};
 use habitat_engine::store::{
     Allocation, Effect, Expected, Object, Principal, PublishedAcceptance, Settlement, Store,
-    Submission, TaskHead, Verification, VerificationVerdict,
+    Submission, TaskEvent, TaskHead, Verification, VerificationVerdict,
 };
 use std::fs::{self, DirBuilder};
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
@@ -56,6 +56,9 @@ const SECOND_ATTEMPT: &str = "06000000-0000-4000-8000-00000000000e";
 const SECOND_START: &str = "06000000-0000-4000-8000-00000000000f";
 const SECOND_SETTLE: &str = "06000000-0000-4000-8000-000000000010";
 const SECOND_VERIFY: &str = "06000000-0000-4000-8000-000000000011";
+const EV_TASK: &str = "06000000-0000-4000-8000-0000000000d1";
+const EV_KEY: &str = "06000000-0000-4000-8000-0000000000d2";
+const EV_ADMITTED: &str = "06000000-0000-4000-8000-0000000000d3";
 const CRITERIA: &str = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 // Independently known SHA-256 of the literal UTF-8 candidate bytes "hello".
 const SUBJECT: &str = "sha256:2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824";
@@ -1484,5 +1487,86 @@ fn a_binding_naming_another_task_is_corrupt() {
     assert!(matches!(
         Store::open(&area.path, id(GEN), id(EPOCH), false, deadline()),
         Err(habitat_engine::store::Error::Corrupt)
+    ));
+}
+
+/// B14a-1c · `events_after` reads a task's events after one of its own, in `sequence` order,
+/// asserted whole off the origin (F129); the bound refuses with both numbers on its edge's far
+/// side and admits on its near side; an unknown event, another task's event and a foreign
+/// principal are each `NotFound`.
+#[test]
+fn events_after_reads_one_task_s_later_events_within_its_bound() {
+    use habitat_engine::store::Error;
+    let (_area, mut store, evidence) = ready();
+    record(&mut store, &evidence, VerificationVerdict::Passed);
+    let owner = principal();
+    let event = |kind: &str, generation: &str| TaskEvent {
+        kind: kind.to_owned(),
+        generation: generation.to_owned(),
+    };
+    assert_eq!(
+        store
+            .events_after(&owner, id(TASK), id(ADMITTED), 3, deadline())
+            .unwrap(),
+        vec![
+            event("attempt_started", "2"),
+            event("attempt_observed", "3"),
+            event("verification_observed", "4"),
+        ]
+    );
+    assert_eq!(
+        store
+            .events_after(&owner, id(TASK), id(SETTLED), 1, deadline())
+            .unwrap(),
+        vec![event("verification_observed", "4")]
+    );
+    assert_eq!(
+        store
+            .events_after(&owner, id(TASK), id(VERIFIED), 0, deadline())
+            .unwrap(),
+        Vec::<TaskEvent>::new()
+    );
+    assert!(matches!(
+        store.events_after(&owner, id(TASK), id(ADMITTED), 2, deadline()),
+        Err(Error::EventsBound { found: 3, limit: 2 })
+    ));
+    assert!(matches!(
+        store.events_after(&owner, id(TASK), id(OTHER), 3, deadline()),
+        Err(Error::NotFound)
+    ));
+    store
+        .submit(
+            Submission {
+                principal: &owner,
+                key: id(EV_KEY),
+                task: id(EV_TASK),
+                event: id(EV_ADMITTED),
+                request_bytes: b"a second task",
+                workspace_id: id("28f00000-0000-4000-8000-00000000000a"),
+                criteria: Sha256Digest::parse(CRITERIA).unwrap(),
+                allocation: Allocation {
+                    limit_ms: 1000,
+                    work_ms: 800,
+                    verify_ms: 200,
+                },
+            },
+            deadline(),
+        )
+        .unwrap();
+    assert!(matches!(
+        store.events_after(&owner, id(TASK), id(EV_ADMITTED), 3, deadline()),
+        Err(Error::NotFound)
+    ));
+    // Another task's later event is not this task's.
+    assert_eq!(
+        store
+            .events_after(&owner, id(TASK), id(SETTLED), 1, deadline())
+            .unwrap(),
+        vec![event("verification_observed", "4")]
+    );
+    let stranger = Principal::new(1001, "operator").unwrap();
+    assert!(matches!(
+        store.events_after(&stranger, id(TASK), id(ADMITTED), 3, deadline()),
+        Err(Error::NotFound)
     ));
 }

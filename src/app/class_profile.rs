@@ -73,11 +73,13 @@ pub struct Declared {
     pub systemd_run_sha256: String,
 }
 
-/// A read profile: its declaration and the directory it was read from.
+/// A read profile: its declaration, the directory it was read from, and the `sha256:` of the exact
+/// bytes that declaration was composed from — the digest an attempt's binding records (B14a-1c).
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Profile {
     pub declared: Declared,
     pub directory: PathBuf,
+    pub digest: String,
 }
 
 /// Which workspace field a refusal names.
@@ -264,6 +266,7 @@ pub fn read(directory: &Path) -> Result<Profile, Unready> {
     Ok(Profile {
         declared: compose(&bytes).map_err(Unready::Refused)?,
         directory: directory.to_path_buf(),
+        digest: super::evidence::digest(&bytes),
     })
 }
 
@@ -1150,9 +1153,20 @@ systemd_run_sha256 = "{HEX2}"
         let good = root.join("good");
         assert!(fs::DirBuilder::new().mode(0o700).create(&good).is_ok());
         write(&good.join(PROFILE_FILE), valid().as_bytes(), 0o600);
+        // B14a-1c · the digest is over the exact bytes read; the literal is coreutils `sha256sum` of
+        // `valid()` rendered outside Rust (the constants substituted, `{{`/`}}` unescaped).
         assert_eq!(
-            read(&good).map(|profile| (profile.directory, profile.declared.workspaces.len())),
-            Ok((good.clone(), 2))
+            read(&good).map(|profile| (
+                profile.directory,
+                profile.declared.workspaces.len(),
+                profile.digest
+            )),
+            Ok((
+                good.clone(),
+                2,
+                "sha256:3068a2c7453ec408cf5a3d666b27a06112339881f549235963a484a508ec25ba"
+                    .to_owned()
+            ))
         );
         write(&good.join(PROFILE_FILE), valid().as_bytes(), 0o644);
         assert_eq!(
@@ -1336,6 +1350,7 @@ systemd_run_sha256 = "{HEX2}"
         let read = Ok(Profile {
             declared: compose(valid().as_bytes())?,
             directory: PathBuf::from("/p"),
+            digest: String::new(),
         });
         assert_eq!(screen(&read, ID), Ok(()));
         assert_eq!(screen(&read, ID2), Ok(()));

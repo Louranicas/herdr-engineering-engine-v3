@@ -233,7 +233,8 @@ impl Sink for Evidence<'_> {
     }
 }
 
-fn digest(bytes: &[u8]) -> String {
+/// `sha256:` and lowercase hex over the exact bytes.
+pub(crate) fn digest(bytes: &[u8]) -> String {
     let mut value = String::from("sha256:");
     let hex = b"0123456789abcdef";
     for byte in Sha256::digest(bytes) {

@@ -412,6 +412,13 @@ pub enum Error {
         found: u64,
         limit: u64,
     },
+    /// More of a task's events follow a writer's own last event than the caller's bound, counted in
+    /// the same statement that reads them: refused with both numbers rather than truncated
+    /// (B14a-1c, the runtime's second-writer check).
+    EventsBound {
+        found: u64,
+        limit: u64,
+    },
     /// The task's outcome is already decided without a cancellation (accepted, or its terminal stop
     /// committed): there is no intent left to record, and its outcome stays historical (B05, RC03 §6).
     AlreadyStopped,
@@ -754,6 +761,14 @@ pub struct TaskHead {
 pub struct AttemptHead {
     pub id: String,
     pub task_generation: String,
+    pub generation: String,
+}
+
+/// One task event as a writer's second-writer check reads it (B14a-1c): its kind and the task
+/// generation it was written at.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TaskEvent {
+    pub kind: String,
     pub generation: String,
 }
 
@@ -1247,6 +1262,62 @@ impl Store {
     ) -> Result<TaskHead> {
         schema::bound(&self.connection, deadline)?;
         visible_head(&self.connection, principal, id)
+    }
+
+    /// The kind and generation of every event of task `id` after its own event `after`, in
+    /// `sequence` order (B14a-1c): what a writer reads to learn who else wrote since it last did.
+    /// At most `limit + 1` rows are read; the count rides in the same statement, so the refusal and
+    /// the rows describe one snapshot.
+    ///
+    /// # Errors
+    /// `NotFound` when the task is not the principal's or `after` is not one of its events;
+    /// `EventsBound` with both numbers when more than `limit` follow.
+    pub fn events_after(
+        &self,
+        principal: &Principal,
+        id: UuidV4<'_>,
+        after: UuidV4<'_>,
+        limit: u64,
+        deadline: Instant,
+    ) -> Result<Vec<TaskEvent>> {
+        schema::bound(&self.connection, deadline)?;
+        visible_head(&self.connection, principal, id)?;
+        let sequence: u64 = self
+            .connection
+            .query_row(
+                "SELECT sequence FROM events WHERE id=? AND task_id=?",
+                [after.as_str(), id.as_str()],
+                |row| read_number(row, 0),
+            )
+            .optional()?
+            .ok_or(Error::NotFound)?;
+        let mut statement = self.connection.prepare(
+            "SELECT kind,generation,(SELECT count(*) FROM events WHERE task_id=?1 AND sequence>?2) \
+             FROM events WHERE task_id=?1 AND sequence>?2 ORDER BY sequence LIMIT ?3",
+        )?;
+        let rows = statement.query_map(
+            params![
+                id.as_str(),
+                number(sequence)?,
+                number(limit.saturating_add(1))?
+            ],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    read_number(row, 2)?,
+                ))
+            },
+        )?;
+        let mut events = Vec::new();
+        for row in rows {
+            let (kind, generation, found) = row?;
+            if found > limit {
+                return Err(Error::EventsBound { found, limit });
+            }
+            events.push(TaskEvent { kind, generation });
+        }
+        Ok(events)
     }
 
     /// Reserve a unique attempt before dispatch. Previous uncertain attempts block reuse.

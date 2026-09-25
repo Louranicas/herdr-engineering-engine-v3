@@ -4562,6 +4562,7 @@ fn profile_declaring(declared: &str) -> Result<Profile, Box<dyn Error>> {
     Ok(Profile {
         declared: class_profile::compose(text.as_bytes()).map_err(|error| format!("{error:?}"))?,
         directory: PathBuf::from("/nonexistent/profile"),
+        digest: format!("sha256:{}", "c".repeat(64)),
     })
 }
 
