@@ -7,7 +7,7 @@
     "codebase": "/var/home/herdr-engineering-engine-v3"
   },
   "source_plan_sha256": "e62091172c60c391bbd5221dd7d3a9bfa398c8a89a1b66c8c5de97c4ddc88d0c",
-  "catalogue_sha256": "c016f2dfba668f5d35beee7718edf696329f65bbac9270ab0977dc0561645968",
+  "catalogue_sha256": "74fb56f1dada6c215fa6e46cea115c646f6e9423a4fb79224ba7c1c03724ed13",
   "readiness": {
     "id": "HEE3-READINESS-001",
     "sha256": "f574043487f39db6424c4988bce58e88a6e766f02f974fbcf3fa8dd6e0003548",
@@ -6040,6 +6040,16 @@
           "task_id": "T04"
         },
         {
+          "path": "migrations/004.sql",
+          "owner": "store",
+          "modules": [
+            "store",
+            "task"
+          ],
+          "reason": "Fourth migration of the additive chain (B14-P2c-1): tasks gains workspace_id, the installed workspace admission bound (NULL for tasks admitted before it), preserved over the table's thirteen pre-step columns; identity is its own pinned body digest in store::schema. Inventoried by exact bytes, never rewritten by the publisher.",
+          "task_id": "T04"
+        },
+        {
           "path": "src/store/roster/attempts.rs",
           "owner": "store",
           "modules": [
@@ -8861,6 +8871,16 @@
             "task"
           ],
           "reason": "Third migration of the additive chain (B08): task_dispositions records an operator's task.resolve disposition; operations admits task.resolve and task_stops admits abandoned, each rebuilt preserving every row; identity is its own pinned body digest in store::schema. Inventoried by exact bytes, never rewritten by the publisher.",
+          "task_id": "T04"
+        },
+        {
+          "path": "migrations/004.sql",
+          "owner": "store",
+          "modules": [
+            "store",
+            "task"
+          ],
+          "reason": "Fourth migration of the additive chain (B14-P2c-1): tasks gains workspace_id, the installed workspace admission bound (NULL for tasks admitted before it), preserved over the table's thirteen pre-step columns; identity is its own pinned body digest in store::schema. Inventoried by exact bytes, never rewritten by the publisher.",
           "task_id": "T04"
         },
         {
@@ -53095,6 +53115,16 @@
       "task_id": "T04"
     },
     {
+      "path": "migrations/004.sql",
+      "owner": "store",
+      "modules": [
+        "store",
+        "task"
+      ],
+      "reason": "Fourth migration of the additive chain (B14-P2c-1): tasks gains workspace_id, the installed workspace admission bound (NULL for tasks admitted before it), preserved over the table's thirteen pre-step columns; identity is its own pinned body digest in store::schema. Inventoried by exact bytes, never rewritten by the publisher.",
+      "task_id": "T04"
+    },
+    {
       "path": "src/contracts/roster.rs",
       "owner": "contracts",
       "modules": [
@@ -54716,8 +54746,8 @@
       "bytes": 6019
     },
     "tools/check-quality": {
-      "sha256": "978b5ab67864da0e9556dbfe27d0becf872c4b265f0368434c05e2c3f4c54b22",
-      "bytes": 83865
+      "sha256": "ec4a88cd555a918e062b51c9feff360b1cc9cfda21ab9bf199cf6b78dc5f1df4",
+      "bytes": 83982
     },
     "tools/development_process.py": {
       "sha256": "e76e3a794193e5df7ee96fabf700113d718527745a0f9a9dba1e04fd5c7baaf3",
@@ -54728,8 +54758,8 @@
       "bytes": 10433
     },
     "tests/t25_quality.py": {
-      "sha256": "4a4f2f6a41932a9902c0a6ee7bd25c3bb2d5bc97f19bbee08c876a1df774acea",
-      "bytes": 145145
+      "sha256": "2cdb3a1d46bae90cfbb70bfa6c5fb90357edb47e9c0248f1c1184bd3c8732f10",
+      "bytes": 145220
     },
     "julia/Manifest.toml": {
       "sha256": "097d5028df4e1667a970a8297d41eedb908e0319a0b4154c7ec12548140a9f79",
@@ -55460,16 +55490,16 @@
       "bytes": 8748
     },
     "src/store/schema.rs": {
-      "sha256": "806872d4174fb4092146c26063b0481945a0119b5928034923d1c24f807b4b5f",
-      "bytes": 19561
+      "sha256": "e3d7a88f714a5ff9a8a737039c3a367840a06ff9a6415aa175bc76f4e742f28b",
+      "bytes": 21772
     },
     "src/store/backup.rs": {
       "sha256": "98dfc0708c12865d8bcf8cace9434b5cd166526721709b86f84a24f975815fc5",
       "bytes": 14084
     },
     "tests/t04_store.rs": {
-      "sha256": "1791499b383e5a2c3ca6cdd840b70d27497f338afb1301a6a28b4c50d0f186ed",
-      "bytes": 95599
+      "sha256": "49c967498dcb34f262b4fccb72223d00b1d4836683d0f2879a66c951e183c6ab",
+      "bytes": 99919
     },
     "docs/store-contract.md": {
       "sha256": "b65ffe744d2abf93c3b0c40345787940213806ade52e9ef010e17f3012a81396",
@@ -55480,8 +55510,8 @@
       "bytes": 10139
     },
     "tools/check-store-mutations": {
-      "sha256": "e49dc1220576278ff890ba46b9888947ab499a1b69ef78df604224ff19a56310",
-      "bytes": 19730
+      "sha256": "b8fd7400f9858b65acd42714c193613ebbf61fc3a3937eafb0ae2bd2a8d20eac",
+      "bytes": 19756
     },
     "tools/sqlite-inputs/sqlite-amalgamation-3530400.zip": {
       "sha256": "1e71ddf93849c6a6ecf58b827c0692073d2dd7ee40196158068f7b29f422e87d",
@@ -55587,6 +55617,10 @@
       "sha256": "af8e45090193f9c0019565400b1a986dc51d67a087bb620416b3591296a001f9",
       "bytes": 4058
     },
+    "migrations/004.sql": {
+      "sha256": "3968cf54924e08ff288013420f391a710eca02bd62e2c7efefdcbc3c55955aab",
+      "bytes": 1303
+    },
     "src/contracts/roster.rs": {
       "sha256": "bdde6efe1ee29cf620b521b8b8ddce051f73cc86dcac05ec46f35193440a4710",
       "bytes": 14706
@@ -55608,8 +55642,8 @@
       "bytes": 10585
     },
     "tests/t05_store.rs": {
-      "sha256": "10ac20694084d00a59b6d8af0c79cece90167391458ceaefcab1fb3b66961ead",
-      "bytes": 69012
+      "sha256": "0a5d6bb1958aa7d89e5d94295be785717f40835e53513f515f833d1e0e4db2f6",
+      "bytes": 69164
     },
     "docs/roster-contract.md": {
       "sha256": "32612a958aa81b95eb8f6260b91ce91bcc911387047df4594cd0c6b58d7e01f3",
@@ -55672,8 +55706,8 @@
       "bytes": 16785
     },
     "development/t06/fixed-runtime-frontend/src/frontend.rs": {
-      "sha256": "fbf71307a3c2f237cfd7f0123a7b18a5aa829a960bc3211c836348fe51e8d5e4",
-      "bytes": 35884
+      "sha256": "2c2748a0873fccb5c56067c668043acb406abf4a11806a554e2414cf5ad4bd44",
+      "bytes": 36449
     },
     "development/t06/fixed-runtime-frontend/src/inputs.rs": {
       "sha256": "20c377c77663de0d0fe2fa63a4ad517a44edffa7c2fd361f4bb21141cd6f17bc",
@@ -55696,8 +55730,8 @@
       "bytes": 10241
     },
     "development/t06/fixed-runtime-frontend/tests/frontend_controls.rs": {
-      "sha256": "01b15ba68652a6f41832168013cee38a86351492da26651fd34257e5e5aeb798",
-      "bytes": 23348
+      "sha256": "029bbeaee8d011521956603c44547d2bbc160cfa4828dac613dd919f251828bf",
+      "bytes": 23450
     },
     "development/t06/fixed-runtime-frontend/tests/test_freezer.py": {
       "sha256": "b3162fb67398460946aaeee7b07f95802a95cd00d5e2bc2c3abfee89794d33ba",
@@ -55744,8 +55778,8 @@
       "bytes": 36298
     },
     "development/t06/task-runtime/src/runtime_fixture.rs": {
-      "sha256": "80632dea298958a47091251ad4403bdd2454b2e995f4c687a907e5a10ace7e2d",
-      "bytes": 13782
+      "sha256": "ac58982877a0250a64fce35e1f4ac2295634f3521eaf9f0bd22f937287d1d774",
+      "bytes": 13858
     },
     "development/t06/task-runtime/src/runtime_readback.rs": {
       "sha256": "6f68720489263f1fd19857aaaf23f51d27a16769ed9a44bfac7642595c696fe4",
@@ -55784,8 +55818,8 @@
       "bytes": 1772
     },
     "development/t06/task-runtime/tests/native_store.rs": {
-      "sha256": "ef70c8f76a00b728671090ce9ed3de9dcb70e443b1fe7be8ecd13db9d559fac9",
-      "bytes": 13558
+      "sha256": "c40b7c4423f26c5157b377a7d5025313e1f92b79032623984810cd01df97f253",
+      "bytes": 13634
     },
     "development/t06/task-runtime/tests/prepare_controls.rs": {
       "sha256": "ec24ed668500f12ac927c64aeac8a0ae9bd8bdae9196ac77999c30a8f046ef6a",
@@ -55816,8 +55850,8 @@
       "bytes": 29291
     },
     "src/app/durable_control.rs": {
-      "sha256": "b556b7f0a65d89bec41abf65c58205cbbe4e85fca130ebe42473b29ad4946db1",
-      "bytes": 29811
+      "sha256": "267deb26dc7c3eabec28fd23a620d98d4ba84dcb95c32971ee2b0ae3963ee3ee",
+      "bytes": 29889
     },
     "src/app/evidence.rs": {
       "sha256": "d69db824fbe5664643b2a5dde6285a93829c9c3a268aef2a2131a90ad67b6163",
@@ -55892,8 +55926,8 @@
       "bytes": 26561
     },
     "src/main.rs": {
-      "sha256": "44631d49e6930d95fc2058846a94ee5f5eb46c4b3cb781be03be57f58cd657e0",
-      "bytes": 37670
+      "sha256": "8d1932abe0d57b71c1c99fe9d3f7d4c2f49fd317499dc735fdd23d06db5bd4c9",
+      "bytes": 37802
     },
     "src/store/staging.rs": {
       "sha256": "8bb17b5598550fd2c002dc7063ddfa56cf4a6e0a51566264b908ba655acce5d3",
@@ -55972,8 +56006,8 @@
       "bytes": 20203
     },
     "tests/t06_durable_control.rs": {
-      "sha256": "01f7849ba4553952438de858d93d1869faf9d0c81dda48fdf27229af149c6ae7",
-      "bytes": 6541
+      "sha256": "c1ceccba499df69d0f15eab5f41e0c9ec22117f8f31665c0a3292999995928df",
+      "bytes": 6619
     },
     "tests/t06_evidence.rs": {
       "sha256": "8d4ba5209311cd787dea28dcef51b953eef1cd9519e0b9a1e807047e9f06be14",
@@ -56000,20 +56034,20 @@
       "bytes": 12082
     },
     "tests/t06_store.rs": {
-      "sha256": "3bb7afb54382cc51aff20b151f14b85c703f17b982e44a1c22cadf3c37fe6e51",
-      "bytes": 43592
+      "sha256": "90f49a650b2dcde2046fe403caa522548a5179b6276ed52feb0e4147f51f96f6",
+      "bytes": 43740
     },
     "tests/t06_store_staging.rs": {
-      "sha256": "60e97f3e6f13b618e7367f245df460deadbe7dc3bf6c28ffc7dc0237fdc26161",
-      "bytes": 11966
+      "sha256": "1a91e080d901ff45b3b145cf09fc49590c2be215ae92467b243585b0f0473593",
+      "bytes": 12040
     },
     "tests/t06_subjects.rs": {
       "sha256": "dd1f3395eca4776a0417c2659e25e33b5d8cc5b681eb36b9cb2f43a63df41549",
       "bytes": 9781
     },
     "tests/t06_terminal.rs": {
-      "sha256": "f75c11d0321f460af7ebabad03ede5649fc7d9158f3c1f3035f80737a152ffa3",
-      "bytes": 37669
+      "sha256": "11dcf900fc31548e0456cdb52636261906e94eb2801d8ca13e45b67f47508326",
+      "bytes": 37747
     },
     "tests/t06_workspace.rs": {
       "sha256": "5a29425f78000e5ca08339b73f9a26a5a759ed770c131734c65635ecb3c2b939",
