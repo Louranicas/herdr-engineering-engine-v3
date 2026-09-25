@@ -3062,6 +3062,20 @@ fn resolve_refusals<'a>(
             "not_found",
             json!("/precondition/id"),
         ),
+        // Before anything else about the task: an invisible task names no obligation either.
+        (
+            "another operator's task, a bogus obligation",
+            stranger,
+            resolve_frame(
+                10,
+                RESOLVE_KEY,
+                &ids[0],
+                "3",
+                &body("28d00000-0000-4000-8000-0000000009fd"),
+            )?,
+            "not_found",
+            json!("/precondition/id"),
+        ),
         (
             "an unknown task",
             operator,
@@ -3871,6 +3885,12 @@ fn resolve_body_cases(object: &Value) -> Vec<(&'static str, Value, Option<&'stat
             "a 2048-byte reason",
             with(&|b| b["reason"] = json!("é".repeat(1024))),
             None,
+        ),
+        // Bytes, not code points: 1,025 two-byte characters are 2,050 bytes.
+        (
+            "a 2050-byte reason of 1025 characters",
+            with(&|b| b["reason"] = json!("é".repeat(1025))),
+            Some("/body/reason"),
         ),
         (
             "evidence that is not an array",
