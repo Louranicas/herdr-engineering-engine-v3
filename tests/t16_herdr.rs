@@ -1530,7 +1530,7 @@ fn the_event_text_bound_refuses_before_copying() -> Outcome {
     Ok(())
 }
 
-/// T16-HD-76 · each bound is the engine's published one, read from the schemas the engine serves
+/// T16-HD-76 · each list bound is the engine's published one, read from the schemas the engine serves
 /// (an independent source: the generated contract, not this module's constants).
 #[test]
 fn the_view_bounds_are_the_published_wire_bounds() -> Outcome {
@@ -1549,9 +1549,8 @@ fn the_view_bounds_are_the_published_wire_bounds() -> Outcome {
         get["$defs"]["BodyResult_task_get"]["properties"]["evidence"]["maxItems"],
         serde_json::json!(MAX_EVIDENCE_REFS)
     );
-    assert_eq!(
-        MAX_EVENT_TEXT_BYTES,
-        habitat_engine::contracts::control::MAX_FRAME_BYTES
-    );
+    // MAX_EVENT_TEXT_BYTES is the frame bound by construction; no schema declares a text bound, so
+    // there is no independent value to pin it against (review of 2f44216, gap 3) — the decoder
+    // (C08a) owns the tight bound.
     Ok(())
 }

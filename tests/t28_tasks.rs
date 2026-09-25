@@ -4730,12 +4730,26 @@ fn every_catalogue_action_is_dispatched_or_named_unserved() -> Result<(), Box<dy
             return Err(format!("{}: closed", action.id).into());
         };
         let reply: Value = serde_json::from_slice(&bytes)?;
-        // Past admission (review G4): every admission refusal names an envelope field outside
-        // `/body`, or is `unknown_action`; a row refused there would make the checks below vacuous.
+        // Past admission (review G4): the frame and `admit` refuse with a
+        // frame, protocol or authentication code, `unknown_action`, `unsupported_action_version`, or `invalid_argument`/`forbidden` at an envelope field
+        // outside `/body`. A dispatch arm may name an envelope field too (`task.preview` answers
+        // `unavailable` at `/precondition`), so the code decides, not the field alone. A row
+        // refused at admission would make the checks below vacuous.
         let field = reply["details"]["field"].as_str().unwrap_or("");
+        let code = reply["code"].as_str().unwrap_or("");
+        let admission = matches!(
+            code,
+            "invalid_frame"
+                | "unsupported_protocol"
+                | "unsupported_version"
+                | "unauthenticated"
+                | "unknown_action"
+                | "unsupported_action_version"
+        ) || (matches!(code, "invalid_argument" | "forbidden")
+            && !field.is_empty()
+            && !field.starts_with("/body"));
         assert!(
-            reply["code"] != json!("unknown_action")
-                && (field.is_empty() || field.starts_with("/body")),
+            !admission,
             "{}: refused at admission, so dispatch was never reached: {reply}",
             action.id
         );

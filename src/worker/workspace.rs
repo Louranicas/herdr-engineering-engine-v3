@@ -828,14 +828,14 @@ pub fn export_directory(
 /// rows, such as a receipt's subject files, refuses a symlink row before calling
 /// [`manifest_digest`]).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ManifestKind {
+pub(crate) enum ManifestKind {
     Directory,
     File { executable: bool, sha256: [u8; 32] },
 }
 
 /// Why a set of rows has no manifest digest.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ManifestRefusal {
+pub(crate) enum ManifestRefusal {
     /// A path holds a C0 control byte or DEL (the manifest's line and field separators).
     ControlByte,
     /// Paths are not strictly ascending by their bytes: out of order, or a duplicate.
@@ -852,7 +852,7 @@ pub enum ManifestRefusal {
 /// # Errors
 /// [`ManifestRefusal::ControlByte`] for a path with a C0 control or DEL; [`ManifestRefusal::Unordered`]
 /// for a path not strictly after the previous one.
-pub fn manifest_digest<'a>(
+pub(crate) fn manifest_digest<'a>(
     rows: impl IntoIterator<Item = (&'a str, ManifestKind)>,
 ) -> Result<String, ManifestRefusal> {
     let alphabet = b"0123456789abcdef";
