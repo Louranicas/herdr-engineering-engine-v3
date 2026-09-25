@@ -30,17 +30,18 @@
 //!   answers `unavailable`, as every use of that connection does. The first reply and every replay
 //!   are rendered by one function per action.
 
-use crate::actions::control::{Recorded, TaskRequest, Tasks};
+use crate::actions::control::{CURSOR_LIFETIME_MS, Recorded, TaskRequest, Tasks};
 use crate::app::evidence::fresh_id;
 use crate::contracts::control::{
     ErrorCode, Fault, Outcome, Precondition, ResultEffect, Retry, request_sha256,
 };
+use crate::contracts::parse_u64_decimal;
 use crate::contracts::{Sha256Digest, UuidV4};
 use crate::store::{
     Admission, Allocation, CancelIntent, Cancellation, Error as StoreError, Principal, Store,
-    Submission, TaskHead,
+    Submission, TaskFilter, TaskHead,
 };
-use crate::task::control::{Cancel, Selector, Spec};
+use crate::task::control::{Cancel, List, Selector, Spec};
 use serde_json::{Value, json};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -355,6 +356,76 @@ impl Tasks for StoreTasks {
                 "cursor": self.cursor(view.event_high_water, &head.id, now_unix_ms),
             }),
         })
+    }
+
+    fn list(
+        &self,
+        principal: &Principal,
+        list: &List,
+        deadline_unix_ms: u64,
+        now_unix_ms: u64,
+    ) -> Result<Outcome, Fault> {
+        let until = deadline(deadline_unix_ms, now_unix_ms);
+        let cursor = list.page.cursor.as_ref();
+        // The after_key this listing issues is an admission sequence; anything else it never issued.
+        let after = cursor
+            .map(|cursor| {
+                parse_u64_decimal(&cursor.after_key).map_err(|_| {
+                    Fault::invalid("/body/page/cursor/after_key", "a key this listing issued")
+                })
+            })
+            .transpose()?
+            .unwrap_or(0);
+        let states: Vec<&str> = list.states.iter().map(|state| state.name()).collect();
+        let filter = TaskFilter {
+            states: &states,
+            task_class: list.task_class.as_deref(),
+            parent_task_id: list.parent_task_id.as_deref(),
+        };
+        let limit = usize::try_from(list.page.limit).map_err(|_| internal())?;
+        let mut store = self
+            .store
+            .lock()
+            .map_err(|_| unavailable("the ledger's owner panicked"))?;
+        let listing = store
+            .task_list(
+                principal,
+                &filter,
+                cursor.map(|cursor| cursor.snapshot_revision),
+                after,
+                limit,
+                until,
+            )
+            .map_err(|error| match error {
+                StoreError::SnapshotAhead { .. } => {
+                    Fault::resync("/body/page/cursor/snapshot_revision")
+                }
+                other => store_fault(&other),
+            })?;
+        drop(store);
+        let mut items = Vec::with_capacity(listing.tasks.len());
+        for (_, view) in &listing.tasks {
+            let obligations =
+                u32::try_from(view.unresolved_obligations()).map_err(|_| internal())?;
+            items.push(head_record(
+                &view.head,
+                view.current_attempt(),
+                obligations,
+            )?);
+        }
+        let snapshot = listing.snapshot.to_string();
+        let next_cursor = match listing.tasks.last() {
+            Some((sequence, _)) if listing.more => json!({
+                "snapshot_revision": snapshot,
+                "after_key": sequence.to_string(),
+                "filter_sha256": list.filter_sha256(),
+                "expires_unix_ms": now_unix_ms.saturating_add(CURSOR_LIFETIME_MS).to_string(),
+            }),
+            _ => Value::Null,
+        };
+        Ok(Outcome::read(json!({
+            "page": {"items": items, "next_cursor": next_cursor, "snapshot_revision": snapshot},
+        })))
     }
 
     fn cancel(

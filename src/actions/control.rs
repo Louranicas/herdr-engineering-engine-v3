@@ -23,9 +23,9 @@ use super::{
 use crate::contracts::Principal;
 use crate::contracts::control::{
     self as wire, Envelope, ErrorCode, Fault, FrameFault, Health, MAX_DEADLINE_AHEAD_MS,
-    MAX_FRAME_BYTES, Outcome, Precondition, Received, Retry, Socket, result_frame,
+    MAX_FRAME_BYTES, Outcome, PageCursor, PageIn, Precondition, Received, Retry, Socket,
+    result_frame,
 };
-use crate::contracts::{Sha256Digest, parse_u64_decimal};
 use crate::task::control::{self as task_body, Selector, Spec};
 use serde_json::{Map, Value, json};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -34,9 +34,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 pub const CURSOR_LIFETIME_MS: u64 = 300_000;
 /// The longest `tools.list` query, in UTF-8 bytes (RC03 §4: `UTF8[0..256]`).
 pub const MAX_QUERY_BYTES: usize = 256;
-/// The widest `tools.list` page a caller may ask for (`PageInV1.limit`).
-pub const MAX_PAGE_LIMIT: u64 = 100;
-const MAX_AFTER_KEY_BYTES: usize = 256;
+/// The widest page a caller may ask for (`PageInV1.limit`), the wire's own.
+pub use crate::contracts::control::MAX_PAGE_LIMIT;
 
 /// The server-side grant store: what a grant lets an authenticated principal see and do.
 pub trait Grants {
@@ -128,6 +127,22 @@ pub trait Tasks {
         &self,
         principal: &Principal,
         selector: &Selector,
+        deadline_unix_ms: u64,
+        now_unix_ms: u64,
+    ) -> Result<Outcome, Fault>;
+
+    /// One page of the principal's tasks (B06), `list`'s cursor already proved current in its
+    /// lifetime and filter; its snapshot is the ledger's to judge.
+    ///
+    /// # Errors
+    ///
+    /// `resync_required` for a snapshot the ledger never reached; `invalid_argument` for an
+    /// `after_key` this listing could not have issued; `resource_exhausted` past a task's read bound;
+    /// `unavailable` when the ledger cannot be read.
+    fn list(
+        &self,
+        principal: &Principal,
+        list: &task_body::List,
         deadline_unix_ms: u64,
         now_unix_ms: u64,
     ) -> Result<Outcome, Fault>;
@@ -412,6 +427,21 @@ fn dispatch(action: Action, caller: &Caller, context: &Context<'_>) -> Result<Ou
                 &cancel,
             )
         }
+        "task.list" => {
+            // Shape, then owner, then the listing's own semantics (the cursor's lifetime and
+            // filter), in the order every task action keeps.
+            let list = task_body::list(body)?;
+            let tasks = context.composed.tasks.ok_or_else(owner_absent)?;
+            if let Some(cursor) = &list.page.cursor {
+                cursor.resumes(&list.filter_sha256(), context.now_unix_ms)?;
+            }
+            tasks.list(
+                context.principal,
+                &list,
+                context.envelope.deadline_unix_ms,
+                context.now_unix_ms,
+            )
+        }
         "task.get" => {
             let selector = task_body::get(body)?;
             let tasks = context.composed.tasks.ok_or_else(owner_absent)?;
@@ -423,35 +453,42 @@ fn dispatch(action: Action, caller: &Caller, context: &Context<'_>) -> Result<Ou
             )
         }
         "tools.inspect" => tools_inspect(caller, body).map(Outcome::read),
-        "health" if !body.is_empty() => Err(Fault::invalid("/body", "an empty object")),
-        "health" => context
-            .composed
-            .health
-            .map(|health| {
-                let draining = context
-                    .composed
-                    .draining
-                    .is_some_and(|flag| flag.load(Ordering::Acquire));
-                let health = if draining {
-                    Health {
-                        socket: Socket::Draining,
-                        ..*health
-                    }
-                } else {
-                    *health
-                };
-                Outcome::read(health.body())
-            })
-            .ok_or(
-                Fault::of(
-                    ErrorCode::Unavailable,
-                    Retry::AfterCondition,
-                    "health needs the coordinator's recovery, database and socket state",
-                )
-                .because("coordinator state is not composed behind this receiver"),
-            ),
+        "health" => health(context),
         _ => Err(owner_absent()),
     }
+}
+
+/// `health`: the coordinator's observation, as composed, with the drain read at each frame (APP-01).
+fn health(context: &Context<'_>) -> Result<Outcome, Fault> {
+    if !context.envelope.body.is_empty() {
+        return Err(Fault::invalid("/body", "an empty object"));
+    }
+    context
+        .composed
+        .health
+        .map(|health| {
+            let draining = context
+                .composed
+                .draining
+                .is_some_and(|flag| flag.load(Ordering::Acquire));
+            let health = if draining {
+                Health {
+                    socket: Socket::Draining,
+                    ..*health
+                }
+            } else {
+                *health
+            };
+            Outcome::read(health.body())
+        })
+        .ok_or(
+            Fault::of(
+                ErrorCode::Unavailable,
+                Retry::AfterCondition,
+                "health needs the coordinator's recovery, database and socket state",
+            )
+            .because("coordinator state is not composed behind this receiver"),
+        )
 }
 
 fn tools_list(
@@ -472,35 +509,23 @@ fn tools_list(
             ));
         }
     };
-    let Some(Value::Object(page)) = body.get("page") else {
-        return Err(Fault::invalid("/body/page", "PageInV1"));
-    };
-    if page.len() != 2 {
-        return Err(Fault::invalid("/body/page", "exactly limit and cursor"));
-    }
-    let limit = page
-        .get("limit")
-        .and_then(Value::as_u64)
-        .filter(|limit| (1..=MAX_PAGE_LIMIT).contains(limit))
-        .ok_or(Fault::invalid("/body/page/limit", "integer 1..100"))?;
+    let PageIn { limit, cursor } = PageIn::parse(body.get("page"))?;
     let filter = filter_sha256(query);
-    let after = match page.get("cursor") {
-        Some(Value::Null) => None,
-        Some(Value::Object(cursor)) => Some(resume(cursor, &filter, now_unix_ms)?),
-        _ => {
-            return Err(Fault::invalid("/body/page/cursor", "null or PageCursorV1"));
-        }
-    };
+    let after = cursor
+        .map(|cursor| resume(cursor, &filter, now_unix_ms))
+        .transpose()?;
     // Never wider than the catalogue's own page bound, whatever the caller asked for; a
     // continuation cursor carries the rest, so nothing is silently dropped.
     let width = usize::try_from(limit).map_or(MAX_PAGE, |limit| limit.min(MAX_PAGE));
     let listed =
-        Catalogue::search(caller, query, after, width).map_err(|refusal| match refusal {
-            Refusal::PageOutOfRange => {
-                Fault::invalid("/body/page/cursor/after_key", "a key this listing issued")
-            }
-            _ => internal(),
-        })?;
+        Catalogue::search(caller, query, after.as_deref(), width).map_err(
+            |refusal| match refusal {
+                Refusal::PageOutOfRange => {
+                    Fault::invalid("/body/page/cursor/after_key", "a key this listing issued")
+                }
+                _ => internal(),
+            },
+        )?;
     let revision = CATALOGUE_REVISION.to_string();
     let mut items = Vec::with_capacity(listed.entries.len());
     for action in &listed.entries {
@@ -571,53 +596,14 @@ fn tools_inspect(caller: &Caller, body: &Map<String, Value>) -> Result<Value, Fa
     }))
 }
 
-/// Where a continuation cursor resumes, once it is proved to belong to this listing.
-fn resume<'a>(
-    cursor: &'a Map<String, Value>,
-    filter: &str,
-    now_unix_ms: u64,
-) -> Result<&'a str, Fault> {
-    let text = |name: &str| cursor.get(name).and_then(Value::as_str);
-    if cursor.len() != 4 {
-        return Err(Fault::invalid(
-            "/body/page/cursor",
-            "exactly snapshot_revision, after_key, filter_sha256 and expires_unix_ms",
-        ));
+/// Where a continuation cursor resumes, once it is proved to belong to this listing: the
+/// catalogue's own revision, then the cursor's lifetime and filter.
+fn resume(cursor: PageCursor, filter: &str, now_unix_ms: u64) -> Result<String, Fault> {
+    if u64::try_from(CATALOGUE_REVISION).ok() != Some(cursor.snapshot_revision) {
+        return Err(Fault::resync("/body/page/cursor/snapshot_revision"));
     }
-    let snapshot = text("snapshot_revision")
-        .and_then(|value| parse_u64_decimal(value).ok())
-        .ok_or(Fault::invalid(
-            "/body/page/cursor/snapshot_revision",
-            "U64Decimal",
-        ))?;
-    let after_key = text("after_key")
-        .filter(|key| (1..=MAX_AFTER_KEY_BYTES).contains(&key.len()) && key.is_ascii())
-        .ok_or(Fault::invalid(
-            "/body/page/cursor/after_key",
-            "ASCII of 1..256 bytes",
-        ))?;
-    let issued_for = text("filter_sha256")
-        .filter(|digest| Sha256Digest::parse(digest).is_ok())
-        .ok_or(Fault::invalid("/body/page/cursor/filter_sha256", "Sha256"))?;
-    let expires = text("expires_unix_ms")
-        .and_then(|value| parse_u64_decimal(value).ok())
-        .ok_or(Fault::invalid(
-            "/body/page/cursor/expires_unix_ms",
-            "U64Decimal",
-        ))?;
-    if u64::try_from(CATALOGUE_REVISION).ok() != Some(snapshot) {
-        return Err(resync("/body/page/cursor/snapshot_revision"));
-    }
-    if expires <= now_unix_ms {
-        return Err(resync("/body/page/cursor/expires_unix_ms"));
-    }
-    if issued_for != filter {
-        return Err(Fault::invalid(
-            "/body/page/cursor/filter_sha256",
-            "the filter this cursor was issued for",
-        ));
-    }
-    Ok(after_key)
+    cursor.resumes(filter, now_unix_ms)?;
+    Ok(cursor.after_key)
 }
 
 /// The digest a `tools.list` cursor binds its filter by: SHA-256 over the server-produced
@@ -626,15 +612,6 @@ fn resume<'a>(
 #[must_use]
 pub fn filter_sha256(query: Option<&str>) -> String {
     wire::request_sha256(json!({ "query": query }).to_string().as_bytes())
-}
-
-fn resync(field: &'static str) -> Fault {
-    Fault::of(
-        ErrorCode::ResyncRequired,
-        Retry::Never,
-        "the cursor no longer names this listing; start again without one",
-    )
-    .at(field)
 }
 
 fn unknown_action() -> Fault {

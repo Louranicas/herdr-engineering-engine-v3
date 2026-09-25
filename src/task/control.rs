@@ -18,9 +18,10 @@
 //!   engine cannot enforce is not admitted;
 //! * `parent` must be `null`: child allocations belong to cohort composition, not composed here.
 
-use crate::contracts::control::{CancelReason, ErrorCode, Fault, Retry};
+use crate::contracts::control::{CancelReason, ErrorCode, Fault, PageIn, Retry, request_sha256};
 use crate::contracts::{UuidV4, parse_u64_decimal};
-use serde_json::{Map, Value};
+use crate::recovery::TaskState;
+use serde_json::{Map, Value, json};
 
 /// The task classes the RC01 profile admits.
 pub const ADMITTED_CLASSES: [&str; 1] = ["rust-library-change/1"];
@@ -276,6 +277,104 @@ pub fn cancel(body: &Map<String, Value>) -> Result<Cancel, Fault> {
         }
     };
     Ok(Cancel { reason, note })
+}
+
+/// The most states a `task.list` may select (`TaskStateV1[0..12]`: every state once).
+const MAX_LIST_STATES: usize = 12;
+/// The longest class a `task.list` may select by (`ASCII[1..64]`).
+const MAX_CLASS_BYTES: usize = 64;
+
+/// A valid `task.list` body (contract-decisions.md:342).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct List {
+    /// The task states selected, each once; empty selects every state.
+    pub states: Vec<TaskState>,
+    /// The admitted class selected, if any.
+    pub task_class: Option<String>,
+    /// The parent selected, if any.
+    pub parent_task_id: Option<String>,
+    /// The page asked for.
+    pub page: PageIn,
+}
+
+impl List {
+    /// The digest a `task.list` cursor binds its filter by: SHA-256 over the server-produced compact
+    /// JSON `{"parent_task_id":…,"states":[…],"task_class":…}`, keys in byte order, the states sorted
+    /// by their names' bytes, no LF -- derived from the validated values, never from caller text
+    /// (RC03 §4's rule for event filters, applied to this listing as `tools.list` applies it).
+    #[must_use]
+    pub fn filter_sha256(&self) -> String {
+        let mut states: Vec<&str> = self.states.iter().map(|state| state.name()).collect();
+        states.sort_unstable();
+        let form = json!({
+            "parent_task_id": self.parent_task_id,
+            "states": states,
+            "task_class": self.task_class,
+        });
+        request_sha256(form.to_string().as_bytes())
+    }
+}
+
+/// Read `task.list`'s body.
+///
+/// # Errors
+///
+/// `invalid_argument` naming the member: `/body` unless exactly `states`, `task_class`,
+/// `parent_task_id` and `page`; `/body/states` unless a duplicate-free array of at most 12 task
+/// states; `/body/task_class` unless null or ASCII of 1..64 bytes; `/body/parent_task_id` unless
+/// null or a `UuidV4`; the page by [`PageIn::parse`].
+pub fn list(body: &Map<String, Value>) -> Result<List, Fault> {
+    exactly(
+        body,
+        &["states", "task_class", "parent_task_id", "page"],
+        "/body",
+    )?;
+    let refused = || {
+        Fault::invalid(
+            "/body/states",
+            "a duplicate-free array of at most 12 task states",
+        )
+    };
+    let Some(Value::Array(named)) = body.get("states") else {
+        return Err(refused());
+    };
+    if named.len() > MAX_LIST_STATES {
+        return Err(refused());
+    }
+    let mut states = Vec::with_capacity(named.len());
+    for name in named {
+        let state = name
+            .as_str()
+            .and_then(TaskState::parse)
+            .filter(|state| !states.contains(state))
+            .ok_or_else(refused)?;
+        states.push(state);
+    }
+    let task_class = match body.get("task_class") {
+        Some(Value::Null) => None,
+        Some(Value::String(class))
+            if (1..=MAX_CLASS_BYTES).contains(&class.len()) && class.is_ascii() =>
+        {
+            Some(class.clone())
+        }
+        _ => {
+            return Err(Fault::invalid(
+                "/body/task_class",
+                "null or ASCII of 1..64 bytes",
+            ));
+        }
+    };
+    let parent_task_id = match body.get("parent_task_id") {
+        Some(Value::Null) => None,
+        Some(Value::String(parent)) if UuidV4::parse(parent).is_ok() => Some(parent.clone()),
+        _ => return Err(Fault::invalid("/body/parent_task_id", "null or UuidV4")),
+    };
+    Ok(List {
+        states,
+        task_class,
+        parent_task_id,
+        page: PageIn::parse(body.get("page"))?,
+    })
 }
 
 /// How `task.get` names its task.

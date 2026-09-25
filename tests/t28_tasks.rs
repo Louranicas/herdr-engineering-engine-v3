@@ -584,6 +584,31 @@ fn without_a_composed_ledger_task_actions_are_unavailable() -> Result<(), Box<dy
         (&reply["code"], &reply["details"]["constraint"]),
         (&json!("unavailable"), &json!("owner not composed"))
     );
+    // B06: a valid list is refused the same way; an invalid one names its body member first.
+    for (body, code, constraint) in [
+        (
+            unfiltered(10, &Value::Null),
+            "unavailable",
+            json!("owner not composed"),
+        ),
+        (
+            json!({}),
+            "invalid_argument",
+            json!("exactly its declared members"),
+        ),
+    ] {
+        let Reply::Frame(bytes) =
+            control::serve_composed(&list_frame(8, &body), NOW, &operator, composed)
+        else {
+            return Err("closed".into());
+        };
+        let reply: Value = serde_json::from_slice(&bytes)?;
+        assert_eq!(
+            (&reply["code"], &reply["details"]["constraint"]),
+            (&json!(code), &constraint),
+            "{reply}"
+        );
+    }
     // B05: a schema-valid cancel is refused the same way, before any ledger is consulted.
     let frame = cancel_frame(
         7,
@@ -1923,6 +1948,23 @@ impl Tasks for Handed {
         Err(habitat_engine::contracts::control::Fault::expired())
     }
 
+    fn list(
+        &self,
+        principal: &Principal,
+        list: &habitat_engine::task::control::List,
+        deadline_unix_ms: u64,
+        now_unix_ms: u64,
+    ) -> Result<
+        habitat_engine::contracts::control::Outcome,
+        habitat_engine::contracts::control::Fault,
+    > {
+        self.0.borrow_mut().push(format!(
+            "list {principal:?} {} {deadline_unix_ms} {now_unix_ms}",
+            list.filter_sha256()
+        ));
+        Err(habitat_engine::contracts::control::Fault::expired())
+    }
+
     fn replay(
         &self,
         request: &TaskRequest<'_>,
@@ -2004,5 +2046,607 @@ fn the_owner_reads_an_expired_record_within_the_wires_own_window() -> Outcome {
         )
         .map_err(|error| format!("{error:?}"))?;
     assert_eq!(unseen, None);
+    Ok(())
+}
+
+// --- B06 · task.list (task-G05; body and result: contract-decisions.md:342; pages: :319-321) ---------
+
+/// A `task.submit` frame under the `n`th list key, so each admission is a distinct task.
+fn submit_nth(n: u8) -> Vec<u8> {
+    request(
+        "task.submit",
+        0x60 + n,
+        Some(&format!("28d00000-0000-4000-8000-0000000007{n:02x}")),
+        &json!({"spec": spec()}),
+    )
+}
+
+/// A `task.list` frame: `states`, `task_class`, `parent_task_id` and the page, as given.
+fn list_frame(request_no: u8, body: &Value) -> Vec<u8> {
+    request("task.list", request_no, None, body)
+}
+
+/// A `task.list` frame whose own deadline is live at receiver time `now_unix_ms`, for cases served
+/// later than `NOW`: the request's deadline and the cursor's lifetime are different clocks.
+fn list_frame_at(
+    request_no: u8,
+    body: &Value,
+    now_unix_ms: u64,
+) -> Result<Vec<u8>, Box<dyn Error>> {
+    let mut frame: Value = serde_json::from_slice(&list_frame(request_no, body))?;
+    frame["deadline_unix_ms"] = json!((now_unix_ms + 5_000).to_string());
+    Ok(serde_json::to_vec(&frame)?)
+}
+
+/// The ledger's global event high-water, read from the ledger file itself, not through the engine.
+fn high_water(scratch: &Scratch) -> Result<u64, Box<dyn Error>> {
+    let file = scratch
+        .0
+        .join("state/generations")
+        .join(GENERATION)
+        .join("ledger.sqlite3");
+    let db =
+        rusqlite::Connection::open_with_flags(file, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    Ok(db
+        .query_row("SELECT max(sequence) FROM events", [], |row| {
+            row.get::<_, i64>(0)
+        })
+        .map(u64::try_from)??)
+}
+
+/// The filter digest a `task.list` cursor binds, computed here with `sha2` over the compact form this
+/// test writes by hand (keys in byte order, `states` sorted, no LF), not through the engine.
+fn list_filter(states: &[&str], class: Option<&str>, parent: Option<&str>) -> String {
+    let mut sorted = states.to_vec();
+    sorted.sort_unstable();
+    let quoted = |text: Option<&str>| text.map_or("null".to_owned(), |text| format!("\"{text}\""));
+    let states: Vec<String> = sorted.iter().map(|state| format!("\"{state}\"")).collect();
+    let form = format!(
+        "{{\"parent_task_id\":{},\"states\":[{}],\"task_class\":{}}}",
+        quoted(parent),
+        states.join(","),
+        quoted(class)
+    );
+    digest(Sha256::digest(form.as_bytes()))
+}
+
+fn unfiltered(limit: u64, cursor: &Value) -> Value {
+    json!({"states": [], "task_class": null, "parent_task_id": null,
+           "page": {"limit": limit, "cursor": cursor}})
+}
+
+/// B06: a principal's tasks page in admission order under one snapshot. Each page is asserted whole
+/// -- off the origin: the second and third pages, not only the first -- and every item equals the
+/// head `task.get` reads for that task. The snapshot revision is the ledger's event high-water when
+/// the listing began, read from the ledger file; a task admitted after it is not a member of this
+/// listing. Another principal's task is never listed.
+#[test]
+fn a_list_pages_the_principals_tasks_in_admission_order() -> Outcome {
+    let scratch = Scratch::new()?;
+    let tasks = ledger(&scratch)?;
+    let operator = Principal::new(1000, "operator").map_err(|error| format!("{error:?}"))?;
+    let other = Principal::new(1001, "operator").map_err(|error| format!("{error:?}"))?;
+    let mut ids = Vec::new();
+    for n in 1..=3 {
+        let reply = serve(&tasks, &operator, &submit_nth(n))?;
+        ids.push(
+            reply["body"]["task"]["task_id"]
+                .as_str()
+                .ok_or("task id")?
+                .to_owned(),
+        );
+    }
+    serve(&tasks, &other, &submit_nth(9))?;
+    for n in 4..=5 {
+        let reply = serve(&tasks, &operator, &submit_nth(n))?;
+        ids.push(
+            reply["body"]["task"]["task_id"]
+                .as_str()
+                .ok_or("task id")?
+                .to_owned(),
+        );
+    }
+    let snapshot = high_water(&scratch)?.to_string();
+    assert_eq!(snapshot, "6", "six admissions, one event each");
+    let heads = ids
+        .iter()
+        .map(|id| head_of(&tasks, &operator, id))
+        .collect::<Result<Vec<_>, _>>()?;
+    let filter = list_filter(&[], None, None);
+    let first = serve(
+        &tasks,
+        &operator,
+        &list_frame(1, &unfiltered(2, &Value::Null)),
+    )?;
+    let cursor = |after: &str| {
+        json!({"snapshot_revision": snapshot, "after_key": after, "filter_sha256": filter,
+               "expires_unix_ms": (NOW + 300_000).to_string()})
+    };
+    assert_eq!(
+        first["body"],
+        json!({"page": {"items": [heads[0], heads[1]], "next_cursor": cursor("2"),
+                        "snapshot_revision": snapshot}}),
+        "{first}"
+    );
+    // A task admitted after the listing began is not a member of it. The other principal's admission
+    // is the fourth event, so this principal's fourth task is the fifth.
+    serve(&tasks, &operator, &submit_nth(6))?;
+    let second = serve(
+        &tasks,
+        &operator,
+        &list_frame(2, &unfiltered(2, &cursor("2"))),
+    )?;
+    assert_eq!(
+        second["body"],
+        json!({"page": {"items": [heads[2], heads[3]], "next_cursor": cursor("5"),
+                        "snapshot_revision": snapshot}}),
+        "{second}"
+    );
+    let third = serve(
+        &tasks,
+        &operator,
+        &list_frame(3, &unfiltered(2, &cursor("5"))),
+    )?;
+    assert_eq!(
+        third["body"],
+        json!({"page": {"items": [heads[4]], "next_cursor": null, "snapshot_revision": snapshot}}),
+        "{third}"
+    );
+    assert_eq!(
+        (&third["kind"], &third["effect"], &third["replayed"]),
+        (&json!("result"), &json!("none"), &json!(false))
+    );
+    // Another principal sees its own one task, and none of these.
+    let theirs = serve(
+        &tasks,
+        &other,
+        &list_frame(4, &unfiltered(100, &Value::Null)),
+    )?;
+    let items = theirs["body"]["page"]["items"].as_array().ok_or("items")?;
+    assert_eq!(items.len(), 1, "{theirs}");
+    assert!(
+        !ids.iter().any(|id| items[0]["task_id"] == json!(id)),
+        "{theirs}"
+    );
+    conforms(&[
+        ("task.list", &first),
+        ("task.list", &second),
+        ("task.list", &third),
+        ("task.list", &theirs),
+    ])?;
+    Ok(())
+}
+
+/// B06: the filters. `states` selects by the task's current state (empty selects every state);
+/// `task_class` by the class the task was admitted under, read from its admitted request; a
+/// `parent_task_id` selects the tasks admitted under that parent, which no task has yet.
+#[test]
+fn a_list_filters_by_state_class_and_parent() -> Outcome {
+    let scratch = Scratch::new()?;
+    let tasks = ledger(&scratch)?;
+    let operator = Principal::new(1000, "operator").map_err(|error| format!("{error:?}"))?;
+    let mut ids = Vec::new();
+    for n in 1..=3 {
+        let reply = serve(&tasks, &operator, &submit_nth(n))?;
+        ids.push(
+            reply["body"]["task"]["task_id"]
+                .as_str()
+                .ok_or("task id")?
+                .to_owned(),
+        );
+    }
+    let cancelled = serve(
+        &tasks,
+        &operator,
+        &cancel_frame(
+            4,
+            CANCEL_KEY,
+            &ids[1],
+            "1",
+            &json!({"reason": "superseded", "note": null}),
+        )?,
+    )?;
+    assert_eq!(cancelled["observed_generation"], json!("2"), "{cancelled}");
+    let listed = |no: u8, states: Value, class: Value, parent: Value| {
+        let reply = serve(
+            &tasks,
+            &operator,
+            &list_frame(
+                no,
+                &json!({"states": states, "task_class": class, "parent_task_id": parent,
+                        "page": {"limit": 100, "cursor": null}}),
+            ),
+        )?;
+        let ids: Vec<String> = reply["body"]["page"]["items"]
+            .as_array()
+            .ok_or("items")?
+            .iter()
+            .map(|item| item["task_id"].as_str().unwrap_or("?").to_owned())
+            .collect();
+        Ok::<_, Box<dyn Error>>((ids, reply))
+    };
+    let all = ids.clone();
+    let mut replies = Vec::new();
+    for (no, states, class, parent, expected) in [
+        (10, json!([]), Value::Null, Value::Null, all.clone()),
+        (
+            11,
+            json!(["cancellation_requested"]),
+            Value::Null,
+            Value::Null,
+            vec![ids[1].clone()],
+        ),
+        (
+            12,
+            json!(["admitted"]),
+            Value::Null,
+            Value::Null,
+            vec![ids[0].clone(), ids[2].clone()],
+        ),
+        (
+            13,
+            json!(["admitted", "cancellation_requested"]),
+            Value::Null,
+            Value::Null,
+            all.clone(),
+        ),
+        (14, json!(["accepted"]), Value::Null, Value::Null, vec![]),
+        (
+            15,
+            json!([]),
+            json!("rust-library-change/1"),
+            Value::Null,
+            all.clone(),
+        ),
+        (16, json!([]), json!("other-class/1"), Value::Null, vec![]),
+        (17, json!([]), Value::Null, json!(ids[0]), vec![]),
+    ] {
+        let (got, reply) = listed(no, states.clone(), class.clone(), parent.clone())?;
+        assert_eq!(
+            got, expected,
+            "states {states} class {class} parent {parent}: {reply}"
+        );
+        replies.push(reply);
+    }
+    let rows: Vec<(&str, &Value)> = replies.iter().map(|reply| ("task.list", reply)).collect();
+    conforms(&rows)?;
+    Ok(())
+}
+
+/// B06: a cursor is a selector over one listing, never a grant (RC03 §4). It resumes only the filter
+/// it was issued for (`invalid_argument` at `filter_sha256` otherwise), only before it expires, and
+/// only over the ledger it was issued from: an expired cursor and one naming a snapshot beyond the
+/// ledger's high-water are `resync_required`. A malformed one is refused by member.
+#[test]
+fn a_list_cursor_resumes_only_its_own_filter_snapshot_and_lifetime() -> Outcome {
+    let scratch = Scratch::new()?;
+    let tasks = ledger(&scratch)?;
+    let operator = Principal::new(1000, "operator").map_err(|error| format!("{error:?}"))?;
+    for n in 1..=3 {
+        serve(&tasks, &operator, &submit_nth(n))?;
+    }
+    let first = serve(
+        &tasks,
+        &operator,
+        &list_frame(1, &unfiltered(1, &Value::Null)),
+    )?;
+    let cursor = first["body"]["page"]["next_cursor"].clone();
+    assert_eq!(cursor["after_key"], json!("1"), "{first}");
+    let with = |edit: &dyn Fn(&mut Value)| {
+        let mut cursor = cursor.clone();
+        edit(&mut cursor);
+        cursor
+    };
+    let mut replies = vec![first.clone()];
+    for (case, body, now, code, field) in [
+        (
+            "another filter",
+            json!({"states": ["admitted"], "task_class": null, "parent_task_id": null,
+                   "page": {"limit": 1, "cursor": cursor}}),
+            NOW,
+            "invalid_argument",
+            "/body/page/cursor/filter_sha256",
+        ),
+        (
+            "expired",
+            unfiltered(1, &cursor),
+            NOW + 300_000,
+            "resync_required",
+            "/body/page/cursor/expires_unix_ms",
+        ),
+        (
+            "a snapshot the ledger never reached",
+            unfiltered(1, &with(&|c| c["snapshot_revision"] = json!("4"))),
+            NOW,
+            "resync_required",
+            "/body/page/cursor/snapshot_revision",
+        ),
+        (
+            "an after_key that is not a sequence",
+            unfiltered(1, &with(&|c| c["after_key"] = json!("task-1"))),
+            NOW,
+            "invalid_argument",
+            "/body/page/cursor/after_key",
+        ),
+        (
+            "an unknown member",
+            unfiltered(1, &with(&|c| c["extra"] = json!(1))),
+            NOW,
+            "invalid_argument",
+            "/body/page/cursor",
+        ),
+    ] {
+        let reply = serve_at(&tasks, &operator, &list_frame_at(2, &body, now)?, now)?;
+        assert_eq!(
+            (&reply["code"], &reply["details"]["field"]),
+            (&json!(code), &json!(field)),
+            "{case}: {reply}"
+        );
+        replies.push(reply);
+    }
+    // The cursor still resumes its own listing, one millisecond before it expires.
+    let resumed = serve_at(
+        &tasks,
+        &operator,
+        &list_frame_at(3, &unfiltered(1, &cursor), NOW + 299_999)?,
+        NOW + 299_999,
+    )?;
+    assert_eq!(
+        resumed["body"]["page"]["next_cursor"]["after_key"],
+        json!("2"),
+        "{resumed}"
+    );
+    replies.push(resumed);
+    let rows: Vec<(&str, &Value)> = replies.iter().map(|reply| ("task.list", reply)).collect();
+    conforms(&rows)?;
+    Ok(())
+}
+
+/// `task.list` bodies, each one member away from a valid body, with the member each must be
+/// refused at (`None`: valid).
+/// Every task state, in the contract's order (`TaskStateV1`), written here from the contract.
+const TASK_STATES: [&str; 12] = [
+    "admitted",
+    "queued",
+    "running",
+    "verifying",
+    "repair_pending",
+    "cancellation_requested",
+    "blocked",
+    "accepted",
+    "failed",
+    "cancelled",
+    "abandoned",
+    "effect_unknown",
+];
+
+/// A valid unfiltered `task.list` body with the member at `path` replaced by `value`.
+fn list_body_with(path: &[&str], value: Value) -> Value {
+    let mut body = unfiltered(100, &Value::Null);
+    let mut target = &mut body;
+    for step in &path[..path.len() - 1] {
+        target = &mut target[*step];
+    }
+    target[path[path.len() - 1]] = value;
+    body
+}
+
+fn list_body_cases() -> Vec<(u8, &'static str, Value, Option<&'static str>)> {
+    let with = list_body_with;
+    vec![
+        (
+            1,
+            "an extra member",
+            with(&["extra"], json!(1)),
+            Some("/body"),
+        ),
+        (
+            2,
+            "states not an array",
+            with(&["states"], json!("admitted")),
+            Some("/body/states"),
+        ),
+        (
+            3,
+            "an unknown state",
+            with(&["states"], json!(["done"])),
+            Some("/body/states"),
+        ),
+        (
+            4,
+            "a repeated state",
+            with(&["states"], json!(["queued", "queued"])),
+            Some("/body/states"),
+        ),
+        (
+            5,
+            "every state",
+            with(&["states"], json!(TASK_STATES)),
+            None,
+        ),
+        (
+            6,
+            "an empty class",
+            with(&["task_class"], json!("")),
+            Some("/body/task_class"),
+        ),
+        (
+            7,
+            "a 65-byte class",
+            with(&["task_class"], json!("c".repeat(65))),
+            Some("/body/task_class"),
+        ),
+        (
+            8,
+            "a 64-byte class",
+            with(&["task_class"], json!("c".repeat(64))),
+            None,
+        ),
+        (
+            9,
+            "a non-ASCII class",
+            with(&["task_class"], json!("é")),
+            Some("/body/task_class"),
+        ),
+        (
+            10,
+            "a parent that is not a UuidV4",
+            with(&["parent_task_id"], json!("p")),
+            Some("/body/parent_task_id"),
+        ),
+        (
+            11,
+            "a zero limit",
+            with(&["page", "limit"], json!(0)),
+            Some("/body/page/limit"),
+        ),
+        (
+            12,
+            "a limit of 101",
+            with(&["page", "limit"], json!(101)),
+            Some("/body/page/limit"),
+        ),
+        (13, "a limit of 1", with(&["page", "limit"], json!(1)), None),
+        (
+            14,
+            "a page member too many",
+            with(&["page", "extra"], json!(1)),
+            Some("/body/page"),
+        ),
+        (
+            15,
+            "a cursor that is not an object",
+            with(&["page", "cursor"], json!("c")),
+            Some("/body/page/cursor"),
+        ),
+    ]
+}
+
+/// B06: the body, member by member (contract-decisions.md:342): `states` a duplicate-free array of
+/// at most 12 task states; `task_class` null or ASCII of 1..64 bytes; `parent_task_id` null or a
+/// `UuidV4`; `page` exactly a limit of 1..100 and a cursor.
+#[test]
+fn a_list_body_is_checked_member_by_member() -> Outcome {
+    let scratch = Scratch::new()?;
+    let tasks = ledger(&scratch)?;
+    let operator = Principal::new(1000, "operator").map_err(|error| format!("{error:?}"))?;
+    let mut replies = Vec::new();
+    for (no, case, body, field) in list_body_cases() {
+        let reply = serve(&tasks, &operator, &list_frame(no, &body))?;
+        match field {
+            Some(field) => assert_eq!(
+                (&reply["code"], &reply["details"]["field"]),
+                (&json!("invalid_argument"), &json!(field)),
+                "{case}: {reply}"
+            ),
+            None => assert_eq!(reply["kind"], json!("result"), "{case}: {reply}"),
+        }
+        replies.push(reply);
+    }
+    let rows: Vec<(&str, &Value)> = replies.iter().map(|reply| ("task.list", reply)).collect();
+    conforms(&rows)?;
+    Ok(())
+}
+
+/// B06: a task whose admitted bytes are not a JSON request (one staged through the store's own API,
+/// never the wire) is listed like any other -- with the head `task.get` reads, here generation 2
+/// with its queued attempt current -- and simply has no class or parent to select it by: a class
+/// filter passes over it rather than failing the listing.
+#[test]
+fn a_list_passes_over_a_task_whose_admitted_bytes_name_no_class() -> Outcome {
+    let scratch = Scratch::new()?;
+    let operator = Principal::new(1000, "operator").map_err(|error| format!("{error:?}"))?;
+    let mut store = raw_store(&scratch)?;
+    begun(&mut store, &operator, 1)?;
+    let tasks = StoreTasks::new(store, EPOCH.to_owned());
+    let admitted = serve(&tasks, &operator, &submit_nth(1))?;
+    let wire_task = admitted["body"]["task"]["task_id"]
+        .as_str()
+        .ok_or("task id")?
+        .to_owned();
+    let staged = nth(0x05b1, 1);
+    let staged_head = head_of(&tasks, &operator, &staged)?;
+    assert_eq!(
+        (
+            &staged_head["generation"],
+            &staged_head["current_attempt_id"]
+        ),
+        (&json!("2"), &json!(nth(0x05b2, 1))),
+        "{staged_head}"
+    );
+    let all = serve(
+        &tasks,
+        &operator,
+        &list_frame(1, &unfiltered(100, &Value::Null)),
+    )?;
+    assert_eq!(
+        all["body"]["page"]["items"],
+        json!([staged_head, head_of(&tasks, &operator, &wire_task)?]),
+        "{all}"
+    );
+    let classed = serve(
+        &tasks,
+        &operator,
+        &list_frame(
+            2,
+            &json!({"states": [], "task_class": "rust-library-change/1", "parent_task_id": null,
+                    "page": {"limit": 100, "cursor": null}}),
+        ),
+    )?;
+    let ids: Vec<&Value> = classed["body"]["page"]["items"]
+        .as_array()
+        .ok_or("items")?
+        .iter()
+        .map(|item| &item["task_id"])
+        .collect();
+    assert_eq!(ids, [&json!(wire_task)], "{classed}");
+    conforms(&[("task.list", &all), ("task.list", &classed)])?;
+    Ok(())
+}
+
+/// B06: a filter is one filter whatever order its states are named in. A cursor issued for
+/// `[cancellation_requested, admitted]` binds the digest computed here independently (the states
+/// sorted), and resumes the same listing named `[admitted, cancellation_requested]`.
+#[test]
+fn a_list_filter_is_one_filter_whatever_the_order_of_its_states() -> Outcome {
+    let scratch = Scratch::new()?;
+    let tasks = ledger(&scratch)?;
+    let operator = Principal::new(1000, "operator").map_err(|error| format!("{error:?}"))?;
+    for n in 1..=3 {
+        serve(&tasks, &operator, &submit_nth(n))?;
+    }
+    let both = |no: u8, states: Value, cursor: &Value| {
+        serve(
+            &tasks,
+            &operator,
+            &list_frame(
+                no,
+                &json!({"states": states, "task_class": null, "parent_task_id": null,
+                        "page": {"limit": 1, "cursor": cursor}}),
+            ),
+        )
+    };
+    let named = both(
+        4,
+        json!(["cancellation_requested", "admitted"]),
+        &Value::Null,
+    )?;
+    let issued = named["body"]["page"]["next_cursor"].clone();
+    assert_eq!(
+        issued["filter_sha256"],
+        json!(list_filter(
+            &["cancellation_requested", "admitted"],
+            None,
+            None
+        )),
+        "{named}"
+    );
+    let reordered = both(5, json!(["admitted", "cancellation_requested"]), &issued)?;
+    assert_eq!(
+        reordered["body"]["page"]["next_cursor"]["after_key"],
+        json!("2"),
+        "{reordered}"
+    );
+    conforms(&[("task.list", &named), ("task.list", &reordered)])?;
     Ok(())
 }

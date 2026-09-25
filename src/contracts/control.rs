@@ -609,6 +609,18 @@ impl Fault {
         .at("/deadline_unix_ms")
     }
 
+    /// `resync_required` at `field`: the cursor no longer names the listing it was issued for; the
+    /// caller starts again without one.
+    #[must_use]
+    pub const fn resync(field: &'static str) -> Self {
+        Self::of(
+            ErrorCode::ResyncRequired,
+            Retry::Never,
+            "the cursor no longer names this listing; start again without one",
+        )
+        .at(field)
+    }
+
     /// `stale_generation` at `field`: the precondition names a generation the resource has moved
     /// past, and `current` is the one the caller can now see (RC03 §6: "with current visible
     /// generation where authorized"). `retry: never`, because a generation only grows: the same
@@ -733,6 +745,130 @@ fn record(value: &Value) -> Vec<u8> {
     let mut bytes = value.to_string().into_bytes();
     bytes.push(b'\n');
     bytes
+}
+
+/// The widest page a caller may ask for (`PageInV1.limit`, RC03 §4).
+pub const MAX_PAGE_LIMIT: u64 = 100;
+/// The longest `after_key` (`PageCursorV1`, `ASCII[1..256]`).
+const MAX_AFTER_KEY_BYTES: usize = 256;
+
+/// `PageInV1` (RC03 §4): a page limit of 1..100 and the cursor that continues a listing, if any.
+/// The one reader of a listing's page, for every action that pages.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PageIn {
+    /// The most items the caller asked for.
+    pub limit: u64,
+    /// The continuation cursor, or `None` for a listing's first page.
+    pub cursor: Option<PageCursor>,
+}
+
+impl PageIn {
+    /// Read `page` (the body member).
+    ///
+    /// # Errors
+    ///
+    /// `invalid_argument` naming the member: `/body/page` unless an object of exactly `limit` and
+    /// `cursor`; `/body/page/limit` outside 1..100; `/body/page/cursor` unless null or a
+    /// `PageCursorV1` ([`PageCursor::parse`]).
+    pub fn parse(page: Option<&Value>) -> Result<Self, Fault> {
+        let Some(Value::Object(page)) = page else {
+            return Err(Fault::invalid("/body/page", "PageInV1"));
+        };
+        if page.len() != 2 {
+            return Err(Fault::invalid("/body/page", "exactly limit and cursor"));
+        }
+        let limit = page
+            .get("limit")
+            .and_then(Value::as_u64)
+            .filter(|limit| (1..=MAX_PAGE_LIMIT).contains(limit))
+            .ok_or(Fault::invalid("/body/page/limit", "integer 1..100"))?;
+        let cursor = match page.get("cursor") {
+            Some(Value::Null) => None,
+            Some(Value::Object(cursor)) => Some(PageCursor::parse(cursor)?),
+            _ => {
+                return Err(Fault::invalid("/body/page/cursor", "null or PageCursorV1"));
+            }
+        };
+        Ok(Self { limit, cursor })
+    }
+}
+
+/// `PageCursorV1` (RC03 §4), read member by member. A cursor is a selector over one listing, never a
+/// grant: the listing that issued it decides what its snapshot and `after_key` mean.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PageCursor {
+    /// The snapshot the listing was issued under.
+    pub snapshot_revision: u64,
+    /// The opaque ordering key the next page starts after.
+    pub after_key: String,
+    /// The digest of the filter it was issued for.
+    pub filter_sha256: String,
+    /// When it stops naming the listing.
+    pub expires_unix_ms: u64,
+}
+
+impl PageCursor {
+    /// Read a `PageCursorV1` object.
+    ///
+    /// # Errors
+    ///
+    /// `invalid_argument` naming the member: `/body/page/cursor` unless exactly the four members;
+    /// then each member's own rule.
+    pub fn parse(cursor: &Map<String, Value>) -> Result<Self, Fault> {
+        let text = |name: &str| cursor.get(name).and_then(Value::as_str);
+        if cursor.len() != 4 {
+            return Err(Fault::invalid(
+                "/body/page/cursor",
+                "exactly snapshot_revision, after_key, filter_sha256 and expires_unix_ms",
+            ));
+        }
+        let snapshot_revision = text("snapshot_revision")
+            .and_then(|value| parse_u64_decimal(value).ok())
+            .ok_or(Fault::invalid(
+                "/body/page/cursor/snapshot_revision",
+                "U64Decimal",
+            ))?;
+        let after_key = text("after_key")
+            .filter(|key| (1..=MAX_AFTER_KEY_BYTES).contains(&key.len()) && key.is_ascii())
+            .ok_or(Fault::invalid(
+                "/body/page/cursor/after_key",
+                "ASCII of 1..256 bytes",
+            ))?;
+        let filter_sha256 = text("filter_sha256")
+            .filter(|digest| Sha256Digest::parse(digest).is_ok())
+            .ok_or(Fault::invalid("/body/page/cursor/filter_sha256", "Sha256"))?;
+        let expires_unix_ms = text("expires_unix_ms")
+            .and_then(|value| parse_u64_decimal(value).ok())
+            .ok_or(Fault::invalid(
+                "/body/page/cursor/expires_unix_ms",
+                "U64Decimal",
+            ))?;
+        Ok(Self {
+            snapshot_revision,
+            after_key: after_key.to_owned(),
+            filter_sha256: filter_sha256.to_owned(),
+            expires_unix_ms,
+        })
+    }
+
+    /// Whether it may resume a listing of `filter` at `now_unix_ms`. The snapshot is the issuing
+    /// listing's to judge, before this.
+    ///
+    /// # Errors
+    ///
+    /// `resync_required` once it has expired; `invalid_argument` at `filter_sha256` for another filter.
+    pub fn resumes(&self, filter: &str, now_unix_ms: u64) -> Result<(), Fault> {
+        if self.expires_unix_ms <= now_unix_ms {
+            return Err(Fault::resync("/body/page/cursor/expires_unix_ms"));
+        }
+        if self.filter_sha256 != filter {
+            return Err(Fault::invalid(
+                "/body/page/cursor/filter_sha256",
+                "the filter this cursor was issued for",
+            ));
+        }
+        Ok(())
+    }
 }
 
 /// Why a cancellation is asked for: `task.cancel`'s closed reason set (RC03 §6;

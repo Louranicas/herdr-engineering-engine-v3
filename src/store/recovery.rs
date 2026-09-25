@@ -435,6 +435,87 @@ fn attempt_row(row: &Row<'_>) -> Result<DurableAttempt> {
     Ok(r)
 }
 
+/// What `task.list` selects (B06): task states (empty selects every state), and the class and the
+/// parent a task was admitted under (`None` selects any).
+#[derive(Clone, Copy, Debug)]
+pub struct TaskFilter<'a> {
+    pub states: &'a [&'a str],
+    pub task_class: Option<&'a str>,
+    pub parent_task_id: Option<&'a str>,
+}
+
+/// One page of a principal's tasks (B06): the snapshot it was read under, each listed task with
+/// its admission sequence (the listing's ordering key), and whether more remain.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TaskListing {
+    pub snapshot: u64,
+    pub tasks: Vec<(u64, TaskView)>,
+    pub more: bool,
+}
+
+/// A class or a parent as the task's admitted request names it; `NULL` for bytes that are not a
+/// JSON request (a ledger fixture never admitted through the wire).
+const ADMITTED_CLASS: &str = "CASE WHEN json_valid(CAST(t.spec AS TEXT)) THEN json_extract(CAST(t.spec AS TEXT),'$.body.spec.task_class') END";
+const ADMITTED_PARENT: &str = "CASE WHEN json_valid(CAST(t.spec AS TEXT)) THEN json_extract(CAST(t.spec AS TEXT),'$.body.spec.parent.task_id') END";
+
+fn list_in(
+    db: &Connection,
+    principal: &Principal,
+    filter: &TaskFilter<'_>,
+    snapshot: Option<u64>,
+    after: u64,
+    limit: usize,
+    deadline: Instant,
+) -> Result<TaskListing> {
+    let high_water = db.query_row("SELECT coalesce(max(sequence),0) FROM events", [], |row| {
+        read_number(row, 0)
+    })?;
+    let snapshot = snapshot.unwrap_or(high_water);
+    if snapshot > high_water {
+        return Err(Error::SnapshotAhead {
+            snapshot,
+            high_water,
+        });
+    }
+    let states = serde_json::to_string(filter.states)?;
+    let sql = format!(
+        "SELECT t.id,e.sequence FROM tasks t JOIN events e ON e.task_id=t.id AND e.kind='admitted' \
+         WHERE t.principal_uid=?1 AND t.principal_role=?2 AND e.sequence>?3 AND e.sequence<=?4 \
+         AND (?5='[]' OR t.state IN (SELECT value FROM json_each(?5))) \
+         AND (?6 IS NULL OR ({ADMITTED_CLASS})=?6) AND (?7 IS NULL OR ({ADMITTED_PARENT})=?7) \
+         ORDER BY e.sequence LIMIT ?8"
+    );
+    let wanted = i64::try_from(limit).map_err(|_| Error::Bound)?;
+    let mut statement = db.prepare(&sql)?;
+    let rows = statement
+        .query_map(
+            rusqlite::params![
+                principal.uid(),
+                principal.role(),
+                i64::try_from(after).map_err(|_| Error::Bound)?,
+                i64::try_from(snapshot).map_err(|_| Error::Bound)?,
+                states,
+                filter.task_class,
+                filter.parent_task_id,
+                wanted.checked_add(1).ok_or(Error::Bound)?,
+            ],
+            |row| Ok((row.get::<_, String>(0)?, read_number(row, 1)?)),
+        )?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let more = rows.len() > limit;
+    let mut tasks = Vec::with_capacity(limit.min(rows.len()));
+    for (id, sequence) in rows.into_iter().take(limit) {
+        remaining(deadline)?;
+        let task = UuidV4::parse(&id).map_err(|_| Error::Corrupt)?;
+        tasks.push((sequence, read_view(db, principal, task, deadline)?));
+    }
+    Ok(TaskListing {
+        snapshot,
+        tasks,
+        more,
+    })
+}
+
 /// One task as its principal may read it (B03): its head, its attempts and how many of its
 /// delivery obligations are still owed, from one read snapshot, with the ledger's read point.
 /// Scoped by `task_id`, so a ledger's size never decides whether one task can be read.
@@ -505,6 +586,39 @@ impl Store {
         task: UuidV4<'_>,
         deadline: Instant,
     ) -> Result<TaskView> {
+        self.read_snapshot(deadline, |db| read_view(db, principal, task, deadline))
+    }
+
+    /// B06 `task.list`: one page of `principal`'s tasks in admission order, each read as
+    /// [`Store::task_view`] reads it, from one read snapshot. Membership is fixed by `snapshot` (the
+    /// event high-water when the listing began; `None` begins one): a task admitted after it is not
+    /// a member. `states`, the admitted class and the parent select; the page starts after the
+    /// admission sequence `after` and holds at most `limit` tasks, `more` saying whether any remain.
+    /// A class and a parent are read from the task's admitted request, where they are persisted.
+    /// # Errors
+    /// `UncertainCommit` when poisoned; `SnapshotAhead` for a snapshot beyond the high-water;
+    /// `TaskViewBound` for a listed task past the attempt bound; `Bound`; read failures.
+    pub fn task_list(
+        &mut self,
+        principal: &Principal,
+        filter: &TaskFilter<'_>,
+        snapshot: Option<u64>,
+        after: u64,
+        limit: usize,
+        deadline: Instant,
+    ) -> Result<TaskListing> {
+        self.read_snapshot(deadline, |db| {
+            list_in(db, principal, filter, snapshot, after, limit, deadline)
+        })
+    }
+
+    /// Run `read` in one deferred read transaction, rolled back after: the one door for a
+    /// principal's read snapshot. Refuses a poisoned store; a rollback failure poisons it.
+    fn read_snapshot<T>(
+        &mut self,
+        deadline: Instant,
+        read: impl FnOnce(&Connection) -> Result<T>,
+    ) -> Result<T> {
         if self.poisoned {
             return Err(Error::UncertainCommit);
         }
@@ -512,7 +626,7 @@ impl Store {
         let tx = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Deferred)?;
-        let result = read_view(&tx, principal, task, deadline);
+        let result = read(&tx);
         match (result, super::roll_back(tx)) {
             (result, Ok(())) => result,
             (Err(original), Err(failure)) => {

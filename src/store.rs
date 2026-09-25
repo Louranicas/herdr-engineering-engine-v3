@@ -387,6 +387,12 @@ pub enum Error {
     StaleGeneration {
         current: Generation,
     },
+    /// A listing's cursor names a snapshot beyond the ledger's event high-water: it was issued by
+    /// another ledger (a restore, a new generation), so it no longer names this one (B06).
+    SnapshotAhead {
+        snapshot: u64,
+        high_water: u64,
+    },
     /// The task's outcome is already decided without a cancellation (accepted, or its terminal stop
     /// committed): there is no intent left to record, and its outcome stays historical (B05, RC03 §6).
     AlreadyStopped,
@@ -1807,7 +1813,8 @@ mod staging_tests;
 
 pub use recovery::{
     DurableAcceptance, DurableAttempt, DurableStop, DurableTask, DurableVerification,
-    PendingDelivery, RecoveryInventory, RecoveryLimits, StartupInventory, StartupLimits, TaskView,
+    PendingDelivery, RecoveryInventory, RecoveryLimits, StartupInventory, StartupLimits,
+    TaskFilter, TaskListing, TaskView,
 };
 
 pub use reconciliation::{
