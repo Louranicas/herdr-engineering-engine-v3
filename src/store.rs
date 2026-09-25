@@ -1243,6 +1243,9 @@ impl Store {
         } = observation;
         self.transaction(deadline,|tx| {
             let head=head(tx,expected.task.as_str())?;same_generation(&head,expected.task_generation)?;
+            // A decided task (accepted, or stopped -- B08's abandonment can stop one over an
+            // unsettled attempt) is never observed back into life.
+            if outcome_decided(tx,&head)? { return Err(Error::AlreadyStopped); }
             require_attempt(tx,expected,false)?;
             let prior:(String,String,Option<u64>)=tx.query_row("SELECT effect,cleanup,used_ms FROM attempts WHERE id=?",[expected.attempt.as_str()],|row|Ok((row.get(0)?,row.get(1)?,read_optional_number(row,2)?)))?;
             if prior.2.is_some_and(|known|used_ms.is_none_or(|next|next<known))
@@ -1387,6 +1390,16 @@ impl Store {
             return Err(Error::Bound);
         }
         operator(input.principal)?;
+        // An exact replay answers from its record before any evidence is read again.
+        if let Some(stored) = self.replayed::<Resolution>(
+            "task.resolve",
+            input.principal,
+            input.key,
+            input.request_bytes,
+            deadline,
+        )? {
+            return Ok((stored, true));
+        }
         let objects = self.evidence_objects(input.evidence, deadline)?;
         let request_digest = digest(input.request_bytes);
         let recipient = input.principal.recipient();
@@ -1439,17 +1452,21 @@ impl Store {
                 let unknown_usage: bool = tx.query_row(
                     "SELECT EXISTS(SELECT 1 FROM attempts WHERE task_id=? AND used_ms IS NULL)",
                     [input.task.as_str()], |row| row.get(0))?;
+                // An attempt settles its usage into the spend only when it settles; an unsettled
+                // attempt's measured usage is charged here, where the task stops.
+                let unsettled: u64 = tx.query_row(
+                    "SELECT coalesce(sum(used_ms),0) FROM attempts WHERE task_id=? AND state!='settled'",
+                    [input.task.as_str()], |row| read_number(row, 0))?;
+                let spent = head.spent_ms.checked_add(unsettled).ok_or(Error::Budget)?;
                 let stop_body = serde_json::to_vec(&serde_json::json!({
                     "reason": ABANDONED_BY_OPERATOR, "disposition_id": input.disposition_id.as_str(),
                 }))?;
                 let evidence = &objects[0];
-                tx.execute("INSERT INTO artifacts(digest,size) VALUES(?,?) ON CONFLICT(digest) DO NOTHING",
-                    params![evidence.digest, number(evidence.size)?])?;
                 terminal::close(tx, &terminal::Closing {
                     task: input.task.as_str(), expected: generation.parse().map_err(|_| Error::Corrupt)?,
-                    event: input.stop_event.as_str(), evidence: &evidence.digest,
+                    event: input.stop_event.as_str(), evidence: &evidence.digest, evidence_size: evidence.size,
                     reason: ABANDONED_BY_OPERATOR, state: if head.cancellation { "cancelled" } else { "abandoned" },
-                    body: &stop_body, spent: (!unknown_usage).then_some(head.spent_ms), recipient: &recipient,
+                    body: &stop_body, spent: (!unknown_usage).then_some(spent), recipient: &recipient,
                 })?;
             }
             let view = recovery::read_view(tx, input.principal, input.task, deadline)?;
@@ -1926,6 +1943,9 @@ fn plan(obligation: &Obligation, disposition: Disposition, resolved: bool) -> Re
         (Obligation::Delivery, _) => refuse(ResolveRefusal::Inapplicable(
             "a delivery has no effect to acknowledge and no task to quarantine",
         )),
+        (Obligation::Attempt { .. }, Disposition::Quarantine) if resolved => {
+            refuse(ResolveRefusal::Resolved)
+        }
         (Obligation::Attempt { .. }, Disposition::Quarantine) => Ok(Plan {
             quarantines: true,
             ..keep

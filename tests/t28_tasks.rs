@@ -639,16 +639,25 @@ fn cleanup_and_delivery_are_read_from_the_ledgers_own_states() {
     ] {
         assert_eq!(cleanup_of(&attempts), expected, "{attempts:?}");
     }
-    for (state, pending, expected) in [
-        ("admitted", 0, "none"),
-        ("running", 2, "none"),
-        ("accepted", 0, "delivered"),
-        ("accepted", 1, "pending"),
-        ("failed", 0, "delivered"),
-        ("cancelled", 3, "pending"),
-        ("abandoned", 0, "none"),
+    // B08: `abandoned` is a stop like the others (an operator's abandonment through the stop door,
+    // with its notification), and a delivery given up is `unknown`, never `delivered`.
+    for (state, pending, given_up, expected) in [
+        ("admitted", 0, 0, "none"),
+        ("running", 2, 0, "none"),
+        ("accepted", 0, 0, "delivered"),
+        ("accepted", 1, 0, "pending"),
+        ("accepted", 0, 1, "unknown"),
+        ("failed", 0, 0, "delivered"),
+        ("cancelled", 3, 1, "pending"),
+        ("abandoned", 0, 0, "delivered"),
+        ("abandoned", 1, 0, "pending"),
+        ("blocked", 0, 1, "none"),
     ] {
-        assert_eq!(delivery_of(state, pending), expected, "{state} {pending}");
+        assert_eq!(
+            delivery_of(state, pending, given_up),
+            expected,
+            "{state} {pending} {given_up}"
+        );
     }
 }
 
@@ -1041,6 +1050,8 @@ enum Stage {
     UnknownEffectOnly,
     /// Its attempt's effect observed `none`, but usage unknown: the attempt stays `unknown`, gen 3.
     UsageUnknown,
+    /// Its attempt's effect unknown and its usage unknown, cleanup settled: `effect_unknown`, gen 3.
+    UnknownEffectAndUsage,
     /// Verified `Invalid`: state `failed` with no stop row yet, generation 4.
     Failed,
     /// Verified and accepted: generation 5.
@@ -1140,12 +1151,18 @@ fn staged(
         .settle_attempt(
             &settle,
             Settlement {
-                effect: if known && stage != Stage::UnknownEffectOnly {
+                effect: if known
+                    && !matches!(
+                        stage,
+                        Stage::UnknownEffectOnly | Stage::UnknownEffectAndUsage
+                    ) {
                     Effect::None
                 } else {
                     Effect::Unknown
                 },
-                used_ms: (known && stage != Stage::UsageUnknown).then_some(10),
+                used_ms: (known
+                    && !matches!(stage, Stage::UsageUnknown | Stage::UnknownEffectAndUsage))
+                .then_some(10),
                 cleanup_settled: known,
                 ready_to_verify: matches!(stage, Stage::Failed | Stage::Accepted),
             },
@@ -1155,7 +1172,11 @@ fn staged(
         .map_err(fault)?;
     if matches!(
         stage,
-        Stage::Settled | Stage::Unknown | Stage::UnknownEffectOnly | Stage::UsageUnknown
+        Stage::Settled
+            | Stage::Unknown
+            | Stage::UnknownEffectOnly
+            | Stage::UsageUnknown
+            | Stage::UnknownEffectAndUsage
     ) {
         return Ok(task);
     }
@@ -3787,6 +3808,9 @@ fn a_resolve_keeps_a_pending_cancel_and_releases_known_usage() -> Outcome {
         json!("abandoned"),
         "{abandoned}"
     );
+    // The attempt measured 10 ms (the fixture's own literal) but never settled, so the spend had not
+    // counted it: the stop charges it, and releases the reservations.
+    let charged = json!(spent.as_i64().ok_or("spent")? + 10);
     assert_eq!(
         (
             ledger_value(
@@ -3796,8 +3820,8 @@ fn a_resolve_keeps_a_pending_cancel_and_releases_known_usage() -> Outcome {
             )?,
             ledger_value(&scratch, "SELECT spent_ms FROM tasks WHERE id=?", &ids[1])?
         ),
-        (json!(0), spent),
-        "every usage is known: reservations released, spend unchanged"
+        (json!(0), charged),
+        "every usage is known: reservations released, measured usage charged"
     );
     conforms(&[
         ("task.cancel", &cancelled),
@@ -3973,5 +3997,245 @@ fn a_resolve_body_is_checked_member_by_member() -> Outcome {
         .map(|reply| ("task.resolve", reply))
         .collect();
     conforms(&rows)?;
+    Ok(())
+}
+
+/// `id` as a `UuidV4`, or why not, as text.
+fn uuid_of(id: &str) -> Result<UuidV4<'_>, String> {
+    UuidV4::parse(id).map_err(|error| format!("{error:?}"))
+}
+
+/// Settle `attempt` (generation 1) of `task` at `generation` as observed: no effect, 10 ms, cleanup
+/// settled, not ready to verify.
+fn settle_observed(
+    store: &mut Store,
+    task: &str,
+    generation: &str,
+    attempt: &str,
+    event: u16,
+) -> Result<String, String> {
+    use habitat_engine::store::{Effect, Expected, Settlement};
+    store
+        .settle_attempt(
+            &Expected {
+                task: uuid_of(task)?,
+                task_generation: generation.parse().map_err(|error| format!("{error:?}"))?,
+                attempt: uuid_of(attempt)?,
+                attempt_generation: "1".parse().map_err(|error| format!("{error:?}"))?,
+            },
+            Settlement {
+                effect: Effect::None,
+                used_ms: Some(10),
+                cleanup_settled: true,
+                ready_to_verify: false,
+            },
+            UuidV4::parse(&nth(0x08c0, event)).map_err(|error| format!("{error:?}"))?,
+            Instant::now() + Duration::from_secs(10),
+        )
+        .map_err(|error| format!("{error:?}"))
+}
+
+/// B08 (code review): the observation door and a disposition. A stopped task's attempt cannot be
+/// settled back into life (`AlreadyStopped`); settling a quarantined task's attempt lifts the
+/// quarantine, because the observation settles the ambiguity the quarantine held apart.
+#[test]
+fn an_observation_never_revives_a_stopped_task_and_lifts_a_quarantine() -> Outcome {
+    let scratch = Scratch::new()?;
+    let operator = Principal::new(1000, "operator").map_err(|error| format!("{error:?}"))?;
+    let (tasks, ids, evidence) =
+        resolve_ledger(&scratch, &operator, &[Stage::Unknown, Stage::Unknown])?;
+    let refs = json!([evidence_of(&evidence)]);
+    let (first, second) = (nth(0x05b2, 1), nth(0x05b2, 2));
+    resolve_with(
+        &tasks,
+        &operator,
+        (1, RESOLVE_KEY, &ids[0], "3"),
+        &first,
+        "acknowledge_external_effect",
+        &refs,
+    )?;
+    let abandoned = resolve_with(
+        &tasks,
+        &operator,
+        (2, RESOLVE_KEY_2, &ids[0], "4"),
+        &first,
+        "abandon",
+        &refs,
+    )?;
+    let generation = abandoned["body"]["task"]["generation"]
+        .as_str()
+        .ok_or("gen")?
+        .to_owned();
+    resolve_with(
+        &tasks,
+        &operator,
+        (3, RESOLVE_KEY_3, &ids[1], "3"),
+        &second,
+        "quarantine",
+        &json!([]),
+    )?;
+    drop(tasks);
+    let mut store = raw_store(&scratch)?;
+    assert_eq!(
+        settle_observed(&mut store, &ids[0], &generation, &first, 1),
+        Err("AlreadyStopped".to_owned())
+    );
+    settle_observed(&mut store, &ids[1], "4", &second, 2)?;
+    let lifted = store
+        .get(
+            &operator,
+            UuidV4::parse(&ids[1])?,
+            Instant::now() + Duration::from_secs(10),
+        )
+        .map_err(|error| format!("{error:?}"))?;
+    assert_eq!(
+        lifted.state, "repair_pending",
+        "the observation lifts the quarantine"
+    );
+    Ok(())
+}
+
+/// B08 (code review): every reader of a delivery sees a disposition. `task.get` reads an abandoned
+/// task's stop notification as `pending`, and a delivery given up as `unknown`, never `delivered`;
+/// the recovery inventory's delivery list drops what was given up.
+#[test]
+fn every_delivery_reader_sees_an_abandonment_and_a_delivery_given_up() -> Outcome {
+    let scratch = Scratch::new()?;
+    let operator = Principal::new(1000, "operator").map_err(|error| format!("{error:?}"))?;
+    let (tasks, ids, evidence) = resolve_ledger(
+        &scratch,
+        &operator,
+        &[Stage::UnknownEffectOnly, Stage::Accepted],
+    )?;
+    let refs = json!([evidence_of(&evidence)]);
+    let first = nth(0x05b2, 1);
+    resolve_with(
+        &tasks,
+        &operator,
+        (1, RESOLVE_KEY, &ids[0], "3"),
+        &first,
+        "acknowledge_external_effect",
+        &refs,
+    )?;
+    resolve_with(
+        &tasks,
+        &operator,
+        (2, RESOLVE_KEY_2, &ids[0], "4"),
+        &first,
+        "abandon",
+        &refs,
+    )?;
+    let read = |no: u8, task: &str| {
+        serve(
+            &tasks,
+            &operator,
+            &request(
+                "task.get",
+                no,
+                None,
+                &json!({"selector": {"task_id": task}, "evidence": "none"}),
+            ),
+        )
+    };
+    assert_eq!(
+        read(3, &ids[0])?["body"]["delivery"],
+        json!("pending"),
+        "the stop notification is owed"
+    );
+    let event = ledger_value(
+        &scratch,
+        "SELECT o.event_id FROM outbox o JOIN events e ON e.id=o.event_id WHERE e.task_id=? AND o.delivered=0",
+        &ids[1],
+    )?;
+    let event = event.as_str().ok_or("delivery event")?.to_owned();
+    resolve_with(
+        &tasks,
+        &operator,
+        (4, RESOLVE_KEY_3, &ids[1], "5"),
+        &event,
+        "abandon",
+        &json!([]),
+    )?;
+    let given_up = read(5, &ids[1])?;
+    assert_eq!(
+        given_up["body"]["delivery"],
+        json!("unknown"),
+        "given up is not delivered: {given_up}"
+    );
+    drop(tasks);
+    let mut store = raw_store(&scratch)?;
+    let inventory = store
+        .recovery_inventory(
+            UuidV4::parse(EPOCH)?,
+            habitat_engine::store::RecoveryLimits {
+                rows: 1024,
+                bytes: 1_048_576,
+            },
+            Instant::now() + Duration::from_secs(10),
+        )
+        .map_err(|error| format!("{error:?}"))?;
+    assert!(
+        inventory
+            .pending_delivery
+            .iter()
+            .all(|row| row.event != event),
+        "the recovery inventory's list"
+    );
+    conforms(&[("task.get", &given_up)])?;
+    Ok(())
+}
+
+/// B08 (code review): a quarantine of an obligation already closed is `conflict`; an unknown effect
+/// whose usage is unknown stays pending when acknowledged, though its cleanup settled.
+#[test]
+fn a_closed_obligation_takes_no_quarantine_and_unknown_usage_keeps_one_open() -> Outcome {
+    let scratch = Scratch::new()?;
+    let operator = Principal::new(1000, "operator").map_err(|error| format!("{error:?}"))?;
+    let (tasks, ids, evidence) = resolve_ledger(
+        &scratch,
+        &operator,
+        &[Stage::UnknownEffectOnly, Stage::UnknownEffectAndUsage],
+    )?;
+    let refs = json!([evidence_of(&evidence)]);
+    let acknowledge = "acknowledge_external_effect";
+    let (first, second) = (nth(0x05b2, 1), nth(0x05b2, 2));
+    resolve_with(
+        &tasks,
+        &operator,
+        (1, RESOLVE_KEY, &ids[0], "3"),
+        &first,
+        acknowledge,
+        &refs,
+    )?;
+    let closed = resolve_with(
+        &tasks,
+        &operator,
+        (2, RESOLVE_KEY_2, &ids[0], "4"),
+        &first,
+        "quarantine",
+        &json!([]),
+    )?;
+    assert_eq!(
+        code_at(&closed),
+        (&json!("conflict"), &json!("/body/obligation_id")),
+        "{closed}"
+    );
+    let usage = resolve_with(
+        &tasks,
+        &operator,
+        (3, RESOLVE_KEY_3, &ids[1], "3"),
+        &second,
+        acknowledge,
+        &refs,
+    )?;
+    assert_eq!(
+        (
+            &usage["body"]["obligation_state"],
+            &usage["body"]["task"]["unresolved_obligations"]
+        ),
+        (&json!("pending"), &json!(1)),
+        "usage unknown: {usage}"
+    );
+    conforms(&[("task.resolve", &closed), ("task.resolve", &usage)])?;
     Ok(())
 }

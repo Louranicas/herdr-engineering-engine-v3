@@ -125,15 +125,10 @@ impl Store {
             if !matches!(current.state.as_str(), "admitted" | "queued" | "repair_pending" | "failed" | "verifying" | "cancellation_requested") {
                 return Err(Error::Outstanding);
             }
-            tx.execute("INSERT INTO artifacts(digest,size) VALUES(?,?) ON CONFLICT(digest) DO NOTHING",
-                params![stop.evidence.digest, number(stop.evidence.size)?])?;
-            let stored_size: u64 = tx.query_row("SELECT size FROM artifacts WHERE digest=?",
-                [&stop.evidence.digest], |row| super::read_number(row, 0))?;
-            if stored_size != stop.evidence.size { return Err(Error::Corrupt); }
             let state = if current.cancellation { "cancelled" } else { "failed" };
             let generation = close(tx, &Closing {
                 task: stop.task.as_str(), expected: stop.generation, event: stop.event.as_str(),
-                evidence: &stop.evidence.digest, reason: stop.reason.as_str(), state, body: &body,
+                evidence: &stop.evidence.digest, evidence_size: stop.evidence.size, reason: stop.reason.as_str(), state, body: &body,
                 spent: Some(spent), recipient: &principal.recipient(),
             })?;
             Ok(Stopped { generation, cancelled: current.cancellation })
@@ -150,6 +145,7 @@ pub(super) struct Closing<'a> {
     pub(super) expected: Generation,
     pub(super) event: &'a str,
     pub(super) evidence: &'a str,
+    pub(super) evidence_size: u64,
     pub(super) reason: &'a str,
     pub(super) state: &'static str,
     pub(super) body: &'a [u8],
@@ -160,6 +156,20 @@ pub(super) struct Closing<'a> {
 /// Commit `closing`; the one door every stop (a failure, a cancellation, an abandonment) goes
 /// through. Returns the new generation.
 pub(super) fn close(tx: &rusqlite::Transaction<'_>, closing: &Closing<'_>) -> Result<String> {
+    // The evidence is registered with its size, and a registered size that differs is corruption,
+    // for every stop alike.
+    tx.execute(
+        "INSERT INTO artifacts(digest,size) VALUES(?,?) ON CONFLICT(digest) DO NOTHING",
+        params![closing.evidence, number(closing.evidence_size)?],
+    )?;
+    let stored_size: u64 = tx.query_row(
+        "SELECT size FROM artifacts WHERE digest=?",
+        [closing.evidence],
+        |row| super::read_number(row, 0),
+    )?;
+    if stored_size != closing.evidence_size {
+        return Err(Error::Corrupt);
+    }
     let generation = next(closing.expected)?;
     event(tx, closing.event, closing.task, &generation, "task_stopped")?;
     tx.execute(

@@ -545,6 +545,8 @@ pub struct TaskView {
     pub head: TaskHead,
     pub attempts: Vec<DurableAttempt>,
     pub pending_deliveries: usize,
+    /// Undelivered outbox rows an operator gave up (B08): no longer owed, and never delivered.
+    pub given_up_deliveries: usize,
     /// Attempts whose obligation an operator's disposition closed (B08), read in the same snapshot:
     /// their rows still record what was observed, and they no longer count as owed.
     pub resolved_attempts: Vec<String>,
@@ -709,6 +711,13 @@ pub(super) fn read_view(
         [task.as_str()],
         |row| read_number(row, 0),
     )?;
+    let given_up = db.query_row(
+        "SELECT count(*) FROM outbox o JOIN events e ON e.id=o.event_id WHERE e.task_id=? \
+         AND o.delivered=0 AND EXISTS(SELECT 1 FROM task_dispositions d WHERE \
+         d.obligation_kind='delivery' AND d.obligation_id=o.event_id AND d.resolves=1)",
+        [task.as_str()],
+        |row| read_number(row, 0),
+    )?;
     let mut statement = db.prepare(
         "SELECT obligation_id FROM task_dispositions \
          WHERE task_id=? AND obligation_kind='attempt' AND resolves=1 ORDER BY obligation_id",
@@ -724,6 +733,7 @@ pub(super) fn read_view(
         head,
         attempts,
         pending_deliveries: usize::try_from(pending).map_err(|_| Error::Bound)?,
+        given_up_deliveries: usize::try_from(given_up).map_err(|_| Error::Bound)?,
         resolved_attempts,
         event_high_water,
     })

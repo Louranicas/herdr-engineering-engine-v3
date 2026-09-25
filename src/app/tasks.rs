@@ -449,7 +449,7 @@ impl Tasks for StoreTasks {
             .map(|attempt| attempt.cleanup.as_str())
             .collect();
         let cleanup = cleanup_of(&cleanups);
-        let delivery = delivery_of(&head.state, deliveries);
+        let delivery = delivery_of(&head.state, deliveries, view.given_up_deliveries);
         Ok(Outcome {
             effect: ResultEffect::None,
             replayed: false,
@@ -689,13 +689,15 @@ pub fn cleanup_of(attempts: &[&str]) -> &'static str {
 }
 
 /// The task's delivery. Delivery obligations are created only by terminal events (acceptance and
-/// a stop: `store.rs`'s acceptance and `store/terminal.rs`), so before one nothing is owed; after
-/// one it is pending until its outbox row is delivered.
+/// a stop: `store.rs`'s acceptance and `store/terminal.rs`, including an operator's abandonment),
+/// so before one nothing is owed; after one it is pending until its outbox row is delivered, and a
+/// delivery an operator gave up (B08) is `unknown` -- never `delivered`, which it was not.
 #[must_use]
-pub fn delivery_of(state: &str, pending: usize) -> &'static str {
+pub fn delivery_of(state: &str, pending: usize, given_up: usize) -> &'static str {
     match state {
-        "accepted" | "failed" | "cancelled" if pending > 0 => "pending",
-        "accepted" | "failed" | "cancelled" => "delivered",
+        "accepted" | "failed" | "cancelled" | "abandoned" if pending > 0 => "pending",
+        "accepted" | "failed" | "cancelled" | "abandoned" if given_up > 0 => "unknown",
+        "accepted" | "failed" | "cancelled" | "abandoned" => "delivered",
         _ => "none",
     }
 }
