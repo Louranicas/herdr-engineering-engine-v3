@@ -36,6 +36,10 @@ mod coordinator;
 #[path = "t28_tasks.rs"]
 mod tasks;
 
+/// B07: `task.preview` composed over the declared recipes and the roster, writing nothing.
+#[path = "t28_preview.rs"]
+mod preview;
+
 type Outcome = Result<(), Box<dyn Error>>;
 
 /// The plan spine's own action list — the independent source these cases compare against.

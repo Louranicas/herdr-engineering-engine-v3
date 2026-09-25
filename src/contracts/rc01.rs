@@ -11,3 +11,7 @@ pub const CLEANUP_RESERVE: Duration = Duration::from_mins(5);
 pub const MAX_ATTEMPTS: u8 = 3;
 /// Consecutive attempts without a newly satisfied criterion before the task stops.
 pub const MAX_NO_PROGRESS: u8 = 2;
+/// Input tokens one future model invocation may be sent ("32,768 input tokens and 4,096 output
+/// tokens per future model invocation; reject if the adapter cannot establish the bound",
+/// docs/contract-decisions.md, RC01). Route reads it as the context a recipe must hold (B07 R1.7).
+pub const MAX_INPUT_TOKENS: u64 = 32_768;

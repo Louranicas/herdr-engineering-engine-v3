@@ -1,0 +1,170 @@
+{
+ "scope": "known answers for tests/fixtures/preview/fixture.json, computed by this generator over the T09 route oracle's screen",
+ "answers": {
+  "eligible": [
+   {
+    "recipe_id": "at-deadline",
+    "recipe_version": 13,
+    "adapter_id": "07b00000-0000-4000-8000-0000000000ac",
+    "actual_model_required": false
+   },
+   {
+    "recipe_id": "base-local",
+    "recipe_version": 1,
+    "adapter_id": "07b00000-0000-4000-8000-0000000000a0",
+    "actual_model_required": true
+   },
+   {
+    "recipe_id": "fast-local",
+    "recipe_version": 2,
+    "adapter_id": "07b00000-0000-4000-8000-0000000000a1",
+    "actual_model_required": false
+   },
+   {
+    "recipe_id": "messy-caps",
+    "recipe_version": 15,
+    "adapter_id": "07b00000-0000-4000-8000-0000000000ae",
+    "actual_model_required": true
+   },
+   {
+    "recipe_id": "no-quality",
+    "recipe_version": 14,
+    "adapter_id": "07b00000-0000-4000-8000-0000000000ad",
+    "actual_model_required": false
+   }
+  ],
+  "exclusions": [
+   {
+    "recipe_id": "ctx-short",
+    "code": "capability"
+   },
+   {
+    "recipe_id": "ctx-unknown",
+    "code": "capability"
+   },
+   {
+    "recipe_id": "disabled-local",
+    "code": "unavailable"
+   },
+   {
+    "recipe_id": "down-local",
+    "code": "unavailable"
+   },
+   {
+    "recipe_id": "ghost",
+    "code": "unavailable"
+   },
+   {
+    "recipe_id": "never-observed",
+    "code": "stale"
+   },
+   {
+    "recipe_id": "no-cost",
+    "code": "budget"
+   },
+   {
+    "recipe_id": "no-latency",
+    "code": "budget"
+   },
+   {
+    "recipe_id": "pricey",
+    "code": "budget"
+   },
+   {
+    "recipe_id": "remote-model",
+    "code": "privacy"
+   },
+   {
+    "recipe_id": "slow",
+    "code": "budget"
+   },
+   {
+    "recipe_id": "strangers",
+    "code": "unavailable"
+   },
+   {
+    "recipe_id": "unknown-local",
+    "code": "stale"
+   }
+  ],
+  "cost_mode": "bounded"
+ },
+ "after_reopen": {
+  "eligible": [],
+  "exclusions": [
+   {
+    "recipe_id": "at-deadline",
+    "code": "stale"
+   },
+   {
+    "recipe_id": "base-local",
+    "code": "stale"
+   },
+   {
+    "recipe_id": "ctx-short",
+    "code": "capability"
+   },
+   {
+    "recipe_id": "ctx-unknown",
+    "code": "capability"
+   },
+   {
+    "recipe_id": "disabled-local",
+    "code": "unavailable"
+   },
+   {
+    "recipe_id": "down-local",
+    "code": "stale"
+   },
+   {
+    "recipe_id": "fast-local",
+    "code": "stale"
+   },
+   {
+    "recipe_id": "ghost",
+    "code": "unavailable"
+   },
+   {
+    "recipe_id": "messy-caps",
+    "code": "stale"
+   },
+   {
+    "recipe_id": "never-observed",
+    "code": "stale"
+   },
+   {
+    "recipe_id": "no-cost",
+    "code": "stale"
+   },
+   {
+    "recipe_id": "no-latency",
+    "code": "stale"
+   },
+   {
+    "recipe_id": "no-quality",
+    "code": "stale"
+   },
+   {
+    "recipe_id": "pricey",
+    "code": "stale"
+   },
+   {
+    "recipe_id": "remote-model",
+    "code": "privacy"
+   },
+   {
+    "recipe_id": "slow",
+    "code": "stale"
+   },
+   {
+    "recipe_id": "strangers",
+    "code": "unavailable"
+   },
+   {
+    "recipe_id": "unknown-local",
+    "code": "stale"
+   }
+  ],
+  "cost_mode": "unknown"
+ }
+}

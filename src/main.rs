@@ -197,6 +197,7 @@ use habitat_engine::app::control_socket::{
 };
 use habitat_engine::app::coordinator;
 use habitat_engine::app::grants::{self, FileGrants};
+use habitat_engine::app::routing;
 use habitat_engine::contracts::control::{FrameReader, MAX_FRAME_BYTES, ReadError};
 use habitat_engine::worker::namespace_shim::{self, NamespaceExec};
 use signal_hook::consts::SIGTERM;
@@ -320,8 +321,25 @@ fn serve() -> ExitCode {
     );
     eprintln!("habitat-engine: {}", started.line);
     let health = started.health;
+    // The route configuration task.preview screens against, read once under custody (B07). Its
+    // outcome is said after the task owner's, so a refused ledger's reason stays in the first lines.
+    let routes = home.join(routing::ROUTING_DIRECTORY);
+    let routing = routing::read(&routes);
     let tasks = match started.reconciled.map(coordinator::compose_tasks) {
-        Some(Ok(tasks)) => Some(tasks),
+        Some(Ok(tasks)) => {
+            match &routing {
+                Ok(_) => eprintln!(
+                    "habitat-engine: route configuration read from {}",
+                    routes.display()
+                ),
+                Err(why) => eprintln!(
+                    "habitat-engine: task.preview unavailable: {} ({})",
+                    why.constraint(),
+                    routes.display()
+                ),
+            }
+            Some(tasks.with_routing(routing))
+        }
         Some(Err(why)) => {
             eprintln!("habitat-engine: task actions unavailable: {why}");
             None

@@ -1105,7 +1105,7 @@ impl Policy {
 /// (identity, version, adapter, whether an actual model is required) and the figures the roster
 /// cannot hold (RC03 declares none). It restates no roster fact: capabilities, locality and
 /// availability come from the roster record it names. A figure absent from the row is `None`,
-/// unknown, never invented. `serves` names the task classes the recipe is declared to serve
+/// unknown, never invented; a declared one is a TOML integer, so `0..=i64::MAX`. `serves` names the task classes the recipe is declared to serve
 /// (a recipe fact, since no roster observer can observe suitability for a class); which classes
 /// exist is the task module's, checked where the two meet.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1177,6 +1177,12 @@ impl Routing {
     #[must_use]
     pub fn baseline(&self) -> &str {
         &self.declaration.baseline
+    }
+
+    /// The declared staleness bound, validated in `1..=MAX_STALENESS_MS`.
+    #[must_use]
+    pub const fn staleness_bound_ms(&self) -> u64 {
+        self.declaration.staleness_bound_ms
     }
 
     /// `sha256:` over the canonical rendering of the declared recipes. Two configurations share it

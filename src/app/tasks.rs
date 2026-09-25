@@ -37,6 +37,7 @@
 
 use crate::actions::control::{CURSOR_LIFETIME_MS, Recorded, TaskRequest, Tasks};
 use crate::app::evidence::fresh_id;
+use crate::app::routing::{self, Routing, Unready};
 use crate::contracts::control::{
     ErrorCode, Fault, Outcome, PageCursor, Precondition, ResultEffect, Retry, request_sha256,
 };
@@ -46,7 +47,7 @@ use crate::store::{
     Admission, Allocation, CancelIntent, Cancellation, Error as StoreError, Principal, Resolution,
     ResolveIntent, ResolveRefusal, Store, Submission, TaskFilter, TaskHead,
 };
-use crate::task::control::{Cancel, List, Resolve, Selector, Spec};
+use crate::task::control::{Cancel, List, Preview, Resolve, Selector, Spec};
 use serde_json::{Value, json};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -62,16 +63,26 @@ pub const VISIBILITY_REVISION: &str = "0";
 pub struct StoreTasks {
     store: Mutex<Store>,
     epoch: String,
+    routing: Result<Routing, Unready>,
 }
 
 impl StoreTasks {
-    /// Compose the ledger `store`, opened for `epoch`.
+    /// Compose the ledger `store`, opened for `epoch`, with no route configuration: `task.preview`
+    /// answers "route configuration not installed" until [`StoreTasks::with_routing`].
     #[must_use]
     pub fn new(store: Store, epoch: String) -> Self {
         Self {
             store: Mutex::new(store),
             epoch,
+            routing: Err(Unready::NotInstalled),
         }
+    }
+
+    /// The route configuration `task.preview` screens against, composed once (B07), or why there
+    /// is none.
+    #[must_use]
+    pub fn with_routing(self, routing: Result<Routing, Unready>) -> Self {
+        Self { routing, ..self }
     }
 
     fn cursor(&self, sequence: u64, task: &str, now_unix_ms: u64) -> Value {
@@ -637,6 +648,24 @@ impl Tasks for StoreTasks {
             .map_err(|error| resolve_fault(error, &target.id))?;
         drop(store);
         resolved(&record, replayed)
+    }
+
+    fn preview(
+        &self,
+        principal: &Principal,
+        preview: &Preview,
+        deadline_unix_ms: u64,
+        now_unix_ms: u64,
+    ) -> Result<Outcome, Fault> {
+        let composed = self.routing.as_ref().map_err(|why| why.fault())?;
+        let until = deadline(deadline_unix_ms, now_unix_ms);
+        let snapshot = self
+            .store
+            .lock()
+            .map_err(|_| unavailable("the ledger's owner panicked"))?
+            .roster_snapshot(principal, until)
+            .map_err(|error| store_fault(&error))?;
+        routing::preview(composed, &snapshot, &preview.spec).map(Outcome::read)
     }
 
     fn replay(&self, request: &TaskRequest<'_>, of: Recorded) -> Result<Option<Outcome>, Fault> {

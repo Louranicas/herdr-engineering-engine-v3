@@ -95,7 +95,56 @@ fn unavailable(field: &'static str, constraint: &'static str) -> Fault {
 /// reserves but does not admit (remote privacy, currency, tokens, a parent allocation).
 pub fn submission(body: &Map<String, Value>) -> Result<Spec, Fault> {
     exactly(body, &["spec"], "/body")?;
-    let spec = object(body.get("spec"), "/body/spec")?;
+    spec(body.get("spec"))
+}
+
+/// A valid `task.preview` body: the spec, read by the one door submission reads it through, and
+/// the catalogue revision the caller planned against (the receiver compares it with its own).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Preview {
+    /// The spec, validated exactly as `task.submit` validates it.
+    pub spec: Spec,
+    /// The `catalogue_revision` the caller names.
+    pub catalogue_revision: u64,
+}
+
+/// Read `task.preview`'s body (B07).
+///
+/// # Errors
+///
+/// `invalid_argument` naming the member: `/body` unless exactly `spec`, `brief_revision` and
+/// `catalogue_revision`; every refusal of [`submission`]'s spec, at the same member with the same
+/// code; `/body/brief_revision` unless the `U64Decimal` `"0"` — RC01 admits only `parent: null`, so
+/// there is no brief (a composed parent's rule will be: equal to `spec.parent.brief_revision`, else
+/// `resync_required`); `/body/catalogue_revision` unless a `U64Decimal`.
+pub fn preview(body: &Map<String, Value>) -> Result<Preview, Fault> {
+    exactly(
+        body,
+        &["spec", "brief_revision", "catalogue_revision"],
+        "/body",
+    )?;
+    let spec = spec(body.get("spec"))?;
+    let decimal = |name: &str, field: &'static str| {
+        body.get(name)
+            .and_then(Value::as_str)
+            .and_then(|text| parse_u64_decimal(text).ok())
+            .ok_or(Fault::invalid(field, "U64Decimal"))
+    };
+    if decimal("brief_revision", "/body/brief_revision")? != 0 {
+        return Err(Fault::invalid(
+            "/body/brief_revision",
+            "0 when the spec names no parent",
+        ));
+    }
+    Ok(Preview {
+        spec,
+        catalogue_revision: decimal("catalogue_revision", "/body/catalogue_revision")?,
+    })
+}
+
+/// The one reader of a `TaskSpecV1` under the RC01 overlay, for every action that carries one.
+fn spec(value: Option<&Value>) -> Result<Spec, Fault> {
+    let spec = object(value, "/body/spec")?;
     exactly(
         spec,
         &[

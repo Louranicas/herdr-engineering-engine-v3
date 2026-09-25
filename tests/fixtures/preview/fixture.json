@@ -1,0 +1,37 @@
+{
+  "scope": "task.preview known-answer fixture (B07b). Roster records are seeded through the store's own doors; recipes name them by `record`. `ghost` names no record; `stranger` is a record under another operator uid; `disabled` records are disabled after their observation.",
+  "class": "rust-library-change/1",
+  "wall_ms": 600000,
+  "records": [
+    {"name": "B", "locality": "local", "capabilities": ["text"], "observation": {"availability": "available", "capabilities": ["text"]}},
+    {"name": "L", "locality": "local", "capabilities": ["text", "rust-library-change/1"], "observation": {"availability": "available", "capabilities": ["text", "rust-library-change/1"]}},
+    {"name": "R", "locality": "remote", "capabilities": ["text"], "observation": {"availability": "available", "capabilities": ["text"]}},
+    {"name": "D", "locality": "local", "capabilities": ["text"], "observation": {"availability": "unavailable", "capabilities": ["text"]}},
+    {"name": "U", "locality": "local", "capabilities": ["text"], "observation": {"availability": "unknown", "capabilities": ["text"]}},
+    {"name": "N", "locality": "local", "capabilities": ["text"], "observation": null},
+    {"name": "X", "locality": "local", "capabilities": ["x", "x", "a\u0001", "text"], "observation": {"availability": "available", "capabilities": ["x", "a\u0001"]}},
+    {"name": "Z", "locality": "local", "capabilities": ["text"], "observation": {"availability": "available", "capabilities": ["text"]}, "disabled": true},
+    {"name": "stranger", "locality": "local", "capabilities": ["text"], "observation": {"availability": "available", "capabilities": ["text"]}}
+  ],
+  "baseline": "base-local",
+  "recipes": [
+    {"id": "base-local", "record": "B", "version": 1, "adapter": "07b00000-0000-4000-8000-0000000000a0", "actual_model_required": true, "context_limit_tokens": 32768, "cost_microunits": 0, "quality_basis_points": 5000, "latency_ms": 1000},
+    {"id": "fast-local", "record": "L", "version": 2, "adapter": "07b00000-0000-4000-8000-0000000000a1", "actual_model_required": false, "context_limit_tokens": 65536, "cost_microunits": 0, "quality_basis_points": 7000, "latency_ms": 400},
+    {"id": "ctx-short", "record": "L", "version": 3, "adapter": "07b00000-0000-4000-8000-0000000000a2", "actual_model_required": true, "context_limit_tokens": 32767, "cost_microunits": 0, "quality_basis_points": 7000, "latency_ms": 400},
+    {"id": "ctx-unknown", "record": "L", "version": 4, "adapter": "07b00000-0000-4000-8000-0000000000a3", "actual_model_required": true, "cost_microunits": 0, "quality_basis_points": 7000, "latency_ms": 400},
+    {"id": "remote-model", "record": "R", "version": 5, "adapter": "07b00000-0000-4000-8000-0000000000a4", "actual_model_required": true, "context_limit_tokens": 32768, "cost_microunits": 0, "quality_basis_points": 9000, "latency_ms": 100},
+    {"id": "down-local", "record": "D", "version": 6, "adapter": "07b00000-0000-4000-8000-0000000000a5", "actual_model_required": true, "context_limit_tokens": 32768, "cost_microunits": 0, "quality_basis_points": 5000, "latency_ms": 900},
+    {"id": "unknown-local", "record": "U", "version": 7, "adapter": "07b00000-0000-4000-8000-0000000000a6", "actual_model_required": true, "context_limit_tokens": 32768, "cost_microunits": 0, "quality_basis_points": 5000, "latency_ms": 900},
+    {"id": "never-observed", "record": "N", "version": 8, "adapter": "07b00000-0000-4000-8000-0000000000a7", "actual_model_required": true, "context_limit_tokens": 32768, "cost_microunits": 0, "quality_basis_points": 5000, "latency_ms": 900},
+    {"id": "pricey", "record": "L", "version": 9, "adapter": "07b00000-0000-4000-8000-0000000000a8", "actual_model_required": true, "context_limit_tokens": 32768, "cost_microunits": 5, "quality_basis_points": 9500, "latency_ms": 100},
+    {"id": "no-cost", "record": "L", "version": 10, "adapter": "07b00000-0000-4000-8000-0000000000a9", "actual_model_required": true, "context_limit_tokens": 32768, "quality_basis_points": 9500, "latency_ms": 100},
+    {"id": "slow", "record": "L", "version": 11, "adapter": "07b00000-0000-4000-8000-0000000000aa", "actual_model_required": true, "context_limit_tokens": 32768, "cost_microunits": 0, "quality_basis_points": 9500, "latency_ms": 300001},
+    {"id": "no-latency", "record": "L", "version": 12, "adapter": "07b00000-0000-4000-8000-0000000000ab", "actual_model_required": true, "context_limit_tokens": 32768, "cost_microunits": 0, "quality_basis_points": 9500},
+    {"id": "at-deadline", "record": "L", "version": 13, "adapter": "07b00000-0000-4000-8000-0000000000ac", "actual_model_required": false, "context_limit_tokens": 32768, "cost_microunits": 0, "quality_basis_points": 6000, "latency_ms": 300000},
+    {"id": "no-quality", "record": "L", "version": 14, "adapter": "07b00000-0000-4000-8000-0000000000ad", "actual_model_required": false, "context_limit_tokens": 32768, "cost_microunits": 0, "latency_ms": 700},
+    {"id": "messy-caps", "record": "X", "version": 15, "adapter": "07b00000-0000-4000-8000-0000000000ae", "actual_model_required": true, "context_limit_tokens": 32768, "cost_microunits": 0, "quality_basis_points": 5000, "latency_ms": 800},
+    {"id": "ghost", "record": "ghost", "version": 16, "adapter": "07b00000-0000-4000-8000-0000000000af", "actual_model_required": true, "context_limit_tokens": 32768, "cost_microunits": 0, "quality_basis_points": 5000, "latency_ms": 800},
+    {"id": "disabled-local", "record": "Z", "version": 17, "adapter": "07b00000-0000-4000-8000-0000000000b0", "actual_model_required": true, "context_limit_tokens": 32768, "cost_microunits": 0, "quality_basis_points": 5000, "latency_ms": 800},
+    {"id": "strangers", "record": "stranger", "version": 18, "adapter": "07b00000-0000-4000-8000-0000000000b1", "actual_model_required": true, "context_limit_tokens": 32768, "cost_microunits": 0, "quality_basis_points": 5000, "latency_ms": 800}
+  ]
+}

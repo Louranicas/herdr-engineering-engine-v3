@@ -3,6 +3,7 @@
 
 use super::{Generation, UuidV4, parse_u64_decimal};
 use serde::{Deserialize, Deserializer, Serialize};
+use std::collections::BTreeSet;
 
 pub const MAX_RECORDS: usize = 256;
 pub const MAX_HISTORY: usize = 4096;
@@ -232,6 +233,40 @@ pub enum Freshness {
     WrongBinding,
 }
 
+/// The observation's age on the receiver's monotonic clock at `now`, or `None` when that clock
+/// ran backwards. Meaningful only within one receiver epoch, which [`freshness`] checks first.
+#[must_use]
+pub fn age_ms(observation: &Observation, now: &ReceiptTime) -> Option<u64> {
+    now.monotonic_ms
+        .checked_sub(observation.received.monotonic_ms)
+}
+
+/// The capabilities `observation` evidences for `head`: those the definition declares **and**
+/// the observation reports (RC03 keeps declared and observed capabilities separate), when the
+/// observation is [`Freshness::Fresh`] under `ttl_ms`; `None` otherwise. A set, so a repeated
+/// label counts once. The one rule for "declared and observed": [`Selection::permits`] and route
+/// composition both read it.
+#[must_use]
+pub fn evidenced_capabilities<'a>(
+    head: &'a RosterHeadV1,
+    observation: Option<&'a Observation>,
+    now: &ReceiptTime,
+    ttl_ms: u64,
+) -> Option<BTreeSet<&'a str>> {
+    if freshness(head, observation, now, ttl_ms) != Freshness::Fresh {
+        return None;
+    }
+    let observed = &observation?.input.capabilities;
+    Some(
+        head.definition
+            .capabilities
+            .iter()
+            .filter(|capability| observed.contains(capability))
+            .map(String::as_str)
+            .collect(),
+    )
+}
+
 /// Compare attributable facts; this function grants no worker or service control.
 #[must_use]
 pub fn freshness(
@@ -259,10 +294,7 @@ pub fn freshness(
     if observation.received.epoch != now.epoch {
         return Freshness::EpochMismatch;
     }
-    let Some(age) = now
-        .monotonic_ms
-        .checked_sub(observation.received.monotonic_ms)
-    else {
+    let Some(age) = age_ms(observation, now) else {
         return Freshness::ClockRegression;
     };
     if now.unix_ms < observation.received.unix_ms {
@@ -323,14 +355,15 @@ impl Selection {
                 .version
                 .as_ref()
                 .is_none_or(|version| version == &head.definition.version)
-            && freshness(head, observation, now, self.ttl_ms) == Freshness::Fresh
-            && observation.is_some_and(|observed| {
-                observed.input.availability == Availability::Available
-                    && self.capabilities.iter().all(|cap| {
-                        head.definition.capabilities.contains(cap)
-                            && observed.input.capabilities.contains(cap)
-                    })
-            })
+            && observation
+                .is_some_and(|observed| observed.input.availability == Availability::Available)
+            && evidenced_capabilities(head, observation, now, self.ttl_ms).is_some_and(
+                |evidenced| {
+                    self.capabilities
+                        .iter()
+                        .all(|cap| evidenced.contains(cap.as_str()))
+                },
+            )
     }
 }
 

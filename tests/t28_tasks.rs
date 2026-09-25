@@ -24,10 +24,10 @@ use std::time::{Duration, Instant};
 type Outcome = Result<(), Box<dyn Error>>;
 
 static NEXT: AtomicUsize = AtomicUsize::new(0);
-const GENERATION: &str = "28d00000-0000-4000-8000-000000000001";
+pub(super) const GENERATION: &str = "28d00000-0000-4000-8000-000000000001";
 const EPOCH: &str = "28d00000-0000-4000-8000-000000000002";
 pub(super) const KEY: &str = "28d00000-0000-4000-8000-0000000000aa";
-const NOW: u64 = 1_790_000_000_000;
+pub(super) const NOW: u64 = 1_790_000_000_000;
 
 /// `sha256:` hex of a digest, computed here from `sha2` directly, not through the engine.
 pub(super) fn digest(bytes: impl AsRef<[u8]>) -> String {
@@ -40,10 +40,10 @@ pub(super) fn digest(bytes: impl AsRef<[u8]>) -> String {
         })
 }
 
-struct Scratch(PathBuf);
+pub(super) struct Scratch(pub(super) PathBuf);
 
 impl Scratch {
-    fn new() -> Result<Self, Box<dyn Error>> {
+    pub(super) fn new() -> Result<Self, Box<dyn Error>> {
         let path = std::env::temp_dir().join(format!(
             "hee3-t28t-{}-{}",
             std::process::id(),
@@ -252,7 +252,7 @@ fn a_get_names_its_task_by_identity_or_by_the_submit_key() -> Outcome {
 }
 
 /// Sees and may do everything task-owned: these cases are about the ledger, not grants.
-struct Open;
+pub(super) struct Open;
 
 impl Grants for Open {
     fn resolve(&self, _: &Principal, _: &str, _: &str, _: u64) -> Option<Caller> {
@@ -306,7 +306,7 @@ fn serve_at(
 }
 
 /// Serve `payload` at `now_unix_ms` with `tasks` and `grants` composed.
-fn serve_composed_at(
+pub(super) fn serve_composed_at(
     tasks: &dyn Tasks,
     grants: &dyn Grants,
     principal: &Principal,
@@ -326,7 +326,7 @@ fn serve_composed_at(
 }
 
 /// Every reply validated against the published schema by the independent oracle.
-fn conforms(replies: &[(&str, &Value)]) -> Outcome {
+pub(super) fn conforms(replies: &[(&str, &Value)]) -> Outcome {
     let rows: Vec<Value> = replies
         .iter()
         .enumerate()
@@ -1063,7 +1063,7 @@ fn nth(role: u16, index: u16) -> String {
 }
 
 /// A writable ledger in `scratch`, as `ledger` opens it but without the task owner around it.
-fn raw_store(scratch: &Scratch) -> Result<Store, Box<dyn Error>> {
+pub(super) fn raw_store(scratch: &Scratch) -> Result<Store, Box<dyn Error>> {
     let root = scratch.0.join("state");
     if !root.exists() {
         DirBuilder::new().mode(0o700).create(&root)?;
@@ -1928,7 +1928,7 @@ fn every_mutating_action_that_records_nothing_has_no_owner_to_record_it() -> Out
 /// A task owner that records what each call was handed and answers nothing (review F5; F101: a
 /// double that discards its arguments pins no value).
 #[derive(Default)]
-struct Handed(std::cell::RefCell<Vec<String>>);
+pub(super) struct Handed(pub(super) std::cell::RefCell<Vec<String>>);
 
 impl Tasks for Handed {
     fn submit(
@@ -2012,6 +2012,23 @@ impl Tasks for Handed {
         self.0.borrow_mut().push(format!(
             "list {principal:?} {} {deadline_unix_ms} {now_unix_ms}",
             list.filter_sha256()
+        ));
+        Err(habitat_engine::contracts::control::Fault::expired())
+    }
+
+    fn preview(
+        &self,
+        principal: &Principal,
+        preview: &habitat_engine::task::control::Preview,
+        deadline_unix_ms: u64,
+        now_unix_ms: u64,
+    ) -> Result<
+        habitat_engine::contracts::control::Outcome,
+        habitat_engine::contracts::control::Fault,
+    > {
+        self.0.borrow_mut().push(format!(
+            "preview {principal:?} {} {} {deadline_unix_ms} {now_unix_ms}",
+            preview.spec.task_class, preview.spec.limit_ms
         ));
         Err(habitat_engine::contracts::control::Fault::expired())
     }

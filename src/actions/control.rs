@@ -183,6 +183,23 @@ pub trait Tasks {
         body: &task_body::Resolve,
     ) -> Result<Outcome, Fault>;
 
+    /// Which declared recipes could run `preview`'s spec for `principal`, and why each other one
+    /// cannot (B07): route's filters over the principal's roster snapshot, with no write, no
+    /// reservation and no idempotency record. The catalogue revision is already proved current.
+    ///
+    /// # Errors
+    ///
+    /// `unavailable` naming why the owner cannot answer (routing not installed or refused; the
+    /// route baseline's roster record not available to this caller, or not usable); the ledger's
+    /// read refusals (`deadline_exceeded`, `resource_exhausted`, `unavailable`).
+    fn preview(
+        &self,
+        principal: &Principal,
+        preview: &task_body::Preview,
+        deadline_unix_ms: u64,
+        now_unix_ms: u64,
+    ) -> Result<Outcome, Fault>;
+
     /// RC03 §6 readback for an expired request: the stored result, with `replayed: true`, when
     /// `request` is an exact replay of a recorded `of` request -- the same principal, key and exact
     /// bytes -- or `None` when its key is unseen. Nothing is written.
@@ -432,6 +449,35 @@ fn dispatch(action: Action, caller: &Caller, context: &Context<'_>) -> Result<Ou
             let resolve = task_body::resolve(body)?;
             let tasks = context.composed.tasks.ok_or_else(owner_absent)?;
             tasks.resolve(&task_request(context)?, task_target(context)?, &resolve)
+        }
+        "task.preview" => {
+            // Shape (a precondition is a parent allocation, refused as the spec's parent is),
+            // then owner, then the catalogue revision the caller planned against.
+            let preview = task_body::preview(body)?;
+            if context.envelope.precondition.is_some() {
+                return Err(Fault::of(
+                    ErrorCode::Unavailable,
+                    Retry::AfterCondition,
+                    "the RC01 offline, zero-external-spend profile does not admit this",
+                )
+                .at("/precondition")
+                .because("child allocations are not composed behind this receiver"));
+            }
+            let tasks = context.composed.tasks.ok_or_else(owner_absent)?;
+            if u64::try_from(CATALOGUE_REVISION).ok() != Some(preview.catalogue_revision) {
+                return Err(Fault::of(
+                    ErrorCode::ResyncRequired,
+                    Retry::Never,
+                    "the catalogue has another revision; read tools.list again",
+                )
+                .at("/body/catalogue_revision"));
+            }
+            tasks.preview(
+                context.principal,
+                &preview,
+                context.envelope.deadline_unix_ms,
+                context.now_unix_ms,
+            )
         }
         "task.get" => {
             let selector = task_body::get(body)?;

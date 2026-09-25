@@ -217,7 +217,7 @@ CONTEXT_INPUTS = ("src/context.rs",)
 COHORT_TARGET_COUNTS = {"t22_cohort": 67}
 COHORT_INPUTS = ("src/cohort.rs", "evaluation/cohorts/claim-overlap-v1.json",
                  "tests/fixtures/t22/C01.json", "tests/fixtures/t22/C02.json")
-ACTIONS_TARGET_COUNTS = {"t28_actions": 184}
+ACTIONS_TARGET_COUNTS = {"t28_actions": 193}
 # The control receiver (review coordinator step 1) is served from the catalogue: its wire half in
 # contracts, its catalogue half in actions, and the independent Python oracle its cases run.
 ACTIONS_INPUTS = ("src/actions.rs", "src/worker/tools.rs", "src/actions/control.rs",
@@ -230,6 +230,11 @@ ACTIONS_INPUTS = ("src/actions.rs", "src/worker/tools.rs", "src/actions/control.
                   "src/app/tasks.rs", "src/task/control.rs", "tests/t28_tasks.rs",
                   # APP-07: a lost commit through the real store's cut point, a unit of app::tasks.
                   "tests/t28_uncertain.rs",
+                  # B07 task.preview: the composition, the custody door it shares with grants, its
+                  # battery and the independent generator of its known answers.
+                  "src/app/routing.rs", "src/app/custody.rs", "tests/t28_preview.rs",
+                  "tests/fixtures/preview/fixture.json", "tests/fixtures/preview/known-answers.json",
+                  "tests/fixtures/preview/make-known-answers.py",
                   # T29 composition (b): the consumer the engine cases run, over skills/ and workflows/.
                   "tests/fixtures/t29/compose.py",
                   "tests/fixtures/native/control-v1/receiver-oracle.py",
@@ -1240,6 +1245,10 @@ def main():
         if has_t09(ROOT):
             run("route-oracle-table", [sys.executable, "tests/fixtures/route/make-known-answers.py", "--check"],
                 required_text="answers=13 fallback_answers=11 matches_generator=yes")
+        if has_t09(ROOT) and has_actions_battery(ROOT):
+            # B07: the preview table, re-derived by its generator over the route oracle above.
+            run("preview-oracle-table", [sys.executable, "-W", "error", "tests/fixtures/preview/make-known-answers.py", "--check"],
+                required_text="eligible=5 exclusions=13 reopened_eligible=0 matches_generator=yes")
         run("rustc-identity", [str(compiler), "-vV"], required_text="rustc 1.98.0 ")
         cargo = str(binaries["cargo"])
         metadata = run("offline-dependency-resolution", [cargo, "metadata", "--locked", "--offline", "--format-version=1"])

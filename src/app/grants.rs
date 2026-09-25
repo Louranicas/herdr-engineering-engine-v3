@@ -12,21 +12,19 @@
 //!   presents it under any other principal is refused exactly as an unknown grant is.
 //! * **Custody before content.** The directory must be the operator's, mode 0700, opened without
 //!   following a link; the record must be a regular 0600 file of the operator's, read under
-//!   [`MAX_GRANT_BYTES`]. A grant a second user could have written is not a grant.
+//!   [`MAX_GRANT_BYTES`]. A grant a second user could have written is not a grant. Both rules are
+//!   [`crate::app::custody`]'s, the one door the route configuration is read through as well.
 //!
 //! Every refusal resolves to `None`, which the receiver renders as `forbidden`: the store never
 //! tells a caller which of the checks it failed.
 
 use crate::actions::control::Grants;
 use crate::actions::{Caller, Effect, Owner};
+use crate::app::custody::{DirectoryError, PrivateDirectory};
 use crate::contracts::control::request_sha256;
 use crate::contracts::{UuidV4, parse_u64_decimal};
 use crate::store::Principal;
-use rustix::fs::{Mode, OFlags, openat};
 use serde::Deserialize;
-use std::fs::File;
-use std::io::Read;
-use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 
 /// The largest grant record read.
@@ -56,9 +54,13 @@ impl std::fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
-impl From<rustix::io::Errno> for Error {
-    fn from(value: rustix::io::Errno) -> Self {
-        Self::Io(value.into())
+impl From<DirectoryError> for Error {
+    fn from(value: DirectoryError) -> Self {
+        match value {
+            DirectoryError::NotFound => Self::Io(std::io::ErrorKind::NotFound.into()),
+            DirectoryError::Custody => Self::Custody,
+            DirectoryError::Io(error) => Self::Io(error),
+        }
     }
 }
 
@@ -78,7 +80,7 @@ struct Record {
 /// Grants held as reviewed files in one private directory.
 #[derive(Debug)]
 pub struct FileGrants {
-    directory: File,
+    directory: PrivateDirectory,
 }
 
 impl FileGrants {
@@ -89,44 +91,18 @@ impl FileGrants {
     /// [`Error::Custody`] unless `path` is a directory owned by this process's effective user
     /// with mode 0700, reached without following a final symlink; [`Error::Io`] otherwise.
     pub fn open(path: &Path) -> Result<Self, Error> {
-        let directory = File::from(rustix::fs::open(
-            path,
-            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-            Mode::empty(),
-        )?);
-        let meta = directory.metadata().map_err(Error::Io)?;
-        if !meta.is_dir() || !owned_private(&meta, 0o700) {
-            return Err(Error::Custody);
-        }
-        Ok(Self { directory })
+        Ok(Self {
+            directory: PrivateDirectory::open(path)?,
+        })
     }
 
     fn record(&self, grant_id: &str) -> Option<Vec<u8>> {
         // The name is a validated UUIDv4, so it can hold no separator and no dot segment.
         UuidV4::parse(grant_id).ok()?;
-        let file = File::from(
-            openat(
-                &self.directory,
-                format!("{grant_id}.json"),
-                OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC | OFlags::NONBLOCK,
-                Mode::empty(),
-            )
-            .ok()?,
-        );
-        let meta = file.metadata().ok()?;
-        if !meta.is_file() || !owned_private(&meta, 0o600) || meta.len() > MAX_GRANT_BYTES {
-            return None;
-        }
-        let mut bytes = Vec::new();
-        file.take(MAX_GRANT_BYTES + 1)
-            .read_to_end(&mut bytes)
-            .ok()?;
-        (bytes.len() as u64 <= MAX_GRANT_BYTES).then_some(bytes)
+        self.directory
+            .read(&format!("{grant_id}.json"), MAX_GRANT_BYTES)
+            .ok()
     }
-}
-
-fn owned_private(meta: &std::fs::Metadata, mode: u32) -> bool {
-    meta.uid() == rustix::process::geteuid().as_raw() && meta.mode() & 0o777 == mode
 }
 
 impl Grants for FileGrants {

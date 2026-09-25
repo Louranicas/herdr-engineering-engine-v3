@@ -16,5 +16,7 @@ pub mod startup;
 
 pub mod control_socket;
 pub mod coordinator;
+pub mod custody;
 pub mod grants;
+pub mod routing;
 pub mod tasks;
