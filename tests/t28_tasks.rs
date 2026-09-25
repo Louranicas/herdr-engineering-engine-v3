@@ -1,6 +1,8 @@
 //! T28 task-owner cases (a module of `t28_actions`): `task.submit` and `task.get` composed behind
 //! the control receiver over a real ledger (review D-C3 step 3). Every ledger is a scratch root.
-use habitat_engine::actions::control::{self, Composed, Grants, Reply};
+use habitat_engine::actions::control::{
+    self, Composed, Grants, Recorded, Reply, TaskRequest, Tasks,
+};
 use habitat_engine::actions::{Caller, Effect, Owner};
 use habitat_engine::app::tasks::{StoreTasks, cleanup_of, delivery_of, submit_readback};
 use habitat_engine::contracts::UuidV4;
@@ -300,8 +302,19 @@ fn serve_at(
     payload: &[u8],
     now_unix_ms: u64,
 ) -> Result<Value, Box<dyn Error>> {
+    serve_composed_at(tasks, &Open, principal, payload, now_unix_ms)
+}
+
+/// Serve `payload` at `now_unix_ms` with `tasks` and `grants` composed.
+fn serve_composed_at(
+    tasks: &dyn Tasks,
+    grants: &dyn Grants,
+    principal: &Principal,
+    payload: &[u8],
+    now_unix_ms: u64,
+) -> Result<Value, Box<dyn Error>> {
     let composed = Composed {
-        grants: &Open,
+        grants,
         health: None,
         tasks: Some(tasks),
         draining: None,
@@ -1499,7 +1512,7 @@ fn an_exact_replay_after_its_deadline_returns_the_stored_result() -> Outcome {
     Ok(())
 }
 
-/// Expired requests that are not an exact replay of a recorded one, each with the action it names
+/// Expired requests whose key is not recorded for their principal and action, each with the action it names
 /// and the principal that sends it, after `task` was submitted under `KEY` and cancelled under
 /// `CANCEL_KEY` to generation 2.
 type Case<'a> = (&'static str, &'static str, &'a Principal, Vec<u8>);
@@ -1523,12 +1536,6 @@ fn expired_cases<'a>(
             ),
         ),
         (
-            "other bytes under a recorded submit key",
-            "task.submit",
-            operator,
-            request("task.submit", 4, Some(KEY), &json!({"spec": spec()})),
-        ),
-        (
             "another principal's recorded submit",
             "task.submit",
             other,
@@ -1539,12 +1546,6 @@ fn expired_cases<'a>(
             "task.cancel",
             operator,
             cancel_frame(5, CANCEL_KEY_2, task, "2", &why)?,
-        ),
-        (
-            "other bytes under a recorded cancel key",
-            "task.cancel",
-            operator,
-            cancel_frame(6, CANCEL_KEY, task, "2", &why)?,
         ),
         (
             "another action's recorded key",
@@ -1578,11 +1579,11 @@ fn expired_cases<'a>(
     ])
 }
 
-/// B05 (a), the other half of the rule: an expired request that is NOT an exact replay of a recorded
-/// one is refused `deadline_exceeded` before dispatch, as before -- an unseen key, other bytes under a
-/// recorded key, another principal's recorded key, another action's recorded key, a read, a request
-/// the catalogue would refuse and one malformed past its deadline -- and nothing is written. A key is
-/// bound per action (RC03 §6), so a live cancel under the submit's key then commits.
+/// B05 (a), the other half of the rule: an expired request whose key is not recorded for its principal
+/// and action is refused `deadline_exceeded` before dispatch, as before -- an unseen key, another
+/// principal's recorded key, another action's recorded key, no key, a read, a request the catalogue
+/// would refuse and one malformed past its deadline -- and nothing is written. A key is bound per
+/// action (RC03 §6), so a live cancel under the submit's key then commits.
 #[test]
 fn an_expired_request_that_is_not_a_recorded_replay_is_refused_and_writes_nothing() -> Outcome {
     let scratch = Scratch::new()?;
@@ -1649,5 +1650,345 @@ fn an_expired_request_that_is_not_a_recorded_replay_is_refused_and_writes_nothin
         .map(|(action, reply)| (*action, reply))
         .collect();
     conforms(&rows)?;
+    Ok(())
+}
+
+/// B05 (a), review F3: a recorded key answers its disposition after the deadline as before it (RC03
+/// §6, "For an already-recorded key, return its stored disposition"; "Same selector with another
+/// digest returns `conflict` and does not mutate"). Other bytes under a recorded key are `conflict`
+/// at `/idempotency_key`, for both actions, and nothing is written.
+#[test]
+fn a_recorded_key_answers_other_bytes_with_conflict_after_its_deadline() -> Outcome {
+    let scratch = Scratch::new()?;
+    let tasks = ledger(&scratch)?;
+    let operator = Principal::new(1000, "operator").map_err(|error| format!("{error:?}"))?;
+    let task = submitted(&tasks, &operator)?;
+    let why = json!({"reason": "operator_request", "note": null});
+    let cancelled = serve(
+        &tasks,
+        &operator,
+        &cancel_frame(2, CANCEL_KEY, &task, "1", &why)?,
+    )?;
+    assert_eq!(cancelled["observed_generation"], json!("2"), "{cancelled}");
+    let mut replies = Vec::new();
+    for (action, frame) in [
+        (
+            "task.submit",
+            request("task.submit", 4, Some(KEY), &json!({"spec": spec()})),
+        ),
+        (
+            "task.cancel",
+            cancel_frame(6, CANCEL_KEY, &task, "2", &why)?,
+        ),
+    ] {
+        let refused = serve_at(&tasks, &operator, &frame, AN_HOUR_LATE)?;
+        assert_eq!(
+            (
+                &refused["code"],
+                &refused["effect"],
+                &refused["retry"],
+                &refused["details"]["field"]
+            ),
+            (
+                &json!("conflict"),
+                &json!("none"),
+                &json!("never"),
+                &json!("/idempotency_key")
+            ),
+            "{action}: {refused}"
+        );
+        replies.push((action, refused));
+    }
+    assert_eq!(
+        head_of(&tasks, &operator, &task)?,
+        cancelled["body"]["task"]
+    );
+    let rows: Vec<(&str, &Value)> = replies
+        .iter()
+        .map(|(action, reply)| (*action, reply))
+        .collect();
+    conforms(&rows)?;
+    Ok(())
+}
+
+/// A grant store that records every question it is asked, and answers one fixed caller.
+struct Asked {
+    answer: Option<Caller>,
+    asked: std::cell::RefCell<Vec<(String, String, String, u64)>>,
+}
+
+impl Grants for Asked {
+    fn resolve(
+        &self,
+        principal: &Principal,
+        grant_id: &str,
+        scope_sha256: &str,
+        now_unix_ms: u64,
+    ) -> Option<Caller> {
+        self.asked.borrow_mut().push((
+            format!("{principal:?}"),
+            grant_id.to_owned(),
+            scope_sha256.to_owned(),
+            now_unix_ms,
+        ));
+        self.answer.clone()
+    }
+}
+
+/// B05 (a), review F1: a record is read past its deadline only for a principal whose grant may read
+/// it. The same exact replay is refused `deadline_exceeded` when no grant resolves and when the grant
+/// lacks the action's effect, and answered from the record when the grant covers it -- through one
+/// recording double, which must have been asked with the transport's principal, the request's grant
+/// and scope, and the replay's receipt time.
+#[test]
+fn a_replay_past_its_deadline_needs_the_grant_that_may_read_it() -> Outcome {
+    let scratch = Scratch::new()?;
+    let tasks = ledger(&scratch)?;
+    let operator = Principal::new(1000, "operator").map_err(|error| format!("{error:?}"))?;
+    let submit = request("task.submit", 1, Some(KEY), &json!({"spec": spec()}));
+    let first = serve(&tasks, &operator, &submit)?;
+    assert_eq!(first["replayed"], json!(false), "{first}");
+    let seeing = Owner::ALL.into_iter().fold(Caller::new(), Caller::seeing);
+    let covered = Effect::ALL
+        .into_iter()
+        .fold(seeing.clone(), Caller::granted);
+    let uncovered = Effect::ALL
+        .into_iter()
+        .filter(|effect| *effect != Effect::DurableAdmission)
+        .fold(seeing, Caller::granted);
+    let scope = format!("sha256:{}", "4".repeat(64));
+    let mut replies = Vec::new();
+    for (case, answer, code) in [
+        ("no grant", None, "deadline_exceeded"),
+        (
+            "a grant without the effect",
+            Some(uncovered),
+            "deadline_exceeded",
+        ),
+        ("a covering grant", Some(covered), "replayed"),
+    ] {
+        let grants = Asked {
+            answer,
+            asked: std::cell::RefCell::new(Vec::new()),
+        };
+        let reply = serve_composed_at(&tasks, &grants, &operator, &submit, AN_HOUR_LATE)?;
+        let got = if reply["replayed"] == json!(true) {
+            "replayed"
+        } else {
+            reply["code"].as_str().unwrap_or("?")
+        };
+        assert_eq!(got, code, "{case}: {reply}");
+        assert_eq!(
+            *grants.asked.borrow(),
+            [(
+                format!("{operator:?}"),
+                KEY.to_owned(),
+                scope.clone(),
+                AN_HOUR_LATE
+            )],
+            "{case}"
+        );
+        replies.push(("task.submit", reply));
+    }
+    let rows: Vec<(&str, &Value)> = replies
+        .iter()
+        .map(|(action, reply)| (*action, reply))
+        .collect();
+    conforms(&rows)?;
+    Ok(())
+}
+
+/// B05 (a), review F4: `Recorded` names the actions whose owner records a result. It is checked
+/// against the world, the catalogue, rather than trusted: every action that changes state and is
+/// not `Recorded` must be refused live `unavailable / owner not composed` -- so nothing is ever
+/// recorded that a replay past its deadline would owe -- and every `Recorded` one must reach its
+/// composed owner. Composing a new owner without naming it here turns this red.
+#[test]
+fn every_mutating_action_that_records_nothing_has_no_owner_to_record_it() -> Outcome {
+    use habitat_engine::actions::{CATALOGUE, PreconditionRule};
+    let scratch = Scratch::new()?;
+    let tasks = ledger(&scratch)?;
+    let operator = Principal::new(1000, "operator").map_err(|error| format!("{error:?}"))?;
+    let (mut recording, mut unowned) = (Vec::new(), Vec::new());
+    for (index, action) in CATALOGUE
+        .iter()
+        .filter(|action| action.effect.mutates())
+        .enumerate()
+    {
+        let mut frame: Value = serde_json::from_slice(&request(
+            action.id,
+            0x40 + u8::try_from(index)?,
+            Some(KEY),
+            &json!({}),
+        ))?;
+        frame["action_version"] = json!(action.wire_version().ok_or("action version")?);
+        frame["precondition"] = match action.precondition {
+            PreconditionRule::Forbidden => Value::Null,
+            PreconditionRule::Optional(kind) | PreconditionRule::Required(kind) => json!({
+                "resource": kind.name(), "id": "28d00000-0000-4000-8000-0000000000cc",
+                "generation": "1"}),
+        };
+        let reply = serve(&tasks, &operator, &serde_json::to_vec(&frame)?)?;
+        let owner_absent = (&reply["code"], &reply["details"]["constraint"])
+            == (&json!("unavailable"), &json!("owner not composed"));
+        if Recorded::of(action.id).is_some() {
+            assert!(
+                !owner_absent,
+                "{} records but has no owner: {reply}",
+                action.id
+            );
+            recording.push(action.id);
+        } else {
+            assert!(
+                owner_absent,
+                "{} may record, but is not Recorded: {reply}",
+                action.id
+            );
+            unowned.push(action.id);
+        }
+    }
+    recording.sort_unstable();
+    assert_eq!(recording, ["task.cancel", "task.submit"]);
+    assert!(
+        unowned.len() >= 5,
+        "the world is the catalogue's mutating actions: {unowned:?}"
+    );
+    Ok(())
+}
+
+/// A task owner that records what each call was handed and answers nothing (review F5; F101: a
+/// double that discards its arguments pins no value).
+#[derive(Default)]
+struct Handed(std::cell::RefCell<Vec<String>>);
+
+impl Tasks for Handed {
+    fn submit(
+        &self,
+        request: &TaskRequest<'_>,
+        spec: &habitat_engine::task::control::Spec,
+    ) -> Result<
+        habitat_engine::contracts::control::Outcome,
+        habitat_engine::contracts::control::Fault,
+    > {
+        self.0.borrow_mut().push(format!(
+            "submit {} {}",
+            request.idempotency_key, spec.limit_ms
+        ));
+        Err(habitat_engine::contracts::control::Fault::expired())
+    }
+
+    fn get(
+        &self,
+        principal: &Principal,
+        selector: &Selector,
+        deadline_unix_ms: u64,
+        now_unix_ms: u64,
+    ) -> Result<
+        habitat_engine::contracts::control::Outcome,
+        habitat_engine::contracts::control::Fault,
+    > {
+        self.0.borrow_mut().push(format!(
+            "get {principal:?} {selector:?} {deadline_unix_ms} {now_unix_ms}"
+        ));
+        Err(habitat_engine::contracts::control::Fault::expired())
+    }
+
+    fn cancel(
+        &self,
+        request: &TaskRequest<'_>,
+        target: &habitat_engine::contracts::control::Precondition,
+        body: &habitat_engine::task::control::Cancel,
+    ) -> Result<
+        habitat_engine::contracts::control::Outcome,
+        habitat_engine::contracts::control::Fault,
+    > {
+        self.0.borrow_mut().push(format!(
+            "cancel {} {} {}",
+            request.idempotency_key, target.id, body.reason
+        ));
+        Err(habitat_engine::contracts::control::Fault::expired())
+    }
+
+    fn replay(
+        &self,
+        request: &TaskRequest<'_>,
+        of: Recorded,
+    ) -> Result<
+        Option<habitat_engine::contracts::control::Outcome>,
+        habitat_engine::contracts::control::Fault,
+    > {
+        self.0.borrow_mut().push(format!(
+            "replay {of:?} {:?} {} {} {} {}",
+            request.principal,
+            request.idempotency_key,
+            digest(Sha256::digest(request.payload)),
+            request.deadline_unix_ms,
+            request.now_unix_ms
+        ));
+        Ok(None)
+    }
+}
+
+/// B05 (a), review F5: the owner is handed exactly the expired request -- its principal, key and
+/// exact bytes -- with a read window of the wire's own maximum, 60 000 ms from receipt (RC03 §6
+/// "at most 60,000 ms ahead"); a read past its deadline is never handed to the owner at all; and the
+/// store's read of the record is bounded by the deadline it is given.
+#[test]
+fn the_owner_reads_an_expired_record_within_the_wires_own_window() -> Outcome {
+    let operator = Principal::new(1000, "operator").map_err(|error| format!("{error:?}"))?;
+    let submit = request("task.submit", 1, Some(KEY), &json!({"spec": spec()}));
+    let cancel = cancel_frame(
+        2,
+        CANCEL_KEY,
+        "28d00000-0000-4000-8000-0000000000cc",
+        "1",
+        &json!({"reason": "operator_request", "note": null}),
+    )?;
+    let read = request(
+        "task.get",
+        3,
+        None,
+        &json!({"selector": {"task_id": "28d00000-0000-4000-8000-0000000000cc"}, "evidence": "none"}),
+    );
+    let handed = Handed::default();
+    for frame in [&submit, &cancel, &read] {
+        let reply = serve_composed_at(&handed, &Open, &operator, frame, AN_HOUR_LATE)?;
+        assert_eq!(reply["code"], json!("deadline_exceeded"), "{reply}");
+    }
+    let window = AN_HOUR_LATE + 60_000;
+    assert_eq!(
+        *handed.0.borrow(),
+        [
+            format!(
+                "replay Submit {operator:?} {KEY} {} {window} {AN_HOUR_LATE}",
+                digest(Sha256::digest(&submit))
+            ),
+            format!(
+                "replay Cancel {operator:?} {CANCEL_KEY} {} {window} {AN_HOUR_LATE}",
+                digest(Sha256::digest(&cancel))
+            ),
+        ]
+    );
+    // The store's own read is bounded: a deadline already passed is refused before any read, and a
+    // live one reads an unseen key as nothing.
+    let scratch = Scratch::new()?;
+    let store = raw_store(&scratch)?;
+    let passed = Instant::now()
+        .checked_sub(Duration::from_millis(1))
+        .ok_or("clock")?;
+    let refused = store.replayed_submit(&operator, UuidV4::parse(KEY)?, &submit, passed);
+    assert!(
+        matches!(refused, Err(habitat_engine::store::Error::Deadline)),
+        "{refused:?}"
+    );
+    let unseen = store
+        .replayed_submit(
+            &operator,
+            UuidV4::parse(KEY)?,
+            &submit,
+            Instant::now() + Duration::from_secs(10),
+        )
+        .map_err(|error| format!("{error:?}"))?;
+    assert_eq!(unseen, None);
     Ok(())
 }

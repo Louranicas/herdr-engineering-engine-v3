@@ -24,9 +24,11 @@
 //!   the intent's obligation and what the cancel found of the worker; a lost commit reads back by
 //!   `task.get` on the precondition's task.
 //! * **A recorded request answers after its deadline (RC03 §6).** An expired envelope reaches this
-//!   owner only through [`Tasks::replay`], which reads the stored result of an exact replay (same
-//!   principal, key and bytes) and writes nothing; anything else is refused `deadline_exceeded` by
-//!   the catalogue. The first reply and every replay are rendered by one function per action.
+//!   owner only through [`Tasks::replay`], which reads the record under its key and writes
+//!   nothing: the stored result for the exact bytes, `conflict` for other bytes, and for an unseen
+//!   key nothing, which the catalogue refuses `deadline_exceeded`. After an uncertain commit it
+//!   answers `unavailable`, as every use of that connection does. The first reply and every replay
+//!   are rendered by one function per action.
 
 use crate::actions::control::{Recorded, TaskRequest, Tasks};
 use crate::app::evidence::fresh_id;

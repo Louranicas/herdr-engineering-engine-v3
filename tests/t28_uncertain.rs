@@ -121,6 +121,10 @@ fn readback(request_id: u8) -> Vec<u8> {
 }
 
 fn serve(tasks: &StoreTasks, payload: &[u8]) -> Result<Value, Box<dyn Error>> {
+    serve_at(tasks, payload, NOW)
+}
+
+fn serve_at(tasks: &StoreTasks, payload: &[u8], now_unix_ms: u64) -> Result<Value, Box<dyn Error>> {
     let operator = Principal::new(1000, "operator").map_err(|error| format!("{error:?}"))?;
     let composed = Composed {
         grants: &Open,
@@ -128,7 +132,7 @@ fn serve(tasks: &StoreTasks, payload: &[u8]) -> Result<Value, Box<dyn Error>> {
         tasks: Some(tasks),
         draining: None,
     };
-    match control::serve_composed(payload, NOW, &operator, composed) {
+    match control::serve_composed(payload, now_unix_ms, &operator, composed) {
         Reply::Frame(bytes) => Ok(serde_json::from_slice(&bytes)?),
         Reply::Close(fault) => Err(format!("closed: {}", fault.name()).into()),
     }
@@ -174,6 +178,19 @@ fn a_lost_commit_is_effect_unknown_and_its_readback_finds_the_admission() -> Out
                 "details": {"field": null, "constraint": null, "current_generation": null},
             })
         );
+        // B05 (a), review F2: nor can it answer the exact retry past its deadline from the record.
+        // The row it would read may be one that was never committed, so a `committed` replay here
+        // would be a claim the ledger cannot make; it is the same named condition.
+        let late = serve_at(&tasks, &submit, NOW + 3_600_000)?;
+        assert_eq!(
+            (&late["code"], &late["effect"], &late["message"]),
+            (
+                &json!("unavailable"),
+                &json!("none"),
+                &json!("the ledger's last commit is uncertain; it must be reopened")
+            ),
+            "{late}"
+        );
     }
     // Reopened, as an engine restart reopens it: the readback finds the admission the uncertain
     // commit made, and the caller's exact retry is that admission replayed, never a second one.
@@ -196,6 +213,17 @@ fn a_lost_commit_is_effect_unknown_and_its_readback_finds_the_admission() -> Out
         ),
         (&json!("committed"), &json!(true), &json!(task)),
         "{retried}"
+    );
+    // Reopened, the record answers the same retry past its deadline too.
+    let late = serve_at(&tasks, &submit, NOW + 3_600_000)?;
+    assert_eq!(
+        (
+            &late["effect"],
+            &late["replayed"],
+            &late["body"]["task"]["task_id"]
+        ),
+        (&json!("committed"), &json!(true), &json!(task)),
+        "{late}"
     );
     Ok(())
 }

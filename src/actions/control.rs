@@ -147,13 +147,14 @@ pub trait Tasks {
         body: &task_body::Cancel,
     ) -> Result<Outcome, Fault>;
 
-    /// RC03 §6 readback: the stored result, with `replayed: true`, when `request` is an exact replay
-    /// of a recorded `of` request -- the same principal, key and exact bytes -- or `None` when it is
-    /// not (an unseen key, or other bytes under it). Nothing is written.
+    /// RC03 §6 readback for an expired request: the stored result, with `replayed: true`, when
+    /// `request` is an exact replay of a recorded `of` request -- the same principal, key and exact
+    /// bytes -- or `None` when its key is unseen. Nothing is written.
     ///
     /// # Errors
     ///
-    /// `unavailable` when the ledger cannot be read.
+    /// `conflict` for other bytes under a recorded key (its recorded disposition, as inside the
+    /// deadline); `unavailable` when the ledger cannot be read or its last commit is uncertain.
     fn replay(&self, request: &TaskRequest<'_>, of: Recorded) -> Result<Option<Outcome>, Fault>;
 }
 
@@ -246,12 +247,13 @@ pub fn serve_composed(
     })
 }
 
-/// An envelope whose deadline passed before receipt (RC03 §6). Only an exact replay of a request the
-/// owner recorded is answered, from that record; everything else -- an unseen key, other bytes under
-/// a recorded key, an action that records nothing, a request the catalogue or the grant refuses --
-/// is refused [`Fault::expired`] before dispatch, exactly as the wire refused it before replay was
-/// possible. The grant is still resolved: a stored result is read only for the principal and grant
-/// that may read it. The record's read is bounded by the widest window the wire admits.
+/// An envelope whose deadline passed before receipt (RC03 §6: "For an already-recorded key, return
+/// its stored disposition even if the original deadline has since passed"). A recorded key answers
+/// from its record: the stored result for the exact bytes, `conflict` for other bytes. Everything
+/// else -- an unseen key, an action that records nothing, a request the catalogue or the grant
+/// refuses -- is refused [`Fault::expired`] before dispatch, as the wire refused it before. The
+/// grant is still resolved: a record is read only for the principal and grant that may read it.
+/// The record's read is bounded by the widest window the wire admits.
 fn replay_expired(
     envelope: &Envelope,
     payload: &[u8],

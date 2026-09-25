@@ -1042,11 +1042,14 @@ impl Store {
         })
     }
 
-    /// RC03 §6 readback of an exact `task.submit` replay: the admission stored under (principal,
-    /// `task.submit`, v1, key) when `request_bytes` are the bytes it recorded, else `None` -- other
-    /// bytes under the key are not a replay. Reads only, so it answers after the request's deadline.
+    /// RC03 §6 readback for an expired `task.submit`: the admission stored under (principal,
+    /// `task.submit`, v1, key) when `request_bytes` are the bytes it recorded; `None` when the key is
+    /// unseen. A recorded key answers its disposition, so other bytes under it are `Conflict`, as they
+    /// are inside the deadline. Reads only, so it answers after the request's deadline.
     /// # Errors
-    /// A ledger read failure or a stored result outside its own contract.
+    /// `Conflict`; `UncertainCommit` after a commit this connection could not confirm (a row it would
+    /// read may be one that was never committed); a ledger read failure or a stored result outside
+    /// its own contract.
     pub fn replayed_submit(
         &self,
         principal: &Principal,
@@ -1057,9 +1060,9 @@ impl Store {
         self.replayed("task.submit", principal, key, request_bytes, deadline)
     }
 
-    /// RC03 §6 readback of an exact `task.cancel` replay; [`Store::replayed_submit`]'s rule.
+    /// RC03 §6 readback for an expired `task.cancel`; [`Store::replayed_submit`]'s rule.
     /// # Errors
-    /// A ledger read failure or a stored result outside its own contract.
+    /// As [`Store::replayed_submit`].
     pub fn replayed_cancel(
         &self,
         principal: &Principal,
@@ -1078,12 +1081,16 @@ impl Store {
         request_bytes: &[u8],
         deadline: Instant,
     ) -> Result<Option<T>> {
+        if self.poisoned {
+            return Err(Error::UncertainCommit);
+        }
         schema::bound(&self.connection, deadline)?;
         let request_digest = digest(request_bytes);
-        recorded(&self.connection, principal, action, key)?
-            .filter(|(prior_digest, _)| *prior_digest == request_digest)
-            .map(|(_, result)| serde_json::from_slice(&result).map_err(Error::from))
-            .transpose()
+        match recorded(&self.connection, principal, action, key)? {
+            None => Ok(None),
+            Some((prior_digest, _)) if prior_digest != request_digest => Err(Error::Conflict),
+            Some((_, result)) => Ok(Some(serde_json::from_slice(&result)?)),
+        }
     }
 
     /// Recover admission using values known before a possibly lost first reply.
