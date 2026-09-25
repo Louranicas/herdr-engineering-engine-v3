@@ -73,28 +73,25 @@ fn file_hash(mut file: File, deadline: Instant) -> Result<(String, u64)> {
     Ok((digest_text(&hash.finalize()), length))
 }
 
+/// Row counts of every table the ledger holds (B09b; F65): the world is the ledger's own
+/// `sqlite_schema`, not a list of it. The list this replaced named 15 tables and silently omitted
+/// six the ledger carries (`verifications`, `task_stops`, `task_dispositions`, `attempt_bindings`,
+/// `migration_history`, `ledger_meta`); a table a migration adds is now counted the day it exists.
+/// The schema is bounded (`schema_rows` refuses 65 objects), so the enumeration is too.
 fn counts(connection: &Connection) -> Result<BTreeMap<String, u64>> {
+    let names: Vec<String> = connection
+        .prepare(
+            "SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite\\_%' ESCAPE '\\' \
+             ORDER BY name LIMIT 65",
+        )?
+        .query_map([], |row| row.get(0))?
+        .collect::<std::result::Result<_, _>>()?;
     let mut result = BTreeMap::new();
-    for name in [
-        "tasks",
-        "operations",
-        "attempts",
-        "events",
-        "artifacts",
-        "acceptances",
-        "acceptance_objects",
-        "outbox",
-        "roster_records",
-        "roster_revisions",
-        "roster_observations",
-        "roster_instances",
-        "roster_instance_history",
-        "roster_pins",
-        "roster_cancel_causes",
-    ] {
-        let query = format!("SELECT count(*) FROM {name}");
+    for name in names {
+        // `name` comes from the ledger's own schema, never from a caller; quoted all the same.
+        let query = format!("SELECT count(*) FROM \"{}\"", name.replace('"', "\"\""));
         result.insert(
-            name.to_owned(),
+            name,
             connection.query_row(&query, [], |row| read_number(row, 0))?,
         );
     }

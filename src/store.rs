@@ -1801,8 +1801,8 @@ impl Store {
                 if size!=object.size {return Err(Error::Corrupt);}
             }
             let sequence=event(tx,&data.event,&data.task,&generation,"accepted")?;
-            tx.execute("INSERT INTO acceptances VALUES(?,?,?,?,?,?)",params![data.event,data.task,data.attempt,data.attempt_generation,data.criteria,published.manifest.digest])?;
-            for object in &data.objects {tx.execute("INSERT INTO acceptance_objects VALUES(?,?)",params![data.event,object.digest])?;}
+            tx.execute("INSERT INTO acceptances(event_id,task_id,attempt_id,generation,criteria_digest,manifest_digest) VALUES(?,?,?,?,?,?)",params![data.event,data.task,data.attempt,data.attempt_generation,data.criteria,published.manifest.digest])?;
+            for object in &data.objects {tx.execute("INSERT INTO acceptance_objects(event_id,digest) VALUES(?,?)",params![data.event,object.digest])?;}
             tx.execute("UPDATE tasks SET generation=?,state='accepted',accepted_event=?,spent_ms=spent_ms+?,reserved_work_ms=0,reserved_verify_ms=0 WHERE id=?",params![generation,data.event,number(verification_ms)?,data.task])?;
             cut_point!(fault,CutPoint::AcceptanceWrite);
             let (uid,role):(u32,String)=tx.query_row("SELECT principal_uid,principal_role FROM tasks WHERE id=?",[&data.task],|row|Ok((row.get(0)?,row.get(1)?)))?;

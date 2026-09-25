@@ -27,7 +27,7 @@ pub(super) struct Preserved {
 /// THE ordered migration chain (A25; RC06/T04): the one door for migration identity. Version `k`
 /// is `MIGRATIONS[k - 1]`; a ledger records `k` rows linked by their predecessor columns and
 /// `user_version = k`. Only an appended entry may follow a released one.
-const MIGRATIONS: [Migration; 5] = [
+const MIGRATIONS: [Migration; 6] = [
     Migration {
         sql: include_str!("../../migrations/001.sql"),
         body: "sha256:ac5916feaee05749404dd7d87d98cde7e2ae93048e8b07e133ba7868fc1ee9f2",
@@ -73,10 +73,42 @@ const MIGRATIONS: [Migration; 5] = [
         body: "sha256:51b29ce4e4e48ea0d2e97dc517fb2bbe3ef87618d15625694f7e0b13f1e2693d",
         preserves: &[],
     },
+    // B09b + DS2 + B17: additive. Each extended table is compared over its pre-step columns.
+    Migration {
+        sql: include_str!("../../migrations/006.sql"),
+        body: "sha256:d2b470495342a6e7d05621e59c975e969ce4f13672ac6adf3c4d85cfb44660c0",
+        preserves: &[
+            Preserved {
+                table: "verifications",
+                order: "attempt_id",
+                columns: "attempt_id,event_id,subject_digest,evidence_digest,verdict,used_ms,cleanup_settled",
+            },
+            Preserved {
+                table: "acceptances",
+                order: "event_id",
+                columns: "event_id,task_id,attempt_id,generation,criteria_digest,manifest_digest",
+            },
+            Preserved {
+                table: "acceptance_objects",
+                order: "event_id,digest",
+                columns: "event_id,digest",
+            },
+            Preserved {
+                table: "task_stops",
+                order: "task_id",
+                columns: "task_id,event_id,evidence_digest,reason,state",
+            },
+            Preserved {
+                table: "attempts",
+                order: "id",
+                columns: "id,task_id,generation,state,effect,cleanup,used_ms",
+            },
+        ],
+    },
 ];
 
 /// The version a current ledger records: the chain's length.
-pub(super) const CURRENT: u32 = 5;
+pub(super) const CURRENT: u32 = 6;
 const _: () = assert!(MIGRATIONS.len() == CURRENT as usize);
 
 /// Which clause of the migration chain a ledger (or this binary) fails, at which version (A25).
@@ -552,6 +584,14 @@ pub(super) fn validate(
     // The table exists from migration 5 on: an older ledger is validated as its version recorded it.
     let bindings_invalid:bool=recorded>=5 && connection.query_row("SELECT EXISTS(SELECT 1 FROM attempt_bindings b JOIN attempts a ON a.id=b.attempt_id WHERE b.task_id!=a.task_id) OR EXISTS(SELECT 1 FROM attempts a WHERE EXISTS(SELECT 1 FROM attempt_bindings b WHERE b.task_id=a.task_id) AND NOT EXISTS(SELECT 1 FROM attempt_bindings b WHERE b.attempt_id=a.id))",[],|row|row.get(0))?;
     if bindings_invalid {
+        return Err(Error::Corrupt);
+    }
+    // B09b/DS2 (migration 6): a run record belongs to an observation of its own attempt's task; one
+    // observation's records name one attempt; `settled_event` is set only on a settled attempt and
+    // names an observation of its task; and no artifact id names two digests across the identity
+    // columns (no UNIQUE: a verified acceptance legitimately repeats its evidence as an object).
+    let records_invalid:bool=recorded>=6 && connection.query_row("SELECT EXISTS(SELECT 1 FROM attempt_records r JOIN attempts a ON a.id=r.attempt_id JOIN events e ON e.id=r.event_id WHERE e.task_id IS NOT a.task_id OR e.kind!='attempt_observed') OR EXISTS(SELECT 1 FROM attempt_records GROUP BY event_id HAVING count(DISTINCT attempt_id)>1) OR EXISTS(SELECT 1 FROM attempts a JOIN events e ON e.id=a.settled_event WHERE a.state!='settled' OR e.task_id IS NOT a.task_id OR e.kind!='attempt_observed') OR EXISTS(SELECT 1 FROM (SELECT artifact_id i, digest d FROM attempt_records UNION ALL SELECT evidence_artifact_id, evidence_digest FROM verifications WHERE evidence_artifact_id IS NOT NULL UNION ALL SELECT evidence_artifact_id, evidence_digest FROM task_stops WHERE evidence_artifact_id IS NOT NULL UNION ALL SELECT artifact_id, digest FROM acceptance_objects WHERE artifact_id IS NOT NULL UNION ALL SELECT manifest_artifact_id, manifest_digest FROM acceptances WHERE manifest_artifact_id IS NOT NULL) GROUP BY i HAVING count(DISTINCT d)>1)",[],|row|row.get(0))?;
+    if records_invalid {
         return Err(Error::Corrupt);
     }
     Ok(recorded)

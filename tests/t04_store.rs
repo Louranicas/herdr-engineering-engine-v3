@@ -44,6 +44,8 @@ const MIGRATION_4_BODY: &str =
 /// block), which reproduces 3's and 4's pinned values.
 const MIGRATION_5_BODY: &str =
     "sha256:51b29ce4e4e48ea0d2e97dc517fb2bbe3ef87618d15625694f7e0b13f1e2693d";
+const MIGRATION_6_BODY: &str =
+    "sha256:d2b470495342a6e7d05621e59c975e969ce4f13672ac6adf3c4d85cfb44660c0";
 static NEXT_ROOT: AtomicU64 = AtomicU64::new(0);
 
 struct Area {
@@ -336,6 +338,12 @@ fn fresh_ledger_has_exact_runtime_profile_and_migration() {
                 4,
                 Some(MIGRATION_4_BODY.to_owned())
             ),
+            (
+                6,
+                MIGRATION_6_BODY.to_owned(),
+                5,
+                Some(MIGRATION_5_BODY.to_owned())
+            ),
         ],
         "each row names its body and links its predecessor"
     );
@@ -556,19 +564,19 @@ fn unrelated_version_zero_database_is_preserved_and_refused() {
 fn future_schema_refuses_without_downgrade() {
     let area = Area::new();
     drop(area.open());
-    area.edit_closed("PRAGMA user_version=6;");
+    area.edit_closed("PRAGMA user_version=7;");
     assert!(matches!(
         Store::open(&area.path, uuid(GEN), uuid(EPOCH), false, deadline()),
         Err(Error::Chain(Chain::Newer {
-            recorded: 6,
-            current: 5
+            recorded: 7,
+            current: 6
         }))
     ));
     assert_eq!(
         area.inspect()
             .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
             .unwrap(),
-        6
+        7
     );
 }
 
@@ -1097,7 +1105,7 @@ fn unexpected_trigger_refuses_exact_schema_compatibility() {
     area.edit_closed("CREATE TRIGGER surprise AFTER INSERT ON events BEGIN SELECT 1; END;");
     assert!(matches!(
         Store::open(&area.path, uuid(GEN), uuid(EPOCH), false, deadline()),
-        Err(Error::Chain(Chain::Schema { version: 5 }))
+        Err(Error::Chain(Chain::Schema { version: 6 }))
     ));
 }
 
@@ -2552,17 +2560,38 @@ fn v1_ddl(head: &str) -> &'static str {
     &sql[start..end]
 }
 
+/// Migration 1's exact text of the one statement that starts `head`, through its `;`.
+fn v1_statement(head: &str) -> &'static str {
+    let sql = include_str!("../migrations/001.sql");
+    let start = sql.find(head).unwrap();
+    &sql[start..=start + sql[start..].find(';').unwrap()]
+}
+
 /// Turn a current ledger into a genuine migration-1 ledger that keeps every `operations` and
-/// `task_stops` row: migrations 3 and 2 reversed by hand, which no production path does (A25 is
-/// forward only).
+/// `task_stops` row: migrations 6 to 2 reversed by hand, which no production path does (A25 is
+/// forward only). SQLite cannot drop a foreign-key column, so `attempts` (6's `settled_event`) is
+/// rebuilt from migration 1's DDL, with foreign keys off as they are on this connection.
 fn downgrade_to_v1(area: &Area) {
     area.edit_closed(&format!(
-        "BEGIN; DROP TABLE attempt_bindings; ALTER TABLE tasks DROP COLUMN workspace_id; DROP TABLE task_dispositions; \
+        "BEGIN; DROP TABLE attempt_records; DROP INDEX task_dispositions_by_task; \
+         ALTER TABLE verifications DROP COLUMN satisfied_criteria; \
+         ALTER TABLE verifications DROP COLUMN evidence_schema_id; \
+         ALTER TABLE verifications DROP COLUMN evidence_media_type; \
+         ALTER TABLE verifications DROP COLUMN evidence_artifact_id; \
+         ALTER TABLE acceptance_objects DROP COLUMN schema_id; \
+         ALTER TABLE acceptance_objects DROP COLUMN media_type; \
+         ALTER TABLE acceptance_objects DROP COLUMN artifact_id; \
+         ALTER TABLE acceptances DROP COLUMN manifest_artifact_id; \
+         CREATE TEMP TABLE held AS SELECT id,task_id,generation,state,effect,cleanup,used_ms FROM attempts; \
+         DROP TABLE attempts; {} {} INSERT INTO attempts SELECT * FROM held; DROP TABLE held; \
+         DROP TABLE attempt_bindings; ALTER TABLE tasks DROP COLUMN workspace_id; DROP TABLE task_dispositions; \
          CREATE TEMP TABLE stops AS SELECT * FROM task_stops; DROP TABLE task_stops; {} \
-         INSERT INTO task_stops SELECT * FROM stops; DROP TABLE stops; \
+         INSERT INTO task_stops SELECT task_id,event_id,evidence_digest,reason,state FROM stops; DROP TABLE stops; \
          CREATE TEMP TABLE kept AS SELECT * FROM operations; DROP TABLE operations; {} \
          INSERT INTO operations SELECT * FROM kept; DROP TABLE kept; \
          DELETE FROM migration_history WHERE version>=2; PRAGMA user_version=1; COMMIT;",
+        v1_ddl("CREATE TABLE attempts ("),
+        v1_statement("CREATE UNIQUE INDEX one_unsettled_attempt "),
         v1_ddl("CREATE TABLE task_stops ("),
         operations_v1_ddl()
     ));
@@ -2589,7 +2618,11 @@ fn operations_rows(area: &Area) -> Vec<Vec<rusqlite::types::Value>> {
 fn stops_rows(area: &Area) -> Vec<Vec<rusqlite::types::Value>> {
     let db = area.inspect();
     let mut statement = db
-        .prepare("SELECT * FROM task_stops ORDER BY task_id")
+        // Migration 1's columns: migration 6 adds identity columns every older row reads NULL in
+        // (asserted separately), so the rows are compared over what migration 1 wrote.
+        .prepare(
+            "SELECT task_id,event_id,evidence_digest,reason,state FROM task_stops ORDER BY task_id",
+        )
         .unwrap();
     let width = statement.column_count();
     statement
@@ -2654,7 +2687,7 @@ fn a_migration_one_ledger_upgrades_behind_a_verified_backup_and_reopens() {
         Store::open(&area.path, uuid(GEN), uuid(EPOCH), false, deadline()),
         Err(Error::UpgradeRequired {
             recorded: 1,
-            current: 5
+            current: 6
         })
     ));
     assert_eq!(
@@ -2690,6 +2723,17 @@ fn a_migration_one_ledger_upgrades_behind_a_verified_backup_and_reopens() {
         "every stop row survives the rebuild"
     );
     assert_eq!(user_version(&area.inspect()), i64::from(schema::CURRENT));
+    // Migration 6 adds evidence identity and `settled_event`: every row written before it names none.
+    let unidentified: (i64, i64, i64) = area
+        .inspect()
+        .query_row(
+            "SELECT count(*), count(evidence_artifact_id), (SELECT count(settled_event) FROM attempts) \
+             FROM task_stops",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(unidentified, (1, 0, 0));
     // Migration 4 adds `workspace_id`: every task admitted before it names no bound workspace.
     let unbound: (i64, i64) = area
         .inspect()
@@ -2777,24 +2821,24 @@ fn each_migration_chain_clause_refuses_by_its_own_name() {
     let cases: [(&str, String, Chain); 10] = [
         (
             "newer than this binary",
-            "PRAGMA user_version=6;".into(),
+            "PRAGMA user_version=7;".into(),
             Chain::Newer {
-                recorded: 6,
-                current: 5,
+                recorded: 7,
+                current: 6,
             },
         ),
         (
             "missing history row",
             "DELETE FROM migration_history WHERE version=2;".into(),
             Chain::History {
-                recorded: 5,
-                rows: 4,
+                recorded: 6,
+                rows: 5,
             },
         ),
         (
             "a gap in the versions",
-            "UPDATE migration_history SET version=6 WHERE version=5;".into(),
-            Chain::Sequence { position: 5 },
+            "UPDATE migration_history SET version=7 WHERE version=6;".into(),
+            Chain::Sequence { position: 6 },
         ),
         (
             "wrong 002 digest",
@@ -2837,7 +2881,7 @@ fn each_migration_chain_clause_refuses_by_its_own_name() {
         (
             "schema differs from applying the chain",
             "CREATE INDEX surplus ON tasks(state);".into(),
-            Chain::Schema { version: 5 },
+            Chain::Schema { version: 6 },
         ),
     ];
     for (case, edit, expected) in cases {
@@ -2986,7 +3030,250 @@ fn a_migration_file_that_lost_its_pinned_body_is_refused() {
     files.sort();
     assert_eq!(
         files,
-        ["001.sql", "002.sql", "003.sql", "004.sql", "005.sql"]
+        [
+            "001.sql", "002.sql", "003.sql", "004.sql", "005.sql", "006.sql"
+        ]
     );
     assert_eq!(files.len(), usize::try_from(schema::CURRENT).unwrap());
+}
+
+// ------------------------------------------------ migration 6 (B09b + DS2 + B17)
+
+const RECORD_A: &str = "28f00000-0000-4000-8000-0000000000a1";
+const RECORD_B: &str = "28f00000-0000-4000-8000-0000000000b2";
+const DIGEST_B: &str = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+const DIGEST_C: &str = "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+
+/// The rows a DS2 plant needs on a verifying ledger: two registered objects to cite.
+fn with_objects(area: &Area) {
+    area.edit_closed(&format!(
+        "INSERT INTO artifacts(digest,size) VALUES('{DIGEST_B}',5),('{DIGEST_C}',7);"
+    ));
+}
+
+/// B09b/DS2 pin: migration 6's validate clause, one plant per rule on a real ledger, each beside
+/// a benign mirror that differs only in what the rule reads. A record of the settling observation,
+/// under a settled attempt, opens; each broken binding is refused `Corrupt` at open.
+#[test]
+fn each_run_record_rule_refuses_its_own_plant_and_admits_its_mirror() {
+    let benign = format!(
+        "INSERT INTO attempt_records(event_id,kind,attempt_id,digest,artifact_id) \
+         VALUES('{SETTLED}','run_clock','{ATTEMPT}','{DIGEST_B}','{RECORD_A}'); \
+         UPDATE attempts SET settled_event='{SETTLED}' WHERE id='{ATTEMPT}';"
+    );
+    let cases: [(&str, String, bool); 8] = [
+        ("the settling observation's record", benign.clone(), true),
+        (
+            "a record keyed by a non-observation event",
+            format!(
+                "INSERT INTO attempt_records(event_id,kind,attempt_id,digest,artifact_id) \
+                 VALUES('{STARTED}','run_clock','{ATTEMPT}','{DIGEST_B}','{RECORD_A}');"
+            ),
+            false,
+        ),
+        (
+            "one observation's records name two attempts",
+            format!(
+                "{benign} INSERT INTO attempts(id,task_id,generation,state,effect,cleanup,used_ms) \
+                 VALUES('{OTHER}','{TASK}','2','settled','none','settled',0); \
+                 INSERT INTO attempt_records(event_id,kind,attempt_id,digest,artifact_id) \
+                 VALUES('{SETTLED}','run_outcome','{OTHER}','{DIGEST_C}','{RECORD_B}');"
+            ),
+            false,
+        ),
+        (
+            "a second settled attempt with no records",
+            format!(
+                "{benign} INSERT INTO attempts(id,task_id,generation,state,effect,cleanup,used_ms) \
+                 VALUES('{OTHER}','{TASK}','2','settled','none','settled',0);"
+            ),
+            true,
+        ),
+        (
+            "settled_event names a non-observation event",
+            format!("UPDATE attempts SET settled_event='{STARTED}' WHERE id='{ATTEMPT}';"),
+            false,
+        ),
+        (
+            "settled_event on an attempt that is not settled",
+            format!(
+                "UPDATE attempts SET settled_event='{SETTLED}', state='running' WHERE id='{ATTEMPT}';"
+            ),
+            false,
+        ),
+        (
+            "one artifact id names two digests",
+            format!(
+                "{benign} INSERT INTO attempt_records(event_id,kind,attempt_id,digest,artifact_id) \
+                 VALUES('{SETTLED}','run_outcome','{ATTEMPT}','{DIGEST_C}','{RECORD_A}');"
+            ),
+            false,
+        ),
+        (
+            "two kinds under two artifact ids",
+            format!(
+                "{benign} INSERT INTO attempt_records(event_id,kind,attempt_id,digest,artifact_id) \
+                 VALUES('{SETTLED}','run_outcome','{ATTEMPT}','{DIGEST_C}','{RECORD_B}');"
+            ),
+            true,
+        ),
+    ];
+    for (case, plant, opens) in cases {
+        let area = Area::new();
+        let mut store = area.open();
+        verifying(&mut store);
+        drop(store);
+        with_objects(&area);
+        area.edit_closed(&plant);
+        let result = Store::open(&area.path, uuid(GEN), uuid(EPOCH), false, deadline());
+        if opens {
+            assert!(result.is_ok(), "{case}: {:?}", result.err());
+        } else {
+            assert!(
+                matches!(result, Err(Error::Corrupt)),
+                "{case}: {:?}",
+                result.err()
+            );
+        }
+    }
+}
+
+/// B09b/DS2 pin: an artifact id is one digest across the identity columns, not only within
+/// `attempt_records`: an acceptance object and a run record naming one id for two digests is
+/// refused; the same id for the same digest is admitted (a verified acceptance repeats evidence).
+#[test]
+fn an_artifact_id_is_one_digest_across_the_identity_tables() {
+    for (case, digest, opens) in [
+        ("two digests", DIGEST_B, false),
+        ("one digest", HELLO, true),
+    ] {
+        let area = Area::new();
+        let mut store = area.open();
+        accepted(&mut store);
+        drop(store);
+        with_objects(&area);
+        area.edit_closed(&format!(
+            "UPDATE acceptance_objects SET artifact_id='{RECORD_A}', media_type='text/plain', \
+             schema_id='hee3.fixture/1'; \
+             INSERT INTO attempt_records(event_id,kind,attempt_id,digest,artifact_id) \
+             VALUES('{SETTLED}','capture','{ATTEMPT}','{digest}','{RECORD_A}');"
+        ));
+        let result = Store::open(&area.path, uuid(GEN), uuid(EPOCH), false, deadline());
+        assert_eq!(result.is_ok(), opens, "{case}: {:?}", result.err());
+        if !opens {
+            assert!(matches!(result, Err(Error::Corrupt)), "{case}");
+        }
+    }
+}
+
+/// B09b/B17 pin: migration 6's CHECKs refuse what cannot be an identity or a criteria pattern.
+/// Each statement is run against a real ledger and must fail on the CHECK, naming it; the mirror
+/// beside it succeeds.
+#[test]
+fn migration_six_checks_refuse_partial_identity_and_non_hex_criteria() {
+    let area = Area::new();
+    let mut store = area.open();
+    accepted(&mut store);
+    drop(store);
+    with_objects(&area);
+    let db = Connection::open_with_flags(
+        area.database(),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_NOFOLLOW,
+    )
+    .unwrap();
+    for (sql, admitted) in [
+        (
+            format!("UPDATE acceptance_objects SET artifact_id='{RECORD_A}'"),
+            false,
+        ),
+        (
+            format!(
+                "UPDATE acceptance_objects SET artifact_id='{RECORD_A}', media_type='', \
+                 schema_id='hee3.fixture/1'"
+            ),
+            false,
+        ),
+        (
+            format!(
+                "UPDATE acceptance_objects SET artifact_id='{RECORD_A}', media_type='text/plain', \
+                 schema_id='hee3.fixture/1'"
+            ),
+            true,
+        ),
+        (
+            "UPDATE acceptances SET manifest_artifact_id='short'".to_owned(),
+            false,
+        ),
+        (
+            format!("UPDATE acceptances SET manifest_artifact_id='{RECORD_B}'"),
+            true,
+        ),
+        (
+            format!(
+                "INSERT INTO attempt_records(event_id,kind,attempt_id,digest,artifact_id) \
+                 VALUES('{SETTLED}','clock','{ATTEMPT}','{DIGEST_B}','{RECORD_B}')"
+            ),
+            false,
+        ),
+    ] {
+        let result = db.execute(&sql, []);
+        if admitted {
+            assert!(result.is_ok(), "{sql}: {result:?}");
+        } else {
+            let message = result.map(|_| ()).unwrap_err().to_string();
+            assert!(
+                message.contains("CHECK constraint failed"),
+                "{sql}: {message}"
+            );
+        }
+    }
+    for (pattern, admitted) in [
+        ("0123456789abcdef", true),
+        ("ffffffffffffffff", true),
+        ("0123456789ABCDEF", false),
+        ("0123456789abcde", false),
+        ("0123456789abcdeg", false),
+    ] {
+        let result = db.execute_batch(&format!(
+            "SAVEPOINT s; INSERT INTO verifications(attempt_id,event_id,subject_digest,evidence_digest,\
+             verdict,used_ms,cleanup_settled,satisfied_criteria) VALUES('{ATTEMPT}','{STAGE}','{CRITERIA}',\
+             '{DIGEST_B}','passed',1,1,'{pattern}'); ROLLBACK TO s; RELEASE s;"
+        ));
+        let checked = result
+            .as_ref()
+            .err()
+            .is_some_and(|error| error.to_string().contains("CHECK constraint failed"));
+        assert_eq!(!checked, admitted, "{pattern}: {result:?}");
+    }
+}
+
+/// B09b pin (F65): a backup counts every table the ledger holds — the world is the ledger's own
+/// schema. The list this replaced omitted six tables, and would have omitted `attempt_records`.
+#[test]
+fn a_backup_counts_every_table_the_ledger_holds() {
+    let area = Area::new();
+    let destination = Area::new();
+    let mut store = area.open();
+    accepted(&mut store);
+    let report = store.backup(&destination.path, deadline()).unwrap();
+    drop(store);
+    let tables: Vec<String> = area
+        .inspect()
+        .prepare("SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite%' ORDER BY name")
+        .unwrap()
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .collect::<std::result::Result<_, _>>()
+        .unwrap();
+    assert_eq!(report.counts.keys().cloned().collect::<Vec<_>>(), tables);
+    for (table, rows) in [
+        ("attempt_records", 0),
+        ("verifications", 0),
+        ("ledger_meta", 1),
+        ("migration_history", 6),
+        ("acceptance_objects", 1),
+        ("task_dispositions", 0),
+    ] {
+        assert_eq!(report.counts.get(table), Some(&rows), "{table}");
+    }
 }

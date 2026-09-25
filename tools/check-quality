@@ -139,12 +139,12 @@ UNTRACKED_BY_DESIGN = (
 T03_IMPLEMENTATION_PATHS = ("src/worker/mod.rs", "src/worker/inference.rs")
 T04_IMPLEMENTATION_PATHS = ("src/store.rs", "src/store/artifact.rs", "src/store/backup.rs",
                             "src/store/schema.rs", "migrations/001.sql", "migrations/002.sql",
-                            "migrations/003.sql", "migrations/004.sql", "migrations/005.sql",
+                            "migrations/003.sql", "migrations/004.sql", "migrations/005.sql", "migrations/006.sql",
                             "tests/t04_store.rs")
 # Reviewed independent T04 unit suite: 95 cases (68 + store-lane A01-A03 and A24, 2026-09-24; B02's
-# unwritable-ledger read-back, 2026-09-25; B03's four task_view cases, 2026-09-25; B03b's closure-predicate case; A25's six migration-chain cases; B14-P2c's workspace CHECK and added-column preservation cases; B14a-1a's cancellation-first begin). Source discovery or emitted
+# unwritable-ledger read-back, 2026-09-25; B03's four task_view cases, 2026-09-25; B03b's closure-predicate case; A25's six migration-chain cases; B14-P2c's workspace CHECK and added-column preservation cases; B14a-1a's cancellation-first begin; B09b's four migration-6 cases: run-record rules, cross-table identity, CHECKs, backup table world). Source discovery or emitted
 # counts cannot lower this gate; None remains an explicit pending-state refusal.
-T04_TEST_COUNT = 95
+T04_TEST_COUNT = 99
 # The fixed pre-T04 batteries (T01-T03), by target name: one home, read by both census branches of
 # rust_test_expectations and by tests/t25_quality.py, which looks targets up here rather than
 # re-typing a number (S1). t02_transport is harness = false and prints no summary of its own.

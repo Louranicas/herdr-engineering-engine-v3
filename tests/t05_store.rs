@@ -333,6 +333,25 @@ fn tables(db: &rusqlite::Connection) -> Vec<String> {
         .collect::<rusqlite::Result<Vec<String>>>()
         .unwrap()
 }
+/// The table's primary-key columns in key order, as `PRAGMA table_info` declares them (`pk` is the
+/// 1-based position within the key, 0 for a non-key column); `rowid` when it declares none.
+fn primary_key(db: &rusqlite::Connection, table: &str) -> String {
+    let mut query = db
+        .prepare(&format!(
+            "SELECT name FROM pragma_table_info('{table}') WHERE pk>0 ORDER BY pk"
+        ))
+        .unwrap();
+    let columns: Vec<String> = query
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    if columns.is_empty() {
+        "rowid".to_owned()
+    } else {
+        columns.join(",")
+    }
+}
 fn ledger(area: &Area) -> LedgerState {
     let db = area.inspect();
     let names = tables(&db);
@@ -340,8 +359,13 @@ fn ledger(area: &Area) -> LedgerState {
     names
         .iter()
         .map(|table| {
+            // Ordered by the table's own primary key: a `WITHOUT ROWID` table (migration 6's
+            // `attempt_records`) has no rowid to order by.
             let mut query = db
-                .prepare(&format!("SELECT * FROM {table} ORDER BY rowid"))
+                .prepare(&format!(
+                    "SELECT * FROM {table} ORDER BY {}",
+                    primary_key(&db, table)
+                ))
                 .unwrap();
             let columns = query.column_count();
             query
