@@ -1008,7 +1008,7 @@ impl Cohort {
     /// Whether every live claim is disjoint from every other.
     ///
     /// **This cannot currently return `false`, and saying otherwise was a claim about a
-    /// capability that does not exist.** [`Cohort::new`] is the only constructor, [`Thread`]
+    /// capability that does not exist.** [`Cohort::new`] is the only constructor, `Thread`
     /// is private, and the sole `threads.push` is inside [`Cohort::assign`], which refuses an
     /// overlapping claim. So every reachable cohort satisfies the predicate by construction.
     ///

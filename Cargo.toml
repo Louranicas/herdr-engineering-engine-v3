@@ -2421,6 +2421,18 @@ unsafe_code = "forbid"
 [lints.clippy]
 pedantic = { level = "deny", priority = -1 }
 
+# Rustdoc's lints are not rustc's: `warnings = "deny"` above does not reach `cargo doc`, which is how
+# nine broken or private intra-doc links accumulated unseen (measured 2026-09-26; fixed at each call
+# site). Every rustdoc lint that warns by default is forbidden here, in the artifact.
+[lints.rustdoc]
+broken_intra_doc_links = "forbid"
+private_intra_doc_links = "forbid"
+invalid_codeblock_attributes = "forbid"
+invalid_html_tags = "forbid"
+invalid_rust_codeblocks = "forbid"
+bare_urls = "forbid"
+redundant_explicit_links = "forbid"
+
 [lib]
 name = "habitat_engine"
 path = "src/lib.rs"

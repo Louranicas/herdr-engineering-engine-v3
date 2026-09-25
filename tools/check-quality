@@ -84,6 +84,19 @@ def python_subjects(root, names):
     return sorted(found)
 
 
+def rustdoc_unforbidden(help_text, manifest):
+    """The rustdoc lints the pinned rustdoc warns on by default (`rustdoc -W help`, the world) that the
+    manifest's [lints.rustdoc] does not forbid. Rustdoc's lints are not rustc's -- `warnings = "deny"`
+    does not reach `cargo doc` -- so the set is read from the toolchain, never typed here, and a lint a
+    future toolchain adds is named rather than silently left at warn."""
+    world = sorted({match.group(1).replace("-", "_") for match in
+                    re.finditer(r"^\s*rustdoc::([a-z-]+)\s+warn\s", help_text, re.MULTILINE)})
+    if not world:
+        raise ValueError("rustdoc -W help listed no default-warn rustdoc lint; the world is unreadable")
+    declared = manifest.get("lints", {}).get("rustdoc", {})
+    return [name for name in world if declared.get(name) != "forbid"]
+
+
 def shell_subjects(root, names):
     """Every subject that is shell: a `.sh` file, or a file whose first line is a bash or sh shebang.
     Derived from the gate's own subject set, like `python_subjects`."""
@@ -1287,7 +1300,7 @@ def main():
             return texts
 
         run("process-controls", [sys.executable, "-W", "error", "tests/t25_process.py"], required_text="17 tests")
-        run("quality-integration-controls", [sys.executable, "-W", "error", "tests/t25_quality.py"], required_text="Ran 110 tests" if has_t09(ROOT) else "Ran 93 tests" if has_t08_contract(ROOT) or has_recovery(ROOT) else ("Ran 83 tests" if has_t08(ROOT) else ("Ran 73 tests" if has_t07(ROOT) else ("Ran 66 tests" if has_t21(ROOT) or has_t13(ROOT) else ("Ran 47 tests" if has_t06(ROOT) else "Ran 43 tests")))), required_stream="stderr")
+        run("quality-integration-controls", [sys.executable, "-W", "error", "tests/t25_quality.py"], required_text="Ran 114 tests" if has_t09(ROOT) else "Ran 93 tests" if has_t08_contract(ROOT) or has_recovery(ROOT) else ("Ran 83 tests" if has_t08(ROOT) else ("Ran 73 tests" if has_t07(ROOT) else ("Ran 66 tests" if has_t21(ROOT) or has_t13(ROOT) else ("Ran 47 tests" if has_t06(ROOT) else "Ran 43 tests")))), required_stream="stderr")
         run("workflow-procedure-controls", [sys.executable, "-W", "error", "tests/procedure_schema.py"],
             required_text="run=103 failures=0 errors=0")
         run("workflow-site-sweep", [sys.executable, "tools/check-workflow-sites"],
@@ -1402,6 +1415,15 @@ def main():
                     doc_raw, {"test_counts": [test_expectations["doctest_count"]], "has_t02": False},
                     label + "-doctests",
                 )
+        # G05 `cargo doc` step: rustdoc under the manifest's forbidden [lints.rustdoc], once per feature set
+        # (profile does not change documentation). The world is the pinned rustdoc's own list.
+        lint_help = run("rustdoc-lint-world", [str(binaries["rustdoc"]), "-W", "help"],
+                        required_text="rustdoc::broken-intra-doc-links")["stdout"]
+        unforbidden = rustdoc_unforbidden(lint_help, tomllib.loads((work / "Cargo.toml").read_text()))
+        if unforbidden:
+            raise ValueError("Cargo.toml [lints.rustdoc] does not forbid: " + ", ".join(unforbidden))
+        for features, flags in (("default", []), ("no-default", ["--no-default-features"])):
+            run(features + "-rustdoc", [cargo, "doc", "--workspace", "--locked", "--offline", "--no-deps", *flags])
         # Otherwise valid code triggers one known pedantic rule. It is checked
         # separately so a compiler/format failure cannot steal lint credit.
         fixture = work / "lint-control.rs"

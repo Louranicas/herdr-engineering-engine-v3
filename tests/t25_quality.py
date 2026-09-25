@@ -4,6 +4,7 @@
 from importlib.machinery import SourceFileLoader
 from importlib.util import module_from_spec, spec_from_loader
 from pathlib import Path
+import tomllib
 import json
 import gzip
 import os
@@ -789,6 +790,45 @@ Precompiling packages...
         self.assertEqual(quality.python_lint_argv(Path("/r"), ["a.py", "b"]),
                          ["/r", "check", "--isolated", "--no-cache", "--select", "F,B",
                           "--output-format", "concise", "--", "a.py", "b"])
+
+    # Captured verbatim from the pinned rustdoc 1.98.0 `rustdoc -W help` (2026-09-26): the world the
+    # manifest check reads, produced by the toolchain rather than typed from this module's reading.
+    RUSTDOC_HELP = (
+        "                          rustdoc::missing-crate-level-docs  allow    detects crates with no crate-level documentation\n"
+        "                                 rustdoc::private-doc-tests  allow    detects code samples in docs of private items not documented by rustdoc\n"
+        "                                         rustdoc::bare-urls  warn     detects URLs that are not hyperlinks\n"
+        "                            rustdoc::broken-intra-doc-links  warn     failures in resolving intra-doc link targets\n"
+        "                      rustdoc::invalid-codeblock-attributes  warn     codeblock attribute looks a lot like a known one\n"
+        "                                 rustdoc::invalid-html-tags  warn     detects invalid HTML tags in doc comments\n"
+        "                           rustdoc::invalid-rust-codeblocks  warn     codeblock could not be parsed as valid Rust or is empty\n"
+        "                           rustdoc::private-intra-doc-links  warn     linking from a public item to a private one\n"
+        "                          rustdoc::redundant-explicit-links  warn     detects redundant explicit links in doc comments\n"
+        "                                  rustdoc::all  rustdoc::broken-intra-doc-links, rustdoc::private-intra-doc-links\n")
+
+    def test_rustdoc_world_is_the_toolchains_default_warn_lints(self):
+        world = ["bare_urls", "broken_intra_doc_links", "invalid_codeblock_attributes", "invalid_html_tags",
+                 "invalid_rust_codeblocks", "private_intra_doc_links", "redundant_explicit_links"]
+        self.assertEqual(quality.rustdoc_unforbidden(self.RUSTDOC_HELP, {}), world)
+        # allow-by-default lints and the `all` group are not in the world.
+        self.assertNotIn("missing_crate_level_docs", quality.rustdoc_unforbidden(self.RUSTDOC_HELP, {}))
+
+    def test_rustdoc_manifest_must_forbid_each_lint_by_name(self):
+        every = {name: "forbid" for name in quality.rustdoc_unforbidden(self.RUSTDOC_HELP, {})}
+        self.assertEqual(quality.rustdoc_unforbidden(self.RUSTDOC_HELP, {"lints": {"rustdoc": every}}), [])
+        lowered = {**every, "private_intra_doc_links": "deny", "bare_urls": "warn"}
+        self.assertEqual(quality.rustdoc_unforbidden(self.RUSTDOC_HELP, {"lints": {"rustdoc": lowered}}),
+                         ["bare_urls", "private_intra_doc_links"])
+        missing = {key: value for key, value in every.items() if key != "invalid_html_tags"}
+        self.assertEqual(quality.rustdoc_unforbidden(self.RUSTDOC_HELP, {"lints": {"rustdoc": missing}}),
+                         ["invalid_html_tags"])
+
+    def test_rustdoc_world_that_lists_nothing_refuses(self):
+        with self.assertRaisesRegex(ValueError, "the world is unreadable"):
+            quality.rustdoc_unforbidden("rustdoc::bare-urls  allow  x\n", {})
+
+    def test_this_manifest_forbids_the_captured_world(self):
+        manifest = tomllib.loads((ROOT / "Cargo.toml").read_text())
+        self.assertEqual(quality.rustdoc_unforbidden(self.RUSTDOC_HELP, manifest), [])
 
     def test_shell_lint_names_the_planted_defect_by_its_rule(self):
         # BASH-G11's negative control asserts on the rule's own diagnostic (F96/F130): a planted
@@ -1933,7 +1973,7 @@ class T06QualityInventoryControls(unittest.TestCase):
         # The recheck reads the pin's own path and digest, after the Rust commands.
         recheck = text.index("Pinned interpreter changed")
         self.assertGreater(recheck, text.index("run_rust_test_partitions(ROOT, run, cargo, common, label, test_expectations, parallel_main)"))
-        self.assertIn("required_text='Ran 110 tests' if has_t09(ROOT) else", text)
+        self.assertIn("required_text='Ran 114 tests' if has_t09(ROOT) else", text)
         self.assertIn("'Ran 93 tests' if has_t08_contract(ROOT) or has_recovery(ROOT) else", text)
 
     def test_t06_partition_holds_every_t06_target_once_and_nothing_else(self):

@@ -398,7 +398,7 @@ pub fn host_shape(path: &Path) -> bool {
 
 /// Whether a read-only file may be mounted at `namespace`: clean, absolute and under one of the
 /// plan's file prefixes. Hash-free: the one shape rule for a file destination, shared by
-/// [`validate_file`] and the class profile's declaration check (B14-P2b), so the two cannot differ.
+/// `validate_file` and the class profile's declaration check (B14-P2b), so the two cannot differ.
 #[must_use]
 pub fn file_shape(namespace: &Path) -> bool {
     clean_absolute(namespace)

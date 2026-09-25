@@ -1,6 +1,6 @@
-//! The attempt lifecycle over the real ledger (B14a-1c, design B14a-R1..R5): [`StoreRuntime`]
+//! The attempt lifecycle over the real ledger (B14a-1c, design B14a-R1..R5): `StoreRuntime`
 //! implements the driver's ports by composing Store, the class's candidate application and a
-//! verifier seam. It reaches the ledger only through [`StoreTasks::with_store`], one hold per
+//! verifier seam. It reaches the ledger only through `StoreTasks::with_store`, one hold per
 //! write together with the head read that write depends on, and holds no `Store` between calls,
 //! so no workload can run under the lock.
 //!
@@ -231,7 +231,7 @@ struct StoreRuntime<'a, C, V> {
 /// the roster's history can hold, plus one cancellation (R3 G1). Derived, not chosen.
 const EVENTS_LIMIT: u64 = MAX_HISTORY as u64 + 1;
 
-/// Dispatch one admitted task: the pre-dispatch checks, then the driver over [`StoreRuntime`].
+/// Dispatch one admitted task: the pre-dispatch checks, then the driver over `StoreRuntime`.
 ///
 /// # Errors
 /// A store, lock, identity or entropy failure, or a second writer, from any step.

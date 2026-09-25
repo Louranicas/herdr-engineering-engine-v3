@@ -652,7 +652,7 @@ pub enum ResolveRefusal {
     /// An evidence reference names no artifact the ledger holds (by digest and size).
     UnknownEvidence,
     /// Registering the disposition's evidence would take the ledger's object inventory past what a
-    /// backup copies ([`backup::OBJECT_INVENTORY_BOUND`]), making the ledger un-backup-able (B09).
+    /// backup copies (`backup::OBJECT_INVENTORY_BOUND`), making the ledger un-backup-able (B09).
     Inventory,
 }
 

@@ -5,7 +5,7 @@
 //! Design and its three independent reviews: `~/hee3-evidence/T28/B07-task-preview-20260925/`.
 //!
 //! * **One parse, composed once.** [`compose`] is pure over the configuration's bytes; [`read`]
-//!   is the only I/O, through [`crate::app::custody`]. A [`Policy`] is derived per preview,
+//!   is the only I/O, through [`crate::app::custody`]. A [`crate::route::Policy`] is derived per preview,
 //!   because the baseline's locality is a roster fact that can change while the process runs.
 //! * **A recipe restates no roster fact.** Its record's locality and current observation come
 //!   from the snapshot; its figures and the classes it serves from the declaration.

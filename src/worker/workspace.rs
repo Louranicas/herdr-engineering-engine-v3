@@ -110,7 +110,7 @@ pub enum Error {
 ///
 /// [`Error::Path`] for a relative or rootless path; [`Error::Custody`] when the directory is
 /// not ours or not 0700; [`Error::Changed`] when the name no longer names the opened directory;
-/// [`Error::Bound`] past [`MAX_ENTRIES`] or [`MAX_DEPTH`]; [`Error::Deadline`]; [`Error::Io`].
+/// [`Error::Bound`] past `MAX_ENTRIES` or `MAX_DEPTH`; [`Error::Deadline`]; [`Error::Io`].
 pub fn remove_owned(path: &Path, deadline: Instant) -> Result<(), Error> {
     let (Some(parent), Some(name)) = (path.parent(), path.file_name()) else {
         return Err(Error::Path);
