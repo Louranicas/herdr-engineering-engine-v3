@@ -1825,8 +1825,9 @@ impl PublishedAcceptance {
 /// `Corrupt` for an object registered with another size; `Disposition(Inventory)` past
 /// [`backup::OBJECT_INVENTORY_BOUND`] (the caller's transaction then rolls back).
 fn register_evidence(tx: &rusqlite::Transaction<'_>, objects: &[Object]) -> Result<()> {
+    let mut added = 0_usize;
     for object in objects {
-        tx.execute(
+        added += tx.execute(
             "INSERT INTO artifacts(digest,size) VALUES(?,?) ON CONFLICT(digest) DO NOTHING",
             params![object.digest, number(object.size)?],
         )?;
@@ -1838,6 +1839,11 @@ fn register_evidence(tx: &rusqlite::Transaction<'_>, objects: &[Object]) -> Resu
         if registered != object.size {
             return Err(Error::Corrupt);
         }
+    }
+    // Only a call that grows the inventory can be refused for its size: one that adds nothing (no
+    // evidence, or objects already registered) never is, whoever else grew it (review D2).
+    if added == 0 {
+        return Ok(());
     }
     let held: u64 = tx.query_row("SELECT count(*) FROM artifacts", [], |row| {
         read_number(row, 0)

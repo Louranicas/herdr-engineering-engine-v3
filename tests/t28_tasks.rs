@@ -4296,7 +4296,7 @@ fn a_closed_obligation_takes_no_quarantine_and_unknown_usage_keeps_one_open() ->
 /// does, so the first disposition naming such an object — here the acknowledgement — is refused
 /// (`internal`) with nothing written: no disposition, no stop.
 #[test]
-fn a_stop_refuses_evidence_registered_with_another_size() -> Outcome {
+fn a_disposition_refuses_evidence_registered_with_another_size() -> Outcome {
     let scratch = Scratch::new()?;
     let operator = Principal::new(1000, "operator").map_err(|error| format!("{error:?}"))?;
     let (tasks, ids, evidence) = resolve_ledger(&scratch, &operator, &[Stage::UnknownEffectOnly])?;

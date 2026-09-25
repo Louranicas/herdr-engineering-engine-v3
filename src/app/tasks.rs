@@ -233,9 +233,10 @@ fn resolve_fault(error: StoreError, task: &str) -> Fault {
                 "an evidence reference names no artifact the ledger holds",
             )
             .at("/body/evidence"),
+            // Objects are never deleted, so no condition clears it (review N5).
             ResolveRefusal::Inventory => Fault::of(
                 ErrorCode::ResourceExhausted,
-                Retry::AfterCondition,
+                Retry::Never,
                 "the ledger's object inventory would exceed the 4096 objects a backup copies",
             )
             .at("/body/evidence"),
@@ -339,6 +340,17 @@ fn evidence_fault(error: &StoreError, task_id: &str) -> Fault {
     }
 }
 
+/// The refusal for evidence that is gone or corrupt now (T17): the history is kept.
+fn missing_now() -> Fault {
+    Fault::of(
+        ErrorCode::Unavailable,
+        Retry::AfterCondition,
+        "an evidence object is missing or corrupt now; its history is kept",
+    )
+    .at("/body/evidence")
+    .because("evidence object missing or corrupt")
+}
+
 /// T17 at readback: every object a view names is present and whole now, or the view is refused
 /// `unavailable` (the history is untouched and `evidence: none` still answers). Bounded before any
 /// read by [`MAX_VIEW_BYTES`] over the distinct objects.
@@ -367,14 +379,29 @@ fn available_now(
         match reader.verify(reference, until) {
             Ok(()) => {}
             Err(StoreError::Deadline) => return Err(store_fault(&StoreError::Deadline)),
+            // Absent or other bytes: the evidence is gone or corrupt now (T17).
+            Err(
+                StoreError::NotFound
+                | StoreError::Corrupt
+                | StoreError::Invalid
+                | StoreError::Bound
+                | StoreError::Os(rustix::io::Errno::NOENT),
+            ) => {
+                return Err(missing_now());
+            }
+            Err(StoreError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Err(missing_now());
+            }
+            // Anything else is not a fact about the evidence: the object could not be read now
+            // (review N6), and a later read may succeed.
             Err(_) => {
                 return Err(Fault::of(
                     ErrorCode::Unavailable,
                     Retry::AfterCondition,
-                    "an evidence object is missing or corrupt now; its history is kept",
+                    "an evidence object could not be read now",
                 )
                 .at("/body/evidence")
-                .because("evidence object missing or corrupt"));
+                .because("evidence object unreadable"));
             }
         }
     }

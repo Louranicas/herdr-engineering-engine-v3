@@ -110,9 +110,9 @@ fn read_evidence(
             [task],
             |row| read_number(row, 0),
         )?;
-        let found = dispositions
-            .checked_add(u64::try_from(references.len()).map_err(|_| Error::Bound)?)
-            .ok_or(Error::Bound)?;
+        // The stop's reference is, by `stop_reference`'s own check, the first reference of an
+        // abandonment this sum already counts: it is not added again (review D1).
+        let found = dispositions;
         if found > MAX_VIEW_REFS {
             return Err(Error::EvidenceBound {
                 found,
