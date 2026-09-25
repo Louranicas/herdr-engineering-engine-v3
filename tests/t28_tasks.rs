@@ -1745,7 +1745,17 @@ fn a_replay_past_its_deadline_needs_the_grant_that_may_read_it() -> Outcome {
     let scratch = Scratch::new()?;
     let tasks = ledger(&scratch)?;
     let operator = Principal::new(1000, "operator").map_err(|error| format!("{error:?}"))?;
-    let submit = request("task.submit", 1, Some(KEY), &json!({"spec": spec()}));
+    // The grant named by the request is distinct from its idempotency key, so a grant store asked
+    // with the key (or anything but the request's own grant) is told apart.
+    let grant = "28d00000-0000-4000-8000-0000000006a1";
+    let mut frame: Value = serde_json::from_slice(&request(
+        "task.submit",
+        1,
+        Some(KEY),
+        &json!({"spec": spec()}),
+    ))?;
+    frame["authority"]["grant_id"] = json!(grant);
+    let submit = serde_json::to_vec(&frame)?;
     let first = serve(&tasks, &operator, &submit)?;
     assert_eq!(first["replayed"], json!(false), "{first}");
     let seeing = Owner::ALL.into_iter().fold(Caller::new(), Caller::seeing);
@@ -1782,7 +1792,7 @@ fn a_replay_past_its_deadline_needs_the_grant_that_may_read_it() -> Outcome {
             *grants.asked.borrow(),
             [(
                 format!("{operator:?}"),
-                KEY.to_owned(),
+                grant.to_owned(),
                 scope.clone(),
                 AN_HOUR_LATE
             )],
@@ -1800,9 +1810,11 @@ fn a_replay_past_its_deadline_needs_the_grant_that_may_read_it() -> Outcome {
 
 /// B05 (a), review F4: `Recorded` names the actions whose owner records a result. It is checked
 /// against the world, the catalogue, rather than trusted: every action that changes state and is
-/// not `Recorded` must be refused live `unavailable / owner not composed` -- so nothing is ever
-/// recorded that a replay past its deadline would owe -- and every `Recorded` one must reach its
-/// composed owner. Composing a new owner without naming it here turns this red.
+/// not `Recorded` must be refused live `unavailable / owner not composed`, so nothing is ever
+/// recorded that a replay past its deadline would owe; composing a new owner without naming it in
+/// `Recorded` turns this red. (That each `Recorded` action is asked of its owner past the deadline
+/// is pinned by `the_owner_reads_an_expired_record_within_the_wires_own_window`, through a double
+/// that records the kind it was asked for; a `{}` body here is refused before any owner is reached.)
 #[test]
 fn every_mutating_action_that_records_nothing_has_no_owner_to_record_it() -> Outcome {
     use habitat_engine::actions::{CATALOGUE, PreconditionRule};
@@ -1904,7 +1916,9 @@ impl Tasks for Handed {
     > {
         self.0.borrow_mut().push(format!(
             "cancel {} {} {}",
-            request.idempotency_key, target.id, body.reason
+            request.idempotency_key,
+            target.id,
+            body.reason.name()
         ));
         Err(habitat_engine::contracts::control::Fault::expired())
     }

@@ -18,7 +18,7 @@
 //!   engine cannot enforce is not admitted;
 //! * `parent` must be `null`: child allocations belong to cohort composition, not composed here.
 
-use crate::contracts::control::{ErrorCode, Fault, Retry};
+use crate::contracts::control::{CancelReason, ErrorCode, Fault, Retry};
 use crate::contracts::{UuidV4, parse_u64_decimal};
 use serde_json::{Map, Value};
 
@@ -234,14 +234,6 @@ fn budget(budget: &Map<String, Value>) -> Result<(u64, u64, u64), Fault> {
     Ok((wall, wall - reserve, reserve))
 }
 
-/// Why a cancel is asked for: `task.cancel`'s closed reason set (RC03 §6; contract-decisions.md:343).
-pub const CANCEL_REASONS: [&str; 5] = [
-    "operator_request",
-    "superseded",
-    "budget",
-    "deadline",
-    "safety",
-];
 /// `note` is bounded in UTF-8 bytes; the schema's `maxLength` counts code points, so the byte rule
 /// is decided here.
 const MAX_NOTE_BYTES: usize = 1024;
@@ -250,8 +242,8 @@ const MAX_NOTE_BYTES: usize = 1024;
 /// the body's.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Cancel {
-    /// One of [`CANCEL_REASONS`].
-    pub reason: &'static str,
+    /// Why (the closed vocabulary, [`CancelReason`]).
+    pub reason: CancelReason,
     /// The caller's note, at most 1,024 UTF-8 bytes.
     pub note: Option<String>,
 }
@@ -261,14 +253,14 @@ pub struct Cancel {
 /// # Errors
 ///
 /// `invalid_argument` naming the member: `/body` unless the members are exactly `reason` and
-/// `note`; `/body/reason` outside [`CANCEL_REASONS`]; `/body/note` unless null or a string of at
+/// `note`; `/body/reason` outside [`CancelReason`]; `/body/note` unless null or a string of at
 /// most 1,024 bytes.
 pub fn cancel(body: &Map<String, Value>) -> Result<Cancel, Fault> {
     exactly(body, &["reason", "note"], "/body")?;
     let reason = body
         .get("reason")
         .and_then(Value::as_str)
-        .and_then(|reason| CANCEL_REASONS.into_iter().find(|known| *known == reason))
+        .and_then(CancelReason::parse)
         .ok_or(Fault::invalid(
             "/body/reason",
             "operator_request, superseded, budget, deadline or safety",

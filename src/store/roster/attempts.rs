@@ -5,6 +5,7 @@ use super::{
     Result, Store, Transaction, UuidV4, capacity, digest, dto, invalid, next, operator, prior,
     random_id, record, retain_operation, retain_revision, roster_event, schema,
 };
+use crate::contracts::control::CancelReason;
 use crate::contracts::roster::{
     ActiveAttemptPolicy, CancellationCause, Disable, Instance, InstanceState, Kind, MAX_HISTORY,
     MAX_INPUT, MAX_PINS, MAX_RECORDS, Outcome, Pin, Selection,
@@ -197,7 +198,7 @@ fn cancel_causes(
                 UuidV4::parse(task).map_err(|_| Error::Corrupt)?,
                 current.generation.parse().map_err(|_| Error::Corrupt)?,
                 UuidV4::parse(&event_id).map_err(|_| Error::Corrupt)?,
-                &cancellation_body("operator_request", None)?,
+                &cancellation_body(CancelReason::OperatorRequest, None)?,
             )?;
         }
         causes.push(cause);

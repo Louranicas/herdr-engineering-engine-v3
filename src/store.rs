@@ -344,6 +344,7 @@ pub use artifact::Object;
 pub use backup::{BackupReport, RestoreStatus};
 pub use schema::Chain;
 
+use crate::contracts::control::CancelReason;
 use crate::contracts::rc01::{MAX_ATTEMPTS, TASK_LIMIT};
 use crate::contracts::{Generation, Sha256Digest, UuidV4};
 use artifact::Directory;
@@ -598,7 +599,7 @@ pub struct CancelIntent<'a> {
     pub expected: Generation,
     pub event: UuidV4<'a>,
     pub request_bytes: &'a [u8],
-    pub reason: &'a str,
+    pub reason: CancelReason,
     pub note: Option<&'a str>,
 }
 
@@ -1565,19 +1566,19 @@ fn next(generation: Generation) -> Result<String> {
         .map(|next| next.to_string())
         .map_err(|_| Error::Bound)
 }
+/// The body of a `cancellation_requested` event: why the intent was recorded and the caller's note.
+/// The one shape, for every door that records an intent; the reason is the closed vocabulary's.
+fn cancellation_body(reason: CancelReason, note: Option<&str>) -> Result<Vec<u8>> {
+    Ok(serde_json::to_vec(
+        &serde_json::json!({"reason": reason.name(), "note": note}),
+    )?)
+}
+
 /// The cancellation transition a caller can ask for, by `Store::cancel` or by `task.cancel`: the
 /// next generation and the event that holds the intent (its obligation). The state becomes
 /// `cancellation_requested` -- except that an `effect_unknown` task keeps its state, the precedence
 /// `settle_attempt` and `record_verification` already apply: an unknown effect is never masked by a
 /// cancellation, and the `cancellation` flag still carries the intent.
-/// The body of a `cancellation_requested` event: why the intent was recorded (the `task.cancel`
-/// reason vocabulary) and the caller's note. The one shape, for every door that records an intent.
-fn cancellation_body(reason: &str, note: Option<&str>) -> Result<Vec<u8>> {
-    Ok(serde_json::to_vec(
-        &serde_json::json!({"reason": reason, "note": note}),
-    )?)
-}
-
 fn request_cancellation(
     tx: &Transaction<'_>,
     head: &TaskHead,
@@ -1608,10 +1609,6 @@ fn request_cancellation(
     )?;
     Ok(generation)
 }
-/// Whether the task's outcome is already decided, so no cancellation intent can be recorded: it was
-/// accepted, or its terminal stop committed (a `task_stops` row). A verification that ended the task
-/// `failed` is NOT a terminal commit: a cancellation recorded before the stop wins, and the stop
-/// records `cancelled` (T06, `cancellation_after_failed_verification_wins_before_terminal_commit`).
 /// The (request digest, stored result) bound to (principal, `action`, v1, key), if any: the one read
 /// of the idempotency record, for a live request and for the readback of an expired one alike.
 fn recorded(
@@ -1627,6 +1624,10 @@ fn recorded(
     ).optional()?)
 }
 
+/// Whether the task's outcome is already decided, so no cancellation intent can be recorded: it was
+/// accepted, or its terminal stop committed (a `task_stops` row). A verification that ended the task
+/// `failed` is NOT a terminal commit: a cancellation recorded before the stop wins, and the stop
+/// records `cancelled` (T06, `cancellation_after_failed_verification_wins_before_terminal_commit`).
 fn outcome_decided(tx: &Transaction<'_>, head: &TaskHead) -> Result<bool> {
     if head.accepted_event.is_some() {
         return Ok(true);

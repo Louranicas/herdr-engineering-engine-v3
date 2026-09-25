@@ -735,6 +735,52 @@ fn record(value: &Value) -> Vec<u8> {
     bytes
 }
 
+/// Why a cancellation is asked for: `task.cancel`'s closed reason set (RC03 §6;
+/// contract-decisions.md:343). The one vocabulary for every door that records a cancellation intent
+/// -- the wire parser reads it, the store writes it -- so no door can record a reason outside it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CancelReason {
+    /// An operator asked (also a roster disable with `request_cancel`).
+    OperatorRequest,
+    /// Other work supersedes the task.
+    Superseded,
+    /// The task's budget.
+    Budget,
+    /// The task's deadline.
+    Deadline,
+    /// Safety.
+    Safety,
+}
+
+impl CancelReason {
+    /// Every reason, in the contract's order.
+    pub const ALL: [Self; 5] = [
+        Self::OperatorRequest,
+        Self::Superseded,
+        Self::Budget,
+        Self::Deadline,
+        Self::Safety,
+    ];
+
+    /// The wire spelling.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::OperatorRequest => "operator_request",
+            Self::Superseded => "superseded",
+            Self::Budget => "budget",
+            Self::Deadline => "deadline",
+            Self::Safety => "safety",
+        }
+    }
+
+    /// The reason spelled `name`, if the vocabulary has one.
+    #[must_use]
+    pub fn parse(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|reason| reason.name() == name)
+    }
+}
+
 /// `ResourceKind`: what a generation precondition names.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ResourceKind {
