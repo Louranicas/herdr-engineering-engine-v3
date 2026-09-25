@@ -9,8 +9,9 @@
 //! the workload's and the namespace's, and bwrap, busctl and systemd-run live at fixed host paths.
 
 use super::custody::{DirectoryError, FileError, PrivateDirectory};
+use super::workload::FIXED_DESTINATIONS;
 use crate::contracts::{Sha256Digest, UuidV4};
-use crate::worker::namespace::{self, MAX_MOUNTS};
+use crate::worker::namespace::{self, MAX_MOUNTS, SHIM_DESTINATION};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
@@ -30,9 +31,7 @@ pub const MAX_RUNTIME_FILES: usize = MAX_MOUNTS - WORKLOAD_MOUNTS;
 
 const SCHEMA: &str = "hee3.class-profile/1";
 const CLASS: &str = "rust-library-change/1";
-/// Namespace destinations the workload or the namespace fixes; a runtime file may not take one.
-const COMPILER_NAMESPACE: &str = "/toolchain/bin/rustc";
-const SHIM_NAMESPACE: &str = "/shim/namespace-shim";
+/// Destinations under which the workload mounts and writes its own files.
 const RESERVED_PREFIXES: [&str; 2] = ["/frozen", "/work"];
 
 /// One workspace a task may name by `workspace_id`: its baseline and protected directories (beside
@@ -116,8 +115,12 @@ pub enum PinWhy {
     Duplicate,
     /// A destination the workload or the namespace fixes.
     Reserved,
+    /// A destination the plan creates as a directory: a declared one, or the parent of another
+    /// destination (review P2b-3).
+    Directory,
     Digest,
     Count {
+        found: usize,
         limit: usize,
     },
 }
@@ -248,6 +251,7 @@ pub fn compose(bytes: &[u8]) -> Result<Declared, ProfileError> {
     let shim = host_pin(pins, "shim")?;
     let runtime_files = runtime_files(pins)?;
     let namespace_directories = directories(pins)?;
+    derived(&runtime_files, &namespace_directories)?;
     Ok(Declared {
         workspaces,
         compiler,
@@ -259,8 +263,10 @@ pub fn compose(bytes: &[u8]) -> Result<Declared, ProfileError> {
     })
 }
 
-/// 1-based line and column of byte `offset` in `text`, the column in characters — the toml crate's
-/// own convention, which its message prints (a test compares the two).
+/// 1-based line and column of byte `offset` in `text`, the column in characters. That is the toml
+/// crate's convention where the error falls on a character boundary after ASCII text (a test
+/// compares the two there); toml counts bytes when the erroring byte starts a multi-byte
+/// character, so there the two may differ by that character's extra bytes (review P2b-4).
 fn position(text: &str, offset: usize) -> (usize, usize) {
     let before = text.get(..offset.min(text.len())).unwrap_or(text);
     let (line, last) = before
@@ -451,6 +457,7 @@ fn runtime_files(pins: &toml::Table) -> Result<Vec<RuntimeFile>, ProfileError> {
         return Err(pin_refusal(
             "runtime_files",
             PinWhy::Count {
+                found: rows.len(),
                 limit: MAX_RUNTIME_FILES,
             },
         ));
@@ -470,8 +477,10 @@ fn runtime_files(pins: &toml::Table) -> Result<Vec<RuntimeFile>, ProfileError> {
         if !namespace::file_shape(&destination) {
             return Err(pin_refusal(&at, PinWhy::Namespace));
         }
-        if destination == Path::new(COMPILER_NAMESPACE)
-            || destination == Path::new(SHIM_NAMESPACE)
+        if destination == Path::new(SHIM_DESTINATION)
+            || FIXED_DESTINATIONS
+                .iter()
+                .any(|fixed| destination == Path::new(fixed))
             || RESERVED_PREFIXES
                 .iter()
                 .any(|prefix| destination.starts_with(prefix))
@@ -497,7 +506,10 @@ fn directories(pins: &toml::Table) -> Result<Vec<PathBuf>, ProfileError> {
     if rows.len() > MAX_MOUNTS {
         return Err(pin_refusal(
             "namespace_directories",
-            PinWhy::Count { limit: MAX_MOUNTS },
+            PinWhy::Count {
+                found: rows.len(),
+                limit: MAX_MOUNTS,
+            },
         ));
     }
     let mut out: Vec<PathBuf> = Vec::with_capacity(rows.len());
@@ -516,6 +528,46 @@ fn directories(pins: &toml::Table) -> Result<Vec<PathBuf>, ProfileError> {
         out.push(path);
     }
     Ok(out)
+}
+
+/// The directories the plan will create are acquired too (review P2b-2): the declared ones and
+/// every parent of every destination the plan mounts — the runtime files, the workload's fixed
+/// destinations and the shim's. That set must fit the namespace's mounts, and no runtime file may
+/// be one of its directories (a file where the plan creates a directory, or above another file).
+fn derived(files: &[RuntimeFile], declared: &[PathBuf]) -> Result<(), ProfileError> {
+    let destinations = files
+        .iter()
+        .map(|file| file.namespace.as_path())
+        .chain(FIXED_DESTINATIONS.iter().map(Path::new))
+        .chain(std::iter::once(Path::new(SHIM_DESTINATION)));
+    let mut directories: BTreeSet<&Path> = declared.iter().map(PathBuf::as_path).collect();
+    for destination in destinations {
+        directories.extend(
+            destination
+                .ancestors()
+                .skip(1)
+                .filter(|parent| *parent != Path::new("/")),
+        );
+    }
+    if directories.len() > MAX_MOUNTS {
+        return Err(pin_refusal(
+            "namespace_directories",
+            PinWhy::Count {
+                found: directories.len(),
+                limit: MAX_MOUNTS,
+            },
+        ));
+    }
+    match files
+        .iter()
+        .position(|file| directories.contains(file.namespace.as_path()))
+    {
+        Some(index) => Err(pin_refusal(
+            &format!("pins.runtime_files[{index}]"),
+            PinWhy::Directory,
+        )),
+        None => Ok(()),
+    }
 }
 
 fn digest_text(pins: &toml::Table, key: &str) -> Result<String, ProfileError> {
@@ -569,11 +621,11 @@ systemd_run_sha256 = "{HEX2}"
         )
     }
 
+    /// The refusal `text` composes to; a text that composes fails the calling test.
     fn refused(text: &str) -> ProfileError {
-        match compose(text.as_bytes()) {
-            Err(error) => error,
-            Ok(declared) => panic!("composed: {declared:?}"),
-        }
+        let composed = compose(text.as_bytes());
+        assert!(composed.is_err(), "composed: {composed:?}");
+        composed.err().unwrap_or(ProfileError::Encoding)
     }
 
     fn with(old: &str, new: &str) -> String {
@@ -662,10 +714,12 @@ systemd_run_sha256 = "{HEX2}"
             "a = \"é\" x\n",
             "[t]\nk = [1,\n",
         ] {
-            let message = match text.parse::<toml::Table>() {
-                Err(error) => error.to_string(),
-                Ok(_) => panic!("{text:?} parsed"),
-            };
+            let parsed = text.parse::<toml::Table>();
+            assert!(parsed.is_err(), "{text:?} parsed");
+            let message = parsed
+                .err()
+                .map(|error| error.to_string())
+                .unwrap_or_default();
             let numbers: Vec<usize> = message
                 .lines()
                 .next()
@@ -673,9 +727,8 @@ systemd_run_sha256 = "{HEX2}"
                 .split(|c: char| !c.is_ascii_digit())
                 .filter_map(|part| part.parse().ok())
                 .collect();
-            let [line, column] = numbers[..] else {
-                panic!("{message}");
-            };
+            assert_eq!(numbers.len(), 2, "{message}");
+            let (line, column) = (numbers[0], numbers[1]);
             assert_eq!(
                 refused(text),
                 ProfileError::Syntax { line, column },
@@ -993,7 +1046,13 @@ systemd_run_sha256 = "{HEX2}"
         assert!(compose(files(MAX_RUNTIME_FILES).as_bytes()).is_ok());
         assert_eq!(
             refused(&files(MAX_RUNTIME_FILES + 1)),
-            pin("runtime_files", PinWhy::Count { limit: 510 })
+            pin(
+                "runtime_files",
+                PinWhy::Count {
+                    found: 511,
+                    limit: 510
+                }
+            )
         );
     }
 
@@ -1075,5 +1134,113 @@ systemd_run_sha256 = "{HEX2}"
             "class profile refused: Encoding"
         );
         assert!(fs::remove_dir_all(&root).is_ok());
+    }
+
+    /// B14-P2b review 2, 3 · the directories the plan creates are acquired too: a runtime file where
+    /// the plan makes a directory — a fixed destination's parent, a declared directory, the parent of
+    /// another runtime file — is `Directory`; declared directories past the mounts are `Count` with
+    /// both numbers, and so is a set whose derived parents carry it past them.
+    #[test]
+    fn the_derived_directories_are_bounded_and_never_a_file() {
+        let pin = |name: &str, why| ProfileError::Pin {
+            name: name.to_owned(),
+            why,
+        };
+        let file = "pins.runtime_files[1]";
+        for (text, expected) in [
+            (
+                with(
+                    "namespace = \"/usr/bin/cc\"",
+                    "namespace = \"/toolchain/bin\"",
+                ),
+                pin(file, PinWhy::Directory),
+            ),
+            (
+                with(
+                    "namespace = \"/usr/bin/cc\"",
+                    "namespace = \"/toolchain/lib\"",
+                ),
+                pin(file, PinWhy::Directory),
+            ),
+            (
+                with(
+                    "namespace = \"/toolchain/lib/libstd.so\"",
+                    "namespace = \"/usr/bin/cc/x\"",
+                ),
+                ProfileError::Pin {
+                    name: "pins.runtime_files[1]".into(),
+                    why: PinWhy::Directory,
+                },
+            ),
+            (
+                with(
+                    &format!(
+                        "{{ host = \"/usr/bin/cc\", namespace = \"/usr/bin/cc\", sha256 = \"{HEX2}\" }}"
+                    ),
+                    "[1, 2]",
+                ),
+                ProfileError::WrongType {
+                    path: "pins.runtime_files[1]".into(),
+                },
+            ),
+            (
+                with(
+                    &format!("namespace-shim\", sha256 = \"{HEX}\""),
+                    "namespace-shim\", sha256 = \"x\"",
+                ),
+                pin("shim", PinWhy::Digest),
+            ),
+        ] {
+            assert_eq!(refused(&text), expected, "{text}");
+        }
+        // The workspace list as something other than a list of tables: two sites, two paths.
+        let text = valid();
+        let (head, pins) = (
+            &text[..text.find("[[workspace]]").unwrap_or(0)],
+            &text[text.find("[pins]").unwrap_or(0)..],
+        );
+        for (rows, path) in [
+            ("workspace = 1", "workspace"),
+            ("workspace = [1]", "workspace[0]"),
+        ] {
+            assert_eq!(
+                refused(&format!("{head}{rows}\n{pins}")),
+                ProfileError::WrongType { path: path.into() }
+            );
+        }
+        let declared = |count: usize| {
+            let rows: Vec<String> = (0..count)
+                .map(|index| format!("\"/usr/lib64/d{index}\""))
+                .collect();
+            with(
+                "namespace_directories = [\"/toolchain/lib\", \"/usr/lib64\"]",
+                &format!("namespace_directories = [{}]", rows.join(", ")),
+            )
+        };
+        assert_eq!(
+            refused(&declared(MAX_MOUNTS + 1)),
+            pin(
+                "namespace_directories",
+                PinWhy::Count {
+                    found: MAX_MOUNTS + 1,
+                    limit: MAX_MOUNTS
+                }
+            )
+        );
+        // Counted by hand from the rule: the fixed destinations add six parents (/toolchain/bin,
+        // /toolchain, /frozen/source, /frozen, /frozen/bin, /shim) and the two runtime files three
+        // (/toolchain/lib, /usr/bin, /usr), so n declared directories derive n + 9: 503 fit
+        // exactly, 504 do not.
+        assert!(compose(declared(503).as_bytes()).is_ok());
+        assert_eq!(
+            refused(&declared(504)),
+            pin(
+                "namespace_directories",
+                PinWhy::Count {
+                    found: 513,
+                    limit: MAX_MOUNTS
+                }
+            )
+        );
     }
 }

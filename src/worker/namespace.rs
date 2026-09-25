@@ -31,6 +31,8 @@ const BWRAP_SHA256: [u8; 32] = [
     0x6d, 0xa0, 0x6f, 0x15, 0x2b, 0x08, 0x65, 0x17, 0x2d, 0x73, 0x34, 0x8c, 0x34, 0xcb, 0x88, 0x48,
     0x7c, 0x32, 0x6c, 0xe2, 0xf2, 0x1c, 0xd9, 0x80, 0xfc, 0x25, 0xff, 0x10, 0xc4, 0xdb, 0xcd, 0xfb,
 ];
+/// Where the shim is always mounted.
+pub const SHIM_DESTINATION: &str = "/shim/namespace-shim";
 /// The most read-only files (and, separately, namespace directories) one plan may mount.
 pub const MAX_MOUNTS: usize = 512;
 const MAX_PUBLIC: usize = MAX_MOUNTS + 2;
@@ -469,7 +471,7 @@ fn validate(plan: &BwrapPlan, deadline: Instant) -> Result<(), NamespaceError> {
     }
     validate_file(&plan.shim, deadline)?;
     validate_file(&plan.candidate, deadline)?;
-    if plan.shim.namespace != Path::new("/shim/namespace-shim")
+    if plan.shim.namespace != Path::new(SHIM_DESTINATION)
         || !(plan.candidate.namespace.starts_with("/frozen/bin/")
             || plan.candidate.namespace.starts_with("/work/bin/")
             || plan.candidate.namespace.starts_with("/toolchain/bin/"))

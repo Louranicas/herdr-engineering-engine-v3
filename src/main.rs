@@ -260,12 +260,6 @@ fn socket_path() -> Result<PathBuf, control_socket::Error> {
     Ok(root.join(RUNTIME_DIRECTORY).join(SOCKET_NAME))
 }
 
-/// `habitat-engine serve`: take single-instance custody of IPC01, reconcile the active
-/// generation, compose the task owner over the ledger startup left open, and only then bind and
-/// serve until SIGTERM (IPC01: acquire custody before recovery; bind after ready). SIGTERM drains
-/// (APP-01): nothing more is admitted, each open connection finishes the frame it is serving, the
-/// ledger's writer lock is released, the socket is removed and the engine exits 0. A stale socket
-/// left by a killed engine is cleared at the next start; a live or starting one refuses the start.
 /// Read the class profile dispatch will use (B14-P2b) and say it in one line: declaration only,
 /// no capture before the socket binds. Its value is held by the dispatcher that reads it (B14b).
 fn say_class_profile(home: &Path) {
@@ -284,6 +278,12 @@ fn say_class_profile(home: &Path) {
     }
 }
 
+/// `habitat-engine serve`: take single-instance custody of IPC01, reconcile the active
+/// generation, compose the task owner over the ledger startup left open, and only then bind and
+/// serve until SIGTERM (IPC01: acquire custody before recovery; bind after ready). SIGTERM drains
+/// (APP-01): nothing more is admitted, each open connection finishes the frame it is serving, the
+/// ledger's writer lock is released, the socket is removed and the engine exits 0. A stale socket
+/// left by a killed engine is cleared at the next start; a live or starting one refuses the start.
 fn serve() -> ExitCode {
     // APP-01: SIGTERM is taken before anything else, so one that arrives during startup is held
     // and drains the engine once it serves, rather than killing it mid-reconciliation.

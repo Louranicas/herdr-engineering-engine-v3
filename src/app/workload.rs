@@ -21,6 +21,25 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
+/// The namespace destinations the workload itself mounts, every one fixed by the workload: the
+/// compiler it runs, the source it compiles, the link stage's wrapper and library, the linked
+/// driver and the oracle's public inputs. The class profile refuses a runtime file at, above or
+/// among these (B14-P2b), so this list is the one it reads, never a copy of it.
+pub const COMPILER_DESTINATION: &str = "/toolchain/bin/rustc";
+pub const SOURCE_DESTINATION: &str = "/frozen/source/lib.rs";
+pub const WRAPPER_DESTINATION: &str = "/frozen/public-wrapper.rs";
+pub const LIBRARY_DESTINATION: &str = "/frozen/libstrict_u64_workload.rlib";
+pub const DRIVER_DESTINATION: &str = "/frozen/bin/workload-driver";
+pub const INPUTS_DESTINATION: &str = "/frozen/inputs.hex";
+pub const FIXED_DESTINATIONS: [&str; 6] = [
+    COMPILER_DESTINATION,
+    SOURCE_DESTINATION,
+    WRAPPER_DESTINATION,
+    LIBRARY_DESTINATION,
+    DRIVER_DESTINATION,
+    INPUTS_DESTINATION,
+];
+
 /// Trusted application configuration. Every file is separately pinned and mounted.
 pub struct Tools {
     pub bwrap: PathBuf,
@@ -184,7 +203,7 @@ fn preflight(plan: &Plan<'_>) -> Result<(), Error> {
         || plan.job_root.starts_with(plan.protected.root())
         || plan.source.root().starts_with(plan.job_root)
         || plan.protected.root().starts_with(plan.job_root)
-        || plan.tools.compiler.namespace != Path::new("/toolchain/bin/rustc")
+        || plan.tools.compiler.namespace != Path::new(COMPILER_DESTINATION)
     {
         return Err(Error::Layout);
     }
@@ -200,7 +219,7 @@ fn execute_stages(
     public: &Path,
     run: &mut Run,
 ) -> Result<(), Error> {
-    let source = binding(plan.source, "src/lib.rs", "/frozen/source/lib.rs")?;
+    let source = binding(plan.source, "src/lib.rs", SOURCE_DESTINATION)?;
     let lib_args = [
         "--sysroot",
         "/toolchain",
@@ -210,7 +229,7 @@ fn execute_stages(
         "--crate-type",
         "rlib",
         "-Dwarnings",
-        "/frozen/source/lib.rs",
+        SOURCE_DESTINATION,
         "-o",
         "/work/libstrict_u64_workload.rlib",
     ];
@@ -232,16 +251,9 @@ fn execute_stages(
         "frozen-library",
         scopes.is_some(),
     )?;
-    let wrapper = binding(
-        plan.protected,
-        "public-wrapper.rs",
-        "/frozen/public-wrapper.rs",
-    )?;
-    let rlib = binding(
-        &library,
-        "libstrict_u64_workload.rlib",
-        "/frozen/libstrict_u64_workload.rlib",
-    )?;
+    let wrapper = binding(plan.protected, "public-wrapper.rs", WRAPPER_DESTINATION)?;
+    let rlib = binding(&library, "libstrict_u64_workload.rlib", LIBRARY_DESTINATION)?;
+    let library_argument = format!("strict_u64_workload={LIBRARY_DESTINATION}");
     let link_args = [
         "--sysroot",
         "/toolchain",
@@ -252,8 +264,8 @@ fn execute_stages(
         "-C",
         "linker=/usr/bin/gcc",
         "--extern",
-        "strict_u64_workload=/frozen/libstrict_u64_workload.rlib",
-        "/frozen/public-wrapper.rs",
+        library_argument.as_str(),
+        WRAPPER_DESTINATION,
         "-o",
         "/work/workload-driver",
     ];
@@ -270,11 +282,11 @@ fn execute_stages(
         return Ok(());
     }
     let driver = freeze_output(plan, run, "link-driver", "frozen-driver", scopes.is_some())?;
-    let executable = binding(&driver, "workload-driver", "/frozen/bin/workload-driver")?;
+    let executable = binding(&driver, "workload-driver", DRIVER_DESTINATION)?;
     run.outputs.push(driver);
     let projection = ReadOnlyFile {
         host: public.join("inputs.hex"),
-        namespace: "/frozen/inputs.hex".into(),
+        namespace: INPUTS_DESTINATION.into(),
         sha256: Sha256::digest(oracle.public_inputs()).into(),
     };
     if !stage(
