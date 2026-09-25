@@ -604,6 +604,7 @@ Exact current bytes are inventoried without inserting managed comments. These ar
 | [tools/rust-offline-inputs/vcpkg-0.2.15.crate](file:///var/home/herdr-engineering-engine-v3/tools/rust-offline-inputs/vcpkg-0.2.15.crate) | check | T04 |
 | [tools/rust-offline-inputs/windows-link-0.2.1.crate](file:///var/home/herdr-engineering-engine-v3/tools/rust-offline-inputs/windows-link-0.2.1.crate) | check | T04 |
 | [tools/rust-offline-inputs/windows-sys-0.61.2.crate](file:///var/home/herdr-engineering-engine-v3/tools/rust-offline-inputs/windows-sys-0.61.2.crate) | check | T04 |
+| [migrations/002.sql](file:///var/home/herdr-engineering-engine-v3/migrations/002.sql) | store | T04 |
 | [src/contracts/roster.rs](file:///var/home/herdr-engineering-engine-v3/src/contracts/roster.rs) | contracts | T05 |
 | [src/store/roster.rs](file:///var/home/herdr-engineering-engine-v3/src/store/roster.rs) | store | T05 |
 | [src/store/roster/attempts.rs](file:///var/home/herdr-engineering-engine-v3/src/store/roster/attempts.rs) | store | T05 |

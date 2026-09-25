@@ -7,7 +7,7 @@
     "codebase": "/var/home/herdr-engineering-engine-v3"
   },
   "source_plan_sha256": "e62091172c60c391bbd5221dd7d3a9bfa398c8a89a1b66c8c5de97c4ddc88d0c",
-  "catalogue_sha256": "8a96e05fe0f32f7cc21d0b1dda2df5f1b0a934d9216acfb4b7d510a476e36025",
+  "catalogue_sha256": "bb31a4b6acacf01a43a3e6cdcb1d754632bc17800c52d4669fe045bab4736c73",
   "readiness": {
     "id": "HEE3-READINESS-001",
     "sha256": "f574043487f39db6424c4988bce58e88a6e766f02f974fbcf3fa8dd6e0003548",
@@ -6020,6 +6020,16 @@
           "task_id": "T01"
         },
         {
+          "path": "migrations/002.sql",
+          "owner": "store",
+          "modules": [
+            "store",
+            "task"
+          ],
+          "reason": "Second migration of the additive chain (A25), authored after T04 closed: rebuilds operations so its idempotency CHECK admits task.cancel (RC03 section 6), preserving every row; identity is its own pinned body digest in store::schema. Inventoried by exact bytes, never rewritten by the publisher.",
+          "task_id": "T04"
+        },
+        {
           "path": "src/store/roster/attempts.rs",
           "owner": "store",
           "modules": [
@@ -8821,6 +8831,16 @@
             "store"
           ],
           "reason": "Exact Cargo.lock-bound offline archive closure required by original T04 static SQLite/store implementation; development input only.",
+          "task_id": "T04"
+        },
+        {
+          "path": "migrations/002.sql",
+          "owner": "store",
+          "modules": [
+            "store",
+            "task"
+          ],
+          "reason": "Second migration of the additive chain (A25), authored after T04 closed: rebuilds operations so its idempotency CHECK admits task.cancel (RC03 section 6), preserving every row; identity is its own pinned body digest in store::schema. Inventoried by exact bytes, never rewritten by the publisher.",
           "task_id": "T04"
         },
         {
@@ -53035,6 +53055,16 @@
       "task_id": "T04"
     },
     {
+      "path": "migrations/002.sql",
+      "owner": "store",
+      "modules": [
+        "store",
+        "task"
+      ],
+      "reason": "Second migration of the additive chain (A25), authored after T04 closed: rebuilds operations so its idempotency CHECK admits task.cancel (RC03 section 6), preserving every row; identity is its own pinned body digest in store::schema. Inventoried by exact bytes, never rewritten by the publisher.",
+      "task_id": "T04"
+    },
+    {
       "path": "src/contracts/roster.rs",
       "owner": "contracts",
       "modules": [
@@ -54568,8 +54598,8 @@
       "bytes": 753
     },
     "Cargo.lock": {
-      "sha256": "0dbe885f5d23d05425fb00df5762fa5c0a06042ef0a19848acd07c2e59187bd8",
-      "bytes": 9845
+      "sha256": "39ab2a79a503c951e7506c3361c1e88c8b4b1c1c655750077cc4e75fd138abe9",
+      "bytes": 10351
     },
     "tests/t01_contracts.rs": {
       "sha256": "704ae6314a315a834f1911db7900ef96c57ce1fe59d8e8ca16f9aabb7bbee368",
@@ -54656,8 +54686,8 @@
       "bytes": 6019
     },
     "tools/check-quality": {
-      "sha256": "692f02ff30986c4043831a1a3d176bdad11a48403645e1a9645733c33c7e977b",
-      "bytes": 80339
+      "sha256": "a7c0150f3b9f96f8add5e578534eda543f9e66dd5b0a46d07301aba3d35accd0",
+      "bytes": 81705
     },
     "tools/development_process.py": {
       "sha256": "e76e3a794193e5df7ee96fabf700113d718527745a0f9a9dba1e04fd5c7baaf3",
@@ -54668,8 +54698,8 @@
       "bytes": 10433
     },
     "tests/t25_quality.py": {
-      "sha256": "331ec8d3af1dca3d0526f3f4db9ca9f84f6470639689ece27befa055aec22ad3",
-      "bytes": 143869
+      "sha256": "ee86490890627f37fab979b4ac812787ed285313383500812cb472f17d15e641",
+      "bytes": 144798
     },
     "julia/Manifest.toml": {
       "sha256": "097d5028df4e1667a970a8297d41eedb908e0319a0b4154c7ec12548140a9f79",
@@ -55336,16 +55366,16 @@
       "bytes": 16438
     },
     "tools/rust-offline.md": {
-      "sha256": "43962eb0200bc063d8b242b6916014ac08be4f70c90a2ab8d4638e87367e830e",
-      "bytes": 7451
+      "sha256": "3846c45df4d9563ebe49fb66b723576c53eb06c9a1cad0c3c68239acb57628ce",
+      "bytes": 7570
     },
     "tools/rust-offline-inputs/itoa-1.0.18.crate": {
       "sha256": "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682",
       "bytes": 15935
     },
     "tools/rust-offline-inputs/manifest.json": {
-      "sha256": "0e24160955b19adadf0b9bf0ebea5275f7153476ba980e913ed0250018be6112",
-      "bytes": 9693
+      "sha256": "47e88445a940736bef4bd1fda72d819acbf1deb3c3f3916777d2b45daaa53a80",
+      "bytes": 10151
     },
     "tools/rust-offline-inputs/memchr-2.8.3.crate": {
       "sha256": "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98",
@@ -55400,16 +55430,16 @@
       "bytes": 8748
     },
     "src/store/schema.rs": {
-      "sha256": "8b37ce0fe9c8e4eae5b8edb1e1735d26cf92ce6568fe621e72a9a4a5757b685a",
-      "bytes": 9053
+      "sha256": "05a64878e5357c73d43ea733592e49c4bea37038df43d3fd3983685318c1f5f0",
+      "bytes": 19093
     },
     "src/store/backup.rs": {
-      "sha256": "e2b8295af266572213a3873eccec1583165ac8a4b623a577799a7a4e8dab159b",
-      "bytes": 13662
+      "sha256": "107c50252e3c77ef68217e138167cc22e4cf71cefa5719a7a4df50bb17e9d466",
+      "bytes": 13837
     },
     "tests/t04_store.rs": {
-      "sha256": "8fb7be9db1b719ffb153d7192329d91a4bb44fc8ccfebcc0a74fb7a93beaa660",
-      "bytes": 74681
+      "sha256": "c60f2ff0861dfb25fe112dd1f59fff744e1bbea111f4caaaa8e9271b9bab2ff5",
+      "bytes": 93239
     },
     "docs/store-contract.md": {
       "sha256": "b65ffe744d2abf93c3b0c40345787940213806ade52e9ef010e17f3012a81396",
@@ -55420,8 +55450,8 @@
       "bytes": 10139
     },
     "tools/check-store-mutations": {
-      "sha256": "c5e7246ebc104f0f1f915b7c196736678ed08640b0307a8439ecffd57d2e6968",
-      "bytes": 18978
+      "sha256": "1a4335dffb509285c4fd751000454005644aaa042676dbf07349347a60ec8c43",
+      "bytes": 18955
     },
     "tools/sqlite-inputs/sqlite-amalgamation-3530400.zip": {
       "sha256": "1e71ddf93849c6a6ecf58b827c0692073d2dd7ee40196158068f7b29f422e87d",
@@ -55519,6 +55549,10 @@
       "sha256": "ae137229bcbd6cdf0f7b80a31df61766145077ddf49416a728b02cb3921ff3fc",
       "bytes": 2517186
     },
+    "migrations/002.sql": {
+      "sha256": "0930517b3e4c9048d3d3a2df4ab9952d5654a8e23cd32241011c1858212edad5",
+      "bytes": 2241
+    },
     "src/contracts/roster.rs": {
       "sha256": "ed932a5e24425da36c2c74e540bc6fc478280456933cb0442e2c151eb5900b93",
       "bytes": 13375
@@ -55540,8 +55574,8 @@
       "bytes": 10585
     },
     "tests/t05_store.rs": {
-      "sha256": "2c8e0919d2b1098fd06c45b8b5dc2c794f5a61d698cb3ddcbce6d1ddb5eaa3b2",
-      "bytes": 66084
+      "sha256": "bb898bb870c8ae9bfca044ee58f763be26a5771966f5f497c8ec322fe7fe55e0",
+      "bytes": 66104
     },
     "docs/roster-contract.md": {
       "sha256": "32612a958aa81b95eb8f6260b91ce91bcc911387047df4594cd0c6b58d7e01f3",
@@ -55824,8 +55858,8 @@
       "bytes": 26561
     },
     "src/main.rs": {
-      "sha256": "2dd9f15ea5f08616310a97eb7173efe7d1f862b609fbc0597b65c50118fead17",
-      "bytes": 33688
+      "sha256": "49c91ae256aa5f8311510adb3ae42357daab60b4a3f6d40f26bc4dc6276ea35d",
+      "bytes": 36116
     },
     "src/store/staging.rs": {
       "sha256": "8bb17b5598550fd2c002dc7063ddfa56cf4a6e0a51566264b908ba655acce5d3",

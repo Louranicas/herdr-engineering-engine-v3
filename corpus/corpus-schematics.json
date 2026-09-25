@@ -4,7 +4,7 @@
   "source_sha256": {
     "CORPUS_UPDATE_PROTOCOL.md": "a93c1dd5f6448c0c80e9dc6bb2b7de6f39934864011ea03a24a9c4c9ca8703b2",
     "PLAN_habitat_engine.json": "e62091172c60c391bbd5221dd7d3a9bfa398c8a89a1b66c8c5de97c4ddc88d0c",
-    "corpus_catalogue.json": "8a96e05fe0f32f7cc21d0b1dda2df5f1b0a934d9216acfb4b7d510a476e36025",
+    "corpus_catalogue.json": "bb31a4b6acacf01a43a3e6cdcb1d754632bc17800c52d4669fe045bab4736c73",
     "COMPLETION_STANDARD_habitat_engine.json": "b0f0ee8c52c2b93249f49e5048d274a18beb0ffdbd294b0731d486a09dbf31be",
     "TESTING_STANDARD_habitat_engine.json": "d643fb699b502af05898a718aec4eb9f9461b882cfbb94a89850358166e69336",
     "MODULE_INTERFACES_habitat_engine.json": "ddd56488c228140c6b1e239691d4b9a6c34fcd8edb3770a2ad9206354b42aabd",
