@@ -197,14 +197,14 @@ use habitat_engine::app::control_socket::{
 };
 use habitat_engine::app::coordinator;
 use habitat_engine::app::grants::{self, FileGrants};
-use habitat_engine::app::routing;
+use habitat_engine::app::{class_profile, routing};
 use habitat_engine::contracts::control::{FrameReader, MAX_FRAME_BYTES, ReadError};
 use habitat_engine::worker::namespace_shim::{self, NamespaceExec};
 use signal_hook::consts::SIGTERM;
 use signal_hook::iterator::Signals;
 use std::io::{self, Read, Write};
 use std::os::unix::net::UnixStream;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -266,6 +266,24 @@ fn socket_path() -> Result<PathBuf, control_socket::Error> {
 /// (APP-01): nothing more is admitted, each open connection finishes the frame it is serving, the
 /// ledger's writer lock is released, the socket is removed and the engine exits 0. A stale socket
 /// left by a killed engine is cleared at the next start; a live or starting one refuses the start.
+/// Read the class profile dispatch will use (B14-P2b) and say it in one line: declaration only,
+/// no capture before the socket binds. Its value is held by the dispatcher that reads it (B14b).
+fn say_class_profile(home: &Path) {
+    let class = home.join(class_profile::CLASS_DIRECTORY);
+    match class_profile::read(&class) {
+        Ok(profile) => eprintln!(
+            "habitat-engine: class profile read from {} ({} workspaces declared)",
+            class.display(),
+            profile.declared.workspaces.len()
+        ),
+        Err(why) => eprintln!(
+            "habitat-engine: dispatch unavailable: {} ({})",
+            why.constraint(),
+            class.display()
+        ),
+    }
+}
+
 fn serve() -> ExitCode {
     // APP-01: SIGTERM is taken before anything else, so one that arrives during startup is held
     // and drains the engine once it serves, rather than killing it mid-reconciliation.
@@ -338,6 +356,7 @@ fn serve() -> ExitCode {
                     routes.display()
                 ),
             }
+            say_class_profile(&home);
             Some(tasks.with_routing(routing))
         }
         Some(Err(why)) => {

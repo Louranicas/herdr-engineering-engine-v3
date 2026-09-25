@@ -1424,6 +1424,59 @@ fn the_engine_reads_its_route_configuration_at_start() -> Outcome {
     Ok(())
 }
 
+/// B14-P2b · the engine says its class profile once at start, declaration only: not installed,
+/// read (with the workspaces it declares) or refused with the refusal's own name — never a stop.
+#[test]
+fn the_engine_says_its_class_profile_at_start() -> Outcome {
+    let digest = format!("sha256:{}", "0".repeat(64));
+    let valid = format!(
+        "schema = \"hee3.class-profile/1\"\nclass = \"rust-library-change/1\"\n\n\
+         [[workspace]]\nid = \"28c00000-0000-4000-8000-0000000000f1\"\nbaseline = \"base\"\n\
+         baseline_digest = \"{digest}\"\nprotected = \"protected\"\nprotected_digest = \"{digest}\"\n\n\
+         [pins]\ncompiler = {{ host = \"/opt/rustc\", sha256 = \"{digest}\" }}\n\
+         shim = {{ host = \"/opt/shim\", sha256 = \"{digest}\" }}\nruntime_files = []\n\
+         namespace_directories = []\nbusctl_sha256 = \"{digest}\"\nsystemd_run_sha256 = \"{digest}\"\n"
+    );
+    for (installed, said) in [
+        (None, "dispatch unavailable: class profile not installed"),
+        (Some(valid.as_str()), "class profile read from"),
+        (
+            Some("schema = 1\n"),
+            "dispatch unavailable: class profile refused: WrongType { path: \"schema\" }",
+        ),
+    ] {
+        let world = World::granting(&["task"], &["read-only planning"])?;
+        commission(&world.home)?;
+        let class = world
+            .home
+            .join(".config/herdr-engineering-engine-v3/classes/rust-library-change-1");
+        if let Some(source) = installed {
+            DirBuilder::new()
+                .mode(0o700)
+                .recursive(true)
+                .create(&class)?;
+            write_grant(&class, "profile.toml", source.as_bytes(), 0o600)?;
+        }
+        let log = world.home.join("engine.log");
+        let _engine = Engine::start_logged(&world.run, &world.home, &log)?;
+        let log = fs::read_to_string(&log)?;
+        let line = if installed == Some(valid.as_str()) {
+            format!(
+                "habitat-engine: {said} {} (1 workspaces declared)",
+                class.display()
+            )
+        } else {
+            format!("habitat-engine: {said} ({})", class.display())
+        };
+        assert_eq!(
+            log.lines().filter(|seen| *seen == line).count(),
+            1,
+            "{line}\n{log}"
+        );
+    }
+    Ok(())
+}
+
 #[test]
 fn an_unwritable_ledger_leaves_task_actions_unavailable() -> Outcome {
     let world = World::granting(&["app", "task"], &["read", "durable admission"])?;

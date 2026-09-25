@@ -31,7 +31,8 @@ const BWRAP_SHA256: [u8; 32] = [
     0x6d, 0xa0, 0x6f, 0x15, 0x2b, 0x08, 0x65, 0x17, 0x2d, 0x73, 0x34, 0x8c, 0x34, 0xcb, 0x88, 0x48,
     0x7c, 0x32, 0x6c, 0xe2, 0xf2, 0x1c, 0xd9, 0x80, 0xfc, 0x25, 0xff, 0x10, 0xc4, 0xdb, 0xcd, 0xfb,
 ];
-const MAX_MOUNTS: usize = 512;
+/// The most read-only files (and, separately, namespace directories) one plan may mount.
+pub const MAX_MOUNTS: usize = 512;
 const MAX_PUBLIC: usize = MAX_MOUNTS + 2;
 const MAX_PROTECTED: usize = 32;
 const MAX_CHANNEL: usize = 8 * 1024 * 1024;
@@ -385,18 +386,63 @@ fn read_bounded(path: &Path, cap: usize, deadline: Instant) -> Result<Vec<u8>, N
     Ok(bytes)
 }
 
+/// Whether `path` is a clean absolute path (no `..`, no NUL, at most 4096 bytes): the shape every
+/// host path a plan names must have. Hash-free, so a declaration can be checked before any use
+/// (B14-P2b) by the same rule a plan is.
+#[must_use]
+pub fn host_shape(path: &Path) -> bool {
+    clean_absolute(path)
+}
+
+/// Whether a read-only file may be mounted at `namespace`: clean, absolute and under one of the
+/// plan's file prefixes. Hash-free: the one shape rule for a file destination, shared by
+/// [`validate_file`] and the class profile's declaration check (B14-P2b), so the two cannot differ.
+#[must_use]
+pub fn file_shape(namespace: &Path) -> bool {
+    clean_absolute(namespace)
+        && [
+            "/toolchain",
+            "/frozen",
+            "/shim",
+            "/work/bin",
+            "/lib64/",
+            "/usr/bin/",
+            "/usr/lib64/",
+            "/usr/lib/gcc/",
+            "/usr/libexec/gcc/",
+        ]
+        .iter()
+        .any(|prefix| namespace.starts_with(prefix))
+}
+
+/// Whether a plan may create the namespace directory `path`: clean, absolute and one of the fixed
+/// runtime directories or beneath one. Hash-free, shared with the class profile (B14-P2b).
+#[must_use]
+pub fn directory_shape(path: &Path) -> bool {
+    clean_absolute(path)
+        && [
+            "/shim",
+            "/work",
+            "/tmp",
+            "/toolchain",
+            "/frozen",
+            "/channels",
+            "/lib64",
+            "/usr",
+            "/usr/bin",
+            "/usr/lib",
+            "/usr/lib64",
+            "/usr/lib/gcc",
+            "/usr/libexec",
+            "/usr/libexec/gcc",
+        ]
+        .iter()
+        .any(|prefix| path == Path::new(prefix) || path.starts_with(format!("{prefix}/")))
+}
+
 fn validate_file(file: &ReadOnlyFile, deadline: Instant) -> Result<(), NamespaceError> {
     if !clean_absolute(&file.host)
-        || !clean_absolute(&file.namespace)
-        || !file.namespace.starts_with("/toolchain")
-            && !file.namespace.starts_with("/frozen")
-            && !file.namespace.starts_with("/shim")
-            && !file.namespace.starts_with("/work/bin")
-            && !file.namespace.starts_with("/lib64/")
-            && !file.namespace.starts_with("/usr/bin/")
-            && !file.namespace.starts_with("/usr/lib64/")
-            && !file.namespace.starts_with("/usr/lib/gcc/")
-            && !file.namespace.starts_with("/usr/libexec/gcc/")
+        || !file_shape(&file.namespace)
         || sha256(&file.host, deadline)? != file.sha256
     {
         return Err(NamespaceError::InvalidPlan);
@@ -404,10 +450,6 @@ fn validate_file(file: &ReadOnlyFile, deadline: Instant) -> Result<(), Namespace
     Ok(())
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "one atomic trusted-plan validation gate"
-)]
 fn validate(plan: &BwrapPlan, deadline: Instant) -> Result<(), NamespaceError> {
     if Instant::now() >= deadline {
         return Err(NamespaceError::Deadline);
@@ -473,30 +515,14 @@ fn validate(plan: &BwrapPlan, deadline: Instant) -> Result<(), NamespaceError> {
             return Err(NamespaceError::InvalidPlan);
         }
     }
-    if plan.namespace_directories.iter().any(|p| {
-        !clean_absolute(p)
-            || ![
-                "/shim",
-                "/work",
-                "/tmp",
-                "/toolchain",
-                "/frozen",
-                "/channels",
-                "/lib64",
-                "/usr",
-                "/usr/bin",
-                "/usr/lib",
-                "/usr/lib64",
-                "/usr/lib/gcc",
-                "/usr/libexec",
-                "/usr/libexec/gcc",
-            ]
-            .iter()
-            .any(|prefix| p == Path::new(prefix) || p.starts_with(format!("{prefix}/")))
-    }) || plan
-        .public_files
+    if plan
+        .namespace_directories
         .iter()
-        .any(|p| !clean_absolute(&p.namespace))
+        .any(|p| !directory_shape(p))
+        || plan
+            .public_files
+            .iter()
+            .any(|p| !clean_absolute(&p.namespace))
         || plan.protected_paths.iter().any(|p| !clean_absolute(p))
         || plan.shim_arguments.len() > 253
         || plan
