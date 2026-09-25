@@ -2892,28 +2892,42 @@ fn a_frame_in_flight_when_the_drain_begins_is_answered_and_run_returns() -> Outc
             let returned = control_socket::run(&listener, shared, &|| NOW, &report);
             let _ = done.send(returned.map_err(|error| error.kind()));
         });
-        let mut peer = UnixStream::connect(&path)?;
-        peer.set_read_timeout(Some(REPLY_BUDGET))?;
-        let mut frame = listing(7);
-        frame.push(b'\n');
-        peer.write_all(&frame)?;
-        in_flight.recv_timeout(REPLY_BUDGET)?;
-        drain.begin(&path)?;
-        release.send(())?;
-        let mut reader = FrameReader::new(&mut peer);
-        let reply: Value = match reader.next_frame() {
-            Ok(Some(bytes)) => serde_json::from_slice(&bytes)?,
-            other => return Err(format!("no reply to the frame in flight: {other:?}").into()),
-        };
-        assert_eq!(reply["kind"], json!("result"), "{reply}");
-        assert!(
-            matches!(reader.next_frame(), Ok(None)),
-            "the connection then ends"
-        );
+        // Every step is budgeted, and whatever it concluded the peer is closed on leaving it.
+        let observed = (|| -> Outcome {
+            let mut peer = UnixStream::connect(&path)?;
+            peer.set_read_timeout(Some(REPLY_BUDGET))?;
+            let mut frame = listing(7);
+            frame.push(b'\n');
+            peer.write_all(&frame)?;
+            in_flight.recv_timeout(REPLY_BUDGET)?;
+            drain.begin(&path)?;
+            release.send(())?;
+            let mut reader = FrameReader::new(&mut peer);
+            let reply: Value = match reader.next_frame() {
+                Ok(Some(bytes)) => serde_json::from_slice(&bytes)?,
+                other => return Err(format!("no reply to the frame in flight: {other:?}").into()),
+            };
+            if reply["kind"] != json!("result") {
+                return Err(format!("the frame in flight is answered: {reply}").into());
+            }
+            if !matches!(reader.next_frame(), Ok(None)) {
+                return Err("the connection then ends".into());
+            }
+            Ok(())
+        })();
+        let returned = finished.recv_timeout(REPLY_BUDGET).ok();
+        if returned.is_none() {
+            // A run that ignored the drain is still in accept, and the scope would join it for
+            // ever (F102): shut the listener's receive side so accept fails and run returns.
+            let _ = release.send(());
+            rustix::net::shutdown(&listener, rustix::net::Shutdown::Read)?;
+            let _ = finished.recv_timeout(REPLY_BUDGET);
+        }
+        observed?;
         assert_eq!(
-            finished.recv_timeout(REPLY_BUDGET)?,
-            Ok(()),
-            "run returns once drained"
+            returned,
+            Some(Ok(())),
+            "run returns Ok within {REPLY_BUDGET:?} of the drain"
         );
         Ok(())
     })?;
