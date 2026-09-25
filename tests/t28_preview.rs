@@ -305,6 +305,11 @@ fn a_preview_screens_every_declared_recipe_as_the_independent_oracle_does() -> O
     let reply = serve(&tasks, &principal(1000)?, &preview(1, None))?;
     let after = wall_ms()?;
     let answers: Value = serde_json::from_str(ANSWERS)?;
+    // The oracle screened the fixture's wall budget; the preview sent spec()'s: they must agree.
+    assert_eq!(
+        world.fixture["wall_ms"].to_string(),
+        spec()["budget"]["wall_ms"].as_str().ok_or("wall")?
+    );
     assert_eq!(reply["kind"], json!("result"), "{reply}");
     assert_eq!(reply["effect"], json!("none"));
     assert_eq!(reply["readback"], Value::Null);
@@ -496,6 +501,34 @@ fn shape_comes_before_the_owner_and_the_owner_before_the_revision() -> Outcome {
             receiver::Reply::Close(fault) => Err(format!("closed: {}", fault.name()).into()),
         }
     };
+    // The shared receiver fixture's own base case (t28_control's oracle battery) is refused for
+    // its shape — its spec asks for tokens RC01 does not admit — before the owner (review G2).
+    let cases: Value =
+        serde_json::from_str(include_str!("fixtures/native/control-v1/actions.json"))?;
+    let base = cases["cases"]
+        .as_array()
+        .ok_or("cases")?
+        .iter()
+        .find(|case| case["action"] == json!("task.preview"))
+        .ok_or("base case")?;
+    let at: u64 = base["request"]["deadline_unix_ms"]
+        .as_str()
+        .ok_or("deadline")?
+        .parse()?;
+    let fixture = match receiver::serve(
+        &serde_json::to_vec(&base["request"])?,
+        at - 1_000,
+        &operator,
+        &Open,
+    ) {
+        receiver::Reply::Frame(bytes) => serde_json::from_slice::<Value>(&bytes)?,
+        receiver::Reply::Close(fault) => return Err(format!("closed: {}", fault.name()).into()),
+    };
+    assert_eq!(
+        (&fixture["code"], &fixture["details"]["field"]),
+        (&json!("unavailable"), &json!("/body/spec/budget/tokens")),
+        "{fixture}"
+    );
     let valid = unowned(&preview(0x50, None))?;
     assert_eq!(
         (&valid["code"], &valid["details"]["constraint"]),
@@ -662,8 +695,10 @@ fn routing_is_read_under_custody() -> Outcome {
 
 /// B07-P8 · composition refuses what preview could not serve: bytes that are not UTF-8, the
 /// shipped configuration (its baseline names no declared recipe), a recipe serving a class the
-/// catalogue does not admit. The bound is derived, not guessed: the shipped file (anchor block
-/// included) plus 128 recipe rows of maximal width composes under `MAX_ROUTE_CONFIG_BYTES`. A
+/// catalogue does not admit, a baseline lacking a ranking figure. The bound is derived from the
+/// widest values, not guessed: the shipped file (anchor block included) plus 128 recipe rows with
+/// every value at its widest composes under `MAX_ROUTE_CONFIG_BYTES` (formatting padding is not
+/// bounded by it, and is refused past it). A
 /// figure's widest declarable value is `i64::MAX`: TOML integers are 64-bit signed (the spec
 /// requires an error for one not representable losslessly), so `u64::MAX` refuses the file.
 #[test]
@@ -712,6 +747,31 @@ fn composition_refuses_what_preview_could_not_serve() -> Outcome {
         Some(habitat_engine::route::ConfigError::Syntax)
     );
     assert!(routing::compose(declare(&[row("b", CLASS)], "b").as_bytes()).is_ok());
+    // A baseline lacking a figure the ranking reads is a configuration fact no roster change can
+    // mend: refused here, at composition (review D1), each figure in turn; a candidate may lack one.
+    for figure in ["cost_microunits", "quality_basis_points", "latency_ms"] {
+        let full = row("b", CLASS);
+        let start = full.find(&format!(", {figure} = ")).ok_or(figure)?;
+        let end = full[start + 2..]
+            .find([',', ' '])
+            .map_or(full.len(), |at| start + 2 + at);
+        let end = full[end..]
+            .find([',', '}'])
+            .map_or(full.len(), |at| end + at);
+        let lacking = format!("{}{}", &full[..start], &full[end..]);
+        assert!(!lacking.contains(figure), "{lacking}");
+        let baseline = declare(std::slice::from_ref(&lacking), "b");
+        assert_eq!(
+            routing::compose(baseline.as_bytes()).err(),
+            Some(Unready::Refused),
+            "{figure}"
+        );
+        let candidate = declare(
+            &[row("b", CLASS), lacking.replacen("\"b\"", "\"c\"", 1)],
+            "b",
+        );
+        assert!(routing::compose(candidate.as_bytes()).is_ok(), "{figure}");
+    }
     let widest: Vec<String> = (0..128)
         .map(|index| row(&format!("{index:0>128}"), CLASS))
         .collect();
@@ -733,14 +793,14 @@ fn the_preview_owner_is_handed_the_request() -> Outcome {
     let operator = principal(1000)?;
     let reply = serve_composed_at(&handed, &Open, &operator, &preview(0x70, None), NOW)?;
     assert_eq!(reply["code"], json!("deadline_exceeded"), "{reply}");
-    let limit = spec()["budget"]["wall_ms"]
-        .as_str()
-        .ok_or("wall")?
-        .to_owned();
+    // The spec's own literals: wall 600000 ms; its work share is that less RC01's 5 min
+    // verification reserve (docs/contract-decisions.md RC01), 300000; the criteria in order; the
+    // catalogue revision the body named.
+    assert_eq!(spec()["budget"]["wall_ms"], json!("600000"));
     assert_eq!(
         *handed.0.borrow(),
         [format!(
-            "preview {operator:?} {CLASS} {limit} {} {NOW}",
+            "preview {operator:?} {CLASS} 600000 300000 rejects a leading zero|round-trips the maximum 1 {} {NOW}",
             NOW + 5_000
         )]
     );

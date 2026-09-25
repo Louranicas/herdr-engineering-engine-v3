@@ -244,8 +244,8 @@ pub fn age_ms(observation: &Observation, now: &ReceiptTime) -> Option<u64> {
 /// The capabilities `observation` evidences for `head`: those the definition declares **and**
 /// the observation reports (RC03 keeps declared and observed capabilities separate), when the
 /// observation is [`Freshness::Fresh`] under `ttl_ms`; `None` otherwise. A set, so a repeated
-/// label counts once. The one rule for "declared and observed": [`Selection::permits`] and route
-/// composition both read it.
+/// label counts once. The one rule for "declared and observed": [`Selection::permits`] reads it,
+/// and route composition will when a task first requires a roster capability (B07 review G1).
 #[must_use]
 pub fn evidenced_capabilities<'a>(
     head: &'a RosterHeadV1,

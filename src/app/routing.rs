@@ -9,13 +9,15 @@
 //!   because the baseline's locality is a roster fact that can change while the process runs.
 //! * **A recipe restates no roster fact.** Its record's locality and current observation come
 //!   from the snapshot; its figures and the classes it serves from the declaration.
-//! * **Capabilities: declared and observed, or declared.** The roster's one rule
-//!   ([`roster::evidenced_capabilities`]) under the policy's staleness bound; without a current
-//!   observation the declared set, so availability (R05), not capability (R02), reports what is
-//!   missing. Admitted class ids are stripped from the roster's labels (no observer can observe
-//!   suitability for a class); the recipe's `serves` supplies them. What route is handed is that
-//!   set intersected with the task's requirement, so no admitted roster record — repeated labels,
-//!   control bytes, 128 labels — can make route refuse the whole preview.
+//! * **Capabilities: the task's requirement that the recipe serves.** A task requires exactly its
+//!   class, and suitability for a class is a recipe fact (`serves`; no roster observer can observe
+//!   it), so route is handed `serves ∩ requirement`: at most one label, valid by construction, so no
+//!   admitted roster record can make route refuse the whole preview. Roster labels do not enter:
+//!   under RC01 nothing a task requires is a roster capability, and a path they could take would
+//!   decide nothing (review G1). **Deferred, named:** when a class first requires a non-class
+//!   capability, the roster's evidenced set ([`roster::evidenced_capabilities`], the one
+//!   declared-and-observed rule) joins here, with the declared set when no observation is
+//!   current, so availability (R05), not capability (R02), reports the missing fact.
 //! * **Eligibility is route's screening, read from its explanation.** No second filter: the steps
 //!   route records are mapped to the wire's codes (design P7). A recipe that passed every filter
 //!   but lacks a ranking figure is eligible (eligibility is the filters; ranking is the choice).
@@ -29,7 +31,6 @@ use crate::route::{
 };
 use crate::task::control::{ADMITTED_CLASSES, Spec};
 use serde_json::{Value, json};
-use std::collections::BTreeSet;
 use std::path::Path;
 
 /// Where the operator installs the route configuration, under the home directory: its own 0700
@@ -37,8 +38,10 @@ use std::path::Path;
 pub const ROUTING_DIRECTORY: &str = ".config/herdr-engineering-engine-v3/routing";
 /// The route configuration's file name in [`ROUTING_DIRECTORY`].
 pub const ROUTES_FILE: &str = "routes.toml";
-/// The largest route configuration read: the shipped file with its anchor block plus 128 recipe
-/// rows of maximal width fits with room (derived and pinned by B07-P8).
+/// The largest route configuration read, and the acquisition bound for everything parsed from it
+/// (`toml` parses the whole file before route counts its rows). The shipped file with its anchor
+/// block plus 128 recipe rows, every value at its widest, fits with room (B07-P8). It is not a
+/// bound on formatting: a file padded with whitespace or comments past it is refused as too large.
 pub const MAX_ROUTE_CONFIG_BYTES: u64 = 262_144;
 
 // Availability maps `Expired` to an observation and lets route's R05 bound decide staleness; that
@@ -85,8 +88,9 @@ pub struct Routing {
 /// # Errors
 ///
 /// [`Unready::Refused`] for bytes that are not UTF-8, a declaration or recipe `route` refuses, a
-/// recipe serving a class outside [`ADMITTED_CLASSES`], and a baseline that names no declared
-/// recipe.
+/// recipe serving a class outside [`ADMITTED_CLASSES`], a baseline that names no declared recipe,
+/// and a baseline recipe lacking a figure the ranking reads (a configuration fact no roster change
+/// can mend, so it is refused here and at start, never per preview — review D1).
 pub fn compose(source: &[u8]) -> Result<Routing, Unready> {
     let text = std::str::from_utf8(source).map_err(|_| Unready::Refused)?;
     let parsed = route::Routing::parse(text).map_err(|_| Unready::Refused)?;
@@ -96,11 +100,10 @@ pub fn compose(source: &[u8]) -> Result<Routing, Unready> {
             .iter()
             .all(|class| ADMITTED_CLASSES.contains(&class.as_str()))
     });
-    let baseline_declared = parsed
-        .recipes()
-        .iter()
-        .any(|recipe| recipe.id == parsed.baseline());
-    if !admitted || !baseline_declared {
+    let baseline_usable = parsed
+        .declared_baseline()
+        .is_some_and(|baseline| parsed.carries_ranking(baseline));
+    if !admitted || !baseline_usable {
         return Err(Unready::Refused);
     }
     Ok(Routing { parsed })
@@ -175,7 +178,6 @@ fn join<'r>(
     declared: &'r DeclaredRecipe,
     snapshot: &'r Snapshot,
     required: &[&'r str],
-    staleness_bound_ms: u64,
 ) -> Option<Joined<'r>> {
     let record = snapshot
         .records
@@ -185,28 +187,10 @@ fn join<'r>(
         return None;
     }
     let observation = record.observation.as_ref();
-    let labels: BTreeSet<&str> = roster::evidenced_capabilities(
-        &record.head,
-        observation,
-        &snapshot.now,
-        staleness_bound_ms,
-    )
-    .unwrap_or_else(|| {
-        record
-            .head
-            .definition
-            .capabilities
-            .iter()
-            .map(String::as_str)
-            .collect()
-    });
     let capabilities = required
         .iter()
         .copied()
-        .filter(|capability| {
-            declared.serves.iter().any(|class| class == capability)
-                || (!ADMITTED_CLASSES.contains(capability) && labels.contains(capability))
-        })
+        .filter(|capability| declared.serves.iter().any(|class| class == capability))
         .collect();
     let availability = match (
         roster::freshness(&record.head, observation, &snapshot.now, roster::MAX_TTL_MS),
@@ -276,11 +260,10 @@ pub fn preview(routing: &Routing, snapshot: &Snapshot, spec: &Spec) -> Result<Va
         deadline_ms: Some(spec.work_ms),
         quality_floor_basis_points: None,
     };
-    let bound = parsed.staleness_bound_ms();
     let mut exclusions: Vec<(&str, &str)> = Vec::new();
     let mut joined = Vec::with_capacity(parsed.recipes().len());
     for declared in parsed.recipes() {
-        match join(declared, snapshot, &required, bound) {
+        match join(declared, snapshot, &required) {
             Some(recipe) => joined.push(recipe),
             None if declared.id == parsed.baseline() => {
                 return Err(unavailable(
@@ -298,9 +281,8 @@ pub fn preview(routing: &Routing, snapshot: &Snapshot, spec: &Spec) -> Result<Va
     let policy = parsed
         .policy(&baseline.recipe())
         .map_err(|error| match error {
-            ConfigError::BaselineNotLocal { .. } | ConfigError::BaselineMissingFigure { .. } => {
-                unavailable("the route baseline is not usable")
-            }
+            // The baseline's figures were checked at composition; its locality is the roster's.
+            ConfigError::BaselineNotLocal { .. } => unavailable("the route baseline is not usable"),
             _ => internal(),
         })?;
     let candidates: Vec<Recipe<'_>> = joined.iter().map(Joined::recipe).collect();

@@ -471,8 +471,9 @@ staleness_bound_ms = 30000
 # restates no roster fact: capabilities, locality and availability come from the
 # roster record it names. None is declared here: recipes are populated at
 # commissioning from the runtimes actually available (RC02/T18), and until then
-# the baseline below names no declared recipe, so task.preview answers that the
-# route configuration is refused. At most 128 rows.
+# the baseline below names no declared recipe, so this file, installed as it
+# ships, makes task.preview answer "route configuration refused" (with nothing
+# installed it answers "route configuration not installed"). At most 128 rows.
 recipes = []
 
 # The explicit baseline recipe: the fixed local recipe a tie, an evidence gap or

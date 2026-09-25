@@ -10,8 +10,10 @@ use habitat_engine::route::{
     Route, Routing, Rule, Step, Task, TieRule, evaluate_fallback, route,
 };
 use serde_json::{Value, json};
+use sha2::Digest as _;
 use std::collections::BTreeSet;
 use std::error::Error;
+use std::fmt::Write as _;
 
 type Outcome = Result<(), Box<dyn Error>>;
 
@@ -3239,7 +3241,7 @@ fn config_renderings_f() -> Vec<Rendering> {
                 recipe: "vav".to_owned(),
             }
             .to_string(),
-            "recipe \"vav\" serves no class, repeats one or names an invalid one",
+            "recipe \"vav\" serves no class, repeats one, names an invalid one or more than 128",
         ),
         (
             "RecipeServes",
@@ -3247,7 +3249,7 @@ fn config_renderings_f() -> Vec<Rendering> {
                 recipe: "zayin-7".to_owned(),
             }
             .to_string(),
-            "recipe \"zayin-7\" serves no class, repeats one or names an invalid one",
+            "recipe \"zayin-7\" serves no class, repeats one, names an invalid one or more than 128",
         ),
         (
             "RecipeQuality",
@@ -3908,12 +3910,31 @@ fn declared_recipes_read_back_whole_with_their_own_revision() -> Outcome {
         latency_ms: Some(900),
     };
     assert_eq!(routing.recipes(), &[local.clone(), coding.clone()]);
-    // The rendering whose `sha256sum` is TWO_RECIPES_REVISION:
-    // hee3-route-recipes / schema_version=1 / count=2 / then per recipe in id order:
-    // recipe.id, recipe.version, recipe.adapter, recipe.actual_model_required,
-    // recipe.roster_record, recipe.serves.count, one recipe.serves line per class (sorted),
-    // recipe.context_limit_tokens, recipe.cost_microunits, recipe.quality_basis_points,
-    // recipe.latency_ms — `unknown` for an absent figure; one `key=value` per line.
+    // The rendering, written out whole (review G3): `sha256sum` over exactly these bytes is
+    // TWO_RECIPES_REVISION, so the code's revision equal to it pins its rendering byte for byte.
+    let rendering = "hee3-route-recipes\nschema_version=1\ncount=2\n\
+        recipe.id=private-local\nrecipe.version=1\n\
+        recipe.adapter=09000000-0000-4000-8000-0000000000e2\nrecipe.actual_model_required=false\n\
+        recipe.roster_record=09000000-0000-4000-8000-0000000000f2\nrecipe.serves.count=2\n\
+        recipe.serves=a-class\nrecipe.serves=b-class\nrecipe.context_limit_tokens=unknown\n\
+        recipe.cost_microunits=unknown\nrecipe.quality_basis_points=unknown\n\
+        recipe.latency_ms=unknown\n\
+        recipe.id=routine-code\nrecipe.version=3\n\
+        recipe.adapter=09000000-0000-4000-8000-0000000000e1\nrecipe.actual_model_required=true\n\
+        recipe.roster_record=09000000-0000-4000-8000-0000000000f1\nrecipe.serves.count=1\n\
+        recipe.serves=rust-library-change/1\nrecipe.context_limit_tokens=32768\n\
+        recipe.cost_microunits=0\nrecipe.quality_basis_points=7000\nrecipe.latency_ms=900\n";
+    let digest = sha2::Sha256::digest(rendering.as_bytes()).iter().fold(
+        String::from("sha256:"),
+        |mut text, byte| {
+            let _ = write!(text, "{byte:02x}");
+            text
+        },
+    );
+    assert_eq!(
+        digest, TWO_RECIPES_REVISION,
+        "the literal is what sha256sum hashed"
+    );
     assert_eq!(routing.recipes_revision(), TWO_RECIPES_REVISION);
     let swapped = Routing::parse(&with_recipes(&[PRIVATE, ROUTINE]))?;
     assert_eq!(swapped.recipes(), &[local, coding]);
@@ -3994,7 +4015,21 @@ fn recipe_key_cases() -> Vec<(String, ConfigError)> {
 /// The recipe refusal cases of T09-RT-75: the value rules.
 fn recipe_value_cases() -> Vec<(String, ConfigError)> {
     let routine = |key: &str, value: &str| routine_with(key, value);
+    // 129 distinct valid classes: over route's capability bound (review N7); 128 is admitted.
+    let classes = |count: usize| {
+        let names: Vec<String> = (0..count)
+            .map(|index| format!("\"c-{index:03}\""))
+            .collect();
+        format!("[{}]", names.join(", "))
+    };
+    assert!(Routing::parse(&with_recipes(&[&routine("serves", &classes(128))])).is_ok());
     vec![
+        (
+            with_recipes(&[&routine("serves", &classes(129))]),
+            ConfigError::RecipeServes {
+                recipe: "routine-code".to_owned(),
+            },
+        ),
         (
             with_recipes(&[ROUTINE, ROUTINE]),
             ConfigError::DuplicateRecipe {

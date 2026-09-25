@@ -979,7 +979,7 @@ impl fmt::Display for ConfigError {
             }
             Self::RecipeServes { recipe } => write!(
                 formatter,
-                "recipe {recipe:?} serves no class, repeats one or names an invalid one"
+                "recipe {recipe:?} serves no class, repeats one, names an invalid one or more than 128"
             ),
             Self::RecipeQuality { recipe } => write!(
                 formatter,
@@ -1009,15 +1009,16 @@ pub struct Policy {
 }
 
 impl Policy {
-    /// Read a `routes.toml` document and validate it against the supplied baseline recipe.
+    /// Read a `routes.toml` document and validate it against the supplied baseline recipe:
+    /// [`Routing::parse`], then [`Routing::policy`].
     ///
     /// # Errors
-    /// Refuses, by name, malformed TOML, an unknown, missing or mistyped key, an
-    /// unsupported schema version, an unknown, duplicate or missing filter rule
-    /// or ranking key, an unknown tie rule, a staleness bound outside
-    /// `1..=MAX_STALENESS_MS`, a missing baseline, a baseline other than the one
-    /// supplied, and a baseline ineligible by construction (not local, or
-    /// lacking a figure the filters and ranking read).
+    /// Refuses, by name and in this order: every refusal of [`Routing::parse`] (malformed TOML;
+    /// an unknown, missing or mistyped key; an unsupported schema version; an unknown, duplicate
+    /// or missing filter rule or ranking key; an unknown tie rule; a staleness bound outside
+    /// `1..=MAX_STALENESS_MS`; a missing or invalid baseline identity; then every recipe
+    /// refusal), then a baseline other than the one supplied, and a baseline ineligible by
+    /// construction (not local, or lacking a figure the ranking reads).
     pub fn load(source: &str, baseline: &Recipe<'_>) -> Result<Self, ConfigError> {
         Routing::parse(source)?.policy(baseline)
     }
@@ -1025,7 +1026,7 @@ impl Policy {
     /// Validate supplied declaration values against the supplied baseline recipe.
     ///
     /// # Errors
-    /// The same refusals as [`Policy::load`], except the TOML-only ones.
+    /// The same refusals as [`Policy::load`], except the TOML-only and recipe ones.
     pub fn declare(declaration: Declaration, baseline: &Recipe<'_>) -> Result<Self, ConfigError> {
         let (filters, ranking, tie) = admitted(&declaration)?;
         if declaration.baseline != baseline.id {
@@ -1130,6 +1131,7 @@ pub struct DeclaredRecipe {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Routing {
     declaration: Declaration,
+    ranking: Vec<Key>,
     recipes: Vec<DeclaredRecipe>,
     recipes_revision: String,
 }
@@ -1148,11 +1150,12 @@ impl Routing {
     pub fn parse(source: &str) -> Result<Self, ConfigError> {
         let table: toml::Table = source.parse().map_err(|_| ConfigError::Syntax)?;
         let declaration = declaration(&table)?;
-        admitted(&declaration)?;
+        let (_, ranking, _) = admitted(&declaration)?;
         let recipes = declared_recipes(&table)?;
         let recipes_revision = revision(&recipes_canonical(&recipes));
         Ok(Self {
             declaration,
+            ranking,
             recipes,
             recipes_revision,
         })
@@ -1179,10 +1182,24 @@ impl Routing {
         &self.declaration.baseline
     }
 
-    /// The declared staleness bound, validated in `1..=MAX_STALENESS_MS`.
+    /// The declared recipe the declared baseline identity names, if one is declared.
     #[must_use]
-    pub const fn staleness_bound_ms(&self) -> u64 {
-        self.declaration.staleness_bound_ms
+    pub fn declared_baseline(&self) -> Option<&DeclaredRecipe> {
+        self.recipes
+            .iter()
+            .find(|recipe| recipe.id == self.declaration.baseline)
+    }
+
+    /// Whether `recipe` declares every figure the declared ranking reads: the baseline-recipe
+    /// check [`Policy::declare`] makes that depends on the declaration alone, answerable before
+    /// any roster fact is known.
+    #[must_use]
+    pub fn carries_ranking(&self, recipe: &DeclaredRecipe) -> bool {
+        self.ranking.iter().all(|key| match key {
+            Key::Cost => recipe.cost_microunits.is_some(),
+            Key::Quality => recipe.quality_basis_points.is_some(),
+            Key::Latency => recipe.latency_ms.is_some(),
+        })
     }
 
     /// `sha256:` over the canonical rendering of the declared recipes. Two configurations share it

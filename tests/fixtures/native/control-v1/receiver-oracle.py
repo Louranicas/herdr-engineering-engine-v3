@@ -56,7 +56,10 @@ def envelope_validator(action):
     RC03 section 1: the receiving module owns its action body, and section 5 validates the
     body only after the grant. A rule that reads the body -- roster.update's "create requires
     precondition null" is the only one -- is therefore the owner's, and an action whose owner is
-    not composed behind the receiver is refused `unavailable` before any body rule runs.
+    not composed behind the receiver is refused `unavailable`. The task actions read their body's
+    shape before their owner (the task module's body rules are code in this process; the owner is
+    the ledger), so an unowned task action may be refused `unavailable` by an RC01 shape rule
+    rather than by "owner not composed" -- the code is the same; tests/t28_preview.rs pins which.
     """
     definitions = copy.deepcopy(SCHEMA["$defs"])
     definitions["Request_" + action.replace(".", "_")].pop("allOf", None)

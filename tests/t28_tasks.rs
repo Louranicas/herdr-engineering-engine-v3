@@ -2027,8 +2027,12 @@ impl Tasks for Handed {
         habitat_engine::contracts::control::Fault,
     > {
         self.0.borrow_mut().push(format!(
-            "preview {principal:?} {} {} {deadline_unix_ms} {now_unix_ms}",
-            preview.spec.task_class, preview.spec.limit_ms
+            "preview {principal:?} {} {} {} {} {} {deadline_unix_ms} {now_unix_ms}",
+            preview.spec.task_class,
+            preview.spec.limit_ms,
+            preview.spec.work_ms,
+            preview.spec.criteria.join("|"),
+            preview.catalogue_revision
         ));
         Err(habitat_engine::contracts::control::Fault::expired())
     }
