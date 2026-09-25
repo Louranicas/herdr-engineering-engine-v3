@@ -19,6 +19,8 @@ printf 's\n' > "$tree/a b"; printf 'b\n' > "$tree/a!"; printf 'k\n' > "$tree/a\\
 chmod 600 "$tree/a-b" "$tree/a/b" "$tree/empty.txt" "$tree/dir/sub/deep.rs" "$tree/dir.rs" \
   "$tree/a b" "$tree/a!" "$tree/a\\b" "$tree/é"
 chmod 700 "$tree/run.sh"
+# Only group's execute bit (0o610): executable by capture's `mode & 0o111`, so not only 0o100 decides.
+printf 'g\n' > "$tree/group.sh"; chmod 610 "$tree/group.sh"
 manifest() {
   ( cd "$1"
     find . -mindepth 1 -type d -printf '%P\td\n'

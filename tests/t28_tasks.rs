@@ -530,8 +530,6 @@ fn a_submission_reads_back_by_key_and_identity_to_its_principal_only() -> Outcom
     Ok(())
 }
 
-/// task-G09 / APP-08: `task.get` reads one task, not the ledger. With more unrelated tasks than
-/// the whole-ledger recovery inventory will read (its 1,024-row bound), one task still reads back.
 /// B14-P2a · the digest a task binds its criteria by is the world's: Python's `json.dumps(c,
 /// separators=(',', ':'), ensure_ascii=False)` hashed (tests/fixtures/digest/cases.json), over
 /// lists with a quote, a backslash, a tab, controls with and without a short escape, DEL, `/`,
@@ -543,6 +541,15 @@ fn a_task_binds_its_criteria_by_their_compact_json_digest() -> Outcome {
     let fixture: Value = serde_json::from_str(include_str!("fixtures/digest/cases.json"))?;
     let cases = fixture["criteria"].as_array().ok_or("criteria")?;
     assert_eq!(cases.len(), 5, "the generated set, whole");
+    assert_eq!(
+        fixture["generator_sha256"]
+            .as_str()
+            .map(|hex| format!("sha256:{hex}")),
+        Some(digest(Sha256::digest(include_bytes!(
+            "fixtures/digest/gen-digest-fixtures.sh"
+        )))),
+        "the fixture is its committed generator's output"
+    );
     let scratch = Scratch::new()?;
     let tasks = ledger(&scratch)?;
     let operator = Principal::new(1000, "operator").map_err(|error| format!("{error:?}"))?;
@@ -587,6 +594,8 @@ fn a_task_binds_its_criteria_by_their_compact_json_digest() -> Outcome {
     Ok(())
 }
 
+/// task-G09 / APP-08: `task.get` reads one task, not the ledger. With more unrelated tasks than
+/// the whole-ledger recovery inventory will read (its 1,024-row bound), one task still reads back.
 #[test]
 fn a_task_reads_back_in_a_ledger_past_the_inventory_bound() -> Outcome {
     let scratch = Scratch::new()?;

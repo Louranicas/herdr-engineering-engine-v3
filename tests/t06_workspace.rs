@@ -951,7 +951,7 @@ fn the_content_digest_is_the_coreutils_manifest_s() {
     let del = digest_tree(&area, "del", entries);
     file(&del.join("a\u{7f}"), b"c\n", 0o600);
     assert_eq!(capture(&del).content_digest(), None);
-    let space = digest_tree(&area, "space", entries);
-    file(&space.join("a\u{1f}b"), b"c\n", 0o600);
-    assert_eq!(capture(&space).content_digest(), None);
+    let separator = digest_tree(&area, "separator", entries);
+    file(&separator.join("a\u{1f}b"), b"c\n", 0o600);
+    assert_eq!(capture(&separator).content_digest(), None);
 }

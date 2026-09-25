@@ -138,6 +138,8 @@ T06_INPUTS = (
     "tests/fixtures/patch/cases.json",
     # t06_workspace's content-digest known answer and t28_tasks's criteria-digest known answer (B14-P2a).
     "tests/fixtures/digest/cases.json",
+    # t28_tasks checks the fixture's recorded generator digest against the committed generator.
+    "tests/fixtures/digest/gen-digest-fixtures.sh",
 )
 T06_UNIT_COUNTS = {
     "store::staging_tests::": 13, "check::u64_oracle::tests::": 22,

@@ -296,8 +296,10 @@ impl Snapshot {
     /// `<path>\tf\t<x|->\t<sha256 hex>\n` for a file, `x` when any execute bit is set. The root and
     /// every inode stamp are excluded, so two captures of equal trees agree wherever they live.
     /// The manifest is what a coreutils pipeline emits (`tests/fixtures/digest/`), so the value is
-    /// reproducible outside this program. `None` for a path holding a C0 control or DEL: the
-    /// manifest's order would then disagree with the path order (a tab sorts above 0x01–0x08).
+    /// reproducible outside this program. `None` for a path holding a C0 control or DEL: a tab or a
+    /// newline would break the manifest's lines, and 0x01–0x08 would sort below its tab, so its
+    /// order would disagree with the path order; the rest of C0 and DEL are refused with them,
+    /// conservatively, as one rule.
     #[must_use]
     pub fn content_digest(&self) -> Option<String> {
         let alphabet = b"0123456789abcdef";

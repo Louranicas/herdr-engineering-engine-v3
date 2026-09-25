@@ -1183,7 +1183,7 @@ fn every_published_verdict_state_and_reason_list_is_the_decisions()
 }
 
 use habitat_engine::check::consistency::{
-    Error as PlanError, U64_CASE_ID, U64_CRITERION_ID, U64Attempt, prepare_u64,
+    Error as PlanError, U64_CASE_ID, U64_CRITERIA, U64_CRITERION_ID, U64Attempt, prepare_u64,
 };
 use habitat_engine::check::u64_oracle;
 use habitat_engine::contracts::receipt::{Generation, IdentityV1, InvocationV1};
@@ -1271,6 +1271,16 @@ fn u64_plan_binds_the_workload_manifest_and_every_typed_input()
             }
         );
         assert_eq!(plan.schema_sha256, input.schema_sha256);
+        assert_eq!(
+            plan.identity
+                .criterion_ids
+                .as_slice()
+                .iter()
+                .map(Name::as_str)
+                .collect::<Vec<_>>(),
+            U64_CRITERIA,
+            "the plan's criteria are the class's list, in its order"
+        );
         assert_eq!(plan.subjects, input.subjects);
         // The class's editable binding, from the class's own text (review P4 re-review 3): TASK.md
         // names the one file and the 200 changed lines; 64 KiB is the recorded P4-R2 decision.
