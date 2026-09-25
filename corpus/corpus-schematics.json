@@ -4,7 +4,7 @@
   "source_sha256": {
     "CORPUS_UPDATE_PROTOCOL.md": "a93c1dd5f6448c0c80e9dc6bb2b7de6f39934864011ea03a24a9c4c9ca8703b2",
     "PLAN_habitat_engine.json": "e62091172c60c391bbd5221dd7d3a9bfa398c8a89a1b66c8c5de97c4ddc88d0c",
-    "corpus_catalogue.json": "74fb56f1dada6c215fa6e46cea115c646f6e9423a4fb79224ba7c1c03724ed13",
+    "corpus_catalogue.json": "de19d63c2f30617cb44ad6c3304c539c214c7e80653dd3a7c6f300544616aa96",
     "COMPLETION_STANDARD_habitat_engine.json": "b0f0ee8c52c2b93249f49e5048d274a18beb0ffdbd294b0731d486a09dbf31be",
     "TESTING_STANDARD_habitat_engine.json": "d643fb699b502af05898a718aec4eb9f9461b882cfbb94a89850358166e69336",
     "MODULE_INTERFACES_habitat_engine.json": "ddd56488c228140c6b1e239691d4b9a6c34fcd8edb3770a2ad9206354b42aabd",
@@ -13,7 +13,7 @@
     "corpus_sync.py": "05878c4d2f9800caea05f511ef4b867928c39794293e1c2c53554f230a060c2d",
     "corpus_publication.py": "341922ae8a90c94d6a5cb307c38f5e699eb220101c2526b983d037bfded4fe69",
     "corpus_evidence.py": "3b31d9f71248526dcf750e1a1c5473b280535c8c556fc0abfa936e625eaa04a7",
-    "completion_standard.py": "4b379d53e4c080d780bbd9a8c06fedcf4e8edbda3a4a9a5852e499e14b683fd8",
+    "completion_standard.py": "b78cc7b9b3d5b88546ba3db5c8677ca15c5974cc6b080440f4c40b405cf96b4c",
     "graphify_corpus.py": "0624a89c056c8c2784d49027586d9f390c989a9433493839a27dfdb84c8dfe8d",
     "module_context.py": "0288d8e179f63486cea0cbba0f34624ea8bee450de67695a8098080fe7433b12",
     "corpus_schematics.py": "13316c711ec232b90c3fcd5812fbc276535e060ca1d55a4a48283aeb9f313e89"

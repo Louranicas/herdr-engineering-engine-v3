@@ -607,6 +607,7 @@ Exact current bytes are inventoried without inserting managed comments. These ar
 | [migrations/002.sql](file:///var/home/herdr-engineering-engine-v3/migrations/002.sql) | store | T04 |
 | [migrations/003.sql](file:///var/home/herdr-engineering-engine-v3/migrations/003.sql) | store | T04 |
 | [migrations/004.sql](file:///var/home/herdr-engineering-engine-v3/migrations/004.sql) | store | T04 |
+| [migrations/005.sql](file:///var/home/herdr-engineering-engine-v3/migrations/005.sql) | store | T04 |
 | [src/contracts/roster.rs](file:///var/home/herdr-engineering-engine-v3/src/contracts/roster.rs) | contracts | T05 |
 | [src/store/roster.rs](file:///var/home/herdr-engineering-engine-v3/src/store/roster.rs) | store | T05 |
 | [src/store/roster/attempts.rs](file:///var/home/herdr-engineering-engine-v3/src/store/roster/attempts.rs) | store | T05 |

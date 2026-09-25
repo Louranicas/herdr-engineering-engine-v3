@@ -1,7 +1,7 @@
 # Herdr Engineering Engine v3 — quick start
 
 <!-- HEE3-RESUME-NAVIGATION-BEGIN -->
-[Current saved restart — task.preview, task.get evidence, the candidate apply, the receipt patch binding, the class profile and admission-bound workspaces landed on local main, 2026-09-26 early](file:///var/home/Louranicas/handoffs/HEE3_RESTART_20260926_EARLY.md) ↔ this quick start. This is the latest saved implementation checkpoint; its pending publication and exact evidence supersede older restart-status prose.
+[Current saved restart — task.preview, task.get evidence, the candidate apply, the receipt patch binding, the class profile, admission-bound workspaces and the StoreRuntime attempt lifecycle landed on local main, 2026-09-26 early](file:///var/home/Louranicas/handoffs/HEE3_RESTART_20260926_EARLY.md) ↔ this quick start. This is the latest saved implementation checkpoint; its pending publication and exact evidence supersede older restart-status prose.
 
 [Module completion review — per-module definition of done, schematics and route](file:///var/home/Louranicas/handoffs/HEE3_MODULE_COMPLETION_REVIEW_20260923.md) ↔ this quick start · [Architecture atlas — what complete means (L1 implemented · L2 composed · L3 admitted) and measured schematics](file:///var/home/Louranicas/handoffs/HEE3_ARCHITECTURE_ATLAS_20260923.md) ↔ this quick start.
 
@@ -12,7 +12,7 @@ Jev: [Jev master index](file:///var/mnt/STORAGE-10TB/fedora-obsidian-vaults/jev.
 
 **Start with the corpus tools, current handoff and module contracts. All 22 module boundaries remain unaccepted.** Inspect source bodies and the evidence index for comment stubs and substantive candidates. The handoff records original task progress and candidate evidence limits; no qualified coordinator, routing service or installed migration is supplied by corpus publication.
 
-[Detailed session restart — 2026-09-26 early (B07, B09a, B14-P3, B14-P4, B14-P2a, B14-P2b and B14-P2c-1 landed on local main)](file:///var/home/Louranicas/handoffs/HEE3_RESTART_20260926_EARLY.md) ↔ this quick start. Use the detailed checkpoint for the saved implementation state, exact evidence and immediate next action; revalidate it before resuming.
+[Detailed session restart — 2026-09-26 early (B07, B09a, B14-P3, B14-P4, B14-P2a, B14-P2b, B14-P2c-1 and B14a-1 landed on local main)](file:///var/home/Louranicas/handoffs/HEE3_RESTART_20260926_EARLY.md) ↔ this quick start. Use the detailed checkpoint for the saved implementation state, exact evidence and immediate next action; revalidate it before resuming.
 
 [Codebase README](file:///var/home/herdr-engineering-engine-v3/README.md) · [Vault master](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=00%20-%20Master%20Index) · [Atlas master](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Atlas%2FMASTER_INDEX_habitat_engine) · [Ultra map](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Ultra%20Map%2FIndex)
 
