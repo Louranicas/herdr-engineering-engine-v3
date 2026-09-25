@@ -2085,6 +2085,7 @@ const BIND_PROT: &str = "sha256:222222222222222222222222222222222222222222222222
 const BIND_PROF: &str = "sha256:3333333333333333333333333333333333333333333333333333333333333333";
 const BIND_OTHER: &str = "00000000-0000-4000-8000-0000000000b2";
 const BIND_RESTARTED: &str = "00000000-0000-4000-8000-0000000000b3";
+const BIND_CANCELLED: &str = "00000000-0000-4000-8000-0000000000b4";
 fn bound_start<'a>(
     owner: &'a Principal,
     agent: &'a RosterHeadV1,
@@ -2216,6 +2217,37 @@ fn an_unbound_task_refuses_a_bound_attempt() {
         store.begin_rostered_attempt(again, deadline()).is_ok(),
         "the same begin, unbound, is admitted from that state"
     );
+}
+
+/// B14a-1a · a cancelled task is named `Cancelled` at the wrong begin door too: cancellation is
+/// checked before the mixing rule, which would otherwise answer `Conflict` (review F3).
+#[test]
+fn a_cancelled_task_meets_either_begin_door_as_cancelled() {
+    let owner = principal();
+    let area = Area::new();
+    let mut store = area.open();
+    clock(&mut store, 100);
+    let profile = create(&mut store, 1);
+    observe(&mut store, &profile.head);
+    admit(&mut store);
+    let selections = [choose(&profile.head)];
+    store
+        .begin_rostered_attempt(bound_start(&owner, &profile.head, &selections), deadline())
+        .unwrap();
+    repair_pending(&mut store);
+    store
+        .cancel(uuid(TASK), generation(3), uuid(BIND_CANCELLED), deadline())
+        .unwrap();
+    let before = ledger(&area);
+    let mut second = bound_start(&owner, &profile.head, &selections);
+    second.expected = generation(4);
+    second.attempt = uuid(BIND_OTHER);
+    second.event = uuid(BIND_RESTARTED);
+    assert!(matches!(
+        store.begin_bound_attempt(second, &binding(), deadline()),
+        Err(Error::Cancelled)
+    ));
+    assert_eq!(ledger(&area), before, "a refused begin writes nothing");
 }
 
 /// Settle the fixture's first attempt as not ready to verify: the task returns to

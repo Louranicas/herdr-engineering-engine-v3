@@ -2261,6 +2261,11 @@ fn begin_attempt_in(
     bound: bool,
 ) -> Result<AttemptHead> {
     let head = head(tx, task.as_str())?;
+    // Cancellation first (B14a-R1.2), as in acceptance: before the compare-and-set and before the
+    // mixing rule, so a cancelled task is named `Cancelled` whichever begin door it meets.
+    if head.cancellation {
+        return Err(Error::Cancelled);
+    }
     // A task's attempts are all bound or all unbound (B14a-R2.2): a bound begin refuses a task with
     // an unbound attempt, an unbound begin a task with any binding.
     let mixed: bool = if bound {
@@ -2279,10 +2284,6 @@ fn begin_attempt_in(
     };
     if mixed {
         return Err(Error::Conflict);
-    }
-    // Cancellation before the compare-and-set (B14a-R1.2), as in acceptance.
-    if head.cancellation {
-        return Err(Error::Cancelled);
     }
     same_generation(&head, expected)?;
     if !matches!(head.state.as_str(), "admitted" | "repair_pending") {
