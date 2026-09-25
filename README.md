@@ -195,7 +195,7 @@ HEE3-ANCHORS-END
 
 **Start coding in a new context:** [Canonical restart pointer and launch message](corpus/CONTEXT_HANDOFF.md) ↔ [Quick start](QUICK_START.md). Recover authority, ownership and current publication; scout the earliest original task before the next authorized slice. The handoff records the initial unaccepted T01 candidate; T01 remains first and T25/T26 precede T02.
 
-**Current resume point:** [Restart note](file:///var/home/Louranicas/handoffs/HEE3_RESTART_20260925_AFTERNOON.md) → [Module completion review — per-module definition of done, schematics and route](file:///var/home/Louranicas/handoffs/HEE3_MODULE_COMPLETION_REVIEW_20260923.md) · [Architecture atlas — what complete means (L1 implemented · L2 composed · L3 admitted) and measured schematics](file:///var/home/Louranicas/handoffs/HEE3_ARCHITECTURE_ATLAS_20260923.md) — each links back to this README.
+**Current resume point:** [Restart note](file:///var/home/Louranicas/handoffs/HEE3_RESTART_20260925_EVENING.md) → [Module completion review — per-module definition of done, schematics and route](file:///var/home/Louranicas/handoffs/HEE3_MODULE_COMPLETION_REVIEW_20260923.md) · [Architecture atlas — what complete means (L1 implemented · L2 composed · L3 admitted) and measured schematics](file:///var/home/Louranicas/handoffs/HEE3_ARCHITECTURE_ATLAS_20260923.md) — each links back to this README.
 
 **Known unknowns:** [What cannot yet be verified, each with its reason](file:///var/home/Louranicas/.claude/known-unknowns.md) — read it before trusting a green result; it links back to this README.
 
