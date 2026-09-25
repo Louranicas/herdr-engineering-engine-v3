@@ -24,7 +24,7 @@ pub(super) struct Preserved {
 /// THE ordered migration chain (A25; RC06/T04): the one door for migration identity. Version `k`
 /// is `MIGRATIONS[k - 1]`; a ledger records `k` rows linked by their predecessor columns and
 /// `user_version = k`. Only an appended entry may follow a released one.
-const MIGRATIONS: [Migration; 2] = [
+const MIGRATIONS: [Migration; 3] = [
     Migration {
         sql: include_str!("../../migrations/001.sql"),
         body: "sha256:ac5916feaee05749404dd7d87d98cde7e2ae93048e8b07e133ba7868fc1ee9f2",
@@ -38,10 +38,24 @@ const MIGRATIONS: [Migration; 2] = [
             order: "principal_uid,principal_role,action,version,request_key",
         }],
     },
+    Migration {
+        sql: include_str!("../../migrations/003.sql"),
+        body: "sha256:4b4e9a7e06fa50f26bc8e74af58cd444fe8a6cfca47b7b85e4a598743bbf2d7d",
+        preserves: &[
+            Preserved {
+                table: "operations",
+                order: "principal_uid,principal_role,action,version,request_key",
+            },
+            Preserved {
+                table: "task_stops",
+                order: "task_id",
+            },
+        ],
+    },
 ];
 
 /// The version a current ledger records: the chain's length.
-pub(super) const CURRENT: u32 = 2;
+pub(super) const CURRENT: u32 = 3;
 const _: () = assert!(MIGRATIONS.len() == CURRENT as usize);
 
 /// Which clause of the migration chain a ledger (or this binary) fails, at which version (A25).

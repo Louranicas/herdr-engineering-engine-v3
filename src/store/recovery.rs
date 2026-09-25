@@ -545,6 +545,9 @@ pub struct TaskView {
     pub head: TaskHead,
     pub attempts: Vec<DurableAttempt>,
     pub pending_deliveries: usize,
+    /// Attempts whose obligation an operator's disposition closed (B08), read in the same snapshot:
+    /// their rows still record what was observed, and they no longer count as owed.
+    pub resolved_attempts: Vec<String>,
     /// The ledger's event high-water when the view was read: the same read point the recovery
     /// inventory reports, not the sequence at which this task last changed.
     pub event_high_water: u64,
@@ -560,15 +563,16 @@ impl TaskView {
             .map(|attempt| attempt.id.as_str())
     }
 
-    /// Obligations still owed: every attempt whose effect or cleanup is pending or unknown, plus
-    /// every undelivered outbox row.
+    /// Obligations still owed: every attempt whose effect or cleanup is pending or unknown and no
+    /// disposition closed, plus every undelivered outbox row no disposition gave up.
     #[must_use]
     pub fn unresolved_obligations(&self) -> usize {
         self.attempts
             .iter()
             .filter(|attempt| {
-                matches!(attempt.effect.as_str(), "pending" | "unknown")
-                    || matches!(attempt.cleanup.as_str(), "pending" | "unknown")
+                (matches!(attempt.effect.as_str(), "pending" | "unknown")
+                    || matches!(attempt.cleanup.as_str(), "pending" | "unknown"))
+                    && !self.resolved_attempts.contains(&attempt.id)
             })
             .count()
             + self.pending_deliveries
@@ -698,10 +702,20 @@ pub(super) fn read_view(
         attempts.push(attempt_row(row)?);
     }
     let pending = db.query_row(
-        "SELECT count(*) FROM outbox o JOIN events e ON e.id=o.event_id WHERE e.task_id=? AND o.delivered=0",
+        &format!(
+            "SELECT count(*) FROM outbox o JOIN events e ON e.id=o.event_id WHERE e.task_id=? AND {}",
+            super::UNDELIVERED
+        ),
         [task.as_str()],
         |row| read_number(row, 0),
     )?;
+    let mut statement = db.prepare(
+        "SELECT obligation_id FROM task_dispositions \
+         WHERE task_id=? AND obligation_kind='attempt' AND resolves=1 ORDER BY obligation_id",
+    )?;
+    let resolved_attempts = statement
+        .query_map([task.as_str()], |row| row.get(0))?
+        .collect::<std::result::Result<Vec<String>, _>>()?;
     let event_high_water =
         db.query_row("SELECT coalesce(max(sequence),0) FROM events", [], |row| {
             read_number(row, 0)
@@ -710,6 +724,7 @@ pub(super) fn read_view(
         head,
         attempts,
         pending_deliveries: usize::try_from(pending).map_err(|_| Error::Bound)?,
+        resolved_attempts,
         event_high_water,
     })
 }
@@ -977,9 +992,9 @@ fn collect(
     })?;
     let stops=budget.read(db,"SELECT task_id,event_id,evidence_digest,reason,state FROM task_stops ORDER BY task_id LIMIT ?",|row| {
         let r=DurableStop{task:row.get(0)?,event:row.get(1)?,evidence:row.get(2)?,reason:row.get(3)?,state:row.get(4)?};
-        uuid(&r.task)?;uuid(&r.event)?;digest(&r.evidence)?;crate::contracts::receipt::Name::new(r.reason.clone()).map_err(|_|Error::Corrupt)?;one_of(&r.state,&["failed","cancelled"])?;Ok(r)
+        uuid(&r.task)?;uuid(&r.event)?;digest(&r.evidence)?;crate::contracts::receipt::Name::new(r.reason.clone()).map_err(|_|Error::Corrupt)?;one_of(&r.state,&["failed","cancelled","abandoned"])?;Ok(r)
     })?;
-    let pending_delivery=budget.read(db,"SELECT o.event_id,o.recipient,e.sequence,e.task_id,e.roster_id FROM outbox o JOIN events e ON e.id=o.event_id WHERE o.delivered=0 ORDER BY e.sequence,o.recipient LIMIT ?",|row| {
+    let pending_delivery=budget.read(db,&format!("SELECT o.event_id,o.recipient,e.sequence,e.task_id,e.roster_id FROM outbox o JOIN events e ON e.id=o.event_id WHERE {} ORDER BY e.sequence,o.recipient LIMIT ?",super::UNDELIVERED),|row| {
         let r=PendingDelivery{event:row.get(0)?,recipient:row.get(1)?,sequence:read_number(row,2)?,task:row.get(3)?,roster:row.get(4)?};
         uuid(&r.event)?;for id in [&r.task,&r.roster].into_iter().flatten(){uuid(id)?;}
         if r.task.is_some()==r.roster.is_some() || r.sequence==0 || r.sequence>event_high_water || r.recipient.is_empty() {return Err(Error::Corrupt);}

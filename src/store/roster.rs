@@ -1,7 +1,7 @@
 //! Roster persistence in the existing ledger and transaction owner.
 
 use super::{
-    CutPoint, Error, Object, Principal, Result, Store, digest, next, number, read_number,
+    CutPoint, Error, Object, Principal, Result, Store, digest, next, number, operator, read_number,
     remaining, schema,
 };
 use crate::contracts::roster::{
@@ -145,14 +145,6 @@ fn invalid(error: dto::Invalid) -> Error {
     match error {
         dto::Invalid::Bound => Error::Bound,
         _ => Error::Invalid,
-    }
-}
-
-fn operator(principal: &Principal) -> Result<()> {
-    if principal.role() == "operator" {
-        Ok(())
-    } else {
-        Err(Error::Forbidden)
     }
 }
 

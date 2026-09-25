@@ -130,16 +130,65 @@ impl Store {
             let stored_size: u64 = tx.query_row("SELECT size FROM artifacts WHERE digest=?",
                 [&stop.evidence.digest], |row| super::read_number(row, 0))?;
             if stored_size != stop.evidence.size { return Err(Error::Corrupt); }
-            let generation = next(stop.generation)?;
             let state = if current.cancellation { "cancelled" } else { "failed" };
-            event(tx, stop.event.as_str(), stop.task.as_str(), &generation, "task_stopped")?;
-            tx.execute("UPDATE events SET body=? WHERE id=?", params![body, stop.event.as_str()])?;
-            tx.execute("INSERT INTO task_stops(task_id,event_id,evidence_digest,reason,state) VALUES(?,?,?,?,?)",
-                params![stop.task.as_str(),stop.event.as_str(),stop.evidence.digest,stop.reason.as_str(),state])?;
-            tx.execute("UPDATE tasks SET generation=?,state=?,spent_ms=?,reserved_work_ms=0,reserved_verify_ms=0 WHERE id=?",
-                params![generation,state,number(spent)?,stop.task.as_str()])?;
-            tx.execute("INSERT INTO outbox(event_id,recipient) VALUES(?,?)", params![stop.event.as_str(),principal.recipient()])?;
+            let generation = close(tx, &Closing {
+                task: stop.task.as_str(), expected: stop.generation, event: stop.event.as_str(),
+                evidence: &stop.evidence.digest, reason: stop.reason.as_str(), state, body: &body,
+                spent: Some(spent), recipient: &principal.recipient(),
+            })?;
             Ok(Stopped { generation, cancelled: current.cancellation })
         })
     }
+}
+
+/// One stop's commit (T06; B08): the `task_stopped` event, the stop row naming its evidence, the
+/// terminal state, and the notification, together. `spent: Some(total)` records measured usage and
+/// releases every reservation; `None` leaves both as they are, because some usage is unknown and
+/// "unknown effects retain reservations" (RC01).
+pub(super) struct Closing<'a> {
+    pub(super) task: &'a str,
+    pub(super) expected: Generation,
+    pub(super) event: &'a str,
+    pub(super) evidence: &'a str,
+    pub(super) reason: &'a str,
+    pub(super) state: &'static str,
+    pub(super) body: &'a [u8],
+    pub(super) spent: Option<u64>,
+    pub(super) recipient: &'a str,
+}
+
+/// Commit `closing`; the one door every stop (a failure, a cancellation, an abandonment) goes
+/// through. Returns the new generation.
+pub(super) fn close(tx: &rusqlite::Transaction<'_>, closing: &Closing<'_>) -> Result<String> {
+    let generation = next(closing.expected)?;
+    event(tx, closing.event, closing.task, &generation, "task_stopped")?;
+    tx.execute(
+        "UPDATE events SET body=? WHERE id=?",
+        params![closing.body, closing.event],
+    )?;
+    tx.execute(
+        "INSERT INTO task_stops(task_id,event_id,evidence_digest,reason,state) VALUES(?,?,?,?,?)",
+        params![
+            closing.task,
+            closing.event,
+            closing.evidence,
+            closing.reason,
+            closing.state
+        ],
+    )?;
+    match closing.spent {
+        Some(spent) => tx.execute(
+            "UPDATE tasks SET generation=?,state=?,spent_ms=?,reserved_work_ms=0,reserved_verify_ms=0 WHERE id=?",
+            params![generation, closing.state, number(spent)?, closing.task],
+        )?,
+        None => tx.execute(
+            "UPDATE tasks SET generation=?,state=? WHERE id=?",
+            params![generation, closing.state, closing.task],
+        )?,
+    };
+    tx.execute(
+        "INSERT INTO outbox(event_id,recipient) VALUES(?,?)",
+        params![closing.event, closing.recipient],
+    )?;
+    Ok(generation)
 }

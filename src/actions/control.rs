@@ -94,6 +94,8 @@ pub enum Recorded {
     Submit,
     /// `task.cancel`.
     Cancel,
+    /// `task.resolve`.
+    Resolve,
 }
 
 impl Recorded {
@@ -103,6 +105,7 @@ impl Recorded {
         match id {
             "task.submit" => Some(Self::Submit),
             "task.cancel" => Some(Self::Cancel),
+            "task.resolve" => Some(Self::Resolve),
             _ => None,
         }
     }
@@ -161,6 +164,23 @@ pub trait Tasks {
         request: &TaskRequest<'_>,
         target: &Precondition,
         body: &task_body::Cancel,
+    ) -> Result<Outcome, Fault>;
+
+    /// Record an operator's disposition of one of `target`'s open obligations durably, or return the
+    /// stored result of an exact replay (B08, RC03 §6).
+    ///
+    /// # Errors
+    ///
+    /// `forbidden` for a principal outside the operator role; `stale_generation`; `not_found` for an
+    /// invisible task or an obligation it does not hold; `conflict` for a live attempt, a resolved
+    /// obligation, a refused disposition, a stopped task or other bytes under the key;
+    /// `invalid_argument` for a disposition that does not apply or an abandonment naming no evidence;
+    /// `effect_unknown` after an uncertain commit.
+    fn resolve(
+        &self,
+        request: &TaskRequest<'_>,
+        target: &Precondition,
+        body: &task_body::Resolve,
     ) -> Result<Outcome, Fault>;
 
     /// RC03 §6 readback for an expired request: the stored result, with `replayed: true`, when
@@ -386,47 +406,12 @@ fn dispatch(action: Action, caller: &Caller, context: &Context<'_>) -> Result<Ou
         "task.submit" => {
             let spec = task_body::submission(body)?;
             let tasks = context.composed.tasks.ok_or_else(owner_absent)?;
-            let key = context
-                .envelope
-                .idempotency_key
-                .as_deref()
-                .ok_or_else(internal)?;
-            tasks.submit(
-                &TaskRequest {
-                    principal: context.principal,
-                    idempotency_key: key,
-                    payload: context.payload,
-                    deadline_unix_ms: context.envelope.deadline_unix_ms,
-                    now_unix_ms: context.now_unix_ms,
-                },
-                &spec,
-            )
+            tasks.submit(&task_request(context)?, &spec)
         }
         "task.cancel" => {
             let cancel = task_body::cancel(body)?;
             let tasks = context.composed.tasks.ok_or_else(owner_absent)?;
-            let key = context
-                .envelope
-                .idempotency_key
-                .as_deref()
-                .ok_or_else(internal)?;
-            // `admit` has already required a task precondition for this action.
-            let target = context
-                .envelope
-                .precondition
-                .as_ref()
-                .ok_or_else(internal)?;
-            tasks.cancel(
-                &TaskRequest {
-                    principal: context.principal,
-                    idempotency_key: key,
-                    payload: context.payload,
-                    deadline_unix_ms: context.envelope.deadline_unix_ms,
-                    now_unix_ms: context.now_unix_ms,
-                },
-                target,
-                &cancel,
-            )
+            tasks.cancel(&task_request(context)?, task_target(context)?, &cancel)
         }
         "task.list" => {
             // Shape, then owner, then the listing's own semantics (the cursor's lifetime and
@@ -443,6 +428,11 @@ fn dispatch(action: Action, caller: &Caller, context: &Context<'_>) -> Result<Ou
                 context.now_unix_ms,
             )
         }
+        "task.resolve" => {
+            let resolve = task_body::resolve(body)?;
+            let tasks = context.composed.tasks.ok_or_else(owner_absent)?;
+            tasks.resolve(&task_request(context)?, task_target(context)?, &resolve)
+        }
         "task.get" => {
             let selector = task_body::get(body)?;
             let tasks = context.composed.tasks.ok_or_else(owner_absent)?;
@@ -457,6 +447,27 @@ fn dispatch(action: Action, caller: &Caller, context: &Context<'_>) -> Result<Ou
         "health" => health(context),
         _ => Err(owner_absent()),
     }
+}
+
+/// What an effectful task action hands its owner: the transport's principal, the key `admit`
+/// required, the exact bytes and the deadline.
+fn task_request<'a>(context: &Context<'a>) -> Result<TaskRequest<'a>, Fault> {
+    Ok(TaskRequest {
+        principal: context.principal,
+        idempotency_key: context
+            .envelope
+            .idempotency_key
+            .as_deref()
+            .ok_or_else(internal)?,
+        payload: context.payload,
+        deadline_unix_ms: context.envelope.deadline_unix_ms,
+        now_unix_ms: context.now_unix_ms,
+    })
+}
+
+/// The task precondition `admit` already required of this action.
+fn task_target<'a>(context: &Context<'a>) -> Result<&'a Precondition, Fault> {
+    context.envelope.precondition.as_ref().ok_or_else(internal)
 }
 
 /// `health`: the coordinator's observation, as composed, with the drain read at each frame (APP-01).

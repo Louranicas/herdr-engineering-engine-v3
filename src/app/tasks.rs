@@ -23,6 +23,11 @@
 //!   principal's own door before its generation (an invisible task names none). The result names
 //!   the intent's obligation and what the cancel found of the worker; a lost commit reads back by
 //!   `task.get` on the precondition's task.
+//! * **`task.resolve` records an operator's disposition, never an observation (B08).**
+//!   `Store::resolve_intent` names the obligation (an attempt in state `unknown`, or an undelivered
+//!   delivery), applies the design's table (retry / abandon / acknowledge / quarantine), and writes
+//!   the disposition as a row of its own; an abandonment stops the task only through the one stop
+//!   door, once every unknown effect is acknowledged, retaining reservations when usage is unknown.
 //! * **A recorded request answers after its deadline (RC03 §6).** An expired envelope reaches this
 //!   owner only through [`Tasks::replay`], which reads the record under its key and writes
 //!   nothing: the stored result for the exact bytes, `conflict` for other bytes, and for an unseen
@@ -38,10 +43,10 @@ use crate::contracts::control::{
 use crate::contracts::parse_u64_decimal;
 use crate::contracts::{Sha256Digest, UuidV4};
 use crate::store::{
-    Admission, Allocation, CancelIntent, Cancellation, Error as StoreError, Principal, Store,
-    Submission, TaskFilter, TaskHead,
+    Admission, Allocation, CancelIntent, Cancellation, Error as StoreError, Principal, Resolution,
+    ResolveIntent, ResolveRefusal, Store, Submission, TaskFilter, TaskHead,
 };
-use crate::task::control::{Cancel, List, Selector, Spec};
+use crate::task::control::{Cancel, List, Resolve, Selector, Spec};
 use serde_json::{Value, json};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -128,6 +133,96 @@ impl StoreTasks {
                 "engine_cursor": self.cursor(admission.sequence, &admission.task, now_unix_ms),
             }),
         })
+    }
+}
+
+/// The `task.resolve` result for a stored disposition: the one rendering of a first reply and of
+/// every replay of it.
+fn resolved(record: &Resolution, replayed: bool) -> Result<Outcome, Fault> {
+    UuidV4::parse(&record.task).map_err(|_| internal())?;
+    UuidV4::parse(&record.disposition).map_err(|_| internal())?;
+    let obligations = u32::try_from(record.unresolved_obligations).map_err(|_| internal())?;
+    Ok(Outcome {
+        effect: ResultEffect::Committed,
+        replayed,
+        observed_generation: Some(record.generation.clone()),
+        readback: Some(cancel_readback(&record.task)),
+        body: json!({
+            "task": {
+                "task_id": record.task,
+                "generation": record.generation,
+                "state": record.state,
+                "current_attempt_id": record.current_attempt,
+                "unresolved_obligations": obligations,
+            },
+            "disposition_id": record.disposition,
+            "obligation_state": if record.resolved { "resolved" } else { "pending" },
+        }),
+    })
+}
+
+/// A `task.resolve` refusal on the wire: each names the member that decided it.
+fn resolve_fault(error: StoreError, task: &str) -> Fault {
+    match error {
+        StoreError::UncertainCommit => Fault::effect_unknown(cancel_readback(task)),
+        StoreError::Forbidden => Fault::of(
+            ErrorCode::Forbidden,
+            Retry::Never,
+            "task.resolve is the operator's alone",
+        ),
+        StoreError::StaleGeneration { current } => {
+            Fault::stale("/precondition/generation", current)
+        }
+        StoreError::NotFound => {
+            Fault::of(ErrorCode::NotFound, Retry::Never, "no such visible task")
+                .at("/precondition/id")
+        }
+        StoreError::AlreadyStopped => Fault::of(
+            ErrorCode::Conflict,
+            Retry::Never,
+            "the task already stopped; its outcome stays historical",
+        )
+        .at("/precondition"),
+        StoreError::Disposition(refusal) => match refusal {
+            ResolveRefusal::NoObligation => Fault::of(
+                ErrorCode::NotFound,
+                Retry::Never,
+                "the task holds no open obligation by that id",
+            )
+            .at("/body/obligation_id"),
+            ResolveRefusal::LiveAttempt => Fault::of(
+                ErrorCode::Conflict,
+                Retry::Never,
+                "a live attempt is not an operator's to resolve",
+            )
+            .at("/body/obligation_id")
+            .because("use task.cancel"),
+            ResolveRefusal::Resolved => Fault::of(
+                ErrorCode::Conflict,
+                Retry::Never,
+                "a disposition already closed this obligation",
+            )
+            .at("/body/obligation_id"),
+            ResolveRefusal::Refused(why) => Fault::of(
+                ErrorCode::Conflict,
+                Retry::Never,
+                "the disposition is refused",
+            )
+            .at("/body/disposition")
+            .because(why),
+            ResolveRefusal::Inapplicable(why) => Fault::invalid("/body/disposition", why),
+            ResolveRefusal::NoEvidence => Fault::invalid(
+                "/body/evidence",
+                "an abandonment names at least one artifact the ledger holds",
+            ),
+            ResolveRefusal::UnknownEvidence => Fault::of(
+                ErrorCode::NotFound,
+                Retry::Never,
+                "an evidence reference names no artifact the ledger holds",
+            )
+            .at("/body/evidence"),
+        },
+        other => store_fault(&other),
     }
 }
 
@@ -495,6 +590,55 @@ impl Tasks for StoreTasks {
         cancelled(&record, replayed)
     }
 
+    fn resolve(
+        &self,
+        request: &TaskRequest<'_>,
+        target: &Precondition,
+        body: &Resolve,
+    ) -> Result<Outcome, Fault> {
+        let until = deadline(request.deadline_unix_ms, request.now_unix_ms);
+        let key = UuidV4::parse(request.idempotency_key)
+            .map_err(|_| Fault::invalid("/idempotency_key", "UuidV4"))?;
+        let task =
+            UuidV4::parse(&target.id).map_err(|_| Fault::invalid("/precondition/id", "UuidV4"))?;
+        let obligation = UuidV4::parse(&body.obligation_id)
+            .map_err(|_| Fault::invalid("/body/obligation_id", "UuidV4"))?;
+        let identities = [(); 3].map(|()| fresh_id(until));
+        let [disposition_id, event_id, stop_id] = identities;
+        let entropy = |id: Result<_, _>| id.map_err(|_| unavailable("no entropy for an identity"));
+        let (disposition_id, event_id, stop_id) = (
+            entropy(disposition_id)?,
+            entropy(event_id)?,
+            entropy(stop_id)?,
+        );
+        let mut store = self
+            .store
+            .lock()
+            .map_err(|_| unavailable("the ledger's owner panicked"))?;
+        let (record, replayed) = store
+            .resolve_intent(
+                ResolveIntent {
+                    principal: request.principal,
+                    key,
+                    task,
+                    expected: target.generation,
+                    obligation,
+                    disposition: body.disposition,
+                    reason: &body.reason,
+                    evidence: &body.evidence,
+                    disposition_id: UuidV4::parse(disposition_id.as_str())
+                        .map_err(|_| internal())?,
+                    event: UuidV4::parse(event_id.as_str()).map_err(|_| internal())?,
+                    stop_event: UuidV4::parse(stop_id.as_str()).map_err(|_| internal())?,
+                    request_bytes: request.payload,
+                },
+                until,
+            )
+            .map_err(|error| resolve_fault(error, &target.id))?;
+        drop(store);
+        resolved(&record, replayed)
+    }
+
     fn replay(&self, request: &TaskRequest<'_>, of: Recorded) -> Result<Option<Outcome>, Fault> {
         let until = deadline(request.deadline_unix_ms, request.now_unix_ms);
         let key = UuidV4::parse(request.idempotency_key)
@@ -520,6 +664,11 @@ impl Tasks for StoreTasks {
                 .replayed_cancel(request.principal, key, request.payload, until)
                 .map_err(|error| store_fault(&error))?
                 .map(|record| cancelled(&record, true))
+                .transpose(),
+            Recorded::Resolve => store
+                .replayed_resolve(request.principal, key, request.payload, until)
+                .map_err(|error| store_fault(&error))?
+                .map(|record| resolved(&record, true))
                 .transpose(),
         }
     }

@@ -344,7 +344,7 @@ pub use artifact::Object;
 pub use backup::{BackupReport, RestoreStatus};
 pub use schema::Chain;
 
-use crate::contracts::control::CancelReason;
+use crate::contracts::control::{CancelReason, Disposition, EvidenceRef};
 use crate::contracts::rc01::{MAX_ATTEMPTS, TASK_LIMIT};
 use crate::contracts::{Generation, Sha256Digest, UuidV4};
 use artifact::Directory;
@@ -398,6 +398,8 @@ pub enum Error {
     SnapshotMoved {
         snapshot: u64,
     },
+    /// `task.resolve` (B08) refused, by the obligation or disposition that decided it.
+    Disposition(ResolveRefusal),
     /// The task's outcome is already decided without a cancellation (accepted, or its terminal stop
     /// committed): there is no intent left to record, and its outcome stays historical (B05, RC03 §6).
     AlreadyStopped,
@@ -599,6 +601,62 @@ pub struct Submission<'a> {
     pub criteria: Sha256Digest<'a>,
     pub allocation: Allocation,
 }
+
+/// Why `task.resolve` refuses (B08), by what decided it. Each maps to its own wire member.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ResolveRefusal {
+    /// The task holds no open obligation by that id.
+    NoObligation,
+    /// The id names a live (queued or running) attempt: `task.cancel` owns it.
+    LiveAttempt,
+    /// A disposition already closed that obligation.
+    Resolved,
+    /// The disposition is refused for this obligation as it stands, and why.
+    Refused(&'static str),
+    /// The disposition does not apply to this kind of obligation, and why.
+    Inapplicable(&'static str),
+    /// An abandonment that stops the task names no evidence.
+    NoEvidence,
+    /// An evidence reference names no artifact the ledger holds (by digest and size).
+    UnknownEvidence,
+}
+
+/// One `task.resolve` (B08): the operator's key and exact request bytes, the task and the generation
+/// it expects, the obligation and what is decided, and the identities a disposition would take.
+#[derive(Clone, Copy)]
+pub struct ResolveIntent<'a> {
+    pub principal: &'a Principal,
+    pub key: UuidV4<'a>,
+    pub task: UuidV4<'a>,
+    pub expected: Generation,
+    pub obligation: UuidV4<'a>,
+    pub disposition: Disposition,
+    pub reason: &'a str,
+    pub evidence: &'a [EvidenceRef],
+    pub disposition_id: UuidV4<'a>,
+    pub event: UuidV4<'a>,
+    pub stop_event: UuidV4<'a>,
+    pub request_bytes: &'a [u8],
+}
+
+/// What a disposition recorded, as its caller reads it and as an exact replay returns it: the task's
+/// head after it, the disposition's identity, and whether it closed the obligation. Stored whole in
+/// `operations`.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct Resolution {
+    pub task: String,
+    pub generation: String,
+    pub state: String,
+    pub current_attempt: Option<String>,
+    pub unresolved_obligations: u64,
+    pub disposition: String,
+    pub resolved: bool,
+}
+
+/// An undelivered outbox row (`o`) that no disposition gave up (B08): the one predicate for the
+/// head's count, the notifier's work list and the recovery inventory.
+pub(crate) const UNDELIVERED: &str = "o.delivered=0 AND NOT EXISTS(SELECT 1 FROM task_dispositions d \
+     WHERE d.obligation_kind='delivery' AND d.obligation_id=o.event_id AND d.resolves=1)";
 
 /// One `task.cancel` (B05): the caller's key and exact request bytes, the task it names and the
 /// generation it expects, the event identity a new intent would take, and the reason it gives.
@@ -1085,6 +1143,19 @@ impl Store {
         self.replayed("task.cancel", principal, key, request_bytes, deadline)
     }
 
+    /// RC03 §6 readback for an expired `task.resolve`; [`Store::replayed_submit`]'s rule.
+    /// # Errors
+    /// As [`Store::replayed_submit`].
+    pub fn replayed_resolve(
+        &self,
+        principal: &Principal,
+        key: UuidV4<'_>,
+        request_bytes: &[u8],
+        deadline: Instant,
+    ) -> Result<Option<Resolution>> {
+        self.replayed("task.resolve", principal, key, request_bytes, deadline)
+    }
+
     fn replayed<T: serde::de::DeserializeOwned>(
         &self,
         action: &'static str,
@@ -1260,6 +1331,138 @@ impl Store {
                 worker_settlement: view.worker_settlement().to_owned(),
             };
             tx.execute("INSERT INTO operations(principal_uid,principal_role,action,version,request_key,request_digest,resource_id,result) VALUES(?,?,'task.cancel',1,?,?,?,?)",
+                params![input.principal.uid(),input.principal.role(),input.key.as_str(),request_digest,input.task.as_str(),serde_json::to_vec(&result)?])?;
+            Ok((result, false))
+        })
+    }
+
+    /// The objects `evidence` names, each read and hash-checked through the object store's own door
+    /// (as the stop door checks its evidence), before any transaction (B08).
+    /// # Errors
+    /// `Disposition(UnknownEvidence)` for a reference to no object the ledger holds; `Deadline`; any
+    /// other read failure as itself.
+    fn evidence_objects(&self, evidence: &[EvidenceRef], deadline: Instant) -> Result<Vec<Object>> {
+        evidence
+            .iter()
+            .map(|evidence| {
+                let object = Object {
+                    digest: evidence.sha256.clone(),
+                    size: evidence.byte_length,
+                };
+                match self.read_object(&object, deadline) {
+                    Ok(_) => Ok(object),
+                    // Absent, malformed, oversized, or other bytes than the reference names: the
+                    // ledger holds no such artifact. Any other failure is reported as itself.
+                    Err(
+                        Error::Invalid
+                        | Error::Bound
+                        | Error::Corrupt
+                        | Error::NotFound
+                        | Error::Os(rustix::io::Errno::NOENT),
+                    ) => Err(Error::Disposition(ResolveRefusal::UnknownEvidence)),
+                    Err(Error::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {
+                        Err(Error::Disposition(ResolveRefusal::UnknownEvidence))
+                    }
+                    Err(other) => Err(other),
+                }
+            })
+            .collect()
+    }
+
+    /// `task.resolve` (B08, RC03 section 6): an operator's disposition of one of the task's open
+    /// obligations -- an unknown attempt (`state='unknown'`) or an undelivered delivery (its event) --
+    /// bound to (principal, `task.resolve`, v1, key) and recorded in one transaction. The observation
+    /// is never rewritten: the disposition is a row of its own. An abandonment of an attempt stops
+    /// the task through the one stop door (`abandoned`, or `cancelled` when a cancel is pending),
+    /// once every unsettled attempt's effect is observed or acknowledged.
+    /// # Errors
+    /// `Forbidden` for another role; `Conflict` for other bytes under the key; `NotFound`;
+    /// `StaleGeneration`; `AlreadyStopped`; `Disposition` naming the refusal; `Bound`.
+    pub fn resolve_intent(
+        &mut self,
+        input: ResolveIntent<'_>,
+        deadline: Instant,
+    ) -> Result<(Resolution, bool)> {
+        if input.request_bytes.is_empty() || input.request_bytes.len() > 1_048_576 {
+            return Err(Error::Bound);
+        }
+        operator(input.principal)?;
+        let objects = self.evidence_objects(input.evidence, deadline)?;
+        let request_digest = digest(input.request_bytes);
+        let recipient = input.principal.recipient();
+        self.transaction(deadline, |tx| {
+            if let Some((prior_digest, result)) = recorded(tx, input.principal, "task.resolve", input.key)? {
+                if prior_digest != request_digest { return Err(Error::Conflict); }
+                return Ok((serde_json::from_slice(&result)?, true));
+            }
+            let head = visible_head(tx, input.principal, input.task)?;
+            if head.generation != input.expected.to_string() {
+                let current = head.generation.parse().map_err(|_| Error::Corrupt)?;
+                return Err(Error::StaleGeneration { current });
+            }
+            let refuse = |refusal| Err(Error::Disposition(refusal));
+            let obligation = obligation_of(tx, input.task, input.obligation)?;
+            // A decided task (accepted, or stopped) keeps its outcome: its attempts are no longer an
+            // operator's to dispose of. Its undelivered notifications still are.
+            if matches!(obligation, Obligation::Attempt { .. }) && outcome_decided(tx, &head)? {
+                return Err(Error::AlreadyStopped);
+            }
+            let resolved: bool = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM task_dispositions WHERE obligation_kind=? AND obligation_id=? AND resolves=1)",
+                params![obligation.kind(), input.obligation.as_str()], |row| row.get(0))?;
+            let plan = plan(&obligation, input.disposition, resolved)?;
+            let stops = plan.stops && {
+                if objects.is_empty() { return refuse(ResolveRefusal::NoEvidence); }
+                let open: bool = tx.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM attempts a WHERE a.task_id=? AND a.state!='settled' \
+                     AND a.effect NOT IN ('none','committed') AND NOT EXISTS(SELECT 1 FROM task_dispositions d \
+                     WHERE d.obligation_kind='attempt' AND d.obligation_id=a.id AND d.disposition='acknowledge_external_effect'))",
+                    [input.task.as_str()], |row| row.get(0))?;
+                if open { return refuse(ResolveRefusal::Refused("acknowledge every unknown effect of the task first")); }
+                true
+            };
+            let generation = next(input.expected)?;
+            let state = if plan.quarantines && !head.cancellation { "blocked" } else { head.state.as_str() };
+            let body = serde_json::to_vec(&serde_json::json!({
+                "disposition_id": input.disposition_id.as_str(), "obligation_kind": obligation.kind(),
+                "obligation_id": input.obligation.as_str(), "disposition": input.disposition.name(),
+            }))?;
+            event_with(tx, input.event.as_str(), input.task.as_str(), &generation, "disposition_recorded", &body)?;
+            tx.execute("INSERT INTO task_dispositions(id,task_id,obligation_kind,obligation_id,disposition,resolves,reason,evidence,principal_uid,principal_role,event_id) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                params![input.disposition_id.as_str(), input.task.as_str(), obligation.kind(), input.obligation.as_str(),
+                        input.disposition.name(), plan.resolves, input.reason, serde_json::to_vec(input.evidence)?,
+                        input.principal.uid(), input.principal.role(), input.event.as_str()])?;
+            tx.execute("UPDATE tasks SET generation=?,state=? WHERE id=?", params![generation, state, input.task.as_str()])?;
+            if stops {
+                // Measured usage is recorded and reservations released only when every attempt's
+                // usage is known; otherwise both stay (unknown effects retain reservations).
+                let unknown_usage: bool = tx.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM attempts WHERE task_id=? AND used_ms IS NULL)",
+                    [input.task.as_str()], |row| row.get(0))?;
+                let stop_body = serde_json::to_vec(&serde_json::json!({
+                    "reason": ABANDONED_BY_OPERATOR, "disposition_id": input.disposition_id.as_str(),
+                }))?;
+                let evidence = &objects[0];
+                tx.execute("INSERT INTO artifacts(digest,size) VALUES(?,?) ON CONFLICT(digest) DO NOTHING",
+                    params![evidence.digest, number(evidence.size)?])?;
+                terminal::close(tx, &terminal::Closing {
+                    task: input.task.as_str(), expected: generation.parse().map_err(|_| Error::Corrupt)?,
+                    event: input.stop_event.as_str(), evidence: &evidence.digest,
+                    reason: ABANDONED_BY_OPERATOR, state: if head.cancellation { "cancelled" } else { "abandoned" },
+                    body: &stop_body, spent: (!unknown_usage).then_some(head.spent_ms), recipient: &recipient,
+                })?;
+            }
+            let view = recovery::read_view(tx, input.principal, input.task, deadline)?;
+            let result = Resolution {
+                task: view.head.id.clone(),
+                generation: view.head.generation.clone(),
+                state: view.head.state.clone(),
+                current_attempt: view.current_attempt().map(str::to_owned),
+                unresolved_obligations: u64::try_from(view.unresolved_obligations()).map_err(|_| Error::Bound)?,
+                disposition: input.disposition_id.as_str().to_owned(),
+                resolved: plan.resolves,
+            };
+            tx.execute("INSERT INTO operations(principal_uid,principal_role,action,version,request_key,request_digest,resource_id,result) VALUES(?,?,'task.resolve',1,?,?,?,?)",
                 params![input.principal.uid(),input.principal.role(),input.key.as_str(),request_digest,input.task.as_str(),serde_json::to_vec(&result)?])?;
             Ok((result, false))
         })
@@ -1458,7 +1661,10 @@ impl Store {
         if limit == 0 || limit > 256 {
             return Err(Error::Bound);
         }
-        let mut statement=self.connection.prepare("SELECT o.event_id,o.recipient,e.sequence FROM outbox o JOIN events e ON e.id=o.event_id WHERE delivered=0 ORDER BY e.sequence LIMIT ?")?;
+        let mut statement = self.connection.prepare(&format!(
+            "SELECT o.event_id,o.recipient,e.sequence FROM outbox o JOIN events e ON e.id=o.event_id \
+             WHERE {UNDELIVERED} ORDER BY e.sequence LIMIT ?"
+        ))?;
         Ok(statement
             .query_map([limit], |row| {
                 Ok((row.get(0)?, row.get(1)?, read_number(row, 2)?))
@@ -1599,7 +1805,7 @@ fn request_cancellation(
     body: &[u8],
 ) -> Result<String> {
     let generation = next(expected)?;
-    if head.state == "effect_unknown" {
+    if waiting(&head.state) {
         tx.execute(
             "UPDATE tasks SET cancellation=1,generation=? WHERE id=?",
             params![generation, task.as_str()],
@@ -1620,6 +1826,168 @@ fn request_cancellation(
     )?;
     Ok(generation)
 }
+/// The stop reason an operator's abandonment records.
+const ABANDONED_BY_OPERATOR: &str = "abandoned_by_operator";
+
+/// An obligation a task holds, as `task.resolve` finds it (B08).
+enum Obligation {
+    /// An attempt in state `unknown`: whether its effect is unknown, and whether its cleanup settled
+    /// with its usage known.
+    Attempt {
+        unknown_effect: bool,
+        closable: bool,
+    },
+    /// An undelivered delivery, named by its event.
+    Delivery,
+}
+
+impl Obligation {
+    const fn kind(&self) -> &'static str {
+        match self {
+            Self::Attempt { .. } => "attempt",
+            Self::Delivery => "delivery",
+        }
+    }
+}
+
+/// The obligation `id` names on `task`: an attempt of it (a live one is the cancel's; a settled one
+/// is no obligation), or an event of it with an undelivered outbox row.
+fn obligation_of(tx: &Transaction<'_>, task: UuidV4<'_>, id: UuidV4<'_>) -> Result<Obligation> {
+    let attempt: Option<(String, String, String, Option<u64>)> = tx
+        .query_row(
+            "SELECT state,effect,cleanup,used_ms FROM attempts WHERE id=? AND task_id=?",
+            [id.as_str(), task.as_str()],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    read_optional_number(row, 3)?,
+                ))
+            },
+        )
+        .optional()?;
+    match attempt {
+        Some((state, _, _, _)) if matches!(state.as_str(), "queued" | "running") => {
+            Err(Error::Disposition(ResolveRefusal::LiveAttempt))
+        }
+        Some((state, effect, cleanup, used)) if state == "unknown" => Ok(Obligation::Attempt {
+            unknown_effect: matches!(effect.as_str(), "unknown" | "pending"),
+            closable: cleanup == "settled" && used.is_some(),
+        }),
+        Some(_) => Err(Error::Disposition(ResolveRefusal::NoObligation)),
+        None => {
+            let delivery: bool = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM outbox o JOIN events e ON e.id=o.event_id \
+                 WHERE o.event_id=? AND e.task_id=? AND o.delivered=0)",
+                [id.as_str(), task.as_str()],
+                |row| row.get(0),
+            )?;
+            if delivery {
+                Ok(Obligation::Delivery)
+            } else {
+                Err(Error::Disposition(ResolveRefusal::NoObligation))
+            }
+        }
+    }
+}
+
+/// What a disposition of an obligation does (B08 design R1.3/R2): whether it closes the obligation,
+/// holds the task apart, or stops it.
+struct Plan {
+    resolves: bool,
+    quarantines: bool,
+    stops: bool,
+}
+
+/// The table of B08's design, one cell per (obligation, disposition); `resolved` is whether a
+/// disposition already closed the obligation.
+fn plan(obligation: &Obligation, disposition: Disposition, resolved: bool) -> Result<Plan> {
+    let refuse = |refusal| Err(Error::Disposition(refusal));
+    let keep = Plan {
+        resolves: false,
+        quarantines: false,
+        stops: false,
+    };
+    match (obligation, disposition) {
+        (Obligation::Delivery, _) if resolved => refuse(ResolveRefusal::Resolved),
+        (
+            Obligation::Delivery
+            | Obligation::Attempt {
+                unknown_effect: false,
+                ..
+            },
+            Disposition::Retry,
+        ) => Ok(keep),
+        (Obligation::Delivery, Disposition::Abandon) => Ok(Plan {
+            resolves: true,
+            ..keep
+        }),
+        (Obligation::Delivery, _) => refuse(ResolveRefusal::Inapplicable(
+            "a delivery has no effect to acknowledge and no task to quarantine",
+        )),
+        (Obligation::Attempt { .. }, Disposition::Quarantine) => Ok(Plan {
+            quarantines: true,
+            ..keep
+        }),
+        (
+            Obligation::Attempt {
+                unknown_effect: true,
+                closable,
+            },
+            Disposition::AcknowledgeExternalEffect,
+        ) => {
+            if resolved {
+                refuse(ResolveRefusal::Resolved)
+            } else {
+                Ok(Plan {
+                    resolves: *closable,
+                    ..keep
+                })
+            }
+        }
+        (
+            Obligation::Attempt {
+                unknown_effect: false,
+                ..
+            },
+            Disposition::AcknowledgeExternalEffect,
+        ) => refuse(ResolveRefusal::Inapplicable(
+            "the attempt's effect was observed; there is none to acknowledge",
+        )),
+        (
+            Obligation::Attempt {
+                unknown_effect: true,
+                ..
+            },
+            Disposition::Retry,
+        ) => refuse(ResolveRefusal::Refused(
+            "an unknown effect is never replayed",
+        )),
+        (Obligation::Attempt { .. }, Disposition::Abandon) => Ok(Plan {
+            stops: true,
+            ..keep
+        }),
+    }
+}
+
+/// Whether `state` is a waiting state -- an unknown effect, or a task an operator quarantined
+/// (`blocked`, B08) -- which a cancellation keeps, setting only the flag: a cancel never masks a
+/// liability or lifts a quarantine by renaming it.
+fn waiting(state: &str) -> bool {
+    matches!(state, "effect_unknown" | "blocked")
+}
+
+/// The one "operator only" rule: roster mutations and `task.resolve` (B08) admit only the operator
+/// role, whatever else the grant allows.
+fn operator(principal: &Principal) -> Result<()> {
+    if principal.role() == "operator" {
+        Ok(())
+    } else {
+        Err(Error::Forbidden)
+    }
+}
+
 /// The (request digest, stored result) bound to (principal, `action`, v1, key), if any: the one read
 /// of the idempotency record, for a live request and for the readback of an expired one alike.
 fn recorded(

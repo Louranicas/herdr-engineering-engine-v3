@@ -1037,6 +1037,10 @@ enum Stage {
     Settled,
     /// Its attempt's settlement unknown: `effect_unknown`, generation 3.
     Unknown,
+    /// Its attempt's effect unknown, but cleanup settled and usage known: `effect_unknown`, gen 3.
+    UnknownEffectOnly,
+    /// Its attempt's effect observed `none`, but usage unknown: the attempt stays `unknown`, gen 3.
+    UsageUnknown,
     /// Verified `Invalid`: state `failed` with no stop row yet, generation 4.
     Failed,
     /// Verified and accepted: generation 5.
@@ -1136,8 +1140,12 @@ fn staged(
         .settle_attempt(
             &settle,
             Settlement {
-                effect: if known { Effect::None } else { Effect::Unknown },
-                used_ms: known.then_some(10),
+                effect: if known && stage != Stage::UnknownEffectOnly {
+                    Effect::None
+                } else {
+                    Effect::Unknown
+                },
+                used_ms: (known && stage != Stage::UsageUnknown).then_some(10),
                 cleanup_settled: known,
                 ready_to_verify: matches!(stage, Stage::Failed | Stage::Accepted),
             },
@@ -1145,7 +1153,10 @@ fn staged(
             until,
         )
         .map_err(fault)?;
-    if matches!(stage, Stage::Settled | Stage::Unknown) {
+    if matches!(
+        stage,
+        Stage::Settled | Stage::Unknown | Stage::UnknownEffectOnly | Stage::UsageUnknown
+    ) {
         return Ok(task);
     }
     let evidence = store
@@ -1885,7 +1896,7 @@ fn every_mutating_action_that_records_nothing_has_no_owner_to_record_it() -> Out
         }
     }
     recording.sort_unstable();
-    assert_eq!(recording, ["task.cancel", "task.submit"]);
+    assert_eq!(recording, ["task.cancel", "task.resolve", "task.submit"]);
     assert!(
         unowned.len() >= 5,
         "the world is the catalogue's mutating actions: {unowned:?}"
@@ -1944,6 +1955,25 @@ impl Tasks for Handed {
             request.idempotency_key,
             target.id,
             body.reason.name()
+        ));
+        Err(habitat_engine::contracts::control::Fault::expired())
+    }
+
+    fn resolve(
+        &self,
+        request: &TaskRequest<'_>,
+        target: &habitat_engine::contracts::control::Precondition,
+        body: &habitat_engine::task::control::Resolve,
+    ) -> Result<
+        habitat_engine::contracts::control::Outcome,
+        habitat_engine::contracts::control::Fault,
+    > {
+        self.0.borrow_mut().push(format!(
+            "resolve {} {} {} {}",
+            request.idempotency_key,
+            target.id,
+            body.obligation_id,
+            body.disposition.name()
         ));
         Err(habitat_engine::contracts::control::Fault::expired())
     }
@@ -2904,5 +2934,749 @@ fn a_list_after_key_names_its_epoch_and_an_issued_sequence() -> Outcome {
     }
     let rows: Vec<(&str, &Value)> = replies.iter().map(|reply| ("task.list", reply)).collect();
     conforms(&rows)?;
+    Ok(())
+}
+
+// --- B08 · task.resolve (contract-decisions.md:344; design ~/hee3-evidence/T28/B08-task-resolve-*/DESIGN.md) ---
+
+const RESOLVE_KEY: &str = "28d00000-0000-4000-8000-0000000009a1";
+const RESOLVE_KEY_2: &str = "28d00000-0000-4000-8000-0000000009a2";
+const RESOLVE_KEY_3: &str = "28d00000-0000-4000-8000-0000000009a3";
+
+/// A `task.resolve` frame: the precondition names the task and the generation the operator expects.
+fn resolve_frame(
+    request_no: u8,
+    key: &str,
+    task: &str,
+    generation: &str,
+    body: &Value,
+) -> Result<Vec<u8>, Box<dyn Error>> {
+    let mut frame: Value =
+        serde_json::from_slice(&request("task.resolve", request_no, Some(key), body))?;
+    frame["precondition"] = json!({"resource": "task", "id": task, "generation": generation});
+    Ok(serde_json::to_vec(&frame)?)
+}
+
+fn resolve_body(obligation: &str, disposition: &str, evidence: &Value) -> Value {
+    json!({"obligation_id": obligation, "disposition": disposition,
+           "reason": "operator reviewed the worker's lost reply", "evidence": evidence})
+}
+
+/// An `EvidenceRefV1` naming `object`, stored in the ledger.
+fn evidence_of(object: &habitat_engine::store::Object) -> Value {
+    json!({"artifact_id": "28d00000-0000-4000-8000-0000000009e1", "sha256": object.digest(),
+           "byte_length": object.size(), "media_type": "text/plain", "schema_id": "hee3.evidence/1"})
+}
+
+/// A ledger query answered from the ledger file itself, not through the engine.
+fn ledger_value(scratch: &Scratch, sql: &str, task: &str) -> Result<Value, Box<dyn Error>> {
+    let file = scratch
+        .0
+        .join("state/generations")
+        .join(GENERATION)
+        .join("ledger.sqlite3");
+    let db =
+        rusqlite::Connection::open_with_flags(file, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    let value: rusqlite::types::Value = db.query_row(sql, [task], |row| row.get(0))?;
+    Ok(match value {
+        rusqlite::types::Value::Null => Value::Null,
+        rusqlite::types::Value::Integer(n) => json!(n),
+        rusqlite::types::Value::Text(t) => json!(t),
+        other => json!(format!("{other:?}")),
+    })
+}
+
+/// A ledger of staged tasks (`stages[i]` is task `i + 1`) and a published evidence object.
+fn resolve_ledger(
+    scratch: &Scratch,
+    operator: &Principal,
+    stages: &[Stage],
+) -> Result<(StoreTasks, Vec<String>, habitat_engine::store::Object), Box<dyn Error>> {
+    let mut store = raw_store(scratch)?;
+    let mut tasks = Vec::new();
+    for (index, stage) in stages.iter().enumerate() {
+        tasks.push(staged(
+            &mut store,
+            operator,
+            u16::try_from(index + 1)?,
+            *stage,
+        )?);
+    }
+    let evidence = store
+        .publish(
+            b"operator's reconciliation note",
+            UuidV4::parse(EPOCH)?,
+            Instant::now() + Duration::from_secs(10),
+        )
+        .map_err(|error| format!("{error:?}"))?;
+    Ok((StoreTasks::new(store, EPOCH.to_owned()), tasks, evidence))
+}
+
+/// Serve one `task.resolve` as `principal`: `(request number, key, task, expected generation)`,
+/// then the obligation, the disposition and the evidence references.
+fn resolve_with(
+    tasks: &StoreTasks,
+    principal: &Principal,
+    (no, key, task, generation): (u8, &str, &str, &str),
+    obligation: &str,
+    disposition: &str,
+    evidence: &Value,
+) -> Result<Value, Box<dyn Error>> {
+    let body = resolve_body(obligation, disposition, evidence);
+    serve(
+        tasks,
+        principal,
+        &resolve_frame(no, key, task, generation, &body)?,
+    )
+}
+
+fn code_at(reply: &Value) -> (&Value, &Value) {
+    (&reply["code"], &reply["details"]["field"])
+}
+
+/// One refusal case: its name, principal, frame, code and field.
+type Refusal<'a> = (&'static str, &'a Principal, Vec<u8>, &'static str, Value);
+
+/// The refusals of `a_resolve_needs_...`: each case's principal, frame, code and field.
+fn resolve_refusals<'a>(
+    operator: &'a Principal,
+    reviewer: &'a Principal,
+    ids: &[String],
+    intent: &str,
+) -> Result<Vec<Refusal<'a>>, Box<dyn Error>> {
+    let body = |obligation: &str| resolve_body(obligation, "quarantine", &json!([]));
+    let unknown = body(&nth(0x05b2, 1));
+    Ok(vec![
+        (
+            "another role",
+            reviewer,
+            resolve_frame(1, RESOLVE_KEY, &ids[0], "3", &unknown)?,
+            "forbidden",
+            Value::Null,
+        ),
+        (
+            "an unknown task",
+            operator,
+            resolve_frame(
+                2,
+                RESOLVE_KEY,
+                "28d00000-0000-4000-8000-0000000009ff",
+                "3",
+                &unknown,
+            )?,
+            "not_found",
+            json!("/precondition/id"),
+        ),
+        (
+            "a stale generation",
+            operator,
+            resolve_frame(3, RESOLVE_KEY, &ids[0], "2", &unknown)?,
+            "stale_generation",
+            json!("/precondition/generation"),
+        ),
+        (
+            "an id the task does not hold",
+            operator,
+            resolve_frame(
+                4,
+                RESOLVE_KEY,
+                &ids[0],
+                "3",
+                &body("28d00000-0000-4000-8000-0000000009fe"),
+            )?,
+            "not_found",
+            json!("/body/obligation_id"),
+        ),
+        (
+            "a live attempt",
+            operator,
+            resolve_frame(5, RESOLVE_KEY, &ids[1], "3", &body(&nth(0x05b2, 2)))?,
+            "conflict",
+            json!("/body/obligation_id"),
+        ),
+        (
+            "a cancellation intent",
+            operator,
+            resolve_frame(6, RESOLVE_KEY, &ids[1], "3", &body(intent))?,
+            "not_found",
+            json!("/body/obligation_id"),
+        ),
+        (
+            "a settled attempt",
+            operator,
+            resolve_frame(7, RESOLVE_KEY, &ids[2], "3", &body(&nth(0x05b2, 3)))?,
+            "not_found",
+            json!("/body/obligation_id"),
+        ),
+    ])
+}
+
+/// B08: who may resolve what. Only the operator role; only a task it can see, at the generation it
+/// expects; only an obligation the task holds -- a live attempt is the cancel's (`conflict`), and a
+/// settled attempt, a cancellation intent or an unknown id is `not_found` at the obligation.
+#[test]
+fn a_resolve_needs_the_operator_the_task_its_generation_and_an_open_obligation() -> Outcome {
+    let scratch = Scratch::new()?;
+    let operator = Principal::new(1000, "operator").map_err(|error| format!("{error:?}"))?;
+    let reviewer = Principal::new(1000, "reviewer").map_err(|error| format!("{error:?}"))?;
+    let (tasks, ids, _) = resolve_ledger(
+        &scratch,
+        &operator,
+        &[Stage::Unknown, Stage::Running, Stage::Settled],
+    )?;
+    let cancelled = serve(
+        &tasks,
+        &operator,
+        &cancel_frame(
+            9,
+            CANCEL_KEY,
+            &ids[1],
+            "2",
+            &json!({"reason": "safety", "note": null}),
+        )?,
+    )?;
+    let intent = cancelled["body"]["cancellation_obligation_id"]
+        .as_str()
+        .ok_or("obligation")?;
+    let mut replies = Vec::new();
+    for (case, principal, frame, code, field) in
+        resolve_refusals(&operator, &reviewer, &ids, intent)?
+    {
+        let reply = serve(&tasks, principal, &frame)?;
+        assert_eq!(code_at(&reply), (&json!(code), &field), "{case}: {reply}");
+        replies.push(reply);
+    }
+    // Nothing was written: the unknown-effect task is where its settlement left it.
+    assert_eq!(
+        head_of(&tasks, &operator, &ids[0])?["generation"],
+        json!("3")
+    );
+    let rows: Vec<(&str, &Value)> = replies
+        .iter()
+        .map(|reply| ("task.resolve", reply))
+        .collect();
+    conforms(&rows)?;
+    Ok(())
+}
+
+/// B08: an unknown effect is quarantined or acknowledged, never replayed. `retry` is refused while
+/// the effect is unknown; `abandon` is refused until the effect is acknowledged. Quarantine holds
+/// the task `blocked`, closing nothing; acknowledgement over an unknown cleanup leaves the
+/// obligation pending. Each disposition is a durable row of its own, naming what was decided.
+#[test]
+fn an_unknown_effect_is_quarantined_or_acknowledged_never_replayed() -> Outcome {
+    let scratch = Scratch::new()?;
+    let operator = Principal::new(1000, "operator").map_err(|error| format!("{error:?}"))?;
+    let (tasks, ids, evidence) = resolve_ledger(&scratch, &operator, &[Stage::Unknown])?;
+    let (task, attempt) = (ids[0].as_str(), nth(0x05b2, 1));
+    let refs = json!([evidence_of(&evidence)]);
+    let mut replies = Vec::new();
+    for (no, disposition) in [(1, "retry"), (2, "abandon")] {
+        let refused = resolve_with(
+            &tasks,
+            &operator,
+            (no, RESOLVE_KEY, task, "3"),
+            &attempt,
+            disposition,
+            &refs,
+        )?;
+        assert_eq!(
+            code_at(&refused),
+            (&json!("conflict"), &json!("/body/disposition")),
+            "{disposition}: {refused}"
+        );
+        replies.push(refused);
+    }
+    let quarantined = resolve_with(
+        &tasks,
+        &operator,
+        (3, RESOLVE_KEY, task, "3"),
+        &attempt,
+        "quarantine",
+        &json!([]),
+    )?;
+    let head = &quarantined["body"]["task"];
+    assert_eq!(
+        (
+            &head["state"],
+            &head["generation"],
+            &quarantined["body"]["obligation_state"],
+            &head["unresolved_obligations"]
+        ),
+        (&json!("blocked"), &json!("4"), &json!("pending"), &json!(1)),
+        "{quarantined}"
+    );
+    let disposition_id = quarantined["body"]["disposition_id"]
+        .as_str()
+        .ok_or("disposition id")?;
+    UuidV4::parse(disposition_id)?;
+    assert_eq!(&head_of(&tasks, &operator, task)?, head);
+    assert_eq!(
+        ledger_value(
+            &scratch,
+            "SELECT disposition||'/'||obligation_kind||'/'||resolves FROM task_dispositions WHERE id=?",
+            disposition_id
+        )?,
+        json!("quarantine/attempt/0")
+    );
+    let acknowledged = resolve_with(
+        &tasks,
+        &operator,
+        (4, RESOLVE_KEY_2, task, "4"),
+        &attempt,
+        "acknowledge_external_effect",
+        &refs,
+    )?;
+    let head = &acknowledged["body"]["task"];
+    assert_eq!(
+        (
+            &head["state"],
+            &acknowledged["body"]["obligation_state"],
+            &head["unresolved_obligations"]
+        ),
+        (&json!("blocked"), &json!("pending"), &json!(1)),
+        "cleanup is still unknown: {acknowledged}"
+    );
+    replies.extend([quarantined, acknowledged]);
+    let rows: Vec<(&str, &Value)> = replies
+        .iter()
+        .map(|reply| ("task.resolve", reply))
+        .collect();
+    conforms(&rows)?;
+    Ok(())
+}
+
+/// B08: once every unknown effect of the task is acknowledged, abandonment stops it through the one
+/// stop door -- `abandoned`, a stop row naming the operator's stored evidence -- keeping the
+/// reservation, because usage is unknown; and a cancel after it is refused (the outcome is decided).
+#[test]
+fn an_acknowledged_task_is_abandoned_through_the_stop_door() -> Outcome {
+    let scratch = Scratch::new()?;
+    let operator = Principal::new(1000, "operator").map_err(|error| format!("{error:?}"))?;
+    let (tasks, ids, evidence) = resolve_ledger(&scratch, &operator, &[Stage::Unknown])?;
+    let (task, attempt) = (ids[0].as_str(), nth(0x05b2, 1));
+    let refs = json!([evidence_of(&evidence)]);
+    let reserved = ledger_value(
+        &scratch,
+        "SELECT reserved_work_ms FROM tasks WHERE id=?",
+        task,
+    )?;
+    resolve_with(
+        &tasks,
+        &operator,
+        (1, RESOLVE_KEY, task, "3"),
+        &attempt,
+        "acknowledge_external_effect",
+        &refs,
+    )?;
+    let abandoned = resolve_with(
+        &tasks,
+        &operator,
+        (2, RESOLVE_KEY_2, task, "4"),
+        &attempt,
+        "abandon",
+        &refs,
+    )?;
+    assert_eq!(
+        (
+            &abandoned["body"]["task"]["state"],
+            &abandoned["body"]["obligation_state"],
+            &abandoned["body"]["task"]["generation"]
+        ),
+        (&json!("abandoned"), &json!("pending"), &json!("6")),
+        "the disposition, then the stop: {abandoned}"
+    );
+    assert_eq!(
+        ledger_value(
+            &scratch,
+            "SELECT state||'/'||evidence_digest FROM task_stops WHERE task_id=?",
+            task
+        )?,
+        json!(format!("abandoned/{}", evidence.digest()))
+    );
+    assert_eq!(
+        ledger_value(
+            &scratch,
+            "SELECT reserved_work_ms FROM tasks WHERE id=?",
+            task
+        )?,
+        reserved,
+        "usage is unknown, so the reservation is retained"
+    );
+    let too_late = serve(
+        &tasks,
+        &operator,
+        &cancel_frame(
+            3,
+            CANCEL_KEY,
+            task,
+            "6",
+            &json!({"reason": "operator_request", "note": null}),
+        )?,
+    )?;
+    assert_eq!(
+        code_at(&too_late),
+        (&json!("conflict"), &json!("/precondition")),
+        "{too_late}"
+    );
+    conforms(&[("task.resolve", &abandoned), ("task.cancel", &too_late)])?;
+    Ok(())
+}
+
+/// B08: acknowledging an unknown effect whose cleanup settled and usage is known closes that
+/// obligation (the head counts 0; the attempt row still records what was observed); a second
+/// resolution of it is `conflict` at the obligation. An attempt whose effect was observed but whose
+/// usage is unknown has no effect to acknowledge (`invalid_argument`); `retry` records a request.
+#[test]
+fn an_acknowledged_effect_with_settled_cleanup_closes_its_obligation() -> Outcome {
+    let scratch = Scratch::new()?;
+    let operator = Principal::new(1000, "operator").map_err(|error| format!("{error:?}"))?;
+    let (tasks, ids, evidence) = resolve_ledger(
+        &scratch,
+        &operator,
+        &[Stage::UnknownEffectOnly, Stage::UsageUnknown],
+    )?;
+    let refs = json!([evidence_of(&evidence)]);
+    let (first, second) = (nth(0x05b2, 1), nth(0x05b2, 2));
+    let acknowledge = "acknowledge_external_effect";
+    let acknowledged = resolve_with(
+        &tasks,
+        &operator,
+        (1, RESOLVE_KEY, &ids[0], "3"),
+        &first,
+        acknowledge,
+        &refs,
+    )?;
+    let head = &acknowledged["body"]["task"];
+    assert_eq!(
+        (
+            &acknowledged["body"]["obligation_state"],
+            &head["unresolved_obligations"],
+            &head["state"],
+            &head["generation"]
+        ),
+        (
+            &json!("resolved"),
+            &json!(0),
+            &json!("effect_unknown"),
+            &json!("4")
+        ),
+        "{acknowledged}"
+    );
+    assert_eq!(
+        ledger_value(
+            &scratch,
+            "SELECT effect FROM attempts WHERE task_id=?",
+            &ids[0]
+        )?,
+        json!("unknown"),
+        "the observation is never rewritten"
+    );
+    let again = resolve_with(
+        &tasks,
+        &operator,
+        (2, RESOLVE_KEY_2, &ids[0], "4"),
+        &first,
+        acknowledge,
+        &refs,
+    )?;
+    assert_eq!(
+        code_at(&again),
+        (&json!("conflict"), &json!("/body/obligation_id")),
+        "{again}"
+    );
+    let nothing = resolve_with(
+        &tasks,
+        &operator,
+        (3, RESOLVE_KEY_2, &ids[1], "3"),
+        &second,
+        acknowledge,
+        &refs,
+    )?;
+    assert_eq!(
+        code_at(&nothing),
+        (&json!("invalid_argument"), &json!("/body/disposition")),
+        "{nothing}"
+    );
+    let retried = resolve_with(
+        &tasks,
+        &operator,
+        (4, RESOLVE_KEY_3, &ids[1], "3"),
+        &second,
+        "retry",
+        &json!([]),
+    )?;
+    assert_eq!(
+        (
+            &retried["body"]["obligation_state"],
+            &retried["body"]["task"]["generation"]
+        ),
+        (&json!("pending"), &json!("4")),
+        "{retried}"
+    );
+    conforms(&[
+        ("task.resolve", &acknowledged),
+        ("task.resolve", &again),
+        ("task.resolve", &nothing),
+        ("task.resolve", &retried),
+    ])?;
+    Ok(())
+}
+
+/// B08: a delivery obligation (an accepted task's undelivered notification, named by its event) is
+/// retried or given up. Quarantine and acknowledgement do not apply. Giving it up closes it for the
+/// head's count AND the notifier's work list alike; a second disposition of it is `conflict`.
+/// The task stays accepted.
+#[test]
+fn a_delivery_obligation_is_retried_or_given_up_for_every_reader() -> Outcome {
+    let scratch = Scratch::new()?;
+    let operator = Principal::new(1000, "operator").map_err(|error| format!("{error:?}"))?;
+    let (tasks, ids, _) = resolve_ledger(&scratch, &operator, &[Stage::Accepted])?;
+    let task = &ids[0];
+    let event = ledger_value(
+        &scratch,
+        "SELECT o.event_id FROM outbox o JOIN events e ON e.id=o.event_id WHERE e.task_id=? AND o.delivered=0",
+        task,
+    )?;
+    let event = event.as_str().ok_or("delivery event")?.to_owned();
+    let mut replies = Vec::new();
+    for (no, disposition) in [(1, "quarantine"), (2, "acknowledge_external_effect")] {
+        let reply = serve(
+            &tasks,
+            &operator,
+            &resolve_frame(
+                no,
+                RESOLVE_KEY,
+                task,
+                "5",
+                &resolve_body(&event, disposition, &json!([])),
+            )?,
+        )?;
+        assert_eq!(
+            code_at(&reply),
+            (&json!("invalid_argument"), &json!("/body/disposition")),
+            "{reply}"
+        );
+        replies.push(reply);
+    }
+    let retried = resolve_with(
+        &tasks,
+        &operator,
+        (3, RESOLVE_KEY, task, "5"),
+        &event,
+        "retry",
+        &json!([]),
+    )?;
+    assert_eq!(
+        (
+            &retried["body"]["obligation_state"],
+            &retried["body"]["task"]["unresolved_obligations"],
+            &retried["body"]["task"]["state"]
+        ),
+        (&json!("pending"), &json!(1), &json!("accepted")),
+        "{retried}"
+    );
+    let given_up = resolve_with(
+        &tasks,
+        &operator,
+        (4, RESOLVE_KEY_2, task, "6"),
+        &event,
+        "abandon",
+        &json!([]),
+    )?;
+    assert_eq!(
+        (
+            &given_up["body"]["obligation_state"],
+            &given_up["body"]["task"]["unresolved_obligations"],
+            &given_up["body"]["task"]["state"]
+        ),
+        (&json!("resolved"), &json!(0), &json!("accepted")),
+        "{given_up}"
+    );
+    let again = resolve_with(
+        &tasks,
+        &operator,
+        (5, RESOLVE_KEY_3, task, "7"),
+        &event,
+        "retry",
+        &json!([]),
+    )?;
+    assert_eq!(
+        code_at(&again),
+        (&json!("conflict"), &json!("/body/obligation_id")),
+        "{again}"
+    );
+    drop(tasks);
+    let store = raw_store(&scratch)?;
+    let listed = store
+        .pending_delivery(256, Instant::now() + Duration::from_secs(10))
+        .map_err(|error| format!("{error:?}"))?;
+    assert!(
+        listed.iter().all(|(id, _, _)| *id != event),
+        "the notifier's list: {listed:?}"
+    );
+    replies.extend([retried, given_up, again]);
+    let rows: Vec<(&str, &Value)> = replies
+        .iter()
+        .map(|reply| ("task.resolve", reply))
+        .collect();
+    conforms(&rows)?;
+    Ok(())
+}
+
+/// B08: an exact replay returns the stored disposition (inside and after its deadline); other bytes
+/// under the key conflict. And an abandonment names at least one artifact the ledger holds.
+#[test]
+fn a_resolve_replays_exactly_and_abandonment_names_stored_evidence() -> Outcome {
+    let scratch = Scratch::new()?;
+    let operator = Principal::new(1000, "operator").map_err(|error| format!("{error:?}"))?;
+    let (tasks, ids, evidence) = resolve_ledger(&scratch, &operator, &[Stage::UsageUnknown])?;
+    let (task, attempt) = (&ids[0], nth(0x05b2, 1));
+    let unstored = json!([{"artifact_id": "28d00000-0000-4000-8000-0000000009e2",
+        "sha256": format!("sha256:{}", "7".repeat(64)), "byte_length": 3,
+        "media_type": "text/plain", "schema_id": "hee3.evidence/1"}]);
+    let mut replies = Vec::new();
+    for (no, refs, code, field) in [
+        (1, json!([]), "invalid_argument", "/body/evidence"),
+        (2, unstored, "not_found", "/body/evidence"),
+    ] {
+        let reply = serve(
+            &tasks,
+            &operator,
+            &resolve_frame(
+                no,
+                RESOLVE_KEY,
+                task,
+                "3",
+                &resolve_body(&attempt, "abandon", &refs),
+            )?,
+        )?;
+        assert_eq!(code_at(&reply), (&json!(code), &json!(field)), "{reply}");
+        replies.push(reply);
+    }
+    let frame = resolve_frame(
+        3,
+        RESOLVE_KEY,
+        task,
+        "3",
+        &resolve_body(&attempt, "abandon", &json!([evidence_of(&evidence)])),
+    )?;
+    let first = serve(&tasks, &operator, &frame)?;
+    assert_eq!(
+        (&first["body"]["task"]["state"], &first["replayed"]),
+        (&json!("abandoned"), &json!(false)),
+        "{first}"
+    );
+    for now in [NOW, AN_HOUR_LATE] {
+        let mut expected = first.clone();
+        expected["replayed"] = json!(true);
+        assert_eq!(
+            serve_at(&tasks, &operator, &frame, now)?,
+            expected,
+            "replayed at {now}"
+        );
+    }
+    let other = resolve_with(
+        &tasks,
+        &operator,
+        (4, RESOLVE_KEY, task, "3"),
+        &attempt,
+        "retry",
+        &json!([]),
+    )?;
+    assert_eq!(
+        code_at(&other),
+        (&json!("conflict"), &json!("/idempotency_key")),
+        "{other}"
+    );
+    replies.extend([first, other]);
+    let rows: Vec<(&str, &Value)> = replies
+        .iter()
+        .map(|reply| ("task.resolve", reply))
+        .collect();
+    conforms(&rows)?;
+    Ok(())
+}
+
+/// B08: `blocked` is a waiting state, as `effect_unknown` is. A cancel of a quarantined task keeps
+/// it `blocked` (it sets only the intent), so the quarantine is not lifted by renaming it; the
+/// intent then decides the stop: abandoning the acknowledged task stops it `cancelled`.
+#[test]
+fn a_quarantine_survives_a_cancel_and_the_cancel_decides_the_stop() -> Outcome {
+    let scratch = Scratch::new()?;
+    let operator = Principal::new(1000, "operator").map_err(|error| format!("{error:?}"))?;
+    let (tasks, ids, evidence) = resolve_ledger(&scratch, &operator, &[Stage::Unknown])?;
+    let (task, attempt) = (&ids[0], nth(0x05b2, 1));
+    let quarantined = resolve_with(
+        &tasks,
+        &operator,
+        (1, RESOLVE_KEY, task, "3"),
+        &attempt,
+        "quarantine",
+        &json!([]),
+    )?;
+    assert_eq!(
+        quarantined["body"]["task"]["state"],
+        json!("blocked"),
+        "{quarantined}"
+    );
+    let cancelled = serve(
+        &tasks,
+        &operator,
+        &cancel_frame(
+            2,
+            CANCEL_KEY,
+            task,
+            "4",
+            &json!({"reason": "safety", "note": null}),
+        )?,
+    )?;
+    assert_eq!(
+        (
+            &cancelled["body"]["task"]["state"],
+            &cancelled["body"]["task"]["generation"]
+        ),
+        (&json!("blocked"), &json!("5")),
+        "the cancel keeps the quarantine: {cancelled}"
+    );
+    assert_eq!(
+        ledger_value(&scratch, "SELECT cancellation FROM tasks WHERE id=?", task)?,
+        json!(1)
+    );
+    let refs = json!([evidence_of(&evidence)]);
+    resolve_with(
+        &tasks,
+        &operator,
+        (3, RESOLVE_KEY_2, task, "5"),
+        &attempt,
+        "acknowledge_external_effect",
+        &refs,
+    )?;
+    let stopped = resolve_with(
+        &tasks,
+        &operator,
+        (4, RESOLVE_KEY_3, task, "6"),
+        &attempt,
+        "abandon",
+        &refs,
+    )?;
+    assert_eq!(
+        stopped["body"]["task"]["state"],
+        json!("cancelled"),
+        "{stopped}"
+    );
+    assert_eq!(
+        ledger_value(
+            &scratch,
+            "SELECT state||'/'||reason FROM task_stops WHERE task_id=?",
+            task
+        )?,
+        json!("cancelled/abandoned_by_operator")
+    );
+    conforms(&[
+        ("task.resolve", &quarantined),
+        ("task.cancel", &cancelled),
+        ("task.resolve", &stopped),
+    ])?;
     Ok(())
 }

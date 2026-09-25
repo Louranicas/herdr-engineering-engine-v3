@@ -30,6 +30,10 @@ const MIGRATION_1_BODY: &str =
 /// after the end marker piped to `sha256sum` — the same method reproduces `MIGRATION_1_BODY`.
 const MIGRATION_2_BODY: &str =
     "sha256:bcd3de842dddb090ba6ef208b825d7764ca7d7b8326e0a18394fcc784ce24d4a";
+/// Migration 3's body digest (B08), by the same method (`awk` after the end marker, `sha256sum`), and
+/// independently by Python's `hashlib`; both reproduce `MIGRATION_2_BODY`.
+const MIGRATION_3_BODY: &str =
+    "sha256:4b4e9a7e06fa50f26bc8e74af58cd444fe8a6cfca47b7b85e4a598743bbf2d7d";
 static NEXT_ROOT: AtomicU64 = AtomicU64::new(0);
 
 struct Area {
@@ -280,7 +284,7 @@ fn fresh_ledger_has_exact_runtime_profile_and_migration() {
     assert_eq!(
         db.query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
             .unwrap(),
-        2,
+        3,
         "a fresh create goes straight to the last migration (A25)"
     );
     let mut rows = db
@@ -302,6 +306,12 @@ fn fresh_ledger_has_exact_runtime_profile_and_migration() {
                 MIGRATION_2_BODY.to_owned(),
                 1,
                 Some(MIGRATION_1_BODY.to_owned())
+            ),
+            (
+                3,
+                MIGRATION_3_BODY.to_owned(),
+                2,
+                Some(MIGRATION_2_BODY.to_owned())
             ),
         ],
         "each row names its body and links its predecessor"
@@ -501,19 +511,19 @@ fn unrelated_version_zero_database_is_preserved_and_refused() {
 fn future_schema_refuses_without_downgrade() {
     let area = Area::new();
     drop(area.open());
-    area.edit_closed("PRAGMA user_version=3;");
+    area.edit_closed("PRAGMA user_version=4;");
     assert!(matches!(
         Store::open(&area.path, uuid(GEN), uuid(EPOCH), false, deadline()),
         Err(Error::Chain(Chain::Newer {
-            recorded: 3,
-            current: 2
+            recorded: 4,
+            current: 3
         }))
     ));
     assert_eq!(
         area.inspect()
             .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
             .unwrap(),
-        3
+        4
     );
 }
 
@@ -1042,7 +1052,7 @@ fn unexpected_trigger_refuses_exact_schema_compatibility() {
     area.edit_closed("CREATE TRIGGER surprise AFTER INSERT ON events BEGIN SELECT 1; END;");
     assert!(matches!(
         Store::open(&area.path, uuid(GEN), uuid(EPOCH), false, deadline()),
-        Err(Error::Chain(Chain::Schema { version: 2 }))
+        Err(Error::Chain(Chain::Schema { version: 3 }))
     ));
 }
 
@@ -2464,19 +2474,29 @@ fn read_apis_enforce_the_same_expired_caller_deadline() {
 
 /// The `CREATE TABLE operations` statement exactly as migration 1 spells it.
 fn operations_v1_ddl() -> &'static str {
+    v1_ddl("CREATE TABLE operations (")
+}
+
+/// Migration 1's exact DDL for the table that `head` opens, read from the file itself.
+fn v1_ddl(head: &str) -> &'static str {
     let sql = include_str!("../migrations/001.sql");
-    let start = sql.find("CREATE TABLE operations (").unwrap();
+    let start = sql.find(head).unwrap();
     let end = start + sql[start..].find(") STRICT;").unwrap() + ") STRICT;".len();
     &sql[start..end]
 }
 
-/// Turn a current ledger into a genuine migration-1 ledger that keeps every `operations` row:
-/// migration 2 reversed by hand, which no production path does (A25 is forward only).
+/// Turn a current ledger into a genuine migration-1 ledger that keeps every `operations` and
+/// `task_stops` row: migrations 3 and 2 reversed by hand, which no production path does (A25 is
+/// forward only).
 fn downgrade_to_v1(area: &Area) {
     area.edit_closed(&format!(
-        "BEGIN; CREATE TEMP TABLE kept AS SELECT * FROM operations; DROP TABLE operations; {} \
+        "BEGIN; DROP TABLE task_dispositions; \
+         CREATE TEMP TABLE stops AS SELECT * FROM task_stops; DROP TABLE task_stops; {} \
+         INSERT INTO task_stops SELECT * FROM stops; DROP TABLE stops; \
+         CREATE TEMP TABLE kept AS SELECT * FROM operations; DROP TABLE operations; {} \
          INSERT INTO operations SELECT * FROM kept; DROP TABLE kept; \
-         DELETE FROM migration_history WHERE version=2; PRAGMA user_version=1; COMMIT;",
+         DELETE FROM migration_history WHERE version>=2; PRAGMA user_version=1; COMMIT;",
+        v1_ddl("CREATE TABLE task_stops ("),
         operations_v1_ddl()
     ));
 }
@@ -2489,6 +2509,20 @@ fn operations_rows(area: &Area) -> Vec<Vec<rusqlite::types::Value>> {
             "SELECT * FROM operations \
              ORDER BY principal_uid,principal_role,action,version,request_key",
         )
+        .unwrap();
+    let width = statement.column_count();
+    statement
+        .query_map([], |row| (0..width).map(|index| row.get(index)).collect())
+        .unwrap()
+        .collect::<std::result::Result<_, _>>()
+        .unwrap()
+}
+
+/// Every `task_stops` row, every value, in primary-key order: compared whole.
+fn stops_rows(area: &Area) -> Vec<Vec<rusqlite::types::Value>> {
+    let db = area.inspect();
+    let mut statement = db
+        .prepare("SELECT * FROM task_stops ORDER BY task_id")
         .unwrap();
     let width = statement.column_count();
     statement
@@ -2531,13 +2565,29 @@ fn v1_ledger(area: &Area) -> Vec<Vec<rusqlite::types::Value>> {
 #[test]
 fn a_migration_one_ledger_upgrades_behind_a_verified_backup_and_reopens() {
     let area = Area::new();
+    // A published object, so the stop row below names evidence the verified backup can copy.
+    let evidence = area
+        .open()
+        .publish(b"fixture stop evidence", uuid(EPOCH), deadline())
+        .unwrap();
     let rows = v1_ledger(&area);
+    // A stop row under migration 1's CHECK, so migration 3's rebuild of `task_stops` has a row to
+    // keep (B08): the fixture's second task, stopped `failed` by its admission event's identity.
+    area.edit_closed(&format!(
+        "INSERT INTO artifacts(digest,size) VALUES('{digest}',{size}); \
+         INSERT INTO task_stops(task_id,event_id,evidence_digest,reason,state) \
+         VALUES('{STAGE}','{CANCELLED}','{digest}','fixture_stop','failed');",
+        digest = evidence.digest(),
+        size = evidence.size()
+    ));
+    let stops = stops_rows(&area);
+    assert_eq!(stops.len(), 1, "the fixture holds one stop row");
     let before = fs::read(area.database()).unwrap();
     assert!(matches!(
         Store::open(&area.path, uuid(GEN), uuid(EPOCH), false, deadline()),
         Err(Error::UpgradeRequired {
             recorded: 1,
-            current: 2
+            current: 3
         })
     ));
     assert_eq!(
@@ -2548,7 +2598,7 @@ fn a_migration_one_ledger_upgrades_behind_a_verified_backup_and_reopens() {
     let backup = Area::new();
     let upgrade =
         Store::upgrade(&area.path, uuid(GEN), uuid(EPOCH), &backup.path, deadline()).unwrap();
-    assert_eq!((upgrade.from, upgrade.to), (1, 2));
+    assert_eq!((upgrade.from, upgrade.to), (1, 3));
     let report = upgrade.backup.expect("a step was taken, so a backup was");
     assert_eq!(inspect_backup(&backup).unwrap(), report);
     assert_eq!(report.counts.get("operations"), Some(&2));
@@ -2567,7 +2617,12 @@ fn a_migration_one_ledger_upgrades_behind_a_verified_backup_and_reopens() {
         rows,
         "every operations row survives the rebuild"
     );
-    assert_eq!(user_version(&area.inspect()), 2);
+    assert_eq!(
+        stops_rows(&area),
+        stops,
+        "every stop row survives the rebuild"
+    );
+    assert_eq!(user_version(&area.inspect()), 3);
     let store = area.reopen();
     assert_eq!(
         store
@@ -2616,7 +2671,7 @@ fn a_failed_upgrade_step_leaves_the_ledger_byte_identical() {
     let retry = Area::new();
     let upgrade =
         Store::upgrade(&area.path, uuid(GEN), uuid(EPOCH), &retry.path, deadline()).unwrap();
-    assert_eq!((upgrade.from, upgrade.to), (1, 2));
+    assert_eq!((upgrade.from, upgrade.to), (1, 3));
     assert_eq!(operations_rows(&area), rows);
 }
 
@@ -2629,7 +2684,7 @@ fn a_current_ledger_upgrades_to_itself_without_a_backup() {
     let backup = Area::new();
     let upgrade =
         Store::upgrade(&area.path, uuid(GEN), uuid(EPOCH), &backup.path, deadline()).unwrap();
-    assert_eq!((upgrade.from, upgrade.to), (2, 2));
+    assert_eq!((upgrade.from, upgrade.to), (3, 3));
     assert!(upgrade.backup.is_none());
     assert_eq!(fs::read_dir(&backup.path).unwrap().count(), 0);
     assert_eq!(fs::read(area.database()).unwrap(), before);
@@ -2642,24 +2697,24 @@ fn each_migration_chain_clause_refuses_by_its_own_name() {
     let cases: [(&str, String, Chain); 10] = [
         (
             "newer than this binary",
-            "PRAGMA user_version=3;".into(),
+            "PRAGMA user_version=4;".into(),
             Chain::Newer {
-                recorded: 3,
-                current: 2,
+                recorded: 4,
+                current: 3,
             },
         ),
         (
             "missing history row",
             "DELETE FROM migration_history WHERE version=2;".into(),
             Chain::History {
-                recorded: 2,
-                rows: 1,
+                recorded: 3,
+                rows: 2,
             },
         ),
         (
             "a gap in the versions",
-            "UPDATE migration_history SET version=3 WHERE version=2;".into(),
-            Chain::Sequence { position: 2 },
+            "UPDATE migration_history SET version=4 WHERE version=3;".into(),
+            Chain::Sequence { position: 3 },
         ),
         (
             "wrong 002 digest",
@@ -2702,7 +2757,7 @@ fn each_migration_chain_clause_refuses_by_its_own_name() {
         (
             "schema differs from applying the chain",
             "CREATE INDEX surplus ON tasks(state);".into(),
-            Chain::Schema { version: 2 },
+            Chain::Schema { version: 3 },
         ),
     ];
     for (case, edit, expected) in cases {
@@ -2788,6 +2843,6 @@ fn a_migration_file_that_lost_its_pinned_body_is_refused() {
         .map(|entry| entry.unwrap().file_name().into_string().unwrap())
         .collect();
     files.sort();
-    assert_eq!(files, ["001.sql", "002.sql"]);
+    assert_eq!(files, ["001.sql", "002.sql", "003.sql"]);
     assert_eq!(files.len(), usize::try_from(schema::CURRENT).unwrap());
 }

@@ -871,6 +871,65 @@ impl PageCursor {
     }
 }
 
+/// What an operator decides about an unresolved obligation (`task.resolve`, RC03 section 6;
+/// contract-decisions.md:344). The one vocabulary for the wire parser and the store.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Disposition {
+    /// Ask the obligation's owner to try again; closes nothing.
+    Retry,
+    /// Give the obligation up (a delivery), or stop the task through the stop door (an attempt).
+    Abandon,
+    /// Attest that an unknown external effect happened.
+    AcknowledgeExternalEffect,
+    /// Hold the task apart (`blocked`); closes nothing.
+    Quarantine,
+}
+
+impl Disposition {
+    /// Every disposition, in the contract's order.
+    pub const ALL: [Self; 4] = [
+        Self::Retry,
+        Self::Abandon,
+        Self::AcknowledgeExternalEffect,
+        Self::Quarantine,
+    ];
+
+    /// The wire spelling.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Retry => "retry",
+            Self::Abandon => "abandon",
+            Self::AcknowledgeExternalEffect => "acknowledge_external_effect",
+            Self::Quarantine => "quarantine",
+        }
+    }
+
+    /// The disposition spelled `name`, if the vocabulary has one.
+    #[must_use]
+    pub fn parse(name: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|disposition| disposition.name() == name)
+    }
+}
+
+/// `EvidenceRefV1` (RC03 section 4): a reference to an artifact, never a path or URI. The ledger
+/// checks `sha256` and `byte_length` against what it holds; `artifact_id` is recorded as given.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct EvidenceRef {
+    /// The artifact's identity as the caller names it.
+    pub artifact_id: String,
+    /// Its content digest.
+    pub sha256: String,
+    /// Its size in bytes.
+    pub byte_length: u64,
+    /// Its media type (ASCII 1..128).
+    pub media_type: String,
+    /// Its schema (ASCII 1..128).
+    pub schema_id: String,
+}
+
 /// Why a cancellation is asked for: `task.cancel`'s closed reason set (RC03 §6;
 /// contract-decisions.md:343). The one vocabulary for every door that records a cancellation intent
 /// -- the wire parser reads it, the store writes it -- so no door can record a reason outside it.

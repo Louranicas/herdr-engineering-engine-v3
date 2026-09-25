@@ -18,7 +18,9 @@
 //!   engine cannot enforce is not admitted;
 //! * `parent` must be `null`: child allocations belong to cohort composition, not composed here.
 
-use crate::contracts::control::{CancelReason, ErrorCode, Fault, PageIn, Retry, request_sha256};
+use crate::contracts::control::{
+    CancelReason, Disposition, ErrorCode, EvidenceRef, Fault, PageIn, Retry, request_sha256,
+};
 use crate::contracts::{UuidV4, parse_u64_decimal};
 use crate::recovery::TaskState;
 use serde_json::{Map, Value, json};
@@ -374,6 +376,109 @@ pub fn list(body: &Map<String, Value>) -> Result<List, Fault> {
         task_class,
         parent_task_id,
         page: PageIn::parse(body.get("page"))?,
+    })
+}
+
+/// The longest disposition reason, in UTF-8 bytes (`UTF8[1..2048]`).
+const MAX_REASON_BYTES: usize = 2048;
+/// The most evidence references a request may carry (RC03: evidence arrays <= 64).
+const MAX_EVIDENCE: usize = 64;
+/// The longest media type or schema identity (`ASCII[1..128]`).
+const MAX_EVIDENCE_NAME_BYTES: usize = 128;
+
+/// A valid `task.resolve` body (contract-decisions.md:344). The task and the generation it expects
+/// are the precondition's.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Resolve {
+    /// The obligation decided: an attempt, or a delivery event.
+    pub obligation_id: String,
+    /// What was decided.
+    pub disposition: Disposition,
+    /// Why, as the operator states it (1..2048 UTF-8 bytes).
+    pub reason: String,
+    /// What the operator relies on: references to artifacts the ledger holds.
+    pub evidence: Vec<EvidenceRef>,
+}
+
+/// Read `task.resolve`'s body.
+///
+/// # Errors
+///
+/// `invalid_argument` naming the member: `/body` unless exactly `obligation_id`, `disposition`,
+/// `reason` and `evidence`; `/body/obligation_id` unless a `UuidV4`; `/body/disposition` outside
+/// [`Disposition`]; `/body/reason` unless 1..2048 UTF-8 bytes; `/body/evidence` unless an array of
+/// at most 64 `EvidenceRefV1`, each exactly its five members, well formed.
+pub fn resolve(body: &Map<String, Value>) -> Result<Resolve, Fault> {
+    exactly(
+        body,
+        &["obligation_id", "disposition", "reason", "evidence"],
+        "/body",
+    )?;
+    let obligation_id = body
+        .get("obligation_id")
+        .and_then(Value::as_str)
+        .filter(|id| UuidV4::parse(id).is_ok())
+        .ok_or(Fault::invalid("/body/obligation_id", "UuidV4"))?
+        .to_owned();
+    let disposition = body
+        .get("disposition")
+        .and_then(Value::as_str)
+        .and_then(Disposition::parse)
+        .ok_or(Fault::invalid(
+            "/body/disposition",
+            "retry, abandon, acknowledge_external_effect or quarantine",
+        ))?;
+    let reason = body
+        .get("reason")
+        .and_then(Value::as_str)
+        .filter(|reason| (1..=MAX_REASON_BYTES).contains(&reason.len()))
+        .ok_or(Fault::invalid("/body/reason", "UTF-8 of 1..2048 bytes"))?
+        .to_owned();
+    let refused = || Fault::invalid("/body/evidence", "at most 64 EvidenceRefV1");
+    let Some(Value::Array(named)) = body.get("evidence") else {
+        return Err(refused());
+    };
+    if named.len() > MAX_EVIDENCE {
+        return Err(refused());
+    }
+    let evidence = named
+        .iter()
+        .map(|item| evidence_ref(item).ok_or_else(refused))
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(Resolve {
+        obligation_id,
+        disposition,
+        reason,
+        evidence,
+    })
+}
+
+/// One `EvidenceRefV1`, exactly its five members, each well formed.
+fn evidence_ref(item: &Value) -> Option<EvidenceRef> {
+    let Value::Object(members) = item else {
+        return None;
+    };
+    let text = |name: &str| members.get(name).and_then(Value::as_str);
+    let name = |name: &str| {
+        text(name)
+            .filter(|text| (1..=MAX_EVIDENCE_NAME_BYTES).contains(&text.len()) && text.is_ascii())
+            .map(str::to_owned)
+    };
+    (members.len() == 5).then_some(())?;
+    Some(EvidenceRef {
+        artifact_id: text("artifact_id")
+            .filter(|id| UuidV4::parse(id).is_ok())?
+            .to_owned(),
+        sha256: text("sha256")
+            .filter(|digest| crate::contracts::Sha256Digest::parse(digest).is_ok())?
+            .to_owned(),
+        byte_length: members
+            .get("byte_length")
+            .and_then(Value::as_u64)
+            .and_then(|length| u32::try_from(length).ok())
+            .map(u64::from)?,
+        media_type: name("media_type")?,
+        schema_id: name("schema_id")?,
     })
 }
 

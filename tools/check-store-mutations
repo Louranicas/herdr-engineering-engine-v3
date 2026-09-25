@@ -22,15 +22,19 @@ ROOT = Path(__file__).resolve().parents[1]
 TEST_COUNT = 92
 REQUIRED_SUBJECTS = (
     "src/store.rs", "src/store/artifact.rs", "src/store/schema.rs", "src/store/backup.rs",
-    "migrations/001.sql", "migrations/002.sql", "tests/t04_store.rs", "tools/sqlite-static.py",
+    "migrations/001.sql", "migrations/002.sql", "migrations/003.sql", "tests/t04_store.rs", "tools/sqlite-static.py",
     "tools/check-store-mutations",
 )
 
 MUTATIONS = (('replay-digest-conflict',
   'src/store.rs',
   'same_request_key_with_different_exact_bytes_conflicts_atomically',
-  'if prior_digest != request_digest { return Err(Error::Conflict); }',
-  'if prior_digest != request_digest && false { return Err(Error::Conflict); }',
+  # Anchored with the submit's own lookup line: the same conflict line also guards task.cancel and
+  # task.resolve (B05, B08), so the bare line matched three times and refused the campaign.
+  'recorded(tx, input.principal, "task.submit", input.key)? {\n'
+  '                if prior_digest != request_digest { return Err(Error::Conflict); }',
+  'recorded(tx, input.principal, "task.submit", input.key)? {\n'
+  '                if prior_digest != request_digest && false { return Err(Error::Conflict); }',
   'The same principal-scoped request key with changed canonical bytes must conflict without another task or '
   'event.'),
  ('unknown-work-liability',
