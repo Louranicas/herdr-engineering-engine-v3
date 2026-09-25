@@ -31,23 +31,6 @@ const ENDPOINT: &str = "00000000-0000-4000-8000-000000000012";
 const EVIDENCE: &str = "00000000-0000-4000-8000-000000000013";
 const BOOT: &str = "90000000-0000-4000-8000-000000000001";
 const CRITERIA: &str = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-const TABLES: &[&str] = &[
-    "tasks",
-    "operations",
-    "attempts",
-    "events",
-    "artifacts",
-    "acceptances",
-    "acceptance_objects",
-    "outbox",
-    "roster_records",
-    "roster_revisions",
-    "roster_observations",
-    "roster_instances",
-    "roster_instance_history",
-    "roster_pins",
-    "roster_cancel_causes",
-];
 static NEXT_ROOT: AtomicU64 = AtomicU64::new(0);
 
 struct Area {
@@ -337,9 +320,24 @@ fn counts(area: &Area, tables: &[&str]) -> Vec<i64> {
         .collect()
 }
 type LedgerState = Vec<Vec<Vec<SqlValue>>>;
+/// Every table the ledger holds, read from `sqlite_master` (the world, not a list of it: a
+/// hand-kept list missed `verifications`, `task_stops`, `task_dispositions` and would have missed
+/// `attempt_bindings`; F65, review B14a-R2 G2).
+fn tables(db: &rusqlite::Connection) -> Vec<String> {
+    let mut query = db
+        .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
+        .unwrap();
+    query
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<String>>>()
+        .unwrap()
+}
 fn ledger(area: &Area) -> LedgerState {
     let db = area.inspect();
-    TABLES
+    let names = tables(&db);
+    assert!(names.len() >= 20, "the ledger's tables: {names:?}");
+    names
         .iter()
         .map(|table| {
             let mut query = db
@@ -2080,3 +2078,108 @@ CREATE TABLE outbox (
 const PRE_ROSTER_SHA256: &str =
     "sha256:14c3efd534517403866229f898748ab0685bdad58e0d1da23b6aa6e96140c044";
 const PRE_ROSTER_PACKAGE: &str = "hee3-draft-schema1/0.1.0";
+
+/// B14a-1a · a bound begin records the attempt's baseline, protected and profile digests in the
+/// same transaction, and a task's attempts are all bound or all unbound: an unbound begin of a
+/// bound task, and a bound begin of a task with an unbound attempt, are each refused `Conflict`
+/// before anything is written.
+#[test]
+fn a_task_s_attempts_are_all_bound_or_all_unbound() {
+    const BASE: &str = "sha256:1111111111111111111111111111111111111111111111111111111111111111";
+    const PROT: &str = "sha256:2222222222222222222222222222222222222222222222222222222222222222";
+    const PROF: &str = "sha256:3333333333333333333333333333333333333333333333333333333333333333";
+    const OTHER: &str = "00000000-0000-4000-8000-0000000000b2";
+    fn start<'a>(
+        owner: &'a Principal,
+        agent: &'a RosterHeadV1,
+        selections: &'a [Selection],
+    ) -> RosterStart<'a> {
+        RosterStart {
+            principal: owner,
+            task: uuid(TASK),
+            expected: generation(1),
+            attempt: uuid(ATTEMPT),
+            event: uuid(STARTED),
+            agent_record_id: &agent.record_id,
+            session: uuid(SESSION),
+            workspace: uuid(WORKSPACE),
+            selections,
+            lease_ms: 500,
+        }
+    }
+    let binding = Binding {
+        baseline: Sha256Digest::parse(BASE).unwrap(),
+        protected: Sha256Digest::parse(PROT).unwrap(),
+        profile: Sha256Digest::parse(PROF).unwrap(),
+    };
+    let owner = principal();
+    // Bound first: the row holds exactly the three digests, and an unbound begin is refused.
+    let area = Area::new();
+    let mut store = area.open();
+    clock(&mut store, 100);
+    let profile = create(&mut store, 1);
+    observe(&mut store, &profile.head);
+    admit(&mut store);
+    let selections = [choose(&profile.head)];
+    store
+        .begin_bound_attempt(
+            start(&owner, &profile.head, &selections),
+            &binding,
+            deadline(),
+        )
+        .unwrap();
+    let row: (String, String, String, String, String) = area
+        .inspect()
+        .query_row(
+            "SELECT attempt_id,task_id,baseline_digest,protected_digest,profile_digest FROM attempt_bindings",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+        )
+        .unwrap();
+    assert_eq!(
+        row,
+        (
+            ATTEMPT.into(),
+            TASK.into(),
+            BASE.into(),
+            PROT.into(),
+            PROF.into()
+        )
+    );
+    let before = ledger(&area);
+    assert!(matches!(
+        store.begin_attempt(
+            uuid(TASK),
+            generation(2),
+            uuid(OTHER),
+            uuid(STARTED),
+            deadline()
+        ),
+        Err(Error::Conflict)
+    ));
+    assert_eq!(ledger(&area), before, "a refused begin writes nothing");
+    // Unbound first: a bound begin is refused.
+    let area = Area::new();
+    let mut store = area.open();
+    clock(&mut store, 100);
+    let profile = create(&mut store, 1);
+    observe(&mut store, &profile.head);
+    admit(&mut store);
+    let selections = [choose(&profile.head)];
+    store
+        .begin_rostered_attempt(start(&owner, &profile.head, &selections), deadline())
+        .unwrap();
+    let before = ledger(&area);
+    let mut second = start(&owner, &profile.head, &selections);
+    second.expected = generation(2);
+    second.attempt = uuid(OTHER);
+    assert!(matches!(
+        store.begin_bound_attempt(second, &binding, deadline()),
+        Err(Error::Conflict)
+    ));
+    assert_eq!(
+        ledger(&area),
+        before,
+        "a refused bound begin writes nothing"
+    );
+}

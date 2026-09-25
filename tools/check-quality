@@ -91,12 +91,12 @@ UNTRACKED_BY_DESIGN = (
 T03_IMPLEMENTATION_PATHS = ("src/worker/mod.rs", "src/worker/inference.rs")
 T04_IMPLEMENTATION_PATHS = ("src/store.rs", "src/store/artifact.rs", "src/store/backup.rs",
                             "src/store/schema.rs", "migrations/001.sql", "migrations/002.sql",
-                            "migrations/003.sql", "migrations/004.sql",
+                            "migrations/003.sql", "migrations/004.sql", "migrations/005.sql",
                             "tests/t04_store.rs")
 # Reviewed independent T04 unit suite: 81 cases (68 + store-lane A01-A03 and A24, 2026-09-24; B02's
-# unwritable-ledger read-back, 2026-09-25; B03's four task_view cases, 2026-09-25; B03b's closure-predicate case; A25's six migration-chain cases; B14-P2c's workspace CHECK and added-column preservation cases). Source discovery or emitted
+# unwritable-ledger read-back, 2026-09-25; B03's four task_view cases, 2026-09-25; B03b's closure-predicate case; A25's six migration-chain cases; B14-P2c's workspace CHECK and added-column preservation cases; B14a-1a's cancellation-first begin). Source discovery or emitted
 # counts cannot lower this gate; None remains an explicit pending-state refusal.
-T04_TEST_COUNT = 94
+T04_TEST_COUNT = 95
 # Cargo build parallelism for every gate build (operator decisions 2026-09-24: raised from 2 to 8,
 # then "utilise the full capacity of all hardware"): every CPU this process may run on, taken from
 # the affinity mask so a pinned or containerised habitat is respected. One owner: the store and pi
@@ -110,10 +110,10 @@ T05_IMPLEMENTATION_PATHS = (
 T05_TARGET_COUNTS = {"t05_roster": 29, "t05_codec": 12}
 # Independent release: 35 functions (32 roster-primary, 3 store-secondary).
 # This is a fixed execution inventory, not module-admission case credit.
-T05_STORE_TEST_COUNT = 36
+T05_STORE_TEST_COUNT = 37
 # Fixed reviewed T06 development inventory. Profile repetition earns no new cases.
 T06_TARGET_COUNTS = {
-    "t06_receipts": 64, "t06_store": 39, "t06_graph": 32,
+    "t06_receipts": 64, "t06_store": 41, "t06_graph": 32,
     "t06_driver": 29, "t06_consistency": 50, "t06_workspace": 36,
     "t06_terminal": 39, "t06_evidence": 26, "t06_collector": 29,
     "t06_availability": 22, "t06_decision": 40, "t06_staging": 20,

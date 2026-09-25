@@ -19,10 +19,11 @@ import time
 
 sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[1]
-TEST_COUNT = 94
+TEST_COUNT = 95
 REQUIRED_SUBJECTS = (
     "src/store.rs", "src/store/artifact.rs", "src/store/schema.rs", "src/store/backup.rs",
-    "migrations/001.sql", "migrations/002.sql", "migrations/003.sql", "migrations/004.sql", "tests/t04_store.rs",
+    "migrations/001.sql", "migrations/002.sql", "migrations/003.sql", "migrations/004.sql", "migrations/005.sql",
+    "tests/t04_store.rs",
     "tools/sqlite-static.py",
     "tools/check-store-mutations",
 )

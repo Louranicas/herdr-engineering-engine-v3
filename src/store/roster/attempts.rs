@@ -11,7 +11,7 @@ use crate::contracts::roster::{
     MAX_INPUT, MAX_PINS, MAX_RECORDS, Outcome, Pin, Selection,
 };
 use crate::store::{
-    AttemptHead, begin_attempt_in, cancellation_body, event, head, outcome_decided,
+    AttemptHead, Binding, begin_attempt_in, cancellation_body, event, head, outcome_decided,
     request_cancellation,
 };
 use rusqlite::{OptionalExtension, params};
@@ -216,6 +216,29 @@ impl Store {
         input: RosterStart<'_>,
         deadline: Instant,
     ) -> Result<RosterAttempt> {
+        self.begin_rostered(input, None, deadline)
+    }
+
+    /// [`Store::begin_rostered_attempt`] for an attempt begun for an installed workspace
+    /// (B14a-1a): the snapshots and profile it was bound to are recorded in the same transaction,
+    /// so the attempt cannot exist without them. A task's attempts are all bound or all unbound.
+    /// # Errors
+    /// Those of `begin_rostered_attempt`, and `Conflict` for a task with an unbound attempt.
+    pub fn begin_bound_attempt(
+        &mut self,
+        input: RosterStart<'_>,
+        binding: &Binding<'_>,
+        deadline: Instant,
+    ) -> Result<RosterAttempt> {
+        self.begin_rostered(input, Some(binding), deadline)
+    }
+
+    fn begin_rostered(
+        &mut self,
+        input: RosterStart<'_>,
+        binding: Option<&Binding<'_>>,
+        deadline: Instant,
+    ) -> Result<RosterAttempt> {
         validate_start(&input)?;
         let id = fresh_id!(self.clock, deadline)?;
         let clock = self.clock.clone();
@@ -230,7 +253,10 @@ impl Store {
             let lease=now.monotonic_ms.checked_add(input.lease_ms).ok_or(Error::Bound)?;
             let pins=selected_pins(tx,&input,&now)?;
             let agent=pins.iter().find(|pin|pin.record.head.record_id==input.agent_record_id).ok_or(Error::Invalid)?;
-            let attempt=begin_attempt_in(tx,input.task,input.expected,input.attempt,input.event,fault)?;
+            let attempt=begin_attempt_in(tx,input.task,input.expected,input.attempt,input.event,fault,binding.is_some())?;
+            if let Some(binding)=&binding {
+                tx.execute("INSERT INTO attempt_bindings(attempt_id,task_id,baseline_digest,protected_digest,profile_digest) VALUES(?,?,?,?,?)",params![attempt.id,input.task.as_str(),binding.baseline.as_str(),binding.protected.as_str(),binding.profile.as_str()])?;
+            }
             let instance=Instance { id,generation:"1".to_owned(),revision:"1".to_owned(),agent_record_id:input.agent_record_id.to_owned(),agent_record_version:agent.record.head.record_version.clone(),task_id:input.task.as_str().to_owned(),attempt_id:attempt.id.clone(),attempt_generation:attempt.generation.clone(),session_id:input.session.as_str().to_owned(),workspace_ref:input.workspace.as_str().to_owned(),started:now,lease_expires_monotonic_ms:lease,state:InstanceState::Starting,usage_ms:None };
             for pin in &pins {
                 tx.execute("INSERT INTO roster_pins VALUES(?,?,?,?)",params![attempt.id,pin.record.head.record_id,pin.record.head.record_version,serde_json::to_vec(pin)?])?;

@@ -40,6 +40,10 @@ const WORKSPACE: &str = "28f00000-0000-4000-8000-00000000000a";
 /// anchor block (the same rule reproduces 3's pinned value), not by the store's own `identity`.
 const MIGRATION_4_BODY: &str =
     "sha256:8476c3229448ef8da34f62e8fe75391bf4246e2a6cb73f04c81f0aba3f13382f";
+/// Migration 5's body digest, by the same method (Python's hashlib over the text below the anchor
+/// block), which reproduces 3's and 4's pinned values.
+const MIGRATION_5_BODY: &str =
+    "sha256:51b29ce4e4e48ea0d2e97dc517fb2bbe3ef87618d15625694f7e0b13f1e2693d";
 static NEXT_ROOT: AtomicU64 = AtomicU64::new(0);
 
 struct Area {
@@ -291,7 +295,7 @@ fn fresh_ledger_has_exact_runtime_profile_and_migration() {
     assert_eq!(
         db.query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
             .unwrap(),
-        4,
+        i64::from(schema::CURRENT),
         "a fresh create goes straight to the last migration (A25)"
     );
     let mut rows = db
@@ -325,6 +329,12 @@ fn fresh_ledger_has_exact_runtime_profile_and_migration() {
                 MIGRATION_4_BODY.to_owned(),
                 3,
                 Some(MIGRATION_3_BODY.to_owned())
+            ),
+            (
+                5,
+                MIGRATION_5_BODY.to_owned(),
+                4,
+                Some(MIGRATION_4_BODY.to_owned())
             ),
         ],
         "each row names its body and links its predecessor"
@@ -546,19 +556,19 @@ fn unrelated_version_zero_database_is_preserved_and_refused() {
 fn future_schema_refuses_without_downgrade() {
     let area = Area::new();
     drop(area.open());
-    area.edit_closed("PRAGMA user_version=5;");
+    area.edit_closed("PRAGMA user_version=6;");
     assert!(matches!(
         Store::open(&area.path, uuid(GEN), uuid(EPOCH), false, deadline()),
         Err(Error::Chain(Chain::Newer {
-            recorded: 5,
-            current: 4
+            recorded: 6,
+            current: 5
         }))
     ));
     assert_eq!(
         area.inspect()
             .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
             .unwrap(),
-        5
+        6
     );
 }
 
@@ -1087,7 +1097,7 @@ fn unexpected_trigger_refuses_exact_schema_compatibility() {
     area.edit_closed("CREATE TRIGGER surprise AFTER INSERT ON events BEGIN SELECT 1; END;");
     assert!(matches!(
         Store::open(&area.path, uuid(GEN), uuid(EPOCH), false, deadline()),
-        Err(Error::Chain(Chain::Schema { version: 4 }))
+        Err(Error::Chain(Chain::Schema { version: 5 }))
     ));
 }
 
@@ -1892,6 +1902,28 @@ fn cancellation_first_prevents_acceptance_even_for_prepared_durable_proof() {
     no_acceptance(&area);
 }
 
+/// B14a-R1.2: beginning an attempt with the generation a cancellation bumped names the
+/// cancellation, not the stale compare-and-set.
+#[test]
+fn a_begin_after_cancellation_is_refused_as_cancelled() {
+    let area = Area::new();
+    let mut store = area.open();
+    admit(&mut store);
+    store
+        .cancel(uuid(TASK), revision(1), uuid(CANCELLED), deadline())
+        .unwrap();
+    assert!(matches!(
+        store.begin_attempt(
+            uuid(TASK),
+            revision(1),
+            uuid(ATTEMPT),
+            uuid(STARTED),
+            deadline()
+        ),
+        Err(Error::Cancelled)
+    ));
+}
+
 #[test]
 fn acceptance_first_remains_historical_after_cancel_request() {
     let area = Area::new();
@@ -2525,7 +2557,7 @@ fn v1_ddl(head: &str) -> &'static str {
 /// forward only).
 fn downgrade_to_v1(area: &Area) {
     area.edit_closed(&format!(
-        "BEGIN; ALTER TABLE tasks DROP COLUMN workspace_id; DROP TABLE task_dispositions; \
+        "BEGIN; DROP TABLE attempt_bindings; ALTER TABLE tasks DROP COLUMN workspace_id; DROP TABLE task_dispositions; \
          CREATE TEMP TABLE stops AS SELECT * FROM task_stops; DROP TABLE task_stops; {} \
          INSERT INTO task_stops SELECT * FROM stops; DROP TABLE stops; \
          CREATE TEMP TABLE kept AS SELECT * FROM operations; DROP TABLE operations; {} \
@@ -2622,7 +2654,7 @@ fn a_migration_one_ledger_upgrades_behind_a_verified_backup_and_reopens() {
         Store::open(&area.path, uuid(GEN), uuid(EPOCH), false, deadline()),
         Err(Error::UpgradeRequired {
             recorded: 1,
-            current: 4
+            current: 5
         })
     ));
     assert_eq!(
@@ -2633,7 +2665,7 @@ fn a_migration_one_ledger_upgrades_behind_a_verified_backup_and_reopens() {
     let backup = Area::new();
     let upgrade =
         Store::upgrade(&area.path, uuid(GEN), uuid(EPOCH), &backup.path, deadline()).unwrap();
-    assert_eq!((upgrade.from, upgrade.to), (1, 4));
+    assert_eq!((upgrade.from, upgrade.to), (1, schema::CURRENT));
     let report = upgrade.backup.expect("a step was taken, so a backup was");
     assert_eq!(inspect_backup(&backup).unwrap(), report);
     assert_eq!(report.counts.get("operations"), Some(&2));
@@ -2657,7 +2689,7 @@ fn a_migration_one_ledger_upgrades_behind_a_verified_backup_and_reopens() {
         stops,
         "every stop row survives the rebuild"
     );
-    assert_eq!(user_version(&area.inspect()), 4);
+    assert_eq!(user_version(&area.inspect()), i64::from(schema::CURRENT));
     // Migration 4 adds `workspace_id`: every task admitted before it names no bound workspace.
     let unbound: (i64, i64) = area
         .inspect()
@@ -2716,7 +2748,7 @@ fn a_failed_upgrade_step_leaves_the_ledger_byte_identical() {
     let retry = Area::new();
     let upgrade =
         Store::upgrade(&area.path, uuid(GEN), uuid(EPOCH), &retry.path, deadline()).unwrap();
-    assert_eq!((upgrade.from, upgrade.to), (1, 4));
+    assert_eq!((upgrade.from, upgrade.to), (1, schema::CURRENT));
     assert_eq!(operations_rows(&area), rows);
 }
 
@@ -2729,7 +2761,10 @@ fn a_current_ledger_upgrades_to_itself_without_a_backup() {
     let backup = Area::new();
     let upgrade =
         Store::upgrade(&area.path, uuid(GEN), uuid(EPOCH), &backup.path, deadline()).unwrap();
-    assert_eq!((upgrade.from, upgrade.to), (4, 4));
+    assert_eq!(
+        (upgrade.from, upgrade.to),
+        (schema::CURRENT, schema::CURRENT)
+    );
     assert!(upgrade.backup.is_none());
     assert_eq!(fs::read_dir(&backup.path).unwrap().count(), 0);
     assert_eq!(fs::read(area.database()).unwrap(), before);
@@ -2742,24 +2777,24 @@ fn each_migration_chain_clause_refuses_by_its_own_name() {
     let cases: [(&str, String, Chain); 10] = [
         (
             "newer than this binary",
-            "PRAGMA user_version=5;".into(),
+            "PRAGMA user_version=6;".into(),
             Chain::Newer {
-                recorded: 5,
-                current: 4,
+                recorded: 6,
+                current: 5,
             },
         ),
         (
             "missing history row",
             "DELETE FROM migration_history WHERE version=2;".into(),
             Chain::History {
-                recorded: 4,
-                rows: 3,
+                recorded: 5,
+                rows: 4,
             },
         ),
         (
             "a gap in the versions",
-            "UPDATE migration_history SET version=5 WHERE version=4;".into(),
-            Chain::Sequence { position: 4 },
+            "UPDATE migration_history SET version=6 WHERE version=5;".into(),
+            Chain::Sequence { position: 5 },
         ),
         (
             "wrong 002 digest",
@@ -2802,7 +2837,7 @@ fn each_migration_chain_clause_refuses_by_its_own_name() {
         (
             "schema differs from applying the chain",
             "CREATE INDEX surplus ON tasks(state);".into(),
-            Chain::Schema { version: 4 },
+            Chain::Schema { version: 5 },
         ),
     ];
     for (case, edit, expected) in cases {
@@ -2949,6 +2984,9 @@ fn a_migration_file_that_lost_its_pinned_body_is_refused() {
         .map(|entry| entry.unwrap().file_name().into_string().unwrap())
         .collect();
     files.sort();
-    assert_eq!(files, ["001.sql", "002.sql", "003.sql", "004.sql"]);
+    assert_eq!(
+        files,
+        ["001.sql", "002.sql", "003.sql", "004.sql", "005.sql"]
+    );
     assert_eq!(files.len(), usize::try_from(schema::CURRENT).unwrap());
 }

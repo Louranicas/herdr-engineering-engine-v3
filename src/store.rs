@@ -617,6 +617,16 @@ pub struct Submission<'a> {
     pub workspace_id: UuidV4<'a>,
 }
 
+/// What an attempt begun for an installed workspace is bound to (B14a-1a): the content digests of
+/// the baseline and protected snapshots captured at dispatch (`Snapshot::content_digest`) and of
+/// the class profile it was dispatched under. Every digest is required: the row cannot be partial.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Binding<'a> {
+    pub baseline: Sha256Digest<'a>,
+    pub protected: Sha256Digest<'a>,
+    pub profile: Sha256Digest<'a>,
+}
+
 /// Why `task.resolve` refuses (B08), by what decided it. Each maps to its own wire member.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ResolveRefusal {
@@ -1252,7 +1262,7 @@ impl Store {
     ) -> Result<AttemptHead> {
         let fault = self.fault();
         self.transaction(deadline, |tx| {
-            begin_attempt_in(tx, task, expected, attempt, event_id, fault)
+            begin_attempt_in(tx, task, expected, attempt, event_id, fault, false)
         })
     }
 
@@ -1671,12 +1681,19 @@ impl Store {
         let fault = self.fault();
         self.transaction(deadline,|tx| {
             let head=head(tx,&data.task)?;
-            if head.generation!=data.task_generation || head.criteria!=data.criteria || head.accepted_event.is_some() {return Err(Error::Conflict);}
+            // A durable cancellation is named before a generation it bumped (B14a-R1.2): a decided
+            // acceptance first, then cancellation, then the compare-and-set.
+            if head.accepted_event.is_some() {return Err(Error::Conflict);}
             if head.cancellation {return Err(Error::Cancelled);}
+            if head.generation!=data.task_generation || head.criteria!=data.criteria {return Err(Error::Conflict);}
             if head.state!="verifying" {return Err(Error::Outstanding);}
             let generation:Generation=head.generation.parse().map_err(|_|Error::Corrupt)?;
             let expected=Expected {task:UuidV4::parse(&data.task).map_err(|_|Error::Corrupt)?,task_generation:generation,attempt:UuidV4::parse(&data.attempt).map_err(|_|Error::Corrupt)?,attempt_generation:data.attempt_generation.parse().map_err(|_|Error::Corrupt)?};
             require_attempt(tx,&expected,true)?;
+            // A bound task is accepted only on a bound attempt (B14a-R2.2): the one place the rule
+            // is kept, where both acceptance doors commit.
+            let unbound:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM attempt_bindings WHERE task_id=?) AND NOT EXISTS(SELECT 1 FROM attempt_bindings WHERE attempt_id=?)",params![data.task,data.attempt],|row|row.get(0))?;
+            if unbound {return Err(Error::Conflict);}
             if let Some(verified) = &data.verification {
                 verification::require_verified(tx, &data.attempt, verified)?;
                 if verification_ms != 0 { return Err(Error::Conflict); }
@@ -2241,12 +2258,33 @@ fn begin_attempt_in(
     attempt: UuidV4<'_>,
     event_id: UuidV4<'_>,
     fault: Fault,
+    bound: bool,
 ) -> Result<AttemptHead> {
     let head = head(tx, task.as_str())?;
-    same_generation(&head, expected)?;
+    // A task's attempts are all bound or all unbound (B14a-R2.2): a bound begin refuses a task with
+    // an unbound attempt, an unbound begin a task with any binding.
+    let mixed: bool = if bound {
+        tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM attempts a WHERE a.task_id=? \
+             AND NOT EXISTS(SELECT 1 FROM attempt_bindings b WHERE b.attempt_id=a.id))",
+            [task.as_str()],
+            |row| row.get(0),
+        )?
+    } else {
+        tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM attempt_bindings WHERE task_id=?)",
+            [task.as_str()],
+            |row| row.get(0),
+        )?
+    };
+    if mixed {
+        return Err(Error::Conflict);
+    }
+    // Cancellation before the compare-and-set (B14a-R1.2), as in acceptance.
     if head.cancellation {
         return Err(Error::Cancelled);
     }
+    same_generation(&head, expected)?;
     if !matches!(head.state.as_str(), "admitted" | "repair_pending") {
         return Err(Error::Conflict);
     }

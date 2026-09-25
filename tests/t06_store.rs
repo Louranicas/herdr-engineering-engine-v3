@@ -703,6 +703,28 @@ fn cancellation_after_preparation_invalidates_uncommitted_acceptance() {
     no_delivery(&store);
 }
 
+/// B14a-R1.2: a cancellation bumps the task's generation, and every acceptance door that meets it
+/// with the generation it held before names the cancellation — `Cancelled`, never the stale
+/// compare-and-set's `Conflict` — so a runtime can stop as cancelled without re-reading anything.
+#[test]
+fn a_cancellation_is_named_before_the_generation_it_bumped() {
+    let (_area, mut store, evidence) = ready();
+    record(&mut store, &evidence, VerificationVerdict::Passed);
+    let prepared = proof(&store, &evidence, "4");
+    store
+        .cancel(id(TASK), generation("4"), id(CANCELLED), deadline())
+        .unwrap();
+    assert!(matches!(
+        store.accept(&prepared, 0, deadline()),
+        Err(habitat_engine::store::Error::Cancelled)
+    ));
+    assert!(matches!(
+        inventory_proof(&store, &evidence, std::slice::from_ref(&evidence)),
+        Err(habitat_engine::store::Error::Cancelled)
+    ));
+    no_delivery(&store);
+}
+
 #[test]
 fn acceptance_before_cancellation_remains_historical_and_deliverable() {
     let (_area, mut store, evidence) = ready();
@@ -1328,4 +1350,41 @@ fn verified_acceptance_refuses_a_second_cost_charge_then_accepts_zero() {
     store.accept(&prepared, 0, deadline()).unwrap();
     assert_eq!(head(&store).spent_ms, 50);
     assert_eq!(store.pending_delivery(256, deadline()).unwrap().len(), 1);
+}
+
+/// B14a-1a · a bound task is accepted only on a bound attempt: the rule is kept where acceptance
+/// commits, so it holds even against a ledger the begin doors could not have produced — here a
+/// second connection binds another attempt of the same task, leaving the current one unbound. And a
+/// ledger mixing bound and unbound attempts of one task no longer opens.
+#[test]
+fn a_bound_task_is_accepted_only_on_a_bound_attempt() {
+    let (area, mut store, evidence) = ready();
+    record(&mut store, &evidence, VerificationVerdict::Passed);
+    let prepared = proof(&store, &evidence, "4");
+    let digest = format!("sha256:{}", "1".repeat(64));
+    let db = rusqlite::Connection::open(
+        area.path
+            .join("generations")
+            .join(GEN)
+            .join("ledger.sqlite3"),
+    )
+    .unwrap();
+    db.execute_batch(&format!(
+        "INSERT INTO attempts(id,task_id,generation,state,effect,cleanup,used_ms) \
+         VALUES('{OTHER}','{TASK}','9','settled','none','settled',0); \
+         INSERT INTO attempt_bindings(attempt_id,task_id,baseline_digest,protected_digest,profile_digest) \
+         VALUES('{OTHER}','{TASK}','{digest}','{digest}','{digest}');"
+    ))
+    .unwrap();
+    drop(db);
+    assert!(matches!(
+        store.accept(&prepared, 0, deadline()),
+        Err(habitat_engine::store::Error::Conflict)
+    ));
+    no_delivery(&store);
+    drop(store);
+    assert!(matches!(
+        Store::open(&area.path, id(GEN), id(EPOCH), false, deadline()),
+        Err(habitat_engine::store::Error::Corrupt)
+    ));
 }

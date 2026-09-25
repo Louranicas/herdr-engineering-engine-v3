@@ -67,11 +67,13 @@ impl Store {
     ) -> Result<PublishedAcceptance> {
         super::schema::bound(&self.connection, deadline)?;
         let current = head(&self.connection, expected.task.as_str())?;
-        same_generation(&current, expected.task_generation)?;
-        require_attempt(&self.connection, expected, true)?;
+        // Cancellation before the compare-and-set: a cancel bumps the generation, so the older
+        // order named the cause `Conflict` (B14a-R1.2).
         if current.cancellation {
             return Err(Error::Cancelled);
         }
+        same_generation(&current, expected.task_generation)?;
+        require_attempt(&self.connection, expected, true)?;
         if current.state != "verifying" {
             return Err(Error::Outstanding);
         }

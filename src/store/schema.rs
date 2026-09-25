@@ -27,7 +27,7 @@ pub(super) struct Preserved {
 /// THE ordered migration chain (A25; RC06/T04): the one door for migration identity. Version `k`
 /// is `MIGRATIONS[k - 1]`; a ledger records `k` rows linked by their predecessor columns and
 /// `user_version = k`. Only an appended entry may follow a released one.
-const MIGRATIONS: [Migration; 4] = [
+const MIGRATIONS: [Migration; 5] = [
     Migration {
         sql: include_str!("../../migrations/001.sql"),
         body: "sha256:ac5916feaee05749404dd7d87d98cde7e2ae93048e8b07e133ba7868fc1ee9f2",
@@ -68,10 +68,15 @@ const MIGRATIONS: [Migration; 4] = [
                       cancellation,accepted_event,limit_ms,spent_ms,reserved_work_ms,reserved_verify_ms",
         }],
     },
+    Migration {
+        sql: include_str!("../../migrations/005.sql"),
+        body: "sha256:51b29ce4e4e48ea0d2e97dc517fb2bbe3ef87618d15625694f7e0b13f1e2693d",
+        preserves: &[],
+    },
 ];
 
 /// The version a current ledger records: the chain's length.
-pub(super) const CURRENT: u32 = 4;
+pub(super) const CURRENT: u32 = 5;
 const _: () = assert!(MIGRATIONS.len() == CURRENT as usize);
 
 /// Which clause of the migration chain a ledger (or this binary) fails, at which version (A25).
@@ -541,6 +546,12 @@ pub(super) fn validate(
     }
     let roster_invalid:bool=connection.query_row("SELECT EXISTS(SELECT 1 FROM roster_records r LEFT JOIN roster_revisions v ON v.record_id=r.id AND v.revision=r.revision WHERE v.record_id IS NULL OR r.definition!=v.definition OR r.disabled!=v.disabled) OR EXISTS(SELECT 1 FROM roster_records r JOIN roster_observations o ON o.id=r.observation_id WHERE o.record_id!=r.id OR o.revision!=r.revision OR o.instance_id IS NOT NULL) OR EXISTS(SELECT 1 FROM roster_instances i JOIN attempts a ON a.id=i.attempt_id WHERE i.task_id!=a.task_id) OR EXISTS(SELECT 1 FROM roster_cancel_causes c JOIN attempts a ON a.id=c.attempt_id JOIN events e ON e.id=c.event_id WHERE c.task_id!=a.task_id OR e.roster_id!=c.record_id)",[],|row|row.get(0))?;
     if roster_invalid {
+        return Err(Error::Corrupt);
+    }
+    // B14a-1a: a binding names its own attempt's task, and no task mixes bound and unbound attempts.
+    // The table exists from migration 5 on: an older ledger is validated as its version recorded it.
+    let bindings_invalid:bool=recorded>=5 && connection.query_row("SELECT EXISTS(SELECT 1 FROM attempt_bindings b JOIN attempts a ON a.id=b.attempt_id WHERE b.task_id!=a.task_id) OR EXISTS(SELECT 1 FROM attempts a WHERE EXISTS(SELECT 1 FROM attempt_bindings b WHERE b.task_id=a.task_id) AND NOT EXISTS(SELECT 1 FROM attempt_bindings b WHERE b.attempt_id=a.id))",[],|row|row.get(0))?;
+    if bindings_invalid {
         return Err(Error::Corrupt);
     }
     Ok(recorded)
