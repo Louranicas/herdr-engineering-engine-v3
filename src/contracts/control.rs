@@ -546,7 +546,9 @@ pub struct Fault {
     pub constraint: Option<&'static str>,
     /// A diagnostic; never program logic.
     pub message: &'static str,
-    /// Set only for `effect_unknown`: the read that settles what happened (RC03 §4).
+    /// The read to send next: for `effect_unknown` the read that settles what happened (RC03 §4);
+    /// for a `resource_exhausted` over a bounded view, the narrower route (contract-decisions.md
+    /// "Overflow returns `resource_exhausted` with a narrower query/readback route").
     pub readback: Option<Value>,
     /// Set only for `stale_generation`: the generation the caller can now see (RC03 §6).
     pub current_generation: Option<Generation>,
@@ -662,7 +664,9 @@ impl Fault {
             "request_id": request_id,
             "request_sha256": request_sha256,
             "code": self.code.name(),
-            "effect": if self.readback.is_some() { "unknown" } else { "none" },
+            // The effect is unknown only for `effect_unknown`; any other refusal may still carry a
+            // readback (the narrower route a `resource_exhausted` names, B09) and had no effect.
+            "effect": if self.code == ErrorCode::EffectUnknown { "unknown" } else { "none" },
             "retry": self.retry.name(),
             "readback": self.readback,
             "message": self.message,
@@ -914,6 +918,19 @@ impl Disposition {
     }
 }
 
+/// `task.get`'s evidence view other than `none` (B09): `summary` names the outcome's evidence,
+/// `refs` every reference the task holds.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum EvidenceView {
+    /// The outcome's evidence: bounded by construction.
+    Summary,
+    /// Every reference, each identity once, refused past the contract's 64.
+    Refs,
+}
+
+/// The longest `media_type` or `schema_id` an `EvidenceRefV1` carries, in bytes.
+pub const MAX_EVIDENCE_NAME_BYTES: usize = 128;
+
 /// `EvidenceRefV1` (RC03 section 4): a reference to an artifact, never a path or URI. The ledger
 /// checks `sha256` and `byte_length` against what it holds; `artifact_id` is recorded as given.
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -928,6 +945,42 @@ pub struct EvidenceRef {
     pub media_type: String,
     /// Its schema (ASCII 1..128).
     pub schema_id: String,
+}
+
+impl EvidenceRef {
+    /// The one reader of an `EvidenceRefV1` value: exactly its five members, each well formed —
+    /// for a reference the wire carries and for one the ledger stored (B09: a stored value this
+    /// refuses is corruption).
+    #[must_use]
+    pub fn parse(item: &Value) -> Option<Self> {
+        let Value::Object(members) = item else {
+            return None;
+        };
+        let text = |name: &str| members.get(name).and_then(Value::as_str);
+        let name = |name: &str| {
+            text(name)
+                .filter(|text| {
+                    (1..=MAX_EVIDENCE_NAME_BYTES).contains(&text.len()) && text.is_ascii()
+                })
+                .map(str::to_owned)
+        };
+        (members.len() == 5).then_some(())?;
+        Some(Self {
+            artifact_id: text("artifact_id")
+                .filter(|id| UuidV4::parse(id).is_ok())?
+                .to_owned(),
+            sha256: text("sha256")
+                .filter(|digest| Sha256Digest::parse(digest).is_ok())?
+                .to_owned(),
+            byte_length: members
+                .get("byte_length")
+                .and_then(Value::as_u64)
+                .and_then(|length| u32::try_from(length).ok())
+                .map(u64::from)?,
+            media_type: name("media_type")?,
+            schema_id: name("schema_id")?,
+        })
+    }
 }
 
 /// Why a cancellation is asked for: `task.cancel`'s closed reason set (RC03 §6;

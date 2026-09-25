@@ -22,9 +22,9 @@ use super::{
 };
 use crate::contracts::Principal;
 use crate::contracts::control::{
-    self as wire, Envelope, ErrorCode, Fault, FrameFault, Health, MAX_DEADLINE_AHEAD_MS,
-    MAX_FRAME_BYTES, Outcome, PageCursor, PageIn, Precondition, Received, Retry, Socket,
-    result_frame,
+    self as wire, Envelope, ErrorCode, EvidenceView, Fault, FrameFault, Health,
+    MAX_DEADLINE_AHEAD_MS, MAX_FRAME_BYTES, Outcome, PageCursor, PageIn, Precondition, Received,
+    Retry, Socket, result_frame,
 };
 use crate::task::control::{self as task_body, Selector, Spec};
 use serde_json::{Map, Value, json};
@@ -121,15 +121,18 @@ pub trait Tasks {
     /// ledger cannot be written.
     fn submit(&self, request: &TaskRequest<'_>, spec: &Spec) -> Result<Outcome, Fault>;
 
-    /// Read one visible task.
+    /// Read one visible task, with the evidence `view` names (B09) or none.
     ///
     /// # Errors
     ///
-    /// `not_found` for a task this principal cannot see; `resource_exhausted` past the read bound.
+    /// `not_found` for a task this principal cannot see; `resource_exhausted` past the read bound
+    /// or a view's bound (with the narrower view as its readback); `unavailable` for evidence whose
+    /// object is missing or corrupt now, or whose identity the ledger did not record.
     fn get(
         &self,
         principal: &Principal,
         selector: &Selector,
+        view: Option<EvidenceView>,
         deadline_unix_ms: u64,
         now_unix_ms: u64,
     ) -> Result<Outcome, Fault>;
@@ -480,11 +483,12 @@ fn dispatch(action: Action, caller: &Caller, context: &Context<'_>) -> Result<Ou
             )
         }
         "task.get" => {
-            let selector = task_body::get(body)?;
+            let (selector, view) = task_body::get(body)?;
             let tasks = context.composed.tasks.ok_or_else(owner_absent)?;
             tasks.get(
                 context.principal,
                 &selector,
+                view,
                 context.envelope.deadline_unix_ms,
                 context.now_unix_ms,
             )

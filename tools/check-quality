@@ -217,7 +217,7 @@ CONTEXT_INPUTS = ("src/context.rs",)
 COHORT_TARGET_COUNTS = {"t22_cohort": 67}
 COHORT_INPUTS = ("src/cohort.rs", "evaluation/cohorts/claim-overlap-v1.json",
                  "tests/fixtures/t22/C01.json", "tests/fixtures/t22/C02.json")
-ACTIONS_TARGET_COUNTS = {"t28_actions": 194}
+ACTIONS_TARGET_COUNTS = {"t28_actions": 201}
 # The control receiver (review coordinator step 1) is served from the catalogue: its wire half in
 # contracts, its catalogue half in actions, and the independent Python oracle its cases run.
 ACTIONS_INPUTS = ("src/actions.rs", "src/worker/tools.rs", "src/actions/control.rs",
@@ -235,6 +235,8 @@ ACTIONS_INPUTS = ("src/actions.rs", "src/worker/tools.rs", "src/actions/control.
                   "src/app/routing.rs", "src/app/custody.rs", "tests/t28_preview.rs",
                   "tests/fixtures/preview/fixture.json", "tests/fixtures/preview/known-answers.json",
                   "tests/fixtures/preview/make-known-answers.py",
+                  # B09a task.get evidence views: the battery (the store half is store's).
+                  "tests/t28_evidence.rs",
                   # T29 composition (b): the consumer the engine cases run, over skills/ and workflows/.
                   "tests/fixtures/t29/compose.py",
                   "tests/fixtures/native/control-v1/receiver-oracle.py",

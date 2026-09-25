@@ -645,7 +645,7 @@ impl Store {
 
     /// Run `read` in one deferred read transaction, rolled back after: the one door for a
     /// principal's read snapshot. Refuses a poisoned store; a rollback failure poisons it.
-    fn read_snapshot<T>(
+    pub(super) fn read_snapshot<T>(
         &mut self,
         deadline: Instant,
         read: impl FnOnce(&Connection) -> Result<T>,

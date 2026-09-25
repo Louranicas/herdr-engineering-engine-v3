@@ -39,13 +39,14 @@ use crate::actions::control::{CURSOR_LIFETIME_MS, Recorded, TaskRequest, Tasks};
 use crate::app::evidence::fresh_id;
 use crate::app::routing::{self, Routing, Unready};
 use crate::contracts::control::{
-    ErrorCode, Fault, Outcome, PageCursor, Precondition, ResultEffect, Retry, request_sha256,
+    ErrorCode, EvidenceRef, EvidenceView, Fault, Outcome, PageCursor, Precondition, ResultEffect,
+    Retry, request_sha256,
 };
 use crate::contracts::parse_u64_decimal;
 use crate::contracts::{Sha256Digest, UuidV4};
 use crate::store::{
-    Admission, Allocation, CancelIntent, Cancellation, Error as StoreError, Principal, Resolution,
-    ResolveIntent, ResolveRefusal, Store, Submission, TaskFilter, TaskHead,
+    Admission, Allocation, CancelIntent, Cancellation, Error as StoreError, ObjectReader,
+    Principal, Resolution, ResolveIntent, ResolveRefusal, Store, Submission, TaskFilter, TaskHead,
 };
 use crate::task::control::{Cancel, List, Preview, Resolve, Selector, Spec};
 use serde_json::{Value, json};
@@ -232,6 +233,12 @@ fn resolve_fault(error: StoreError, task: &str) -> Fault {
                 "an evidence reference names no artifact the ledger holds",
             )
             .at("/body/evidence"),
+            ResolveRefusal::Inventory => Fault::of(
+                ErrorCode::ResourceExhausted,
+                Retry::AfterCondition,
+                "the ledger's object inventory would exceed the 4096 objects a backup copies",
+            )
+            .at("/body/evidence"),
         },
         other => store_fault(&other),
     }
@@ -288,6 +295,90 @@ pub fn cancel_readback(task_id: &str) -> Value {
         "action_version": 1,
         "body": {"selector": {"task_id": task_id}, "evidence": "none"},
     })
+}
+
+/// The most bytes a view's distinct objects may sum to before any is read (B09 R1.4): 64 objects of
+/// the ledger's 16 MiB limit would be 1 GiB hashed per read.
+pub const MAX_VIEW_BYTES: u64 = 64 * 1024 * 1024;
+
+/// The narrower route a bounded view names when it overflows: the same task's `summary`, bounded by
+/// construction (contract-decisions.md: "Overflow returns `resource_exhausted` with a narrower
+/// query/readback route").
+#[must_use]
+pub fn summary_readback(task_id: &str) -> Value {
+    json!({
+        "action": "task.get",
+        "action_version": 1,
+        "body": {"selector": {"task_id": task_id}, "evidence": "summary"},
+    })
+}
+
+/// A view's refusal past its bound: `resource_exhausted`, the summary as its readback.
+fn view_exhausted(task_id: &str, message: &'static str) -> Fault {
+    let mut fault =
+        Fault::of(ErrorCode::ResourceExhausted, Retry::AfterReadback, message).at("/body/evidence");
+    fault.readback = Some(summary_readback(task_id));
+    fault
+}
+
+/// The ledger's refusals of an evidence view, and every other through [`store_fault`].
+fn evidence_fault(error: &StoreError, task_id: &str) -> Fault {
+    match error {
+        StoreError::EvidenceIdentity => Fault::of(
+            ErrorCode::Unavailable,
+            Retry::Never,
+            "this task's evidence was recorded without the identity a reference needs",
+        )
+        .at("/body/evidence")
+        .because("evidence identity not recorded for this task"),
+        StoreError::EvidenceBound { .. } => view_exhausted(
+            task_id,
+            "the task holds more evidence references than a view may carry (64)",
+        ),
+        other => store_fault(other),
+    }
+}
+
+/// T17 at readback: every object a view names is present and whole now, or the view is refused
+/// `unavailable` (the history is untouched and `evidence: none` still answers). Bounded before any
+/// read by [`MAX_VIEW_BYTES`] over the distinct objects.
+fn available_now(
+    reader: &ObjectReader,
+    references: &[EvidenceRef],
+    task_id: &str,
+    until: Instant,
+) -> Result<(), Fault> {
+    let mut objects: Vec<&EvidenceRef> = Vec::new();
+    for reference in references {
+        if !objects.iter().any(|seen| seen.sha256 == reference.sha256) {
+            objects.push(reference);
+        }
+    }
+    let bytes = objects.iter().try_fold(0_u64, |sum, reference| {
+        sum.checked_add(reference.byte_length)
+    });
+    if bytes.is_none_or(|bytes| bytes > MAX_VIEW_BYTES) {
+        return Err(view_exhausted(
+            task_id,
+            "the view's objects exceed the bytes one read may check (64 MiB)",
+        ));
+    }
+    for reference in objects {
+        match reader.verify(reference, until) {
+            Ok(()) => {}
+            Err(StoreError::Deadline) => return Err(store_fault(&StoreError::Deadline)),
+            Err(_) => {
+                return Err(Fault::of(
+                    ErrorCode::Unavailable,
+                    Retry::AfterCondition,
+                    "an evidence object is missing or corrupt now; its history is kept",
+                )
+                .at("/body/evidence")
+                .because("evidence object missing or corrupt"));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn unavailable(message: &'static str) -> Fault {
@@ -420,6 +511,7 @@ impl Tasks for StoreTasks {
         &self,
         principal: &Principal,
         selector: &Selector,
+        evidence: Option<EvidenceView>,
         deadline_unix_ms: u64,
         now_unix_ms: u64,
     ) -> Result<Outcome, Fault> {
@@ -442,14 +534,28 @@ impl Tasks for StoreTasks {
                     .id
             }
         };
-        let view = store
-            .task_view(
-                principal,
-                UuidV4::parse(&id).map_err(|_| internal())?,
-                until,
-            )
-            .map_err(|error| store_fault(&error))?;
+        let task = UuidV4::parse(&id).map_err(|_| internal())?;
+        // The rows under the ledger's lock, in one snapshot; the objects after it, outside (B09).
+        let (view, references, reader) = match evidence {
+            None => (
+                store
+                    .task_view(principal, task, until)
+                    .map_err(|error| store_fault(&error))?,
+                Vec::new(),
+                None,
+            ),
+            Some(named) => {
+                let (view, references) = store
+                    .task_evidence(principal, task, named, until)
+                    .map_err(|error| evidence_fault(&error, &id))?;
+                let reader = store.object_reader().map_err(|error| store_fault(&error))?;
+                (view, references, Some(reader))
+            }
+        };
         drop(store);
+        if let Some(reader) = reader {
+            available_now(&reader, &references, &id, until)?;
+        }
         let head = &view.head;
         let attempts: Vec<_> = view.attempts.iter().collect();
         let deliveries = view.pending_deliveries;
@@ -477,7 +583,13 @@ impl Tasks for StoreTasks {
                 })).collect::<Vec<_>>(),
                 "cleanup": cleanup,
                 "delivery": delivery,
-                "evidence": [],
+                "evidence": references.iter().map(|reference| json!({
+                    "artifact_id": reference.artifact_id,
+                    "sha256": reference.sha256,
+                    "byte_length": reference.byte_length,
+                    "media_type": reference.media_type,
+                    "schema_id": reference.schema_id,
+                })).collect::<Vec<_>>(),
                 "cursor": self.cursor(view.event_high_water, &head.id, now_unix_ms),
             }),
         })

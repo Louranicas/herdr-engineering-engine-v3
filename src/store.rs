@@ -329,6 +329,7 @@ macro_rules! fresh_id {
 
 mod artifact;
 mod backup;
+mod evidence;
 mod reconciliation;
 mod recovery;
 mod roster;
@@ -338,6 +339,7 @@ mod verification;
 pub use staging::ArtifactStaging;
 pub use verification::{Verification, VerificationVerdict};
 
+pub use evidence::{MAX_VIEW_REFS, ObjectReader};
 pub use roster::{RequestSource, RosterAttempt, RosterSnapshot, RosterStart};
 
 pub use artifact::Object;
@@ -400,6 +402,16 @@ pub enum Error {
     },
     /// `task.resolve` (B08) refused, by the obligation or disposition that decided it.
     Disposition(ResolveRefusal),
+    /// A task's evidence has no identity the ledger recorded (B09): its verification or acceptance
+    /// was written before the ledger kept evidence identity, or a stop names no disposition. Never
+    /// guessed; it will not appear.
+    EvidenceIdentity,
+    /// An evidence view holds more references than the contract's bound, counted before identities
+    /// collapse: refused with both numbers rather than truncated (B09).
+    EvidenceBound {
+        found: u64,
+        limit: u64,
+    },
     /// The task's outcome is already decided without a cancellation (accepted, or its terminal stop
     /// committed): there is no intent left to record, and its outcome stays historical (B05, RC03 §6).
     AlreadyStopped,
@@ -619,6 +631,9 @@ pub enum ResolveRefusal {
     NoEvidence,
     /// An evidence reference names no artifact the ledger holds (by digest and size).
     UnknownEvidence,
+    /// Registering the disposition's evidence would take the ledger's object inventory past what a
+    /// backup copies ([`backup::OBJECT_INVENTORY_BOUND`]), making the ledger un-backup-able (B09).
+    Inventory,
 }
 
 /// One `task.resolve` (B08): the operator's key and exact request bytes, the task and the generation
@@ -1449,6 +1464,7 @@ impl Store {
                 if open { return refuse(ResolveRefusal::Refused("acknowledge every unknown effect of the task first")); }
                 true
             };
+            register_evidence(tx, &objects)?;
             let generation = next(input.expected)?;
             let state = if plan.quarantines && !head.cancellation { "blocked" } else { head.state.as_str() };
             let body = serde_json::to_vec(&serde_json::json!({
@@ -1801,6 +1817,35 @@ impl PublishedAcceptance {
     pub const fn object(&self) -> &Object {
         &self.manifest
     }
+}
+
+/// Register every disposition evidence object in `artifacts` with its size, as the stop door
+/// registers its own, so a backup copies it (B09 R1.5) — never past what a backup can copy (R2.4).
+/// # Errors
+/// `Corrupt` for an object registered with another size; `Disposition(Inventory)` past
+/// [`backup::OBJECT_INVENTORY_BOUND`] (the caller's transaction then rolls back).
+fn register_evidence(tx: &rusqlite::Transaction<'_>, objects: &[Object]) -> Result<()> {
+    for object in objects {
+        tx.execute(
+            "INSERT INTO artifacts(digest,size) VALUES(?,?) ON CONFLICT(digest) DO NOTHING",
+            params![object.digest, number(object.size)?],
+        )?;
+        let registered: u64 = tx.query_row(
+            "SELECT size FROM artifacts WHERE digest=?",
+            [&object.digest],
+            |row| read_number(row, 0),
+        )?;
+        if registered != object.size {
+            return Err(Error::Corrupt);
+        }
+    }
+    let held: u64 = tx.query_row("SELECT count(*) FROM artifacts", [], |row| {
+        read_number(row, 0)
+    })?;
+    if held > u64::try_from(backup::OBJECT_INVENTORY_BOUND).map_err(|_| Error::Bound)? {
+        return Err(Error::Disposition(ResolveRefusal::Inventory));
+    }
+    Ok(())
 }
 
 fn remaining(deadline: Instant) -> Result<Duration> {

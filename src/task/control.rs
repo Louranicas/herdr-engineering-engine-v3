@@ -19,7 +19,8 @@
 //! * `parent` must be `null`: child allocations belong to cohort composition, not composed here.
 
 use crate::contracts::control::{
-    CancelReason, Disposition, ErrorCode, EvidenceRef, Fault, PageIn, Retry, request_sha256,
+    CancelReason, Disposition, ErrorCode, EvidenceRef, EvidenceView, Fault, PageIn, Retry,
+    request_sha256,
 };
 use crate::contracts::{UuidV4, parse_u64_decimal};
 use crate::recovery::TaskState;
@@ -432,8 +433,6 @@ pub fn list(body: &Map<String, Value>) -> Result<List, Fault> {
 const MAX_REASON_BYTES: usize = 2048;
 /// The most evidence references a request may carry (RC03: evidence arrays <= 64).
 const MAX_EVIDENCE: usize = 64;
-/// The longest media type or schema identity (`ASCII[1..128]`).
-const MAX_EVIDENCE_NAME_BYTES: usize = 128;
 
 /// A valid `task.resolve` body (contract-decisions.md:344). The task and the generation it expects
 /// are the precondition's.
@@ -492,42 +491,13 @@ pub fn resolve(body: &Map<String, Value>) -> Result<Resolve, Fault> {
     }
     let evidence = named
         .iter()
-        .map(|item| evidence_ref(item).ok_or_else(refused))
+        .map(|item| EvidenceRef::parse(item).ok_or_else(refused))
         .collect::<Result<Vec<_>, _>>()?;
     Ok(Resolve {
         obligation_id,
         disposition,
         reason,
         evidence,
-    })
-}
-
-/// One `EvidenceRefV1`, exactly its five members, each well formed.
-fn evidence_ref(item: &Value) -> Option<EvidenceRef> {
-    let Value::Object(members) = item else {
-        return None;
-    };
-    let text = |name: &str| members.get(name).and_then(Value::as_str);
-    let name = |name: &str| {
-        text(name)
-            .filter(|text| (1..=MAX_EVIDENCE_NAME_BYTES).contains(&text.len()) && text.is_ascii())
-            .map(str::to_owned)
-    };
-    (members.len() == 5).then_some(())?;
-    Some(EvidenceRef {
-        artifact_id: text("artifact_id")
-            .filter(|id| UuidV4::parse(id).is_ok())?
-            .to_owned(),
-        sha256: text("sha256")
-            .filter(|digest| crate::contracts::Sha256Digest::parse(digest).is_ok())?
-            .to_owned(),
-        byte_length: members
-            .get("byte_length")
-            .and_then(Value::as_u64)
-            .and_then(|length| u32::try_from(length).ok())
-            .map(u64::from)?,
-        media_type: name("media_type")?,
-        schema_id: name("schema_id")?,
     })
 }
 
@@ -544,22 +514,20 @@ pub enum Selector {
 ///
 /// # Errors
 ///
-/// `invalid_argument` naming the member; `unavailable` for an evidence view this receiver does not
-/// compose (`summary`, `refs`).
-pub fn get(body: &Map<String, Value>) -> Result<Selector, Fault> {
+/// `invalid_argument` naming the member. The evidence view is handed on: `none` reads no evidence,
+/// `summary` and `refs` the views B09 composes.
+pub fn get(body: &Map<String, Value>) -> Result<(Selector, Option<EvidenceView>), Fault> {
     exactly(body, &["selector", "evidence"], "/body")?;
-    match body.get("evidence").and_then(Value::as_str) {
-        Some("none") => {}
-        Some("summary" | "refs") => {
-            return Err(Fault::of(
-                ErrorCode::Unavailable,
-                Retry::AfterCondition,
-                "evidence views are not composed behind this receiver",
-            )
-            .at("/body/evidence"));
-        }
+    let view = match body.get("evidence").and_then(Value::as_str) {
+        Some("none") => None,
+        Some("summary") => Some(EvidenceView::Summary),
+        Some("refs") => Some(EvidenceView::Refs),
         _ => return Err(Fault::invalid("/body/evidence", "none, summary or refs")),
-    }
+    };
+    Ok((selector(body)?, view))
+}
+
+fn selector(body: &Map<String, Value>) -> Result<Selector, Fault> {
     let selector = object(body.get("selector"), "/body/selector")?;
     let uuid = |name: &str, field: &'static str| {
         selector

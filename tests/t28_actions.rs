@@ -40,6 +40,10 @@ mod tasks;
 #[path = "t28_preview.rs"]
 mod preview;
 
+/// B09: `task.get`'s evidence views, read with their identity and checked now.
+#[path = "t28_evidence.rs"]
+mod evidence;
+
 type Outcome = Result<(), Box<dyn Error>>;
 
 /// The plan spine's own action list — the independent source these cases compare against.

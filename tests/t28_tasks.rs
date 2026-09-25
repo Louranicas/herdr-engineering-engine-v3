@@ -6,7 +6,7 @@ use habitat_engine::actions::control::{
 use habitat_engine::actions::{Caller, Effect, Owner};
 use habitat_engine::app::tasks::{StoreTasks, cleanup_of, delivery_of, submit_readback};
 use habitat_engine::contracts::UuidV4;
-use habitat_engine::contracts::control::{ErrorCode, request_sha256};
+use habitat_engine::contracts::control::{ErrorCode, EvidenceView, request_sha256};
 use habitat_engine::store::{Principal, Store};
 use habitat_engine::task::control::{Selector, get, submission};
 use serde_json::{Map, Value, json};
@@ -25,7 +25,7 @@ type Outcome = Result<(), Box<dyn Error>>;
 
 static NEXT: AtomicUsize = AtomicUsize::new(0);
 pub(super) const GENERATION: &str = "28d00000-0000-4000-8000-000000000001";
-const EPOCH: &str = "28d00000-0000-4000-8000-000000000002";
+pub(super) const EPOCH: &str = "28d00000-0000-4000-8000-000000000002";
 pub(super) const KEY: &str = "28d00000-0000-4000-8000-0000000000aa";
 pub(super) const NOW: u64 = 1_790_000_000_000;
 
@@ -209,21 +209,34 @@ fn each_refusal_names_its_member_and_code() -> Outcome {
 
 #[test]
 fn a_get_names_its_task_by_identity_or_by_the_submit_key() -> Outcome {
-    let parse = |value: Value| {
+    type Parsed = Result<(Selector, Option<EvidenceView>), Box<dyn Error>>;
+    let parse = |value: Value| -> Parsed {
         get(value.as_object().ok_or("object")?).map_err(|fault| format!("{:?}", fault.code).into())
     };
-    let by_id: Result<Selector, Box<dyn Error>> =
-        parse(json!({"selector": {"task_id": KEY}, "evidence": "none"}));
-    assert_eq!(by_id?, Selector::Task(KEY.into()));
-    let by_key: Result<Selector, Box<dyn Error>> = parse(
-        json!({"selector": {"source_action": "task.submit", "idempotency_key": KEY}, "evidence": "none"}),
+    assert_eq!(
+        parse(json!({"selector": {"task_id": KEY}, "evidence": "none"}))?,
+        (Selector::Task(KEY.into()), None)
     );
-    assert_eq!(by_key?, Selector::SubmitKey(KEY.into()));
+    assert_eq!(
+        parse(
+            json!({"selector": {"source_action": "task.submit", "idempotency_key": KEY}, "evidence": "none"})
+        )?,
+        (Selector::SubmitKey(KEY.into()), None)
+    );
+    // B09: both evidence views are admitted and handed on (they were `unavailable` before).
+    assert_eq!(
+        parse(json!({"selector": {"task_id": KEY}, "evidence": "summary"}))?,
+        (Selector::Task(KEY.into()), Some(EvidenceView::Summary))
+    );
+    assert_eq!(
+        parse(json!({"selector": {"task_id": KEY}, "evidence": "refs"}))?,
+        (Selector::Task(KEY.into()), Some(EvidenceView::Refs))
+    );
     for (case, value, code) in [
         (
-            "summary",
-            json!({"selector": {"task_id": KEY}, "evidence": "summary"}),
-            "Unavailable",
+            "an unknown view",
+            json!({"selector": {"task_id": KEY}, "evidence": "all"}),
+            "InvalidArgument",
         ),
         (
             "other source",
@@ -241,7 +254,7 @@ fn a_get_names_its_task_by_identity_or_by_the_submit_key() -> Outcome {
             "InvalidArgument",
         ),
     ] {
-        let refused: Result<Selector, Box<dyn Error>> = parse(value);
+        let refused = parse(value);
         assert_eq!(
             refused.err().map(|error| error.to_string()),
             Some(code.to_owned()),
@@ -1039,7 +1052,7 @@ fn a_cancel_body_is_checked_member_by_member() -> Outcome {
 
 /// How far a fixture task is taken through the public ledger API before the cancel.
 #[derive(Clone, Copy, PartialEq)]
-enum Stage {
+pub(super) enum Stage {
     /// One attempt, queued: generation 2.
     Running,
     /// Its attempt settled cleanly, not ready to verify: generation 3.
@@ -1058,7 +1071,7 @@ enum Stage {
     Accepted,
 }
 
-fn nth(role: u16, index: u16) -> String {
+pub(super) fn nth(role: u16, index: u16) -> String {
     format!("{role:08x}-0000-4000-8000-{index:012x}")
 }
 
@@ -1117,7 +1130,7 @@ fn begun(store: &mut Store, operator: &Principal, index: u16) -> Result<(), Box<
 }
 
 /// Task `index`, taken to `stage` through the store's own API; returns its identity.
-fn staged(
+pub(super) fn staged(
     store: &mut Store,
     operator: &Principal,
     index: u16,
@@ -1950,6 +1963,7 @@ impl Tasks for Handed {
         &self,
         principal: &Principal,
         selector: &Selector,
+        view: Option<EvidenceView>,
         deadline_unix_ms: u64,
         now_unix_ms: u64,
     ) -> Result<
@@ -1957,7 +1971,7 @@ impl Tasks for Handed {
         habitat_engine::contracts::control::Fault,
     > {
         self.0.borrow_mut().push(format!(
-            "get {principal:?} {selector:?} {deadline_unix_ms} {now_unix_ms}"
+            "get {principal:?} {selector:?} {view:?} {deadline_unix_ms} {now_unix_ms}"
         ));
         Err(habitat_engine::contracts::control::Fault::expired())
     }
@@ -2981,9 +2995,9 @@ fn a_list_after_key_names_its_epoch_and_an_issued_sequence() -> Outcome {
 
 // --- B08 · task.resolve (contract-decisions.md:344; design ~/hee3-evidence/T28/B08-task-resolve-*/DESIGN.md) ---
 
-const RESOLVE_KEY: &str = "28d00000-0000-4000-8000-0000000009a1";
-const RESOLVE_KEY_2: &str = "28d00000-0000-4000-8000-0000000009a2";
-const RESOLVE_KEY_3: &str = "28d00000-0000-4000-8000-0000000009a3";
+pub(super) const RESOLVE_KEY: &str = "28d00000-0000-4000-8000-0000000009a1";
+pub(super) const RESOLVE_KEY_2: &str = "28d00000-0000-4000-8000-0000000009a2";
+pub(super) const RESOLVE_KEY_3: &str = "28d00000-0000-4000-8000-0000000009a3";
 
 /// A `task.resolve` frame: the precondition names the task and the generation the operator expects.
 fn resolve_frame(
@@ -3005,13 +3019,17 @@ fn resolve_body(obligation: &str, disposition: &str, evidence: &Value) -> Value 
 }
 
 /// An `EvidenceRefV1` naming `object`, stored in the ledger.
-fn evidence_of(object: &habitat_engine::store::Object) -> Value {
+pub(super) fn evidence_of(object: &habitat_engine::store::Object) -> Value {
     json!({"artifact_id": "28d00000-0000-4000-8000-0000000009e1", "sha256": object.digest(),
            "byte_length": object.size(), "media_type": "text/plain", "schema_id": "hee3.evidence/1"})
 }
 
 /// A ledger query answered from the ledger file itself, not through the engine.
-fn ledger_value(scratch: &Scratch, sql: &str, task: &str) -> Result<Value, Box<dyn Error>> {
+pub(super) fn ledger_value(
+    scratch: &Scratch,
+    sql: &str,
+    task: &str,
+) -> Result<Value, Box<dyn Error>> {
     let file = scratch
         .0
         .join("state/generations")
@@ -3029,7 +3047,7 @@ fn ledger_value(scratch: &Scratch, sql: &str, task: &str) -> Result<Value, Box<d
 }
 
 /// A ledger of staged tasks (`stages[i]` is task `i + 1`) and a published evidence object.
-fn resolve_ledger(
+pub(super) fn resolve_ledger(
     scratch: &Scratch,
     operator: &Principal,
     stages: &[Stage],
@@ -3056,7 +3074,7 @@ fn resolve_ledger(
 
 /// Serve one `task.resolve` as `principal`: `(request number, key, task, expected generation)`,
 /// then the obligation, the disposition and the evidence references.
-fn resolve_with(
+pub(super) fn resolve_with(
     tasks: &StoreTasks,
     principal: &Principal,
     (no, key, task, generation): (u8, &str, &str, &str),
@@ -4273,9 +4291,10 @@ fn a_closed_obligation_takes_no_quarantine_and_unknown_usage_keeps_one_open() ->
     Ok(())
 }
 
-/// B08 (code review): the stop door re-reads the evidence's registered size, for every stop. An
-/// artifact row registered with another size than the object is corruption: the abandonment is
-/// refused and nothing stops.
+/// B08 (code review), moved one step earlier by B09 (R1.5): an evidence object registered with another
+/// size than it has is corruption. Every disposition now registers its evidence as the stop door
+/// does, so the first disposition naming such an object — here the acknowledgement — is refused
+/// (`internal`) with nothing written: no disposition, no stop.
 #[test]
 fn a_stop_refuses_evidence_registered_with_another_size() -> Outcome {
     let scratch = Scratch::new()?;
@@ -4296,7 +4315,7 @@ fn a_stop_refuses_evidence_registered_with_another_size() -> Outcome {
     let tasks = StoreTasks::new(raw_store(&scratch)?, EPOCH.to_owned());
     let refs = json!([evidence_of(&evidence)]);
     let first = nth(0x05b2, 1);
-    resolve_with(
+    let refused = resolve_with(
         &tasks,
         &operator,
         (1, RESOLVE_KEY, &ids[0], "3"),
@@ -4304,28 +4323,25 @@ fn a_stop_refuses_evidence_registered_with_another_size() -> Outcome {
         "acknowledge_external_effect",
         &refs,
     )?;
-    let refused = resolve_with(
-        &tasks,
-        &operator,
-        (2, RESOLVE_KEY_2, &ids[0], "4"),
-        &first,
-        "abandon",
-        &refs,
-    )?;
     assert_eq!(
         (&refused["kind"], &refused["code"]),
         (&json!("error"), &json!("internal")),
         "{refused}"
     );
-    assert_eq!(
-        ledger_value(
-            &scratch,
-            "SELECT count(*) FROM task_stops WHERE task_id=?",
-            &ids[0]
-        )?,
-        json!(0),
-        "nothing stopped"
-    );
+    for (table, what) in [
+        ("task_dispositions", "no disposition"),
+        ("task_stops", "nothing stopped"),
+    ] {
+        assert_eq!(
+            ledger_value(
+                &scratch,
+                &format!("SELECT count(*) FROM {table} WHERE task_id=?"),
+                &ids[0]
+            )?,
+            json!(0),
+            "{what}"
+        );
+    }
     conforms(&[("task.resolve", &refused)])?;
     Ok(())
 }
