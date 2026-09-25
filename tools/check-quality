@@ -133,7 +133,7 @@ T06_INPUTS = (
 T06_UNIT_COUNTS = {
     "store::staging_tests::": 13, "check::u64_oracle::tests::": 22,
     "app::capture::tests::": 6, "app::durable_control::tests::": 6,
-    "app::repair::tests::": 2, "worker::namespace::": 8,
+    "app::repair::tests::": 6, "worker::namespace::": 8,
 }
 
 
