@@ -1,5 +1,5 @@
-//! The task owner composed behind the control receiver: `task.submit` and `task.get` through the one
-//! ledger (review D-C3 step 3; RC03 §6).
+//! The task owner composed behind the control receiver: `task.submit`, `task.get` and `task.cancel`
+//! through the one ledger (review D-C3 step 3; RC03 §6).
 //!
 //! The ledger already owns the durable half. `Store::submit` binds (principal, `task.submit`, v1,
 //! idempotency key) to the digest of the request's exact bytes, atomically with the task row and its
@@ -18,13 +18,22 @@
 //!   read. A task holding more attempts than the ledger's own bound is refused
 //!   `resource_exhausted`; nothing is silently truncated. The ledger's state vocabularies are the
 //!   wire's, value for value.
+//! * **`task.cancel` records intent, never settlement (B05).** `Store::cancel_intent` binds the key to
+//!   the request digest and records the intent in one transaction, reading the task through the
+//!   principal's own door before its generation (an invisible task names none). The result names
+//!   the intent's obligation and what the cancel found of the worker; a lost commit reads back by
+//!   `task.get` on the precondition's task.
 
 use crate::actions::control::{TaskRequest, Tasks};
 use crate::app::evidence::fresh_id;
-use crate::contracts::control::{ErrorCode, Fault, Outcome, ResultEffect, Retry, request_sha256};
+use crate::contracts::control::{
+    ErrorCode, Fault, Outcome, Precondition, ResultEffect, Retry, request_sha256,
+};
 use crate::contracts::{Sha256Digest, UuidV4};
-use crate::store::{Allocation, Error as StoreError, Principal, Store, Submission, TaskHead};
-use crate::task::control::{Selector, Spec};
+use crate::store::{
+    Allocation, CancelIntent, Error as StoreError, Principal, Store, Submission, TaskHead,
+};
+use crate::task::control::{Cancel, Selector, Spec};
 use serde_json::{Value, json};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -82,6 +91,16 @@ pub fn submit_readback(idempotency_key: &str) -> Value {
             "selector": {"source_action": "task.submit", "idempotency_key": idempotency_key},
             "evidence": "none",
         },
+    })
+}
+
+/// The readback RC03 §6 prescribes for a cancel: `task.get` by the task the precondition named.
+#[must_use]
+pub fn cancel_readback(task_id: &str) -> Value {
+    json!({
+        "action": "task.get",
+        "action_version": 1,
+        "body": {"selector": {"task_id": task_id}, "evidence": "none"},
     })
 }
 
@@ -259,18 +278,8 @@ impl Tasks for StoreTasks {
         let head = &view.head;
         let attempts: Vec<_> = view.attempts.iter().collect();
         let deliveries = view.pending_deliveries;
-        let current = attempts
-            .iter()
-            .find(|attempt| matches!(attempt.state.as_str(), "queued" | "running"))
-            .map(|attempt| attempt.id.as_str());
-        let open_attempts = attempts
-            .iter()
-            .filter(|attempt| {
-                matches!(attempt.effect.as_str(), "pending" | "unknown")
-                    || matches!(attempt.cleanup.as_str(), "pending" | "unknown")
-            })
-            .count();
-        let obligations = u32::try_from(open_attempts + deliveries).map_err(|_| internal())?;
+        let current = view.current_attempt();
+        let obligations = u32::try_from(view.unresolved_obligations()).map_err(|_| internal())?;
         let cleanups: Vec<&str> = attempts
             .iter()
             .map(|attempt| attempt.cleanup.as_str())
@@ -295,6 +304,78 @@ impl Tasks for StoreTasks {
                 "delivery": delivery,
                 "evidence": [],
                 "cursor": self.cursor(view.event_high_water, &head.id, now_unix_ms),
+            }),
+        })
+    }
+
+    fn cancel(
+        &self,
+        request: &TaskRequest<'_>,
+        target: &Precondition,
+        body: &Cancel,
+    ) -> Result<Outcome, Fault> {
+        let until = deadline(request.deadline_unix_ms, request.now_unix_ms);
+        let key = UuidV4::parse(request.idempotency_key)
+            .map_err(|_| Fault::invalid("/idempotency_key", "UuidV4"))?;
+        let task =
+            UuidV4::parse(&target.id).map_err(|_| Fault::invalid("/precondition/id", "UuidV4"))?;
+        let event_id =
+            fresh_id(until).map_err(|_| unavailable("no entropy for an event identity"))?;
+        let event = UuidV4::parse(event_id.as_str()).map_err(|_| internal())?;
+        let mut store = self
+            .store
+            .lock()
+            .map_err(|_| unavailable("the ledger's owner panicked"))?;
+        let (record, replayed) = store
+            .cancel_intent(
+                CancelIntent {
+                    principal: request.principal,
+                    key,
+                    task,
+                    expected: target.generation,
+                    event,
+                    request_bytes: request.payload,
+                    reason: body.reason,
+                    note: body.note.as_deref(),
+                },
+                until,
+            )
+            .map_err(|error| match error {
+                StoreError::UncertainCommit => Fault::effect_unknown(cancel_readback(&target.id)),
+                StoreError::StaleGeneration { current } => {
+                    Fault::stale("/precondition/generation", current)
+                }
+                StoreError::NotFound => {
+                    Fault::of(ErrorCode::NotFound, Retry::Never, "no such visible task")
+                        .at("/precondition/id")
+                }
+                StoreError::AlreadyStopped => Fault::of(
+                    ErrorCode::Conflict,
+                    Retry::Never,
+                    "the task already stopped; its outcome stays historical",
+                )
+                .at("/precondition"),
+                other => store_fault(&other),
+            })?;
+        drop(store);
+        UuidV4::parse(&record.task).map_err(|_| internal())?;
+        UuidV4::parse(&record.obligation).map_err(|_| internal())?;
+        let obligations = u32::try_from(record.unresolved_obligations).map_err(|_| internal())?;
+        Ok(Outcome {
+            effect: ResultEffect::Committed,
+            replayed,
+            observed_generation: Some(record.generation.clone()),
+            readback: Some(cancel_readback(&record.task)),
+            body: json!({
+                "task": {
+                    "task_id": record.task,
+                    "generation": record.generation,
+                    "state": record.state,
+                    "current_attempt_id": record.current_attempt,
+                    "unresolved_obligations": obligations,
+                },
+                "cancellation_obligation_id": record.obligation,
+                "worker_settlement": record.worker_settlement,
             }),
         })
     }

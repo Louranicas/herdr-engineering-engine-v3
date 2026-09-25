@@ -1,5 +1,6 @@
-//! The task module's control bodies: `task.submit`'s `TaskSpecV1` and `task.get`'s request, read
-//! under the RC01 offline, zero-external-spend profile (RC03 §4; RC01 numeric policy).
+//! The task module's control bodies: `task.submit`'s `TaskSpecV1`, `task.get`'s request and
+//! `task.cancel`'s reason, read under the RC01 offline, zero-external-spend profile (RC03 §4; RC01
+//! numeric policy).
 //!
 //! RC03 §1: "The receiving module owns its action body." These are the rules only the task module
 //! can decide; the envelope, the grant and the catalogue door have already run. Every refusal names
@@ -231,6 +232,58 @@ fn budget(budget: &Map<String, Value>) -> Result<(u64, u64, u64), Fault> {
         .unwrap_or(u64::MAX)
         .min(wall);
     Ok((wall, wall - reserve, reserve))
+}
+
+/// Why a cancel is asked for: `task.cancel`'s closed reason set (RC03 §6; contract-decisions.md:343).
+pub const CANCEL_REASONS: [&str; 5] = [
+    "operator_request",
+    "superseded",
+    "budget",
+    "deadline",
+    "safety",
+];
+/// `note` is bounded in UTF-8 bytes; the schema's `maxLength` counts code points, so the byte rule
+/// is decided here.
+const MAX_NOTE_BYTES: usize = 1024;
+
+/// A valid `task.cancel` body. The task and the generation it expects are the precondition's, not
+/// the body's.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Cancel {
+    /// One of [`CANCEL_REASONS`].
+    pub reason: &'static str,
+    /// The caller's note, at most 1,024 UTF-8 bytes.
+    pub note: Option<String>,
+}
+
+/// Read `task.cancel`'s body.
+///
+/// # Errors
+///
+/// `invalid_argument` naming the member: `/body` unless the members are exactly `reason` and
+/// `note`; `/body/reason` outside [`CANCEL_REASONS`]; `/body/note` unless null or a string of at
+/// most 1,024 bytes.
+pub fn cancel(body: &Map<String, Value>) -> Result<Cancel, Fault> {
+    exactly(body, &["reason", "note"], "/body")?;
+    let reason = body
+        .get("reason")
+        .and_then(Value::as_str)
+        .and_then(|reason| CANCEL_REASONS.into_iter().find(|known| *known == reason))
+        .ok_or(Fault::invalid(
+            "/body/reason",
+            "operator_request, superseded, budget, deadline or safety",
+        ))?;
+    let note = match body.get("note") {
+        Some(Value::Null) => None,
+        Some(Value::String(note)) if note.len() <= MAX_NOTE_BYTES => Some(note.clone()),
+        _ => {
+            return Err(Fault::invalid(
+                "/body/note",
+                "null or UTF-8 within 1,024 bytes",
+            ));
+        }
+    };
+    Ok(Cancel { reason, note })
 }
 
 /// How `task.get` names its task.

@@ -548,6 +548,8 @@ pub struct Fault {
     pub message: &'static str,
     /// Set only for `effect_unknown`: the read that settles what happened (RC03 §4).
     pub readback: Option<Value>,
+    /// Set only for `stale_generation`: the generation the caller can now see (RC03 §6).
+    pub current_generation: Option<Generation>,
 }
 
 impl Fault {
@@ -561,6 +563,7 @@ impl Fault {
             constraint: Some(constraint),
             message: "request does not satisfy HEE3-Control/1",
             readback: None,
+            current_generation: None,
         }
     }
 
@@ -574,6 +577,7 @@ impl Fault {
             constraint: None,
             message,
             readback: None,
+            current_generation: None,
         }
     }
 
@@ -588,6 +592,24 @@ impl Fault {
             constraint: None,
             message: "the commit may or may not have happened; read back before any retry",
             readback: Some(readback),
+            current_generation: None,
+        }
+    }
+
+    /// `stale_generation` at `field`: the precondition names a generation the resource has moved
+    /// past, and `current` is the one the caller can now see (RC03 §6: "with current visible
+    /// generation where authorized"). `retry: never`, because a generation only grows: the same
+    /// bytes are refused the same way for ever, and a new request must name `current`.
+    #[must_use]
+    pub const fn stale(field: &'static str, current: Generation) -> Self {
+        Self {
+            code: ErrorCode::StaleGeneration,
+            retry: Retry::Never,
+            field: Some(field),
+            constraint: Some("the resource's current generation"),
+            message: "the resource has moved past the expected generation",
+            readback: None,
+            current_generation: Some(current),
         }
     }
 
@@ -622,7 +644,7 @@ impl Fault {
             "details": {
                 "field": self.field,
                 "constraint": self.constraint,
-                "current_generation": null,
+                "current_generation": self.current_generation.map(|generation| generation.to_string()),
             },
         }))
     }

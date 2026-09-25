@@ -23,7 +23,7 @@ use super::{
 use crate::contracts::Principal;
 use crate::contracts::control::{
     self as wire, Envelope, ErrorCode, Fault, FrameFault, Health, MAX_DEADLINE_AHEAD_MS,
-    MAX_FRAME_BYTES, Outcome, Received, Retry, Socket, result_frame,
+    MAX_FRAME_BYTES, Outcome, Precondition, Received, Retry, Socket, result_frame,
 };
 use crate::contracts::{Sha256Digest, parse_u64_decimal};
 use crate::task::control::{self as task_body, Selector, Spec};
@@ -71,12 +71,12 @@ pub enum Reply {
     Frame(Vec<u8>),
 }
 
-/// One admitted `task.submit`, as the task owner receives it.
+/// One admitted `task.submit` or `task.cancel`, as the task owner receives it.
 #[derive(Clone, Copy, Debug)]
 pub struct TaskRequest<'a> {
     /// The transport's principal.
     pub principal: &'a Principal,
-    /// The admission's idempotency key (the envelope requires one for this action).
+    /// The request's idempotency key (the envelope requires one for both actions).
     pub idempotency_key: &'a str,
     /// The request's exact bytes: the durable replay digest names these (RC03 §6).
     pub payload: &'a [u8],
@@ -107,6 +107,21 @@ pub trait Tasks {
         selector: &Selector,
         deadline_unix_ms: u64,
         now_unix_ms: u64,
+    ) -> Result<Outcome, Fault>;
+
+    /// Record the intent to cancel `target` (the precondition's task, at its expected generation)
+    /// durably, or return the stored result of an exact replay (B05, RC03 §6).
+    ///
+    /// # Errors
+    ///
+    /// `stale_generation` naming the current generation; `not_found` for a task this principal
+    /// cannot see; `conflict` for a reused key with other bytes or a task that already stopped;
+    /// `effect_unknown` after an uncertain commit.
+    fn cancel(
+        &self,
+        request: &TaskRequest<'_>,
+        target: &Precondition,
+        body: &task_body::Cancel,
     ) -> Result<Outcome, Fault>;
 }
 
@@ -289,6 +304,32 @@ fn dispatch(action: Action, caller: &Caller, context: &Context<'_>) -> Result<Ou
                     now_unix_ms: context.now_unix_ms,
                 },
                 &spec,
+            )
+        }
+        "task.cancel" => {
+            let cancel = task_body::cancel(body)?;
+            let tasks = context.composed.tasks.ok_or_else(owner_absent)?;
+            let key = context
+                .envelope
+                .idempotency_key
+                .as_deref()
+                .ok_or_else(internal)?;
+            // `admit` has already required a task precondition for this action.
+            let target = context
+                .envelope
+                .precondition
+                .as_ref()
+                .ok_or_else(internal)?;
+            tasks.cancel(
+                &TaskRequest {
+                    principal: context.principal,
+                    idempotency_key: key,
+                    payload: context.payload,
+                    deadline_unix_ms: context.envelope.deadline_unix_ms,
+                    now_unix_ms: context.now_unix_ms,
+                },
+                target,
+                &cancel,
             )
         }
         "task.get" => {

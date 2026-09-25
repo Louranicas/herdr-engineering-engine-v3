@@ -381,6 +381,14 @@ pub enum Error {
         open: u64,
         limit: u64,
     },
+    /// A mutation's precondition names a generation the resource has moved past; `current` is the
+    /// one the caller can see (B05, RC03 §6 `stale_generation`).
+    StaleGeneration {
+        current: Generation,
+    },
+    /// The task already stopped (accepted, failed or abandoned) without a cancellation: there is no
+    /// intent left to record, and its outcome stays historical (B05, RC03 §6).
+    AlreadyStopped,
     /// A writable open could not take the ledger's write lock: SQLite opened the ledger, or its
     /// WAL index, read-only whatever the flags asked for (see `require_write_lock`).
     NotWritable,
@@ -578,6 +586,34 @@ pub struct Submission<'a> {
     pub request_bytes: &'a [u8],
     pub criteria: Sha256Digest<'a>,
     pub allocation: Allocation,
+}
+
+/// One `task.cancel` (B05): the caller's key and exact request bytes, the task it names and the
+/// generation it expects, the event identity a new intent would take, and the reason it gives.
+#[derive(Clone, Copy)]
+pub struct CancelIntent<'a> {
+    pub principal: &'a Principal,
+    pub key: UuidV4<'a>,
+    pub task: UuidV4<'a>,
+    pub expected: Generation,
+    pub event: UuidV4<'a>,
+    pub request_bytes: &'a [u8],
+    pub reason: &'a str,
+    pub note: Option<&'a str>,
+}
+
+/// What a cancel recorded, as its caller reads it and as an exact replay returns it: the task's head
+/// after the cancel, the intent's obligation (the `cancellation_requested` event that holds it) and
+/// what the cancel found of the worker. Stored whole in `operations`.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct Cancellation {
+    pub task: String,
+    pub generation: String,
+    pub state: String,
+    pub current_attempt: Option<String>,
+    pub unresolved_obligations: u64,
+    pub obligation: String,
+    pub worker_settlement: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -1104,13 +1140,71 @@ impl Store {
         event_id: UuidV4<'_>,
         deadline: Instant,
     ) -> Result<String> {
-        self.transaction(deadline,|tx| {
-            let head=head(tx,task.as_str())?;same_generation(&head,expected)?;
-            let stopped:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM task_stops WHERE task_id=?)",[task.as_str()],|row|row.get(0))?;
-            if head.cancellation || head.accepted_event.is_some() || stopped {return Ok(head.generation);}
-            let generation=next(expected)?;
-            tx.execute("UPDATE tasks SET cancellation=1,state='cancellation_requested',generation=? WHERE id=?",params![generation,task.as_str()])?;
-            event(tx,event_id.as_str(),task.as_str(),&generation,"cancellation_requested")?;Ok(generation)
+        self.transaction(deadline, |tx| {
+            let head = head(tx, task.as_str())?;
+            same_generation(&head, expected)?;
+            if head.cancellation || head.accepted_event.is_some() || stopped(tx, task)? {
+                return Ok(head.generation);
+            }
+            request_cancellation(tx, task, expected, event_id, b"{}")
+        })
+    }
+
+    /// `task.cancel` (B05, RC03 §6): bind (principal, `task.cancel`, v1, key) to the digest of the
+    /// request's exact bytes, and record the intent, in one transaction. An exact replay returns the
+    /// stored result (`true`), whatever the task did since; other bytes under the key conflict.
+    /// The task is read through the principal's own door (`visible_head`), so a task it cannot see
+    /// is `NotFound` and names no generation. A task already cancelling records nothing new and
+    /// names the obligation it already holds.
+    /// # Errors
+    /// `Conflict`; `NotFound`; `StaleGeneration` naming the current generation; `AlreadyStopped` for a
+    /// task that stopped without a cancellation; `Bound` for empty or oversized request bytes. Nothing
+    /// is written by any refusal.
+    pub fn cancel_intent(
+        &mut self,
+        input: CancelIntent<'_>,
+        deadline: Instant,
+    ) -> Result<(Cancellation, bool)> {
+        if input.request_bytes.is_empty() || input.request_bytes.len() > 1_048_576 {
+            return Err(Error::Bound);
+        }
+        let request_digest = digest(input.request_bytes);
+        self.transaction(deadline, |tx| {
+            let prior: Option<(String, Vec<u8>)> = tx.query_row(
+                "SELECT request_digest,result FROM operations WHERE principal_uid=? AND principal_role=? AND action='task.cancel' AND version=1 AND request_key=?",
+                params![input.principal.uid(),input.principal.role(),input.key.as_str()], |row| Ok((row.get(0)?,row.get(1)?))).optional()?;
+            if let Some((prior_digest, result)) = prior {
+                if prior_digest != request_digest { return Err(Error::Conflict); }
+                return Ok((serde_json::from_slice(&result)?, true));
+            }
+            let head = visible_head(tx, input.principal, input.task)?;
+            if head.generation != input.expected.to_string() {
+                let current = head.generation.parse().map_err(|_| Error::Corrupt)?;
+                return Err(Error::StaleGeneration { current });
+            }
+            if !head.cancellation {
+                if head.accepted_event.is_some() || stopped(tx, input.task)? {
+                    return Err(Error::AlreadyStopped);
+                }
+                let body = serde_json::to_vec(&serde_json::json!({"reason": input.reason, "note": input.note}))?;
+                request_cancellation(tx, input.task, input.expected, input.event, &body)?;
+            }
+            let obligation: String = tx.query_row(
+                "SELECT id FROM events WHERE task_id=? AND kind='cancellation_requested' ORDER BY sequence DESC LIMIT 1",
+                [input.task.as_str()], |row| row.get(0)).optional()?.ok_or(Error::Corrupt)?;
+            let view = recovery::read_view(tx, input.principal, input.task, deadline)?;
+            let result = Cancellation {
+                task: view.head.id.clone(),
+                generation: view.head.generation.clone(),
+                state: view.head.state.clone(),
+                current_attempt: view.current_attempt().map(str::to_owned),
+                unresolved_obligations: u64::try_from(view.unresolved_obligations()).map_err(|_| Error::Bound)?,
+                obligation,
+                worker_settlement: view.worker_settlement().to_owned(),
+            };
+            tx.execute("INSERT INTO operations(principal_uid,principal_role,action,version,request_key,request_digest,resource_id,result) VALUES(?,?,'task.cancel',1,?,?,?,?)",
+                params![input.principal.uid(),input.principal.role(),input.key.as_str(),request_digest,input.task.as_str(),serde_json::to_vec(&result)?])?;
+            Ok((result, false))
         })
     }
 
@@ -1426,6 +1520,37 @@ fn next(generation: Generation) -> Result<String> {
         .map(|next| next.to_string())
         .map_err(|_| Error::Bound)
 }
+/// The one cancellation transition a caller can ask for, by `Store::cancel` or by `task.cancel`: the
+/// next generation, `cancellation_requested`, and the event that holds the intent (its obligation).
+fn request_cancellation(
+    tx: &Transaction<'_>,
+    task: UuidV4<'_>,
+    expected: Generation,
+    event_id: UuidV4<'_>,
+    body: &[u8],
+) -> Result<String> {
+    let generation = next(expected)?;
+    tx.execute(
+        "UPDATE tasks SET cancellation=1,state='cancellation_requested',generation=? WHERE id=?",
+        params![generation, task.as_str()],
+    )?;
+    event_with(
+        tx,
+        event_id.as_str(),
+        task.as_str(),
+        &generation,
+        "cancellation_requested",
+        body,
+    )?;
+    Ok(generation)
+}
+fn stopped(tx: &Transaction<'_>, task: UuidV4<'_>) -> Result<bool> {
+    Ok(tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM task_stops WHERE task_id=?)",
+        [task.as_str()],
+        |row| row.get(0),
+    )?)
+}
 fn same_generation(head: &TaskHead, expected: Generation) -> Result<()> {
     if head.generation == expected.to_string() {
         Ok(())
@@ -1460,9 +1585,19 @@ fn head(connection: &Connection, id: &str) -> Result<TaskHead> {
     connection.query_row("SELECT id,generation,state,cancellation,accepted_event,criteria_digest,spent_ms,reserved_work_ms,reserved_verify_ms FROM tasks WHERE id=?",[id],task_row).optional()?.ok_or(Error::NotFound)
 }
 fn event(tx: &Transaction<'_>, id: &str, task: &str, generation: &str, kind: &str) -> Result<u64> {
+    event_with(tx, id, task, generation, kind, b"{}")
+}
+fn event_with(
+    tx: &Transaction<'_>,
+    id: &str,
+    task: &str,
+    generation: &str,
+    kind: &str,
+    body: &[u8],
+) -> Result<u64> {
     tx.execute(
         "INSERT INTO events(id,task_id,generation,kind,body) VALUES(?,?,?,?,?)",
-        params![id, task, generation, kind, b"{}".as_slice()],
+        params![id, task, generation, kind, body],
     )?;
     u64::try_from(tx.last_insert_rowid()).map_err(|_| Error::Bound)
 }

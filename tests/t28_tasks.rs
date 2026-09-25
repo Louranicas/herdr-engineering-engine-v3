@@ -561,6 +561,22 @@ fn without_a_composed_ledger_task_actions_are_unavailable() -> Result<(), Box<dy
         (&reply["code"], &reply["details"]["constraint"]),
         (&json!("unavailable"), &json!("owner not composed"))
     );
+    // B05: a schema-valid cancel is refused the same way, before any ledger is consulted.
+    let frame = cancel_frame(
+        7,
+        CANCEL_KEY,
+        "28d00000-0000-4000-8000-0000000005ff",
+        "1",
+        &json!({"reason": "safety", "note": null}),
+    )?;
+    let Reply::Frame(bytes) = control::serve_composed(&frame, NOW, &operator, composed) else {
+        return Err("closed".into());
+    };
+    let reply: Value = serde_json::from_slice(&bytes)?;
+    assert_eq!(
+        (&reply["code"], &reply["details"]["constraint"]),
+        (&json!("unavailable"), &json!("owner not composed"))
+    );
     Ok(())
 }
 
@@ -639,5 +655,515 @@ fn the_ledgers_own_allocation_rule_decides_the_budget() -> Outcome {
             );
         }
     }
+    Ok(())
+}
+
+// --- B05 · task.cancel (RC03 §6 "Cancellation"; body and result: contract-decisions.md:343) ------
+
+const CANCEL_KEY: &str = "28d00000-0000-4000-8000-0000000005a1";
+const CANCEL_KEY_2: &str = "28d00000-0000-4000-8000-0000000005a2";
+
+/// A `task.cancel` frame: the precondition names the task and the generation the caller expects.
+fn cancel_frame(
+    request_no: u8,
+    key: &str,
+    task: &str,
+    generation: &str,
+    body: &Value,
+) -> Result<Vec<u8>, Box<dyn Error>> {
+    let mut frame: Value =
+        serde_json::from_slice(&request("task.cancel", request_no, Some(key), body))?;
+    frame["precondition"] = json!({"resource": "task", "id": task, "generation": generation});
+    Ok(serde_json::to_vec(&frame)?)
+}
+
+/// The readback RC03 §6 prescribes for a cancel, written out here rather than taken from the engine.
+fn cancel_readback_of(task: &str) -> Value {
+    json!({"action": "task.get", "action_version": 1,
+           "body": {"selector": {"task_id": task}, "evidence": "none"}})
+}
+
+/// The body the ledger holds for event `id`, read from the ledger file itself, not through the engine.
+fn event_body(scratch: &Scratch, id: &str) -> Result<Value, Box<dyn Error>> {
+    let file = scratch
+        .0
+        .join("state/generations")
+        .join(GENERATION)
+        .join("ledger.sqlite3");
+    let db =
+        rusqlite::Connection::open_with_flags(file, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    let (kind, body): (String, Vec<u8>) =
+        db.query_row("SELECT kind,body FROM events WHERE id=?", [id], |row| {
+            Ok((row.get(0)?, row.get(1)?))
+        })?;
+    assert_eq!(kind, "cancellation_requested");
+    Ok(serde_json::from_slice(&body)?)
+}
+
+fn submitted(tasks: &StoreTasks, operator: &Principal) -> Result<String, Box<dyn Error>> {
+    let first = serve(
+        tasks,
+        operator,
+        &request("task.submit", 1, Some(KEY), &json!({"spec": spec()})),
+    )?;
+    Ok(first["body"]["task"]["task_id"]
+        .as_str()
+        .ok_or("task id")?
+        .to_owned())
+}
+
+fn head_of(tasks: &StoreTasks, operator: &Principal, task: &str) -> Result<Value, Box<dyn Error>> {
+    let read = serve(
+        tasks,
+        operator,
+        &request(
+            "task.get",
+            9,
+            None,
+            &json!({"selector": {"task_id": task}, "evidence": "none"}),
+        ),
+    )?;
+    Ok(read["body"]["task"].clone())
+}
+
+/// B05: a cancel at the expected generation commits the intent once -- a new generation, the
+/// `cancellation_requested` state, an obligation identity and the settlement it found -- and an
+/// exact replay returns that stored result without a second write. Other bytes under the key
+/// conflict. A second cancel under a new key finds the intent already recorded and names the same
+/// obligation.
+#[test]
+fn a_cancel_records_intent_once_and_replays_exactly() -> Outcome {
+    let scratch = Scratch::new()?;
+    let tasks = ledger(&scratch)?;
+    let operator = Principal::new(1000, "operator").map_err(|error| format!("{error:?}"))?;
+    let task = submitted(&tasks, &operator)?;
+    let why = json!({"reason": "operator_request", "note": null});
+    let frame = cancel_frame(2, CANCEL_KEY, &task, "1", &why)?;
+    let first = serve(&tasks, &operator, &frame)?;
+    assert_eq!(
+        (
+            &first["kind"],
+            &first["effect"],
+            &first["replayed"],
+            &first["observed_generation"]
+        ),
+        (
+            &json!("result"),
+            &json!("committed"),
+            &json!(false),
+            &json!("2")
+        ),
+        "{first}"
+    );
+    assert_eq!(first["readback"], cancel_readback_of(&task));
+    assert_eq!(
+        first["body"]["task"],
+        json!({"task_id": task, "generation": "2", "state": "cancellation_requested",
+               "current_attempt_id": null, "unresolved_obligations": 0})
+    );
+    assert_eq!(first["body"]["worker_settlement"], json!("not_started"));
+    let obligation = first["body"]["cancellation_obligation_id"]
+        .as_str()
+        .ok_or("obligation id")?
+        .to_owned();
+    UuidV4::parse(&obligation)?;
+    assert_ne!(obligation, task);
+    // The obligation is the durable intent, and it holds the reason the caller gave.
+    assert_eq!(
+        event_body(&scratch, &obligation)?,
+        json!({"reason": "operator_request", "note": null})
+    );
+    // The independent readback agrees with what the cancel reported.
+    assert_eq!(head_of(&tasks, &operator, &task)?, first["body"]["task"]);
+    let again = serve(&tasks, &operator, &frame)?;
+    assert_eq!(
+        (
+            &again["replayed"],
+            &again["body"],
+            &again["observed_generation"]
+        ),
+        (&json!(true), &first["body"], &json!("2"))
+    );
+    let other = cancel_frame(
+        3,
+        CANCEL_KEY,
+        &task,
+        "1",
+        &json!({"reason": "superseded", "note": null}),
+    )?;
+    let conflict = serve(&tasks, &operator, &other)?;
+    assert_eq!(
+        (&conflict["code"], &conflict["details"]["field"]),
+        (&json!("conflict"), &json!("/idempotency_key"))
+    );
+    let second = serve(
+        &tasks,
+        &operator,
+        &cancel_frame(4, CANCEL_KEY_2, &task, "2", &why)?,
+    )?;
+    assert_eq!(
+        (
+            &second["effect"],
+            &second["replayed"],
+            &second["body"]["task"]["generation"],
+            &second["body"]["cancellation_obligation_id"]
+        ),
+        (
+            &json!("committed"),
+            &json!(false),
+            &json!("2"),
+            &json!(obligation)
+        ),
+        "{second}"
+    );
+    assert_eq!(head_of(&tasks, &operator, &task)?["generation"], json!("2"));
+    conforms(&[
+        ("task.cancel", &first),
+        ("task.cancel", &again),
+        ("task.cancel", &conflict),
+        ("task.cancel", &second),
+    ])?;
+    Ok(())
+}
+
+/// B05: a stale expected generation is `stale_generation` naming the current one; a task the
+/// principal cannot see is `not_found` and names none. Neither writes anything -- the key is not
+/// bound, so the same key then commits a correct request.
+#[test]
+fn a_stale_or_invisible_cancel_writes_nothing() -> Outcome {
+    let scratch = Scratch::new()?;
+    let tasks = ledger(&scratch)?;
+    let operator = Principal::new(1000, "operator").map_err(|error| format!("{error:?}"))?;
+    let task = submitted(&tasks, &operator)?;
+    let why = json!({"reason": "budget", "note": "over the wall"});
+    let stale = serve(
+        &tasks,
+        &operator,
+        &cancel_frame(2, CANCEL_KEY, &task, "7", &why)?,
+    )?;
+    assert_eq!(
+        (
+            &stale["code"],
+            &stale["effect"],
+            &stale["details"]["current_generation"],
+            &stale["details"]["field"],
+            &stale["retry"]
+        ),
+        (
+            &json!("stale_generation"),
+            &json!("none"),
+            &json!("1"),
+            &json!("/precondition/generation"),
+            &json!("never")
+        ),
+        "{stale}"
+    );
+    let stranger = Principal::new(1001, "operator").map_err(|error| format!("{error:?}"))?;
+    let hidden = serve(
+        &tasks,
+        &stranger,
+        &cancel_frame(3, CANCEL_KEY, &task, "1", &why)?,
+    )?;
+    assert_eq!(
+        (&hidden["code"], &hidden["details"]["current_generation"]),
+        (&json!("not_found"), &Value::Null),
+        "{hidden}"
+    );
+    // A stranger's STALE generation is still `not_found`: visibility is decided before the
+    // generation, so an invisible task's current generation is never named ("where authorized").
+    let hidden_stale = serve(
+        &tasks,
+        &stranger,
+        &cancel_frame(3, CANCEL_KEY, &task, "7", &why)?,
+    )?;
+    assert_eq!(
+        (
+            &hidden_stale["code"],
+            &hidden_stale["details"]["current_generation"]
+        ),
+        (&json!("not_found"), &Value::Null),
+        "{hidden_stale}"
+    );
+    let absent = serve(
+        &tasks,
+        &operator,
+        &cancel_frame(
+            4,
+            CANCEL_KEY,
+            "28d00000-0000-4000-8000-0000000005ff",
+            "1",
+            &why,
+        )?,
+    )?;
+    assert_eq!(absent["code"], json!("not_found"));
+    assert_eq!(
+        head_of(&tasks, &operator, &task)?,
+        json!({"task_id": task, "generation": "1", "state": "admitted",
+               "current_attempt_id": null, "unresolved_obligations": 0})
+    );
+    let then = serve(
+        &tasks,
+        &operator,
+        &cancel_frame(5, CANCEL_KEY, &task, "1", &why)?,
+    )?;
+    assert_eq!(
+        (
+            &then["effect"],
+            &then["replayed"],
+            &then["observed_generation"]
+        ),
+        (&json!("committed"), &json!(false), &json!("2")),
+        "{then}"
+    );
+    let obligation = then["body"]["cancellation_obligation_id"]
+        .as_str()
+        .ok_or("obligation id")?;
+    assert_eq!(
+        event_body(&scratch, obligation)?,
+        json!({"reason": "budget", "note": "over the wall"})
+    );
+    conforms(&[
+        ("task.cancel", &stale),
+        ("task.cancel", &hidden),
+        ("task.cancel", &hidden_stale),
+        ("task.cancel", &absent),
+        ("task.cancel", &then),
+    ])?;
+    Ok(())
+}
+
+/// B05: the body is exactly `{reason, note}` (a missing or extra member names `/body`); `note` is at most 1,024 UTF-8 BYTES (the schema's
+/// `maxLength` counts code points, so 342 three-byte characters pass the schema and fail here).
+#[test]
+fn a_cancel_body_is_checked_member_by_member() -> Outcome {
+    let scratch = Scratch::new()?;
+    let tasks = ledger(&scratch)?;
+    let operator = Principal::new(1000, "operator").map_err(|error| format!("{error:?}"))?;
+    let task = submitted(&tasks, &operator)?;
+    let wide = "\u{20ac}".repeat(342);
+    let fits = "\u{20ac}".repeat(341);
+    for (body, field) in [
+        (json!({"reason": "whim", "note": null}), "/body/reason"),
+        (json!({"note": null}), "/body"),
+        (json!({"reason": "safety"}), "/body"),
+        (json!({"reason": "safety", "note": 7}), "/body/note"),
+        (json!({"reason": "safety", "note": wide}), "/body/note"),
+        (
+            json!({"reason": "safety", "note": null, "extra": 1}),
+            "/body",
+        ),
+    ] {
+        let reply = serve(
+            &tasks,
+            &operator,
+            &cancel_frame(2, CANCEL_KEY, &task, "1", &body)?,
+        )?;
+        assert_eq!(
+            (&reply["code"], &reply["details"]["field"]),
+            (&json!("invalid_argument"), &json!(field)),
+            "{body} -> {reply}"
+        );
+    }
+    assert_eq!(head_of(&tasks, &operator, &task)?["generation"], json!("1"));
+    let fitted = serve(
+        &tasks,
+        &operator,
+        &cancel_frame(
+            3,
+            CANCEL_KEY,
+            &task,
+            "1",
+            &json!({"reason": "safety", "note": fits}),
+        )?,
+    )?;
+    assert_eq!(fitted["effect"], json!("committed"), "{fitted}");
+    Ok(())
+}
+
+/// Three tasks, each with one attempt: index 1 running, 2 settled, 3 settled as unknown.
+fn settlement_fixture(scratch: &Scratch, operator: &Principal) -> Result<Store, Box<dyn Error>> {
+    use habitat_engine::store::{Allocation, Effect, Expected, Settlement, Submission};
+    let root = scratch.0.join("state");
+    DirBuilder::new().mode(0o700).create(&root)?;
+    let until = Instant::now() + Duration::from_secs(10);
+    let mut store = Store::open(
+        &root,
+        UuidV4::parse(GENERATION)?,
+        UuidV4::parse(EPOCH)?,
+        true,
+        until,
+    )
+    .map_err(|error| format!("{error:?}"))?;
+    let criteria_text = format!("sha256:{}", "5".repeat(64));
+    let criteria = habitat_engine::contracts::Sha256Digest::parse(&criteria_text)?;
+    let fault = |error: habitat_engine::store::Error| format!("{error:?}");
+    // index 1: running attempt · 2: settled attempt · 3: attempt whose settlement is unknown.
+    for index in 1..=3_u16 {
+        let task = nth(0x05b1, index);
+        let attempt = nth(0x05b2, index);
+        store
+            .submit(
+                Submission {
+                    principal: operator,
+                    key: UuidV4::parse(&nth(0x05b0, index))?,
+                    task: UuidV4::parse(&task)?,
+                    event: UuidV4::parse(&nth(0x05b3, index))?,
+                    request_bytes: b"settlement fixture",
+                    criteria,
+                    allocation: Allocation {
+                        limit_ms: 1_200_000,
+                        work_ms: 900_000,
+                        verify_ms: 300_000,
+                    },
+                },
+                until,
+            )
+            .map_err(fault)?;
+        store
+            .begin_attempt(
+                UuidV4::parse(&task)?,
+                "1".parse()?,
+                UuidV4::parse(&attempt)?,
+                UuidV4::parse(&nth(0x05b4, index))?,
+                until,
+            )
+            .map_err(fault)?;
+        if index > 1 {
+            let now = store
+                .get(operator, UuidV4::parse(&task)?, until)
+                .map_err(fault)?
+                .generation;
+            let known = index == 2;
+            store
+                .settle_attempt(
+                    &Expected {
+                        task: UuidV4::parse(&task)?,
+                        task_generation: now.parse()?,
+                        attempt: UuidV4::parse(&attempt)?,
+                        attempt_generation: "1".parse()?,
+                    },
+                    Settlement {
+                        effect: if known { Effect::None } else { Effect::Unknown },
+                        used_ms: if known { Some(10) } else { None },
+                        cleanup_settled: known,
+                        ready_to_verify: false,
+                    },
+                    UuidV4::parse(&nth(0x05b5, index))?,
+                    until,
+                )
+                .map_err(fault)?;
+        }
+    }
+    Ok(store)
+}
+
+fn nth(role: u16, index: u16) -> String {
+    format!("{role:08x}-0000-4000-8000-{index:012x}")
+}
+
+/// B05: `worker_settlement` is read from the task's attempts in the cancel's own transaction: none
+/// is `not_started`, an unsettled attempt `pending` (and it is the current attempt), one whose
+/// settlement is unknown `unknown`, and only settled ones `settled`.
+#[test]
+fn worker_settlement_is_read_from_the_attempts_the_cancel_found() -> Outcome {
+    let scratch = Scratch::new()?;
+    let operator = Principal::new(1000, "operator").map_err(|error| format!("{error:?}"))?;
+    let store = settlement_fixture(&scratch, &operator)?;
+    let tasks = StoreTasks::new(store, EPOCH.to_owned());
+    let why = json!({"reason": "deadline", "note": null});
+    let mut replies = Vec::new();
+    for (index, settlement) in [(1_u16, "pending"), (2, "settled"), (3, "unknown")] {
+        let task = nth(0x05b1, index);
+        let generation = head_of(&tasks, &operator, &task)?["generation"]
+            .as_str()
+            .ok_or("generation")?
+            .to_owned();
+        let key = nth(0x05b6, index);
+        let reply = serve(
+            &tasks,
+            &operator,
+            &cancel_frame(2, &key, &task, &generation, &why)?,
+        )?;
+        assert_eq!(
+            reply["body"]["worker_settlement"],
+            json!(settlement),
+            "{index}: {reply}"
+        );
+        let current = if index == 1 {
+            json!(nth(0x05b2, 1))
+        } else {
+            Value::Null
+        };
+        assert_eq!(
+            reply["body"]["task"]["current_attempt_id"], current,
+            "{reply}"
+        );
+        assert_eq!(
+            reply["body"]["task"],
+            head_of(&tasks, &operator, &task)?,
+            "the cancel's head is the readback's"
+        );
+        replies.push(reply);
+    }
+    conforms(
+        &replies
+            .iter()
+            .map(|reply| ("task.cancel", reply))
+            .collect::<Vec<_>>(),
+    )?;
+    Ok(())
+}
+
+/// B05: a task that already stopped without a cancellation (here: failed after verification) has
+/// no intent to record -- its outcome stays historical (RC03 §6). The cancel is refused and writes
+/// nothing.
+#[test]
+fn a_cancel_of_a_task_that_already_stopped_is_refused() -> Outcome {
+    let scratch = Scratch::new()?;
+    let root = scratch.0.join("state");
+    DirBuilder::new().mode(0o700).create(&root)?;
+    let until = Instant::now() + Duration::from_secs(10);
+    let mut store = Store::open(
+        &root,
+        UuidV4::parse(GENERATION)?,
+        UuidV4::parse(EPOCH)?,
+        true,
+        until,
+    )
+    .map_err(|error| format!("{error:?}"))?;
+    let evidence = store
+        .publish(b"retained fixture evidence", UuidV4::parse(EPOCH)?, until)
+        .map_err(|error| format!("{error:?}"))?;
+    let criteria_text = format!("sha256:{}", "5".repeat(64));
+    let criteria = habitat_engine::contracts::Sha256Digest::parse(&criteria_text)?;
+    super::socket::fail_task(&mut store, &evidence, criteria, 1)?;
+    let operator = super::socket::operator()?;
+    let task = format!("{:08x}-0000-4000-8000-{:012x}", 0x28d2, 1);
+    let tasks = StoreTasks::new(store, EPOCH.to_owned());
+    let before = head_of(&tasks, &operator, &task)?;
+    assert_eq!(before["state"], json!("failed"), "{before}");
+    let generation = before["generation"].as_str().ok_or("generation")?;
+    let refused = serve(
+        &tasks,
+        &operator,
+        &cancel_frame(
+            2,
+            CANCEL_KEY,
+            &task,
+            generation,
+            &json!({"reason": "operator_request", "note": null}),
+        )?,
+    )?;
+    assert_eq!(
+        (
+            &refused["code"],
+            &refused["effect"],
+            &refused["details"]["field"]
+        ),
+        (&json!("conflict"), &json!("none"), &json!("/precondition")),
+        "{refused}"
+    );
+    assert_eq!(head_of(&tasks, &operator, &task)?, before);
+    conforms(&[("task.cancel", &refused)])?;
     Ok(())
 }

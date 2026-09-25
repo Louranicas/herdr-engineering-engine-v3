@@ -448,6 +448,48 @@ pub struct TaskView {
     pub event_high_water: u64,
 }
 
+impl TaskView {
+    /// The attempt a worker holds now: the one queued or running, if any.
+    #[must_use]
+    pub fn current_attempt(&self) -> Option<&str> {
+        self.attempts
+            .iter()
+            .find(|attempt| matches!(attempt.state.as_str(), "queued" | "running"))
+            .map(|attempt| attempt.id.as_str())
+    }
+
+    /// Obligations still owed: every attempt whose effect or cleanup is pending or unknown, plus
+    /// every undelivered outbox row.
+    #[must_use]
+    pub fn unresolved_obligations(&self) -> usize {
+        self.attempts
+            .iter()
+            .filter(|attempt| {
+                matches!(attempt.effect.as_str(), "pending" | "unknown")
+                    || matches!(attempt.cleanup.as_str(), "pending" | "unknown")
+            })
+            .count()
+            + self.pending_deliveries
+    }
+
+    /// What a cancel finds of the task's worker (B05): `not_started` with no attempt, `pending`
+    /// while one is queued or running, `unknown` when one's settlement is unknown, and `settled`
+    /// only when every attempt settled.
+    #[must_use]
+    pub fn worker_settlement(&self) -> &'static str {
+        let states = || self.attempts.iter().map(|attempt| attempt.state.as_str());
+        if self.attempts.is_empty() {
+            "not_started"
+        } else if states().any(|state| matches!(state, "queued" | "running")) {
+            "pending"
+        } else if states().any(|state| state == "unknown") {
+            "unknown"
+        } else {
+            "settled"
+        }
+    }
+}
+
 impl Store {
     /// Read one task, scoped to `task` and visible to `principal` only.
     ///
@@ -488,7 +530,7 @@ impl Store {
     }
 }
 
-fn read_view(
+pub(super) fn read_view(
     db: &Connection,
     principal: &Principal,
     task: UuidV4<'_>,

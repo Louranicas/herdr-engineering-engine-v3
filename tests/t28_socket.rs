@@ -75,7 +75,7 @@ fn now_unix_ms() -> Result<u64, Box<dyn Error>> {
     )?)
 }
 
-fn operator() -> Result<Principal, Box<dyn Error>> {
+pub(super) fn operator() -> Result<Principal, Box<dyn Error>> {
     Principal::new(euid(), OPERATOR_ROLE).map_err(|error| format!("{error:?}").into())
 }
 
@@ -1128,7 +1128,7 @@ fn a_chain_submits_and_reads_back_through_the_engine_and_stops_at_a_refusal() ->
 
 /// One task failed after a settled attempt and a failed verification, through the store's own
 /// API: a settled attempt of a terminal task, the history B03b's startup must not count.
-fn fail_task(
+pub(super) fn fail_task(
     store: &mut Store,
     evidence: &habitat_engine::store::Object,
     criteria: habitat_engine::contracts::Sha256Digest<'_>,
