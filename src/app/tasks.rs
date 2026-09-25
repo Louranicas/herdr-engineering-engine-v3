@@ -385,7 +385,10 @@ fn available_now(
                 | StoreError::Corrupt
                 | StoreError::Invalid
                 | StoreError::Bound
-                | StoreError::Os(rustix::io::Errno::NOENT),
+                | StoreError::Os(rustix::io::Errno::NOENT)
+                // A file that is not the ledger's own (mode, owner, a link) is no evidence the
+                // ledger can stand behind now: the same refusal (review NEW-3).
+                | StoreError::Custody,
             ) => {
                 return Err(missing_now());
             }

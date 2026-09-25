@@ -1827,10 +1827,11 @@ impl PublishedAcceptance {
 fn register_evidence(tx: &rusqlite::Transaction<'_>, objects: &[Object]) -> Result<()> {
     let mut added = 0_usize;
     for object in objects {
-        added += tx.execute(
+        let inserted = tx.execute(
             "INSERT INTO artifacts(digest,size) VALUES(?,?) ON CONFLICT(digest) DO NOTHING",
             params![object.digest, number(object.size)?],
         )?;
+        added = added.checked_add(inserted).ok_or(Error::Bound)?;
         let registered: u64 = tx.query_row(
             "SELECT size FROM artifacts WHERE digest=?",
             [&object.digest],

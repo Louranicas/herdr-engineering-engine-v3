@@ -16,6 +16,8 @@ use habitat_engine::store::{Object, Principal};
 use serde_json::{Value, json};
 use std::error::Error;
 use std::fs;
+use std::io::Write as _;
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -183,6 +185,11 @@ fn evidence_is_checked_now_and_history_is_kept() -> Outcome {
     fs::remove_file(&a)?;
     let refs = get(&tasks, &task, "refs", 6)?;
     assert_eq!(
+        refs["details"]["constraint"],
+        json!("evidence object missing or corrupt"),
+        "{refs}"
+    );
+    assert_eq!(
         (&refs["code"], &refs["details"]["field"], &refs["retry"]),
         (
             &json!("unavailable"),
@@ -195,13 +202,39 @@ fn evidence_is_checked_now_and_history_is_kept() -> Outcome {
     assert_eq!(summary["kind"], json!("result"), "B is present: {summary}");
     let b = object_file(&scratch, &objects[1]);
     let size = usize::try_from(fs::metadata(&b)?.len())?;
+    // Other bytes of the same size, written as the ledger writes its own (0600), so only the hash
+    // can tell (review NEW-3: a default-mode file would be refused by custody before the hash).
     fs::remove_file(&b)?;
-    fs::write(&b, vec![b'x'; size])?;
+    fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&b)?
+        .write_all(&vec![b'x'; size])?;
     let corrupt = get(&tasks, &task, "summary", 8)?;
     assert_eq!(
-        (&corrupt["code"], &corrupt["details"]["field"]),
-        (&json!("unavailable"), &json!("/body/evidence")),
+        (
+            &corrupt["code"],
+            &corrupt["details"]["field"],
+            &corrupt["details"]["constraint"]
+        ),
+        (
+            &json!("unavailable"),
+            &json!("/body/evidence"),
+            &json!("evidence object missing or corrupt")
+        ),
         "{corrupt}"
+    );
+    // A file that is not the ledger's own — here readable by others — is refused the same way.
+    fs::set_permissions(&b, fs::Permissions::from_mode(0o644))?;
+    let foreign = get(&tasks, &task, "summary", 10)?;
+    assert_eq!(
+        (&foreign["code"], &foreign["details"]["constraint"]),
+        (
+            &json!("unavailable"),
+            &json!("evidence object missing or corrupt")
+        ),
+        "{foreign}"
     );
     let none = get(&tasks, &task, "none", 9)?;
     assert_eq!(none["body"]["task"]["state"], json!("abandoned"), "{none}");
@@ -209,6 +242,7 @@ fn evidence_is_checked_now_and_history_is_kept() -> Outcome {
         ("task.get", &refs),
         ("task.get", &summary),
         ("task.get", &corrupt),
+        ("task.get", &foreign),
         ("task.get", &none),
     ])
 }
@@ -480,7 +514,10 @@ fn a_stop_whose_disposition_names_another_object_is_corrupt() -> Outcome {
     let scratch = Scratch::new()?;
     let (tasks, task, objects) = abandoned(&scratch)?;
     let abandonment = disposition_id(&scratch, &task, "abandon")?;
-    let elsewhere = json!([reference(&objects[0], ID_A, "text/plain")]).to_string();
+    // Another object's digest at the stop object's own size: only the digest rule can refuse it.
+    let mut elsewhere = reference(&objects[0], ID_A, "text/plain");
+    elsewhere["byte_length"] = json!(objects[1].size());
+    let elsewhere = json!([elsewhere]).to_string();
     assert_eq!(
         tamper_two(
             &scratch,
@@ -812,7 +849,9 @@ fn a_resolve_adding_nothing_is_admitted_at_a_full_inventory() -> Outcome {
     let first = quarantine(1, KEYS[0], 0, &registered)?;
     assert_eq!(first["kind"], json!("result"), "{first}");
     let held = ledger_value(&scratch, "SELECT count(*) FROM artifacts WHERE ?<>''", "x")?;
-    for index in 0..(4096 - held.as_i64().ok_or("count")?) {
+    // Past the bound (4097), as another door may have taken it: a disposition adding nothing is
+    // still admitted (review D2; at exactly 4096 nothing would be refused either way).
+    for index in 0..(4097 - held.as_i64().ok_or("count")?) {
         assert_eq!(
             tamper(
                 &scratch,
@@ -836,7 +875,7 @@ fn a_resolve_adding_nothing_is_admitted_at_a_full_inventory() -> Outcome {
     );
     assert_eq!(
         ledger_value(&scratch, "SELECT count(*) FROM artifacts WHERE ?<>''", "x")?,
-        json!(4096)
+        json!(4097)
     );
     conforms(&[
         ("task.resolve", &first),
