@@ -44,6 +44,10 @@ mod preview;
 #[path = "t28_evidence.rs"]
 mod evidence;
 
+/// B14a-1c: the attempt lifecycle over the real ledger (`app::runtime`).
+#[path = "t28_runtime.rs"]
+mod runtime;
+
 type Outcome = Result<(), Box<dyn Error>>;
 
 /// The plan spine's own action list — the independent source these cases compare against.

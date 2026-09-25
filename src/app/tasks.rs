@@ -70,7 +70,22 @@ pub struct StoreTasks {
     class_profile: Result<Profile, class_profile::Unready>,
 }
 
+/// The ledger's owner panicked while holding it; every later hold refuses (F17's accepted
+/// behaviour, B14a-R1.1).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Poisoned;
+
 impl StoreTasks {
+    /// Lend the ledger to `work` for one hold, released when `work` returns (B14a-R1.1). The store
+    /// is lent to a closure and never returned, so no caller can keep it across a workload.
+    ///
+    /// # Errors
+    /// [`Poisoned`] when an earlier holder panicked.
+    pub(crate) fn with_store<T>(&self, work: impl FnOnce(&mut Store) -> T) -> Result<T, Poisoned> {
+        let mut store = self.store.lock().map_err(|_| Poisoned)?;
+        Ok(work(&mut store))
+    }
+
     /// Compose the ledger `store`, opened for `epoch`, with no route configuration: `task.preview`
     /// answers "route configuration not installed" until [`StoreTasks::with_routing`].
     #[must_use]

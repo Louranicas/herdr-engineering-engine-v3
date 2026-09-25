@@ -61,8 +61,8 @@ pub const U64_CRITERIA: [&str; 1] = [U64_CRITERION_ID];
 const U64_MODULE_ID: &str = "check";
 /// The WL-U64 class's one editable file (`TASK.md`: "Change only `src/lib.rs`") and its bounds:
 /// R1's 200 changed lines, and 64 KiB against a 751-byte reference. B14-P2's profile takes them over.
-const U64_EDITABLE: &str = "src/lib.rs";
-const U64_BOUNDS: patch::CandidateBounds = patch::CandidateBounds {
+pub const U64_EDITABLE: &str = "src/lib.rs";
+pub const U64_BOUNDS: patch::CandidateBounds = patch::CandidateBounds {
     bytes: 65_536,
     changed_lines: 200,
 };
