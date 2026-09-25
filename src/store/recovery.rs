@@ -712,9 +712,10 @@ pub(super) fn read_view(
         |row| read_number(row, 0),
     )?;
     let given_up = db.query_row(
-        "SELECT count(*) FROM outbox o JOIN events e ON e.id=o.event_id WHERE e.task_id=? \
-         AND o.delivered=0 AND EXISTS(SELECT 1 FROM task_dispositions d WHERE \
-         d.obligation_kind='delivery' AND d.obligation_id=o.event_id AND d.resolves=1)",
+        &format!(
+            "SELECT count(*) FROM outbox o JOIN events e ON e.id=o.event_id WHERE e.task_id=? AND {}",
+            super::GIVEN_UP
+        ),
         [task.as_str()],
         |row| read_number(row, 0),
     )?;

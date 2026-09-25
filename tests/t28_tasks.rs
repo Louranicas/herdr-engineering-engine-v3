@@ -3757,7 +3757,7 @@ fn a_quarantine_survives_a_cancel_and_the_cancel_decides_the_stop() -> Outcome {
 
 /// B08: the edges of the table. A cancel pending before a quarantine keeps `effect_unknown` (the
 /// quarantine never renames a liability away); an abandonment whose every usage is known releases
-/// the reservations and leaves the measured spend.
+/// the reservations and charges the unsettled attempt's measured usage.
 #[test]
 fn a_resolve_keeps_a_pending_cancel_and_releases_known_usage() -> Outcome {
     let scratch = Scratch::new()?;
@@ -4048,8 +4048,8 @@ fn settle_observed(
 }
 
 /// B08 (code review): the observation door and a disposition. A stopped task's attempt cannot be
-/// settled back into life (`AlreadyStopped`); settling a quarantined task's attempt lifts the
-/// quarantine, because the observation settles the ambiguity the quarantine held apart.
+/// settled back into life (`AlreadyStopped`); an observation that settles a quarantined task's
+/// attempt lifts the quarantine, because it settles the ambiguity the quarantine held apart.
 #[test]
 fn an_observation_never_revives_a_stopped_task_and_lifts_a_quarantine() -> Outcome {
     let scratch = Scratch::new()?;
@@ -4306,5 +4306,137 @@ fn a_stop_refuses_evidence_registered_with_another_size() -> Outcome {
         "nothing stopped"
     );
     conforms(&[("task.resolve", &refused)])?;
+    Ok(())
+}
+
+/// B08 (second review): the stop charges exactly the unsettled attempts' measured usage, on top of
+/// what settled attempts already charged -- off the origin: the first attempt settled at 10 ms (the
+/// fixture's literal), the second is unsettled at 7 ms, so the spend is 17 after the stop.
+#[test]
+fn an_abandonment_charges_only_what_no_settlement_charged() -> Outcome {
+    use habitat_engine::store::{Effect, Expected, Settlement};
+    let scratch = Scratch::new()?;
+    let operator = Principal::new(1000, "operator").map_err(|error| format!("{error:?}"))?;
+    let mut store = raw_store(&scratch)?;
+    let task = staged(&mut store, &operator, 1, Stage::Settled)?;
+    let until = Instant::now() + Duration::from_secs(10);
+    let second = nth(0x08d2, 1);
+    let begun = store
+        .begin_attempt(
+            UuidV4::parse(&task)?,
+            "3".parse()?,
+            UuidV4::parse(&second)?,
+            UuidV4::parse(&nth(0x08d3, 1))?,
+            until,
+        )
+        .map_err(|error| format!("{error:?}"))?;
+    store
+        .settle_attempt(
+            &Expected {
+                task: UuidV4::parse(&task)?,
+                task_generation: "4".parse()?,
+                attempt: UuidV4::parse(&second)?,
+                attempt_generation: begun.generation.parse()?,
+            },
+            Settlement {
+                effect: Effect::Unknown,
+                used_ms: Some(7),
+                cleanup_settled: true,
+                ready_to_verify: false,
+            },
+            UuidV4::parse(&nth(0x08d4, 1))?,
+            until,
+        )
+        .map_err(|error| format!("{error:?}"))?;
+    let evidence = store
+        .publish(
+            b"operator's reconciliation note",
+            UuidV4::parse(EPOCH)?,
+            until,
+        )
+        .map_err(|error| format!("{error:?}"))?;
+    let tasks = StoreTasks::new(store, EPOCH.to_owned());
+    assert_eq!(
+        ledger_value(&scratch, "SELECT spent_ms FROM tasks WHERE id=?", &task)?,
+        json!(10)
+    );
+    let refs = json!([evidence_of(&evidence)]);
+    resolve_with(
+        &tasks,
+        &operator,
+        (1, RESOLVE_KEY, &task, "5"),
+        &second,
+        "acknowledge_external_effect",
+        &refs,
+    )?;
+    let abandoned = resolve_with(
+        &tasks,
+        &operator,
+        (2, RESOLVE_KEY_2, &task, "6"),
+        &second,
+        "abandon",
+        &refs,
+    )?;
+    assert_eq!(
+        abandoned["body"]["task"]["state"],
+        json!("abandoned"),
+        "{abandoned}"
+    );
+    assert_eq!(
+        ledger_value(
+            &scratch,
+            "SELECT spent_ms||'/'||reserved_work_ms FROM tasks WHERE id=?",
+            &task
+        )?,
+        json!("17/0")
+    );
+    Ok(())
+}
+
+/// B08 (second review): only an observation that settles lifts a quarantine. A re-observation that
+/// is still unsettled leaves the task `blocked`: the ambiguity the quarantine holds apart remains.
+#[test]
+fn an_unsettled_observation_keeps_a_quarantine() -> Outcome {
+    use habitat_engine::store::{Effect, Expected, Settlement};
+    let scratch = Scratch::new()?;
+    let operator = Principal::new(1000, "operator").map_err(|error| format!("{error:?}"))?;
+    let (tasks, ids, _) = resolve_ledger(&scratch, &operator, &[Stage::Unknown])?;
+    let attempt = nth(0x05b2, 1);
+    resolve_with(
+        &tasks,
+        &operator,
+        (1, RESOLVE_KEY, &ids[0], "3"),
+        &attempt,
+        "quarantine",
+        &json!([]),
+    )?;
+    drop(tasks);
+    let mut store = raw_store(&scratch)?;
+    let until = Instant::now() + Duration::from_secs(10);
+    store
+        .settle_attempt(
+            &Expected {
+                task: UuidV4::parse(&ids[0])?,
+                task_generation: "4".parse()?,
+                attempt: UuidV4::parse(&attempt)?,
+                attempt_generation: "1".parse()?,
+            },
+            Settlement {
+                effect: Effect::Unknown,
+                used_ms: None,
+                cleanup_settled: false,
+                ready_to_verify: false,
+            },
+            UuidV4::parse(&nth(0x08d5, 1))?,
+            until,
+        )
+        .map_err(|error| format!("{error:?}"))?;
+    let head = store
+        .get(&operator, UuidV4::parse(&ids[0])?, until)
+        .map_err(|error| format!("{error:?}"))?;
+    assert_eq!(
+        (head.state.as_str(), head.generation.as_str()),
+        ("blocked", "5")
+    );
     Ok(())
 }

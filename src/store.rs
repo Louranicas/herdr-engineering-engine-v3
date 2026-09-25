@@ -653,10 +653,22 @@ pub struct Resolution {
     pub resolved: bool,
 }
 
+/// Whether an operator's disposition gave up the delivery of outbox row `o` (B08): the one spelling,
+/// from which both delivery predicates below are made.
+macro_rules! given_up {
+    () => {
+        "EXISTS(SELECT 1 FROM task_dispositions d WHERE d.obligation_kind='delivery' \
+         AND d.obligation_id=o.event_id AND d.resolves=1)"
+    };
+}
+
 /// An undelivered outbox row (`o`) that no disposition gave up (B08): the one predicate for the
 /// head's count, the notifier's work list and the recovery inventory.
-pub(crate) const UNDELIVERED: &str = "o.delivered=0 AND NOT EXISTS(SELECT 1 FROM task_dispositions d \
-     WHERE d.obligation_kind='delivery' AND d.obligation_id=o.event_id AND d.resolves=1)";
+pub(crate) const UNDELIVERED: &str = concat!("o.delivered=0 AND NOT ", given_up!());
+
+/// An undelivered outbox row (`o`) an operator gave up (B08): `UNDELIVERED`'s complement among the
+/// undelivered rows, from the same spelling.
+pub(crate) const GIVEN_UP: &str = concat!("o.delivered=0 AND ", given_up!());
 
 /// One `task.cancel` (B05): the caller's key and exact request bytes, the task it names and the
 /// generation it expects, the event identity a new intent would take, and the reason it gives.
@@ -1256,7 +1268,9 @@ impl Store {
             if used_ms.is_some_and(|used|used>head.reserved_work_ms) {return Err(Error::Budget);}
             let settled=matches!(effect,Effect::None|Effect::Committed)&&used_ms.is_some()&&cleanup_settled;
             let generation=next(expected.task_generation)?;
-            let state=if !settled {"effect_unknown"} else if head.cancellation {"cancellation_requested"} else if ready_to_verify {"verifying"} else {"repair_pending"};
+            // Only a settling observation lifts an operator's quarantine (B08): an unsettled one
+            // leaves the ambiguity the quarantine holds apart, so `blocked` stays.
+            let state=if !settled { if head.state=="blocked" {"blocked"} else {"effect_unknown"} } else if head.cancellation {"cancellation_requested"} else if ready_to_verify {"verifying"} else {"repair_pending"};
             tx.execute("UPDATE attempts SET state=?,effect=?,cleanup=?,used_ms=? WHERE id=?",params![if settled {"settled"}else{"unknown"},effect.name(),if cleanup_settled{"settled"}else{"unknown"},used_ms.map(number).transpose()?,expected.attempt.as_str()])?;
             let used=if settled {used_ms.unwrap_or(0)}else{0};
             tx.execute("UPDATE tasks SET generation=?,state=?,spent_ms=spent_ms+?,reserved_work_ms=reserved_work_ms-? WHERE id=?",params![generation,state,number(used)?,number(used)?,expected.task.as_str()])?;
@@ -1380,7 +1394,8 @@ impl Store {
     /// once every unsettled attempt's effect is observed or acknowledged.
     /// # Errors
     /// `Forbidden` for another role; `Conflict` for other bytes under the key; `NotFound`;
-    /// `StaleGeneration`; `AlreadyStopped`; `Disposition` naming the refusal; `Bound`.
+    /// `StaleGeneration`; `AlreadyStopped`; `Disposition` naming the refusal; `Bound`; `Budget` if
+    /// the charged spend would overflow; `Corrupt` for stop evidence registered with another size.
     pub fn resolve_intent(
         &mut self,
         input: ResolveIntent<'_>,
