@@ -114,7 +114,7 @@ T05_TARGET_COUNTS = {"t05_roster": 29, "t05_codec": 12}
 T05_STORE_TEST_COUNT = 39
 # Fixed reviewed T06 development inventory. Profile repetition earns no new cases.
 T06_TARGET_COUNTS = {
-    "t06_receipts": 64, "t06_store": 42, "t06_graph": 32,
+    "t06_receipts": 64, "t06_store": 43, "t06_graph": 32,
     "t06_driver": 29, "t06_consistency": 50, "t06_workspace": 36,
     "t06_terminal": 39, "t06_evidence": 26, "t06_collector": 29,
     "t06_availability": 22, "t06_decision": 40, "t06_staging": 20,
