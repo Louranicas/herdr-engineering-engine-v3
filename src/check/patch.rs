@@ -7,8 +7,9 @@
 //! split; the line views are one slice per line (at most `MAX_TEXT` lines a side); the search's
 //! trace holds `2·d + 1` cells for each round `d` actually run, `d ≤` the caller's limit, itself at
 //! most [`MAX_EDITS`]; the rendering is at most both texts plus two bytes and one marker a line,
-//! plus one header a hunk. A deadline, when given, is read every round and every hunk; one round's
-//! diagonal slides are not individually bounded (inherited from P3).
+//! plus one header a hunk. A deadline, when given, is read every search round — the only
+//! superlinear work; one round's diagonal slides are not individually bounded (inherited from P3),
+//! and the rendering after the search is linear in its output.
 
 use std::time::Instant;
 
@@ -227,7 +228,7 @@ pub fn edit_count(patch: &[u8]) -> usize {
 /// # Errors
 /// `Bound` for a text past [`MAX_TEXT`] or a path holding a newline, `Encoding` for text that is
 /// not UTF-8 or holds a NUL — both before any split — then `Changes` past `limit` edits (clamped to
-/// [`MAX_EDITS`]) and `Deadline`.
+/// [`MAX_EDITS`]) and `Deadline` between search rounds.
 pub fn unified(
     before: &[u8],
     after: &[u8],
@@ -235,7 +236,6 @@ pub fn unified(
     limit: usize,
     deadline: Option<Instant>,
 ) -> Result<Vec<u8>, Error> {
-    budget(deadline)?;
     admitted(before)?;
     admitted(after)?;
     if path.contains('\n') {
@@ -266,7 +266,6 @@ pub fn unified(
     let mut text = format!("--- a/{path}\n+++ b/{path}\n").into_bytes();
     let mut index = 0;
     while index < changes.len() {
-        budget(deadline)?;
         // Merge every following change at most 2·CONTEXT kept lines after this hunk's last.
         let mut last = index;
         while last + 1 < changes.len() && changes[last + 1].start - changes[last].end <= 2 * CONTEXT
@@ -594,6 +593,7 @@ mod tests {
         );
         let past = Some(Instant::now());
         assert_eq!(unified(b"a\n", b"b\n", "f", 10, past), Err(Error::Deadline));
+        assert_eq!(distance(&[b"a"], &[b"b"], 10, past), Err(Expired));
         assert_eq!(
             unified(b"a\n", b"b\n", "f", usize::MAX, None),
             Ok(b"--- a/f\n+++ b/f\n@@ -1 +1 @@\n-a\n+b\n".to_vec())
@@ -602,9 +602,12 @@ mod tests {
     }
 
     /// The search clamps to `MAX_EDITS`: a pair `MAX_EDITS + 2` edits apart is refused at any
-    /// larger limit, and one exactly `MAX_EDITS` apart is found.
+    /// larger limit, and one exactly `MAX_EDITS` apart is found. The two constants are pinned to
+    /// their sources, not read through their own names: 4096 is B14-P3's reviewed ceiling (review
+    /// P3-1), and the 2 is what `a_final_newline_adds_exactly_two_edits` measures.
     #[test]
     fn the_search_never_exceeds_its_ceiling() {
+        assert_eq!((MAX_CHANGED_LINES, MAX_EDITS), (4096, 4098));
         let lines: Vec<Vec<u8>> = (0..MAX_EDITS + 2)
             .map(|i| format!("{i}\n").into_bytes())
             .collect();

@@ -1186,6 +1186,28 @@ fn a_patch_bound_to_its_subjects_is_accepted() {
     let mut fixture = Fixture::new();
     fixture.bind_texts(SEED, SEED, b"");
     assert!(fixture.check().is_ok());
+    // A nonpass receipt naming no result claims no patch, so none is bound; one naming both is
+    // bound whatever its verdict. The patch is well formed, but for another pair.
+    let foreign =
+        b"--- a/candidate.rs\n+++ b/candidate.rs\n@@ -1 +1 @@\n-seed fixture\n+mutated result\n";
+    for (result, verdict) in [
+        (false, Ok(())),
+        (true, Err(Error::Patch(PatchRefusal::Mismatch))),
+    ] {
+        let mut fixture = Fixture::new();
+        fixture.bind_texts(SEED, RESULT, foreign);
+        if !result {
+            fixture.root["subjects"]["result_subject"] = unavailable("no result");
+            fixture.prepared.subjects = dto(&fixture.root["subjects"]);
+        }
+        fixture.root["verdict"]["state"] = json!("UNMEASURED");
+        fixture.root["verdict"]["reasons"] = json!(["candidate not yet verified"]);
+        assert_eq!(
+            fixture.check().map(|_| ()),
+            verdict,
+            "result named: {result}"
+        );
+    }
 }
 
 /// B14-P4 · the seed ↔ result ↔ patch triple is one binding: a patch from another pair, a seed
@@ -1247,14 +1269,15 @@ fn a_patch_the_subjects_cannot_derive_names_the_cause() {
 }
 
 /// B14-P4 · every refusal of the inventory by its own site: a result with an extra entry
-/// (`Count`), the changed file's mode or kind differing (`Entry`), a second file's contents changed
+/// (`Count`), the changed file's mode, kind, origin, link target or exclusion reason differing
+/// (`Entry`, one case each), a second file's contents changed
 /// (`TwoChanges`), and a changed entry that is not a regular file (`Editable`: an `other` entry,
 /// the one non-file kind a valid record may give content — a file must have it, a directory may
 /// not, and a symlink must name its target).
 #[test]
 fn the_subjects_may_differ_in_one_file_s_contents_only() {
     type Rows = fn(&Ref, &Ref) -> (Vec<Value>, Vec<Value>);
-    let cases: [(Rows, PatchRefusal); 5] = [
+    let cases: [(Rows, PatchRefusal); 8] = [
         (
             |seed, result| (vec![candidate(seed)], vec![candidate(result), other(seed)]),
             PatchRefusal::Count,
@@ -1294,6 +1317,40 @@ fn the_subjects_may_differ_in_one_file_s_contents_only() {
                 )
             },
             PatchRefusal::Editable,
+        ),
+        (
+            |seed, result| {
+                let mut generated = candidate(result);
+                generated["origin"] = json!("generated");
+                (vec![candidate(seed)], vec![generated])
+            },
+            PatchRefusal::Entry,
+        ),
+        (
+            |seed, result| {
+                let link = |content: &Ref, target: &str| {
+                    let mut row = subject_file(Some(content), "candidate.rs", "symlink", false);
+                    row["link_target"] = present(&json!(target));
+                    row
+                };
+                (vec![link(seed, "a")], vec![link(result, "b")])
+            },
+            PatchRefusal::Entry,
+        ),
+        (
+            |seed, result| {
+                let excluded = |content: &Ref, reason: &str| {
+                    let mut row = candidate(content);
+                    row["origin"] = json!("excluded");
+                    row["exclusion_reason"] = present(&json!(reason));
+                    row
+                };
+                (
+                    vec![excluded(seed, "vendored")],
+                    vec![excluded(result, "generated")],
+                )
+            },
+            PatchRefusal::Entry,
         ),
     ];
     for (rows, refusal) in cases {
