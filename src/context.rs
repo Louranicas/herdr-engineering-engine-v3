@@ -342,6 +342,17 @@ pub const MAX_PACKET_BYTES: u64 = 1 << 20;
 /// The most bytes any single source contributes.
 pub const MAX_SOURCE_BYTES: u64 = 64 * 1024;
 
+/// The most sources one assembly may register (CX-04).
+///
+/// Registration is caller input the assembly copies — an identity and up to [`MAX_SELECTED`]
+/// dependency identities per source — so the registry is bounded where it is acquired. At the
+/// bound the assembly's own allocation is at most 4096 x (1 + 256) identities of 36 bytes, about
+/// 38 MiB, and a lookup is a logarithmic probe of the index rather than a scan. It is sixteen
+/// packets' worth of [`MAX_SELECTED`], so no packet the walk can build is short of candidates.
+pub const MAX_SOURCES: usize = 4096;
+
+const _: () = assert!(MAX_SOURCES >= MAX_SELECTED);
+
 /// The deepest a dependency chain is followed.
 ///
 /// A cycle is bounded by this as well as detected: a bound that relies on cycle detection
@@ -445,6 +456,8 @@ pub enum Refusal {
     /// The traversal exceeded its own step budget. Unreachable through any well-formed
     /// assembly; it exists so that a defect in the walk fails loudly instead of hanging.
     TraversalBudget,
+    /// The assembly already holds [`MAX_SOURCES`] sources.
+    RegistryFull,
 }
 
 impl Refusal {
@@ -463,6 +476,7 @@ impl Refusal {
             Self::RootLimit => "more roots than the permitted maximum",
             Self::ContextMismatch => "packets differ in context identity or permitted scope",
             Self::TraversalBudget => "context traversal exceeded its step budget",
+            Self::RegistryFull => "context registry source bound reached",
         }
     }
 }
@@ -862,6 +876,8 @@ impl Change {
 #[derive(Clone, Debug, Default)]
 pub struct Assembly<'a> {
     sources: Vec<Source<'a>>,
+    /// Each registered identity's position in `sources`: the one lookup door.
+    index: BTreeMap<String, usize>,
 }
 
 impl<'a> Assembly<'a> {
@@ -889,6 +905,8 @@ impl<'a> Assembly<'a> {
     ///
     /// * [`Refusal::MalformedIdentity`] for a source or dependency that is not a `UUIDv4`;
     /// * [`Refusal::DuplicateSource`] when the identity is already registered;
+    /// * [`Refusal::RegistryFull`] when [`MAX_SOURCES`] sources are already registered, refused
+    ///   before anything is copied;
     /// * [`Refusal::DependencyLimit`] beyond [`MAX_SELECTED`] declared dependencies;
     /// * [`Refusal::SourceTooLarge`] beyond [`MAX_SOURCE_BYTES`], refused at registration so
     ///   the bound is taken where the bytes are acquired rather than where they are copied.
@@ -960,11 +978,16 @@ impl<'a> Assembly<'a> {
         if self.find(identity.as_str()).is_some() {
             return Err(Refusal::DuplicateSource);
         }
+        if self.sources.len() >= MAX_SOURCES {
+            return Err(Refusal::RegistryFull);
+        }
         let mut declared = Vec::with_capacity(dependencies.len());
         for (dependency, kind) in dependencies {
             let dependency = UuidV4::parse(dependency).map_err(Refusal::MalformedIdentity)?;
             declared.push((dependency.as_str().to_owned(), *kind));
         }
+        self.index
+            .insert(identity.as_str().to_owned(), self.sources.len());
         self.sources.push(Source {
             identity: identity.as_str().to_owned(),
             revision,
@@ -975,9 +998,7 @@ impl<'a> Assembly<'a> {
     }
 
     fn find(&self, identity: &str) -> Option<usize> {
-        self.sources
-            .iter()
-            .position(|source| source.identity == identity)
+        self.index.get(identity).copied()
     }
 }
 

@@ -10,7 +10,7 @@ use std::error::Error;
 use habitat_engine::budget::{Amount, Provenance, Unit};
 use habitat_engine::context::{
     Assembly, Content, MAX_DEPTH, MAX_PACKET_BYTES, MAX_ROOTS, MAX_SELECTED, MAX_SOURCE_BYTES,
-    Omission, Permit, Refusal, Relation, RelationKind, Revision, SCHEMA_VERSION,
+    MAX_SOURCES, Omission, Permit, Refusal, Relation, RelationKind, Revision, SCHEMA_VERSION,
 };
 
 type Outcome = Result<(), Box<dyn Error>>;
@@ -883,6 +883,7 @@ fn refusal_names_are_distinct_and_non_overlapping() {
         Refusal::RootLimit,
         Refusal::ContextMismatch,
         Refusal::TraversalBudget,
+        Refusal::RegistryFull,
     ];
     for (i, a) in all.iter().enumerate() {
         assert!(!a.name().is_empty());
@@ -1625,5 +1626,48 @@ fn affected_consumers_follow_declared_relationships_transitively() -> Outcome {
     let growing = Assembly::compare(&narrower, &old)?;
     assert_eq!(growing.added, vec![id(2), id(3)]);
     assert_eq!(growing.consumers, vec![id(1), id(2)]);
+    Ok(())
+}
+
+/// T11-CX-68 · CX-04: the registry is bounded where sources are acquired. The last source is
+/// admitted, the next is refused before anything is stored — by every door (`register`,
+/// `register_related`, `register_unreadable`) — and a duplicate at the cap still names itself.
+/// The walk still finds a source registered last (the index, not position, answers lookups).
+#[test]
+fn the_registry_is_bounded_at_acquisition() -> Outcome {
+    assert_eq!(MAX_SOURCES, 4096);
+    let mut assembly = Assembly::new();
+    for index in 1..=MAX_SOURCES {
+        assembly.register(&id(index), Revision::new(1), &[], Content::new(b"x"))?;
+    }
+    assert_eq!(assembly.len(), MAX_SOURCES);
+    let next = id(MAX_SOURCES + 1);
+    assert_eq!(
+        assembly.register(&next, Revision::new(1), &[], Content::new(b"x")),
+        Err(Refusal::RegistryFull)
+    );
+    assert_eq!(
+        assembly.register_related(&next, Revision::new(1), &[], Content::new(b"x")),
+        Err(Refusal::RegistryFull)
+    );
+    assert_eq!(
+        assembly.register_unreadable(&next, Revision::new(1), &[]),
+        Err(Refusal::RegistryFull)
+    );
+    assert_eq!(
+        assembly.register(&id(7), Revision::new(1), &[], Content::new(b"x")),
+        Err(Refusal::DuplicateSource)
+    );
+    assert_eq!(assembly.len(), MAX_SOURCES);
+    let last = id(MAX_SOURCES);
+    let permit = Permit::new().allow(&last)?;
+    let packet = assembly.assemble(
+        CONTEXT,
+        &[last.as_str()],
+        Revision::new(1),
+        &permit,
+        bytes(64),
+    )?;
+    assert_eq!(selected_ids(&packet), vec![last.clone()]);
     Ok(())
 }
