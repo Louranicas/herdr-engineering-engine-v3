@@ -1168,7 +1168,7 @@ class T06QualityInventoryControls(unittest.TestCase):
             reviewed.append(71)
         self.assertEqual(sorted(expected["test_counts"]), sorted(reviewed))
         self.assertEqual(sum(expected["test_counts"]), 825 + (91 if quality.has_t13(ROOT) else 0) + (106 if quality.has_t21(ROOT) else 0) + (51 if quality.has_t07(ROOT) else 0) + (23 if quality.has_t08(ROOT) else 0) + (60 if quality.has_recovery(ROOT) else 0) + (24 if quality.has_t08_contract(ROOT) else 0) + (72 if quality.has_t09(ROOT) else 0) + (107 if quality.has_t07_startup(ROOT) else 0) + (81 if quality.has_budget_battery(ROOT) else 0) + (77 if quality.has_notify_battery(ROOT) else 0) + (67 if quality.has_context_battery(ROOT) else 0) + (67 if quality.has_cohort_battery(ROOT) else 0) + (159 if quality.has_actions_battery(ROOT) else 0) + (1 if quality.has_actions_battery(ROOT) else 0) + (71 if quality.has_herdr_battery(ROOT) else 0) + (6 if quality.has_context_battery(ROOT) else 0))
-        self.assertEqual(sum(expected["unit_test_counts"].values()), 197 if quality.has_t13(ROOT) else 192)
+        self.assertEqual(sum(expected["unit_test_counts"].values()), 198 if quality.has_t13(ROOT) else 193)
         paths = quality.quality_subject_paths(ROOT, time.monotonic() + 5, True)
         for path in ["tests/fixtures/receipts/inventory-examples.json",
                      "tests/fixtures/receipt-import/preparation.json",
@@ -1283,10 +1283,10 @@ class T06QualityInventoryControls(unittest.TestCase):
         self.assertEqual(len(expected["test_counts"]), 32 + sum(1 for present in (quality.has_t07, quality.has_t08, quality.has_recovery, quality.has_t08_contract, quality.has_t09, quality.has_t07_startup, quality.has_budget_battery, quality.has_notify_battery, quality.has_context_battery, quality.has_cohort_battery, quality.has_actions_battery, quality.has_herdr_battery) if present(ROOT)))
         # t21_process and t06_availability both hold 22: the repeated-count group.
         self.assertEqual(expected["test_counts"].count(22), 2)
-        self.assertEqual(sum(expected["unit_test_counts"].values()), 197)
+        self.assertEqual(sum(expected["unit_test_counts"].values()), 198)
         quality.require_rust_test_summaries(self.synthetic_combined_output(expected), expected, "synthetic complete")
 
-    def test_historical_t06_subject_keeps_825_and_184(self):
+    def test_historical_t06_subject_keeps_825_and_185(self):
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
             manifest = self.combined_fixture(root)
@@ -1309,7 +1309,7 @@ class T06QualityInventoryControls(unittest.TestCase):
                 if path.exists() and name not in quality.T03_IMPLEMENTATION_PATHS: path.unlink()
             expected = quality.rust_test_expectations(root)
             self.assertEqual(sum(expected["test_counts"]), 825)
-            self.assertEqual(sum(expected["unit_test_counts"].values()), 184)
+            self.assertEqual(sum(expected["unit_test_counts"].values()), 185)
             self.assertEqual(quality.rust_test_partitions(root), [("tests", ["--all-targets"])])
 
     def test_combined_missing_duplicate_and_substituted_targets_refuse(self):
@@ -1563,7 +1563,7 @@ class T06QualityInventoryControls(unittest.TestCase):
         # t13_service also holds 51, so the census carries two 51-rows.
         self.assertEqual(expected["test_counts"].count(51), 2)
         self.assertEqual(expected["test_counts"].count(43), 0)
-        self.assertEqual(sum(expected["unit_test_counts"].values()), 197)
+        self.assertEqual(sum(expected["unit_test_counts"].values()), 198)
         paths = quality.quality_subject_paths(ROOT, time.monotonic() + 5, True)
         for name in ["src/store/recovery.rs", "tests/t07_inventory.rs"]:
             self.assertIn(name, paths)
@@ -1591,7 +1591,7 @@ class T06QualityInventoryControls(unittest.TestCase):
             self.assertEqual(len(expected["test_counts"]), 32)
             # The context battery is stripped in this fixture, so StepBudget's namespace is
             # not registered and the unit census is the historical 190.
-            self.assertEqual(sum(expected["unit_test_counts"].values()), 190)
+            self.assertEqual(sum(expected["unit_test_counts"].values()), 191)
             quality.require_rust_test_summaries(self.synthetic_combined_output(expected), expected, "historical1008")
             self.assertEqual([n for n,_ in quality.rust_test_partitions(root)], ["tests-main", "tests-t06", "tests-t21-process"])
 
@@ -1662,7 +1662,7 @@ class T06QualityInventoryControls(unittest.TestCase):
         self.assertEqual(len(expected["test_counts"]), 44)
         self.assertEqual(expected["test_counts"].count(23), 1)
         self.assertEqual(expected["test_counts"].count(51), 2)
-        self.assertEqual(sum(expected["unit_test_counts"].values()), 197)
+        self.assertEqual(sum(expected["unit_test_counts"].values()), 198)
         self.assertNotIn("worker::native::", "".join(expected["unit_test_counts"]))
         self.assertEqual(quality.T08_TARGET_COUNTS, {"t08_native": 23})
         self.assertEqual(quality.T08_INPUTS, ("src/worker/native.rs", "tests/t08_native.rs", "tests/fixtures/native/client.py"))
@@ -1868,7 +1868,7 @@ class T06QualityInventoryControls(unittest.TestCase):
         self.assertEqual(expected["test_counts"].count(25), 0)
         self.assertEqual(expected["test_counts"].count(26), 2)
         self.assertEqual(quality.BUDGET_TARGET_COUNTS, {"accounting": 81})
-        self.assertEqual(sum(expected["unit_test_counts"].values()), 197)
+        self.assertEqual(sum(expected["unit_test_counts"].values()), 198)
         self.assertNotIn("recovery::", "".join(expected["unit_test_counts"]))
         self.assertEqual(quality.RECOVERY_TARGET_COUNTS, {"recovery": 60})
         self.assertEqual(quality.T08_CONTRACT_TARGET_COUNTS, {"t08_contract": 24})
@@ -2067,7 +2067,7 @@ class T06QualityInventoryControls(unittest.TestCase):
         self.assertEqual(sum(expected["test_counts"]), 1888)
         self.assertEqual(len(expected["test_counts"]), 44)
         self.assertEqual(expected["test_counts"].count(72), 1)
-        self.assertEqual(sum(expected["unit_test_counts"].values()), 197)
+        self.assertEqual(sum(expected["unit_test_counts"].values()), 198)
         self.assertNotIn("route::", "".join(expected["unit_test_counts"]))
         self.assertEqual(quality.T09_TARGET_COUNTS, {"t09_route": 72})
         paths = quality.quality_subject_paths(ROOT, time.monotonic() + 5, True)

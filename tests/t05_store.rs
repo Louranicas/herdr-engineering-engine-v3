@@ -1263,6 +1263,90 @@ fn two_disabled_selected_profiles_keep_two_causes_but_one_task_cancellation_tran
     assert_ne!(after_second.state, "cancelled");
 }
 
+/// A store error as a test failure: `store::Error` is not a `std::error::Error`.
+fn debug(error: &Error) -> String {
+    format!("{error:?}")
+}
+
+/// B05 deferred (b): the roster's cancellation is the task's one cancellation transition
+/// (`request_cancellation`), not a second door. A task whose attempt's effect is unknown keeps
+/// `effect_unknown` -- a cancellation never masks a liability -- while the flag, the generation and
+/// the intent's event are still written, and the intent records why: an operator's disable.
+#[test]
+fn a_roster_cancellation_keeps_an_unknown_effect_and_records_its_reason()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let area = Area::new();
+    let mut store = area.open();
+    clock(&mut store, 100);
+    let agent = create(&mut store, 1);
+    observe(&mut store, &agent.head);
+    admit(&mut store);
+    begin(&mut store, &agent.head, &[choose(&agent.head)]).map_err(|error| debug(&error))?;
+    store
+        .settle_attempt(
+            &Expected {
+                task: uuid(TASK),
+                task_generation: generation(2),
+                attempt: uuid(ATTEMPT),
+                attempt_generation: generation(1),
+            },
+            Settlement {
+                effect: Effect::Unknown,
+                used_ms: None,
+                cleanup_settled: false,
+                ready_to_verify: false,
+            },
+            uuid(SETTLED),
+            deadline(),
+        )
+        .map_err(|error| debug(&error))?;
+    let before = store
+        .get(&principal(), uuid(TASK), deadline())
+        .map_err(|error| debug(&error))?;
+    assert_eq!(
+        (
+            before.state.as_str(),
+            before.generation.as_str(),
+            before.cancellation
+        ),
+        ("effect_unknown", "3", false)
+    );
+    let result = disable(
+        &mut store,
+        &agent.head,
+        2,
+        ActiveAttemptPolicy::RequestCancel,
+    );
+    assert_eq!(result.active_attempts, vec![ATTEMPT.to_owned()]);
+    let after = store
+        .get(&principal(), uuid(TASK), deadline())
+        .map_err(|error| debug(&error))?;
+    assert_eq!(
+        (
+            after.state.as_str(),
+            after.generation.as_str(),
+            after.cancellation
+        ),
+        ("effect_unknown", "4", true)
+    );
+    let db = area.inspect();
+    let mut statement = db.prepare(
+        "SELECT generation,body FROM events WHERE task_id=? AND kind='cancellation_requested'",
+    )?;
+    let intents = statement
+        .query_map([TASK], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    assert_eq!(intents.len(), 1, "one intent");
+    assert_eq!(intents[0].0, "4");
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&intents[0].1)?,
+        json!({"reason": "operator_request", "note": null})
+    );
+    Ok(())
+}
+
 #[test]
 fn disabling_one_profile_does_not_cancel_an_unrelated_owned_attempt() {
     let area = Area::new();

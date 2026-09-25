@@ -1231,7 +1231,7 @@ impl Store {
                 if outcome_decided(tx, &head)? {
                     return Err(Error::AlreadyStopped);
                 }
-                let body = serde_json::to_vec(&serde_json::json!({"reason": input.reason, "note": input.note}))?;
+                let body = cancellation_body(input.reason, input.note)?;
                 request_cancellation(tx, &head, input.task, input.expected, input.event, &body)?;
             }
             let obligation: String = tx.query_row(
@@ -1570,6 +1570,14 @@ fn next(generation: Generation) -> Result<String> {
 /// `cancellation_requested` -- except that an `effect_unknown` task keeps its state, the precedence
 /// `settle_attempt` and `record_verification` already apply: an unknown effect is never masked by a
 /// cancellation, and the `cancellation` flag still carries the intent.
+/// The body of a `cancellation_requested` event: why the intent was recorded (the `task.cancel`
+/// reason vocabulary) and the caller's note. The one shape, for every door that records an intent.
+fn cancellation_body(reason: &str, note: Option<&str>) -> Result<Vec<u8>> {
+    Ok(serde_json::to_vec(
+        &serde_json::json!({"reason": reason, "note": note}),
+    )?)
+}
+
 fn request_cancellation(
     tx: &Transaction<'_>,
     head: &TaskHead,

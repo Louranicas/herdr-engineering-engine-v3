@@ -109,7 +109,7 @@ T05_IMPLEMENTATION_PATHS = (
 T05_TARGET_COUNTS = {"t05_roster": 29, "t05_codec": 12}
 # Independent release: 35 functions (32 roster-primary, 3 store-secondary).
 # This is a fixed execution inventory, not module-admission case credit.
-T05_STORE_TEST_COUNT = 35
+T05_STORE_TEST_COUNT = 36
 # Fixed reviewed T06 development inventory. Profile repetition earns no new cases.
 T06_TARGET_COUNTS = {
     "t06_receipts": 64, "t06_store": 39, "t06_graph": 32,

@@ -9,7 +9,10 @@ use crate::contracts::roster::{
     ActiveAttemptPolicy, CancellationCause, Disable, Instance, InstanceState, Kind, MAX_HISTORY,
     MAX_INPUT, MAX_PINS, MAX_RECORDS, Outcome, Pin, Selection,
 };
-use crate::store::{AttemptHead, begin_attempt_in, event, head};
+use crate::store::{
+    AttemptHead, begin_attempt_in, cancellation_body, event, head, outcome_decided,
+    request_cancellation,
+};
 use rusqlite::{OptionalExtension, params};
 
 #[derive(Clone, Copy)]
@@ -184,15 +187,17 @@ fn cancel_causes(
             params![disable_event, record_id, task, attempt],
         )?;
         let current = head(tx, task)?;
-        if !current.cancellation && current.accepted_event.is_none() {
-            let revision = next(current.generation.parse().map_err(|_| Error::Corrupt)?)?;
-            tx.execute("UPDATE tasks SET cancellation=1,state='cancellation_requested',generation=? WHERE id=?",params![revision,task])?;
-            event(
+        // The task's one cancellation transition and its one decided-outcome rule (B05): a disable
+        // is an operator's request, and an unknown effect stays unknown under it.
+        if !current.cancellation && !outcome_decided(tx, &current)? {
+            let event_id = random_id(deadline)?;
+            request_cancellation(
                 tx,
-                &random_id(deadline)?,
-                task,
-                &revision,
-                "cancellation_requested",
+                &current,
+                UuidV4::parse(task).map_err(|_| Error::Corrupt)?,
+                current.generation.parse().map_err(|_| Error::Corrupt)?,
+                UuidV4::parse(&event_id).map_err(|_| Error::Corrupt)?,
+                &cancellation_body("operator_request", None)?,
             )?;
         }
         causes.push(cause);
