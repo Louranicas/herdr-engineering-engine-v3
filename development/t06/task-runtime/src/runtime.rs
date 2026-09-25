@@ -1406,8 +1406,19 @@ impl habitat_engine::task::driver::Runtime for TaskRuntime<'_> {
     ) -> Result<habitat_engine::task::driver::Checked<AcceptanceProof>, Self::Error> {
         self.verify(attempt)
     }
-    fn accept(&mut self, attempt: &Attempt, evidence: AcceptanceProof) -> Result<(), Self::Error> {
-        self.accept(attempt, &evidence)
+    fn accept(
+        &mut self,
+        attempt: &Attempt,
+        evidence: AcceptanceProof,
+    ) -> Result<habitat_engine::task::driver::Acceptance, Self::Error> {
+        // The store names a cancellation committed first (B14a-R1.2); the driver stops on it.
+        match self.accept(attempt, &evidence) {
+            Ok(()) => Ok(habitat_engine::task::driver::Acceptance::Accepted),
+            Err(Error::Store(store::Error::Cancelled)) => {
+                Ok(habitat_engine::task::driver::Acceptance::CancelledFirst)
+            }
+            Err(error) => Err(error),
+        }
     }
     fn stop(
         &mut self,

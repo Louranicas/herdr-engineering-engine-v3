@@ -44,6 +44,15 @@ pub enum Outcome {
     NeedsSettlement(StopReason),
 }
 
+/// What an acceptance commit answered. A cancellation the store committed first is not an error:
+/// the store names it (`store::Error::Cancelled`, checked before the compare-and-set) and the
+/// driver stops the task as `Cancelled` (B14a-R1.3).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Acceptance {
+    Accepted,
+    CancelledFirst,
+}
+
 /// Effect ports are implemented only by the trusted application composition.
 /// Every method retains actual bytes/measurements or returns an explicit error.
 /// No method interprets worker-provided success text as a verification result.
@@ -75,12 +84,13 @@ pub trait Runtime {
     /// Recheck current identity/cancellation and atomically commit exact evidence,
     /// criterion manifest, acceptance and completion outbox through Store.
     /// # Errors
-    /// Refuses stale/nonpassing proof, lost evidence, cancellation and commit failure.
+    /// Refuses stale/nonpassing proof, lost evidence and commit failure. A cancellation committed
+    /// first is answered `Ok(Acceptance::CancelledFirst)`, never as an error.
     fn accept(
         &mut self,
         attempt: &Self::Attempt,
         evidence: Self::Evidence,
-    ) -> Result<(), Self::Error>;
+    ) -> Result<Acceptance, Self::Error>;
     /// Request a durable stop. Return true only after measured process/workspace/
     /// effect settlement permits a truthful terminal state. False retains pending
     /// obligations and reservations; a cancellation request alone returns false.
@@ -143,8 +153,10 @@ pub fn run<R: Runtime>(runtime: &mut R, criteria_count: u8) -> Result<Outcome, E
                 if runtime.cancellation_requested().map_err(Error::Runtime)? {
                     return stop(runtime, StopReason::Cancelled);
                 }
-                runtime.accept(&attempt, evidence).map_err(Error::Runtime)?;
-                return Ok(Outcome::Accepted);
+                return match runtime.accept(&attempt, evidence).map_err(Error::Runtime)? {
+                    Acceptance::Accepted => Ok(Outcome::Accepted),
+                    Acceptance::CancelledFirst => stop(runtime, StopReason::Cancelled),
+                };
             }
             Checked::Failed { criteria } => {
                 guard

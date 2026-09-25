@@ -25,12 +25,19 @@
 //! Runtime errors propagate without fabricated accept/stop. The fake verify call
 //! models the documented persistence port contract; no row or cost is claimed here.
 //!
+//! Amendment B14a-1b (2026-09-26, recorded in B14-store-runtime DESIGN.md B14a-R1.3): `accept`
+//! answers `Acceptance`; the store names a cancellation that won the race `CancelledFirst`, which
+//! the driver stops as `Cancelled` (settled → `Stopped`, unsettled → `NeedsSettlement`) with no
+//! later begin. The Fake's accept answer is scripted and its default is `Accepted`.
+//!
 //! Parent owns compilation/execution. This file adds no production implementation,
 //! process/provider calls, collector qualification or module-admission claim.
 
 use habitat_engine::contracts::Generation;
 use habitat_engine::task::LoopRefusal;
-use habitat_engine::task::driver::{Checked, Error, Outcome, Runtime, StopReason, Work, run};
+use habitat_engine::task::driver::{
+    Acceptance, Checked, Error, Outcome, Runtime, StopReason, Work, run,
+};
 use std::cell::Cell;
 use std::collections::VecDeque;
 use std::fmt;
@@ -69,6 +76,7 @@ struct Fake {
     checks: VecDeque<Result<(Checked<Evidence>, Duration), Fault>>,
     begin_error: Option<Fault>,
     accept_error: Option<Fault>,
+    acceptance: Acceptance,
     stop_error: Option<Fault>,
     stop_settled: bool,
     next_attempt: u64,
@@ -91,6 +99,7 @@ impl Fake {
                 .collect(),
             begin_error: None,
             accept_error: None,
+            acceptance: Acceptance::Accepted,
             stop_error: None,
             stop_settled: true,
             next_attempt: 100,
@@ -172,9 +181,9 @@ impl Runtime for Fake {
         &mut self,
         attempt: &Self::Attempt,
         evidence: Self::Evidence,
-    ) -> Result<(), Self::Error> {
+    ) -> Result<Acceptance, Self::Error> {
         self.calls.push(Call::Accept(attempt.token, evidence.0));
-        self.accept_error.map_or(Ok(()), Err)
+        self.accept_error.map_or(Ok(self.acceptance), Err)
     }
 
     fn stop(&mut self, reason: StopReason) -> Result<bool, Self::Error> {
@@ -615,4 +624,34 @@ fn all_64_declared_criteria_can_pass_without_shift_overflow_or_truncation() {
         fake.calls.last(),
         Some(&Call::Accept(101, vec![64, 0, 255]))
     );
+}
+
+#[test]
+fn a_cancellation_first_at_acceptance_stops_cancelled_with_no_later_begin() {
+    for settled in [true, false] {
+        let mut fake = Fake::new(vec![passed(3, 7)]);
+        fake.acceptance = Acceptance::CancelledFirst;
+        fake.stop_settled = settled;
+        let outcome = run(&mut fake, 2).unwrap();
+        if settled {
+            assert_eq!(outcome, Outcome::Stopped(StopReason::Cancelled));
+        } else {
+            assert_eq!(outcome, Outcome::NeedsSettlement(StopReason::Cancelled));
+        }
+        assert_eq!(
+            fake.calls,
+            vec![
+                Call::Cancellation,
+                Call::Begin("1".to_owned()),
+                Call::Execute(101),
+                Call::Cancellation,
+                Call::Verify(101),
+                Call::Cancellation,
+                Call::Accept(101, vec![7, 0, 255]),
+                Call::Stop("Cancelled".to_owned()),
+            ],
+            "settled={settled}: one stop after the refused acceptance, no begin"
+        );
+        assert_eq!(fake.begins(), ["1"]);
+    }
 }
