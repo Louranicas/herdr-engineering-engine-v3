@@ -1114,7 +1114,38 @@ fn an_empty_check_window_is_recorded_as_a_timeout_at_no_cost() -> Outcome_ {
             "0000000000000000".to_owned(),
         ]
     );
+    // The second attempt's own subject: a digest the wire admits, not the first check's (the
+    // double was never called for it, so no independent record of the applied snapshot exists;
+    // the first case above pins that the subject IS the handed snapshot's digest).
+    assert!(Sha256Digest::parse(&found[1][1]).is_ok());
     assert_ne!(found[1][1], handed[0].0, "the second attempt's own subject");
+    // The evidence body, read back from the object the verification names (review of 2fd1e46).
+    let evidence = rows(
+        &rig,
+        "SELECT v.evidence_digest FROM verifications v JOIN attempts a ON a.id=v.attempt_id \
+         WHERE a.task_id=? AND v.verdict='timeout'",
+    )?;
+    assert_eq!(evidence.len(), 1);
+    let hex = evidence[0][0]
+        .strip_prefix("sha256:")
+        .ok_or("a sha256: digest")?;
+    let bytes = fs::read(
+        rig.scratch
+            .0
+            .join("state/generations")
+            .join(GENERATION)
+            .join("objects/sha256")
+            .join(&hex[..2])
+            .join(hex),
+    )?;
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&bytes)?,
+        serde_json::json!({
+            "kind": "check_window_empty",
+            "reserved_verify_ms": 10_000,
+            "teardown_ms": 10_000,
+        })
+    );
     assert_eq!(
         rows(&rig, "SELECT reason FROM task_stops WHERE task_id=?")?,
         vec![vec!["verifier_timeout".to_owned()]]

@@ -14,6 +14,7 @@ use super::evidence::{digest, fresh_id};
 use super::repair::{self, Failure};
 use super::tasks::{Poisoned, StoreTasks};
 use crate::check::consistency::{U64_BOUNDS, U64_CRITERIA, U64_EDITABLE};
+use crate::check::decision::CLEANUP_GRACE_MS;
 use crate::contracts::control::criteria_digest;
 use crate::contracts::receipt::Name;
 use crate::contracts::roster::{MAX_HISTORY, Selection};
@@ -87,12 +88,11 @@ pub trait Verifier {
 }
 
 /// What the check keeps back for its own teardown after its cutoff — stopping the scope
-/// (`TERM_GRACE`), the subject readbacks and the scratch release. One number with RC04's
-/// cleanup grace, so a check that honours its window is never late by construction (R14.2).
-pub const CHECK_TEARDOWN: Duration = Duration::from_secs(10);
+/// (`TERM_GRACE`), the subject readbacks and the scratch release. Derived from RC04's cleanup
+/// grace, spelled once in `check::decision`, so a check that honours its window is never late by
+/// construction (R14.2); it must hold at least the scope's stop grace.
+pub const CHECK_TEARDOWN: Duration = Duration::from_millis(CLEANUP_GRACE_MS);
 const _: () = assert!(CHECK_TEARDOWN.as_millis() >= TERM_GRACE.as_millis());
-const _: () =
-    assert!(CHECK_TEARDOWN.as_millis() == crate::check::decision::CLEANUP_GRACE_MS as u128);
 
 /// The window one check may run in (R14): from `begun`, its cutoff `until` — the verify
 /// reservation less [`CHECK_TEARDOWN`], or the task deadline less the same, whichever is first —
@@ -111,7 +111,7 @@ pub struct CheckWindow {
 /// left for a check after its teardown share (R14.1: the runtime then records the check as not
 /// run). Pure over its arguments, so every branch is reachable by choosing them (F95).
 #[must_use]
-pub fn check_window(
+pub(crate) fn check_window(
     now: Instant,
     reserved_verify_ms: u64,
     task_deadline: Instant,
@@ -1154,11 +1154,12 @@ mod tests {
     /// the deadline cuts (`until == deadline − T`, teardown to the deadline); `R == T` and `R < T`
     /// leave no window, separating `<=` from `<`; a deadline inside the teardown leaves none.
     #[test]
-    fn a_check_window_keeps_the_teardown_on_both_arms_and_refuses_an_empty_one() {
+    fn a_check_window_keeps_the_teardown_on_both_arms_and_refuses_an_empty_one()
+    -> Result<(), Box<dyn std::error::Error>> {
         let now = Instant::now();
-        let teardown_ms = u64::try_from(CHECK_TEARDOWN.as_millis()).unwrap_or(u64::MAX);
+        let teardown_ms = u64::try_from(CHECK_TEARDOWN.as_millis())?;
         let far = now + Duration::from_mins(20);
-        let window = check_window(now, 300_000, far).unwrap();
+        let window = check_window(now, 300_000, far).ok_or("a far deadline leaves a window")?;
         assert_eq!(
             (window.begun, window.until, window.teardown_until),
             (
@@ -1168,10 +1169,15 @@ mod tests {
             )
         );
         let near = now + Duration::from_secs(45);
-        let cut = check_window(now, 300_000, near).unwrap();
+        let cut = check_window(now, 300_000, near).ok_or("a near deadline cuts the window")?;
         assert_eq!(
             (cut.begun, cut.until, cut.teardown_until),
-            (now, near.checked_sub(CHECK_TEARDOWN).unwrap(), near)
+            (
+                now,
+                near.checked_sub(CHECK_TEARDOWN)
+                    .ok_or("the deadline holds the teardown")?,
+                near
+            )
         );
         assert_eq!(check_window(now, teardown_ms, far), None, "R == T");
         assert_eq!(check_window(now, teardown_ms - 1, far), None, "R < T");
@@ -1184,5 +1190,6 @@ mod tests {
             None,
             "deadline inside the teardown"
         );
+        Ok(())
     }
 }
