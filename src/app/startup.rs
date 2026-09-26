@@ -20,9 +20,9 @@ use crate::recovery::{
     WorkspaceReadback,
 };
 use crate::store::{
-    self, DurableAttempt, DurableTask, DurableVerification, EvidenceAvailability,
-    ReconciliationRecord, RecordKind, Recorded, RecoveryInventory, RecoveryLimits, StartupLimits,
-    Store, TerminalOrdinals,
+    self, AttemptPaths, AttemptRoot, DurableAttempt, DurableTask, DurableVerification,
+    EvidenceAvailability, ReconciliationRecord, RecordKind, Recorded, RecoveryInventory,
+    RecoveryLimits, StartupLimits, Store, TerminalOrdinals,
 };
 
 /// The most effect-bearing open attempts one startup reconciles (B03b): every one must be
@@ -46,7 +46,7 @@ use std::fs::{self, File};
 use std::io::{self, BufRead, Read, Write};
 use std::os::fd::OwnedFd;
 use std::os::unix::fs::MetadataExt;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::Instant;
 
 // ---- process identity: the one classifier, shared with the development inspector --------
@@ -212,6 +212,35 @@ pub fn presence(read: &io::Result<()>) -> Presence {
     }
 }
 
+/// What an attempt's recorded root and its two leaves say (R21 N15, N17): the cleanup readback,
+/// and the workspace leaf as it may be read (the caller walks a present one for its size). A root
+/// that is absent or unreadable says nothing about its leaves: `NotRead` and an unread workspace,
+/// never a release. Under a present root, an unreadable leaf leaves the cleanup unread; both
+/// leaves absent is complete; otherwise each present leaf remains, `workspace` before `job_root`.
+/// Pure, so every presence triple is reachable by argument.
+#[must_use]
+pub fn leaves_readback(
+    root: Presence,
+    workspace: Presence,
+    job_root: Presence,
+) -> (CleanupReadback, Presence) {
+    if root != Presence::Present {
+        return (CleanupReadback::NotRead, Presence::Unreadable);
+    }
+    let cleanup = match (workspace, job_root) {
+        (Presence::Unreadable, _) | (_, Presence::Unreadable) => CleanupReadback::NotRead,
+        (Presence::Absent, Presence::Absent) => CleanupReadback::Complete,
+        _ => CleanupReadback::Partial {
+            remaining: [(workspace, "workspace"), (job_root, "job_root")]
+                .into_iter()
+                .filter(|(leaf, _)| *leaf == Presence::Present)
+                .map(|(_, name)| name.to_owned())
+                .collect(),
+        },
+    };
+    (cleanup, workspace)
+}
+
 fn read_stat(pid: u32) -> io::Result<String> {
     let mut text = String::new();
     File::open(format!("/proc/{pid}/stat"))?
@@ -291,6 +320,10 @@ pub trait Physical {
     /// # Errors
     /// The world's own reason the obligation could not be performed.
     fn clean(&mut self, subject: &Subject<'_>, target: &str) -> Result<(), String>;
+    /// The roots the ledger recorded for the inventory's attempts (R21 N14, N16), handed once per
+    /// pass, after the clock read and before any readback: the only source of the paths
+    /// `cleanup`, `workspace` and `clean` read. No default: every world says what it does with them.
+    fn record_paths(&mut self, roots: &[AttemptRoot]);
 }
 
 // ---- the runtime world -----------------------------------------------------------------------
@@ -301,14 +334,15 @@ pub struct PiLink {
     pub writer: Box<dyn Write>,
 }
 
-/// The runtime's [`Physical`]: `/proc` for process identity, the caller's
-/// materialized workspace directories for cleanup and workspace readback, the
-/// caller's live Pi transports for the queue, and the caller's retained
-/// acknowledgements. Nothing is inferred from a naming convention: an attempt
-/// with no entry is `NotRead`/`Unreconciled`/`Unrecorded`.
+/// The runtime's [`Physical`]: `/proc` for process identity, the leaves of the root the
+/// ledger recorded for each attempt (its workspace and its check's job root) for cleanup and
+/// workspace readback, the caller's live Pi transports for the queue, and the caller's retained
+/// acknowledgements. Nothing is inferred from a naming convention: an attempt with no recorded
+/// root is `NotRead`/`Unreconciled`/`Unrecorded`.
 pub struct Host {
-    /// Attempt id → the workspace directory the application materialized for it.
-    pub workspaces: BTreeMap<String, PathBuf>,
+    /// Attempt id → the leaves derived from the root the ledger recorded for it (R21 N14-N17),
+    /// set only by [`Physical::record_paths`] through `store::attempt_leaves`.
+    paths: BTreeMap<String, AttemptPaths>,
     /// Attempt id → the dispatch acknowledgement the application retained.
     pub acknowledgements: BTreeMap<String, Acknowledgement>,
     /// Attempt id → a live Pi session transport for it.
@@ -322,7 +356,7 @@ impl Host {
     #[must_use]
     pub fn new(deadline: Instant) -> Self {
         Self {
-            workspaces: BTreeMap::new(),
+            paths: BTreeMap::new(),
             acknowledgements: BTreeMap::new(),
             pi: BTreeMap::new(),
             attached: BTreeMap::new(),
@@ -333,6 +367,21 @@ impl Host {
     #[must_use]
     pub fn attached(&self) -> Vec<&str> {
         self.attached.keys().map(String::as_str).collect()
+    }
+    /// One read of the attempt's recorded root and both leaves, decided by [`leaves_readback`];
+    /// `None` for an attempt with no recorded root.
+    fn leaves(&self, attempt: &str) -> Option<(&AttemptPaths, (CleanupReadback, Presence))> {
+        let paths = self.paths.get(attempt)?;
+        let read = |path: &Path| presence(&fs::symlink_metadata(path).map(|_| ()));
+        let (root, _) = paths.workspace_parts();
+        Some((
+            paths,
+            leaves_readback(
+                read(root),
+                read(&paths.workspace()),
+                read(&paths.job_root()),
+            ),
+        ))
     }
 }
 
@@ -450,30 +499,23 @@ impl Physical for Host {
         }
     }
     fn cleanup(&mut self, subject: &Subject<'_>) -> CleanupReadback {
-        let Some(path) = self.workspaces.get(subject.attempt) else {
-            return CleanupReadback::NotRead;
-        };
-        match presence(&fs::symlink_metadata(path).map(|_| ())) {
-            Presence::Present => CleanupReadback::Partial {
-                remaining: vec!["workspace".into()],
-            },
-            Presence::Absent => CleanupReadback::Complete,
-            Presence::Unreadable => CleanupReadback::NotRead,
-        }
+        self.leaves(subject.attempt)
+            .map_or(CleanupReadback::NotRead, |(_, (cleanup, _))| cleanup)
     }
     fn workspace(&mut self, subject: &Subject<'_>) -> WorkspaceReadback {
-        let Some(path) = self.workspaces.get(subject.attempt) else {
+        let Some((paths, (_, workspace))) = self.leaves(subject.attempt) else {
             return WorkspaceReadback::NotRead;
         };
-        match presence(&fs::symlink_metadata(path).map(|_| ())) {
+        match workspace {
             Presence::Absent => WorkspaceReadback::Released,
             Presence::Unreadable => WorkspaceReadback::NotRead,
             Presence::Present => {
-                if owned_private_dir(path).is_err() {
+                let path = paths.workspace();
+                if owned_private_dir(&path).is_err() {
                     return WorkspaceReadback::NotRead;
                 }
                 let mut entries = 0;
-                match walk_bytes(path, 0, &mut entries) {
+                match walk_bytes(&path, 0, &mut entries) {
                     Ok(bytes) => WorkspaceReadback::Writable { bytes },
                     Err(_) => WorkspaceReadback::NotRead,
                 }
@@ -509,13 +551,13 @@ impl Physical for Host {
         }
     }
     fn clean(&mut self, subject: &Subject<'_>, target: &str) -> Result<(), String> {
-        if target != "workspace" {
-            return Err(format!("no such obligation: {target}"));
+        let paths = self.paths.get(subject.attempt);
+        let path = match target {
+            "workspace" => paths.map(AttemptPaths::workspace),
+            "job_root" => paths.map(AttemptPaths::job_root),
+            _ => return Err(format!("no such obligation: {target}")),
         }
-        let path = self
-            .workspaces
-            .get(subject.attempt)
-            .ok_or("no workspace bound for this attempt")?;
+        .ok_or("no root recorded for this attempt")?;
         if !path.is_absolute() {
             return Err("workspace path is not absolute".into());
         }
@@ -523,10 +565,21 @@ impl Physical for Host {
         // custody read from that descriptor, and the name re-checked before the final unlink
         // (review N6; this shell used to check the path and then remove the path).
         crate::worker::workspace::remove_owned(
-            path,
+            &path,
             std::time::Instant::now() + WORKSPACE_REMOVAL_BUDGET,
         )
         .map_err(|error| format!("remove: {error:?}"))
+    }
+    fn record_paths(&mut self, roots: &[AttemptRoot]) {
+        self.paths = roots
+            .iter()
+            .map(|root| {
+                (
+                    root.attempt.clone(),
+                    store::attempt_leaves(Path::new(&root.root), &root.attempt),
+                )
+            })
+            .collect();
     }
 }
 
@@ -918,6 +971,9 @@ pub fn run_and_hold(
         restored_from: startup.restored_from,
     };
     let clock = physical.clock();
+    // The recorded roots, before any readback and in both modes (R21 N14): the world reads the
+    // leaves the ledger names, never a path it was configured with.
+    physical.record_paths(&inspected.inventory.roots);
     let mut pass = Pass {
         epoch: inspected.inventory.epoch.clone(),
         generation: inspected.inventory.generation.clone(),

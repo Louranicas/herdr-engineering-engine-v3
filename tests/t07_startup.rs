@@ -9,7 +9,7 @@
 use habitat_engine::app::startup::{
     self, Action, Claim, Cursor, Entry, Host, LedgerAccess, LiveIdentity, LiveRead, Pass, Physical,
     PiLink, Presence, ProcessIdentity, Startup, Subject, SubjectValue, classify, gone, intended,
-    live_read, parse_stat, presence, proc_read_failure,
+    leaves_readback, live_read, parse_stat, presence, proc_read_failure,
 };
 use habitat_engine::contracts::roster::{
     Availability, Kind, Locality, ObservationInput, ObservationSource, ReceiptTime,
@@ -22,7 +22,7 @@ use habitat_engine::recovery::{
     ReuseRefusal, Rule, TaskState, Unknown, Verdict, Verification, WorkspaceReadback,
 };
 use habitat_engine::store::{
-    Allocation, Effect, Error as StoreError, Expected, LOCK_SETTLE, Object, Principal,
+    Allocation, AttemptRoot, Effect, Error as StoreError, Expected, LOCK_SETTLE, Object, Principal,
     RECORD_BODY_LIMIT, RECORD_SCAN_LIMIT, ReconciliationRecord, RecordKind, RecordRow,
     RecoveryInventory, RecoveryLimits, RequestSource, RosterStart, Settlement, Stop, Store,
     Submission, VerificationVerdict, record_id,
@@ -116,6 +116,8 @@ enum Call {
         subject: SubjectValue,
         target: String,
     },
+    /// The roots the pass handed over (R21 N16), recorded whole.
+    RecordPaths(Vec<AttemptRoot>),
 }
 
 #[derive(Default)]
@@ -211,6 +213,7 @@ impl World {
                 Call::Clock => name == "clock",
                 Call::Attach { .. } => name == "attach",
                 Call::Clean { .. } => name == "clean",
+                Call::RecordPaths(_) => name == "record_paths",
             })
             .collect()
     }
@@ -279,6 +282,9 @@ impl Physical for World {
     fn clock(&mut self) -> Option<ReceiptTime> {
         self.calls.push(Call::Clock);
         self.clock.clone()
+    }
+    fn record_paths(&mut self, roots: &[AttemptRoot]) {
+        self.calls.push(Call::RecordPaths(roots.to_vec()));
     }
     fn attach(&mut self, subject: &Subject<'_>, identity: &ProcessIdentity) -> Result<(), String> {
         self.calls.push(Call::Attach {
@@ -458,6 +464,17 @@ impl Rig {
     /// A rostered running attempt whose pinned observation carries `identity`
     /// as its `actual_identity`, leased for `lease_ms`.
     fn rostered(identity: &str, lease_ms: u64) -> Self {
+        Self::rostered_under(identity, lease_ms, None)
+    }
+    /// A bound, rostered attempt recorded under `root` (B14b-2; migration 8), settled with a known
+    /// cost and settled cleanup, the task verifying. Its observation names no process.
+    fn bound_ready(root: &Path) -> Self {
+        let mut r = Self::rostered_under("fixture/worker", 60_000, Some(root));
+        r.settle(Effect::None, Some(47_977), true);
+        r
+    }
+    /// [`Rig::rostered`], begun bound under `root` when one is given.
+    fn rostered_under(identity: &str, lease_ms: u64, root: Option<&Path>) -> Self {
         let mut r = Self::admitted();
         let input = Update {
             idempotency_key: OTHER.into(),
@@ -516,23 +533,33 @@ impl Rig {
             version: Some("v1".into()),
             ttl_ms: 60_000,
         }];
-        r.store()
-            .begin_rostered_attempt(
-                RosterStart {
-                    principal: &principal(),
-                    task: id(TASK),
-                    expected: generation("1"),
-                    attempt: id(ATTEMPT),
-                    event: id(START),
-                    agent_record_id: &head.record_id,
-                    session: id(KEY),
-                    workspace: id(STAGE),
-                    selections: &selections,
-                    lease_ms,
+        let start = RosterStart {
+            principal: &principal(),
+            task: id(TASK),
+            expected: generation("1"),
+            attempt: id(ATTEMPT),
+            event: id(START),
+            agent_record_id: &head.record_id,
+            session: id(KEY),
+            workspace: id(STAGE),
+            selections: &selections,
+            lease_ms,
+        };
+        let digest = Sha256Digest::parse(DIGEST).unwrap();
+        match root {
+            None => r.store().begin_rostered_attempt(start, deadline()),
+            Some(root) => r.store().begin_bound_attempt(
+                start,
+                &habitat_engine::store::Binding {
+                    baseline: digest,
+                    protected: digest,
+                    profile: digest,
+                    root,
                 },
                 deadline(),
-            )
-            .unwrap();
+            ),
+        }
+        .unwrap();
         r
     }
     fn expected(&mut self) -> Expected<'static> {
@@ -744,6 +771,7 @@ fn readbacks_asked(world: &World, subject: &SubjectValue) {
         );
     }
     assert_eq!(world.calls_of("clock").len(), 1);
+    assert_eq!(world.calls_of("record_paths").len(), 1);
 }
 
 fn retained(entry: &Entry, rule: Rule, reason: &Unknown, custody: &ProcessCustody) {
@@ -826,7 +854,7 @@ fn empty_ledger_yields_no_entries_and_no_writes() {
     assert_eq!(pass.writes, 0);
     assert!(!pass.permits_execution);
     assert_eq!(r.area.events(), before);
-    assert_eq!(world.calls, vec![Call::Clock]);
+    assert_eq!(world.calls, vec![Call::Clock, Call::RecordPaths(vec![])]);
 }
 
 /// `T07-AP-02` · a running attempt whose observation is not a process identity:
@@ -3021,15 +3049,16 @@ fn host_reads_a_reaped_real_child_as_absent() {
 /// guard; the readback after is complete and the next pass finds R12.
 #[test]
 fn host_cleans_a_real_workspace_directory_and_reads_it_back() {
-    let mut r = Rig::ready();
     let area = Area::new("workspace");
-    let workspace = area.path.join("ws");
+    // The ledger recorded `area` as the attempt's root (B14b-2): the host reads `<root>/<attempt>`,
+    // handed to it by the pass, never inserted by a caller.
+    let mut r = Rig::bound_ready(&area.path);
+    let workspace = area.path.join(ATTEMPT);
     DirBuilder::new().mode(0o700).create(&workspace).unwrap();
     fs::create_dir(workspace.join("nested")).unwrap();
     fs::write(workspace.join("output"), b"12345").unwrap();
     fs::write(workspace.join("nested").join("more"), b"67").unwrap();
     let mut host = Host::new(deadline());
-    host.workspaces.insert(ATTEMPT.into(), workspace.clone());
     let pass = r.pass(&mut host);
     let entry = only(&pass);
     assert_eq!(
@@ -3096,9 +3125,11 @@ fn host_workspace_guards_refuse_links_modes_and_unknown_targets() {
     let open = area.path.join("open");
     DirBuilder::new().mode(0o755).create(&open).unwrap();
     let mut host = Host::new(deadline());
-    host.workspaces.insert("link".into(), link.clone());
-    host.workspaces.insert("open".into(), open.clone());
-    host.workspaces.insert("real".into(), real.clone());
+    let root = area.path.to_str().unwrap().to_owned();
+    host.record_paths(&["link", "open", "real"].map(|attempt| AttemptRoot {
+        attempt: attempt.into(),
+        root: root.clone(),
+    }));
     let subject = |attempt: &'static str| Subject {
         task: TASK,
         attempt,
@@ -3492,16 +3523,22 @@ fn host_attach_refuses_a_pid_whose_identity_moved_in_either_dimension() {
 #[test]
 fn workspace_walk_refuses_past_its_depth_bound() {
     let area = Area::new("depth");
+    // Each fixture is a recorded root holding the attempt's workspace `<root>/<attempt>`.
     let build = |name: &str, levels: usize| {
         let root = area.path.join(name);
         DirBuilder::new().mode(0o700).create(&root).unwrap();
-        let mut path = root.clone();
+        let workspace = root.join(ATTEMPT);
+        DirBuilder::new().mode(0o700).create(&workspace).unwrap();
+        let mut path = workspace;
         for level in 0..levels {
             path = path.join(format!("d{level}"));
             fs::create_dir(&path).unwrap();
         }
         fs::write(path.join("leaf"), b"1234").unwrap();
-        root
+        [AttemptRoot {
+            attempt: ATTEMPT.into(),
+            root: root.to_str().unwrap().to_owned(),
+        }]
     };
     let subject = Subject {
         task: TASK,
@@ -3514,14 +3551,14 @@ fn workspace_walk_refuses_past_its_depth_bound() {
     // Sixteen nested levels put the deepest read at depth 16 — exactly ON the
     // bound, which is the only place a `>` and a `>=` differ. A shallower
     // fixture passes under both and pins nothing (found by planting `>=`).
-    host.workspaces.insert(ATTEMPT.into(), build("shallow", 16));
+    host.record_paths(&build("shallow", 16));
     assert_eq!(
         host.workspace(&subject),
         WorkspaceReadback::Writable { bytes: 4 },
         "sixteen nested levels are exactly on the bound and must still read back"
     );
     let mut host = Host::new(deadline());
-    host.workspaces.insert(ATTEMPT.into(), build("deep", 18));
+    host.record_paths(&build("deep", 18));
     assert_eq!(
         host.workspace(&subject),
         WorkspaceReadback::NotRead,
@@ -3535,13 +3572,19 @@ fn workspace_walk_refuses_past_its_depth_bound() {
 #[test]
 fn workspace_walk_refuses_past_its_entry_bound() {
     let area = Area::new("entries");
+    // Each fixture is a recorded root holding the attempt's workspace `<root>/<attempt>`.
     let build = |name: &str, files: usize| {
         let root = area.path.join(name);
         DirBuilder::new().mode(0o700).create(&root).unwrap();
+        let workspace = root.join(ATTEMPT);
+        DirBuilder::new().mode(0o700).create(&workspace).unwrap();
         for index in 0..files {
-            fs::write(root.join(format!("f{index}")), b"1").unwrap();
+            fs::write(workspace.join(format!("f{index}")), b"1").unwrap();
         }
-        root
+        [AttemptRoot {
+            attempt: ATTEMPT.into(),
+            root: root.to_str().unwrap().to_owned(),
+        }]
     };
     let subject = Subject {
         task: TASK,
@@ -3551,18 +3594,145 @@ fn workspace_walk_refuses_past_its_entry_bound() {
         session: None,
     };
     let mut host = Host::new(deadline());
-    host.workspaces.insert(ATTEMPT.into(), build("at", 4096));
+    host.record_paths(&build("at", 4096));
     assert_eq!(
         host.workspace(&subject),
         WorkspaceReadback::Writable { bytes: 4096 },
         "exactly 4096 entries is inside the bound"
     );
     let mut host = Host::new(deadline());
-    host.workspaces.insert(ATTEMPT.into(), build("over", 4097));
+    host.record_paths(&build("over", 4097));
     assert_eq!(
         host.workspace(&subject),
         WorkspaceReadback::NotRead,
         "4097 entries must refuse, not report a size"
+    );
+}
+
+/// B14b-2 S15 (R21 N14, N16) · the pass hands the inventory's roots to the world once, after the
+/// clock and before any readback, whole: the bound attempt's root as the ledger recorded it. Two
+/// ledgers under two roots, so the value handed is the ledger's, not a constant.
+#[test]
+fn record_paths_hands_the_inventory_s_roots_after_the_clock_and_before_any_readback() {
+    for label in ["roots-a", "roots-b"] {
+        let area = Area::new(label);
+        let mut r = Rig::bound_ready(&area.path);
+        let mut world = World::new();
+        r.pass(&mut world);
+        assert_eq!(
+            world.calls[..2],
+            [
+                Call::Clock,
+                Call::RecordPaths(vec![AttemptRoot {
+                    attempt: ATTEMPT.into(),
+                    root: area.path.to_str().unwrap().into(),
+                }])
+            ],
+            "{:?}",
+            world.calls
+        );
+        assert_eq!(world.calls_of("record_paths").len(), 1);
+    }
+}
+
+/// B14b-2 S15 (R21 N15, N17) · three states from a recorded root and its two leaves. The pure rule
+/// over every presence triple, as a literal table; then one `Host` over real directories: the root
+/// absent (nothing known, nothing released), both leaves present (each remaining, `job_root` has
+/// a reader), the job root cleaned, the workspace cleaned (complete and released, the root kept),
+/// and the paths replaced by an empty hand-over (nothing read).
+#[test]
+fn the_host_reads_three_states_from_the_root_and_its_two_leaves() {
+    use Presence::{Absent as A, Present as P, Unreadable as U};
+    let partial = |remaining: &[&str]| CleanupReadback::Partial {
+        remaining: remaining.iter().map(|name| (*name).to_owned()).collect(),
+    };
+    let nr = CleanupReadback::NotRead;
+    let table = [
+        ((A, A, A), (nr.clone(), U)),
+        ((A, A, P), (nr.clone(), U)),
+        ((A, A, U), (nr.clone(), U)),
+        ((A, P, A), (nr.clone(), U)),
+        ((A, P, P), (nr.clone(), U)),
+        ((A, P, U), (nr.clone(), U)),
+        ((A, U, A), (nr.clone(), U)),
+        ((A, U, P), (nr.clone(), U)),
+        ((A, U, U), (nr.clone(), U)),
+        ((U, A, A), (nr.clone(), U)),
+        ((U, A, P), (nr.clone(), U)),
+        ((U, A, U), (nr.clone(), U)),
+        ((U, P, A), (nr.clone(), U)),
+        ((U, P, P), (nr.clone(), U)),
+        ((U, P, U), (nr.clone(), U)),
+        ((U, U, A), (nr.clone(), U)),
+        ((U, U, P), (nr.clone(), U)),
+        ((U, U, U), (nr.clone(), U)),
+        ((P, A, A), (CleanupReadback::Complete, A)),
+        ((P, A, P), (partial(&["job_root"]), A)),
+        ((P, A, U), (nr.clone(), A)),
+        ((P, P, A), (partial(&["workspace"]), P)),
+        ((P, P, P), (partial(&["workspace", "job_root"]), P)),
+        ((P, P, U), (nr.clone(), P)),
+        ((P, U, A), (nr.clone(), U)),
+        ((P, U, P), (nr.clone(), U)),
+        ((P, U, U), (nr, U)),
+    ];
+    for ((root, workspace, job_root), expected) in table {
+        assert_eq!(
+            leaves_readback(root, workspace, job_root),
+            expected,
+            "root {root:?}, workspace {workspace:?}, job root {job_root:?}"
+        );
+    }
+    let area = Area::new("three");
+    let root = area.path.join("root");
+    let subject = Subject {
+        task: TASK,
+        attempt: ATTEMPT,
+        generation: 1,
+        workspace_ref: None,
+        session: None,
+    };
+    let mut host = Host::new(deadline());
+    host.record_paths(&[AttemptRoot {
+        attempt: ATTEMPT.into(),
+        root: root.to_str().unwrap().into(),
+    }]);
+    let read = |host: &mut Host| (host.cleanup(&subject), host.workspace(&subject));
+    assert_eq!(
+        read(&mut host),
+        (CleanupReadback::NotRead, WorkspaceReadback::NotRead)
+    );
+    let (workspace, job) = (root.join(ATTEMPT), root.join(format!("{ATTEMPT}.check")));
+    for directory in [&root, &workspace, &job] {
+        DirBuilder::new().mode(0o700).create(directory).unwrap();
+    }
+    fs::write(workspace.join("output"), b"abc").unwrap();
+    assert_eq!(
+        read(&mut host),
+        (
+            partial(&["workspace", "job_root"]),
+            WorkspaceReadback::Writable { bytes: 3 }
+        )
+    );
+    assert_eq!(host.clean(&subject, "job_root"), Ok(()));
+    assert!(!job.exists() && workspace.exists());
+    assert_eq!(
+        read(&mut host),
+        (
+            partial(&["workspace"]),
+            WorkspaceReadback::Writable { bytes: 3 }
+        )
+    );
+    assert_eq!(host.clean(&subject, "workspace"), Ok(()));
+    assert_eq!(
+        read(&mut host),
+        (CleanupReadback::Complete, WorkspaceReadback::Released)
+    );
+    assert!(root.exists(), "the recorded root itself is never removed");
+    host.record_paths(&[]);
+    assert_eq!(
+        read(&mut host),
+        (CleanupReadback::NotRead, WorkspaceReadback::NotRead)
     );
 }
 
