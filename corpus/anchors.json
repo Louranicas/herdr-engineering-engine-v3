@@ -7,7 +7,7 @@
     "codebase": "/var/home/herdr-engineering-engine-v3"
   },
   "source_plan_sha256": "e62091172c60c391bbd5221dd7d3a9bfa398c8a89a1b66c8c5de97c4ddc88d0c",
-  "catalogue_sha256": "de19d63c2f30617cb44ad6c3304c539c214c7e80653dd3a7c6f300544616aa96",
+  "catalogue_sha256": "ae1262cc26e4c142d4fb1b5e7ae438307cc31bf4f63466d64cf6c288608890aa",
   "readiness": {
     "id": "HEE3-READINESS-001",
     "sha256": "f574043487f39db6424c4988bce58e88a6e766f02f974fbcf3fa8dd6e0003548",
@@ -6060,6 +6060,16 @@
           "task_id": "T04"
         },
         {
+          "path": "migrations/006.sql",
+          "owner": "store",
+          "modules": [
+            "store",
+            "task"
+          ],
+          "reason": "Sixth migration of the additive chain (B09b-1 + DS2 + B17): verifications, task_stops and acceptance_objects gain the artifact id, media type and schema id a receipt names their evidence by (stored together or not at all, byte-length checked); acceptances gains the manifest artifact id; attempt_records and attempts.settled_event commit the settling observation's run records; verifications.satisfied_criteria holds the 16-hex criteria pattern; the task_dispositions_by_task index. Identity is its own pinned body digest in store::schema. Inventoried by exact bytes, never rewritten by the publisher.",
+          "task_id": "T04"
+        },
+        {
           "path": "src/store/roster/attempts.rs",
           "owner": "store",
           "modules": [
@@ -8901,6 +8911,16 @@
             "task"
           ],
           "reason": "Fifth migration of the additive chain (B14a-1a): attempt_bindings records, per attempt begun through the bound door, the baseline, protected and class-profile digests it was dispatched on; a task's attempts are all bound or all unbound, checked at begin, at acceptance and by the integrity clause; identity is its own pinned body digest in store::schema. Inventoried by exact bytes, never rewritten by the publisher.",
+          "task_id": "T04"
+        },
+        {
+          "path": "migrations/006.sql",
+          "owner": "store",
+          "modules": [
+            "store",
+            "task"
+          ],
+          "reason": "Sixth migration of the additive chain (B09b-1 + DS2 + B17): verifications, task_stops and acceptance_objects gain the artifact id, media type and schema id a receipt names their evidence by (stored together or not at all, byte-length checked); acceptances gains the manifest artifact id; attempt_records and attempts.settled_event commit the settling observation's run records; verifications.satisfied_criteria holds the 16-hex criteria pattern; the task_dispositions_by_task index. Identity is its own pinned body digest in store::schema. Inventoried by exact bytes, never rewritten by the publisher.",
           "task_id": "T04"
         },
         {
@@ -53155,6 +53175,16 @@
       "task_id": "T04"
     },
     {
+      "path": "migrations/006.sql",
+      "owner": "store",
+      "modules": [
+        "store",
+        "task"
+      ],
+      "reason": "Sixth migration of the additive chain (B09b-1 + DS2 + B17): verifications, task_stops and acceptance_objects gain the artifact id, media type and schema id a receipt names their evidence by (stored together or not at all, byte-length checked); acceptances gains the manifest artifact id; attempt_records and attempts.settled_event commit the settling observation's run records; verifications.satisfied_criteria holds the 16-hex criteria pattern; the task_dispositions_by_task index. Identity is its own pinned body digest in store::schema. Inventoried by exact bytes, never rewritten by the publisher.",
+      "task_id": "T04"
+    },
+    {
       "path": "src/contracts/roster.rs",
       "owner": "contracts",
       "modules": [
@@ -54776,8 +54806,8 @@
       "bytes": 6019
     },
     "tools/check-quality": {
-      "sha256": "e447f673d5c959914cc42263f2eb4f33056e556683f0e672238654e21adb707f",
-      "bytes": 90694
+      "sha256": "9e8730702487ee3751bdbe479c91014e5d4051f438850d20c127b85d4d4aa603",
+      "bytes": 91750
     },
     "tools/development_process.py": {
       "sha256": "e76e3a794193e5df7ee96fabf700113d718527745a0f9a9dba1e04fd5c7baaf3",
@@ -54788,8 +54818,8 @@
       "bytes": 10433
     },
     "tests/t25_quality.py": {
-      "sha256": "3b69bf1bb920704f5a3b1290340a369d8a68912f37532920bc0d017a7a3e3f74",
-      "bytes": 158091
+      "sha256": "d77a569c720d68d55e0e01bb749437a672e1d817a063d4bacdf2b4044407512f",
+      "bytes": 158254
     },
     "julia/Manifest.toml": {
       "sha256": "097d5028df4e1667a970a8297d41eedb908e0319a0b4154c7ec12548140a9f79",
@@ -55520,16 +55550,16 @@
       "bytes": 8748
     },
     "src/store/schema.rs": {
-      "sha256": "c8b2b1193cef08e6d8a2ef3bdef02690d62f19d78e03868393cbac84967598e4",
-      "bytes": 22619
+      "sha256": "5617c451abdaac182ad913b8d839c9392560e485ca98175aef5cab842d8b3985",
+      "bytes": 25416
     },
     "src/store/backup.rs": {
-      "sha256": "98dfc0708c12865d8bcf8cace9434b5cd166526721709b86f84a24f975815fc5",
-      "bytes": 14084
+      "sha256": "76fdeb5de58a67c7660a3ed2eea1273c250478cbc5133627c45a5b5bd37b4812",
+      "bytes": 14607
     },
     "tests/t04_store.rs": {
-      "sha256": "3f6101a181b6f4e893e70c251c6f26c429a0fe675753dcda5577d3c1eddd0c70",
-      "bytes": 101151
+      "sha256": "e4e3a39df4a2e4dd75b33331a353387e0cd1d1c380adc9671226242cd14815eb",
+      "bytes": 150730
     },
     "docs/store-contract.md": {
       "sha256": "b65ffe744d2abf93c3b0c40345787940213806ade52e9ef010e17f3012a81396",
@@ -55540,8 +55570,8 @@
       "bytes": 10139
     },
     "tools/check-store-mutations": {
-      "sha256": "1962df3fdb5aa43be4de00134d4716b14d9eff7d186a3517558afcedc8f9c551",
-      "bytes": 19782
+      "sha256": "1abee68d266c0b176665497bcf48117f36e9192f955193c94fd5045261354963",
+      "bytes": 19809
     },
     "tools/sqlite-inputs/sqlite-amalgamation-3530400.zip": {
       "sha256": "1e71ddf93849c6a6ecf58b827c0692073d2dd7ee40196158068f7b29f422e87d",
@@ -55655,6 +55685,10 @@
       "sha256": "9659340059c2374a3f6ef90ec592b2210e1da2d7961caa8afa83586a267b6e63",
       "bytes": 1581
     },
+    "migrations/006.sql": {
+      "sha256": "e0154801a3c02529428124bb72e129a85a258867eab733df4efb7f0533c19088",
+      "bytes": 5451
+    },
     "src/contracts/roster.rs": {
       "sha256": "bdde6efe1ee29cf620b521b8b8ddce051f73cc86dcac05ec46f35193440a4710",
       "bytes": 14706
@@ -55676,8 +55710,8 @@
       "bytes": 10585
     },
     "tests/t05_store.rs": {
-      "sha256": "44a89be97df89cab7aca6547abb15ccbf496d4b198c47f3529e5ac602d515e3c",
-      "bytes": 77492
+      "sha256": "17567f425340009d388f8802226cb56dfe4ec5a9cd5d42c3a095f5ac9f8ff230",
+      "bytes": 79505
     },
     "docs/roster-contract.md": {
       "sha256": "32612a958aa81b95eb8f6260b91ce91bcc911387047df4594cd0c6b58d7e01f3",
@@ -55968,12 +56002,12 @@
       "bytes": 2783
     },
     "src/store/terminal.rs": {
-      "sha256": "391dc854713fa6a9849689f7d6356899acbd4fce8cf4d5e948ebb6290891dd08",
-      "bytes": 9345
+      "sha256": "6d163d01c6b65646a6ce9662129ec0d2695553a1e41c98e88319a96b51f902f1",
+      "bytes": 10250
     },
     "src/store/verification.rs": {
-      "sha256": "c5cca0af9cffa2a0defeb506dd8a5813d996ac1062729f170cc2f4a3d55d8658",
-      "bytes": 9248
+      "sha256": "59574a717d17613ec457e9961a8f4e2f299d140e282d6794e370b4dcd33303b7",
+      "bytes": 13175
     },
     "src/task/driver.rs": {
       "sha256": "8a45f9cd3bbf6628d767888cce5b422cfaa113f1bd9545edd98562e17cd92eb6",
@@ -56068,8 +56102,8 @@
       "bytes": 12082
     },
     "tests/t06_store.rs": {
-      "sha256": "b6261e0ee22e9f61e8157a6089a3d9f0306a9b8dcdb6e3b1a14f0c81171a5324",
-      "bytes": 52985
+      "sha256": "af84ef1461e7bc1ba03483713269706d25f304fc593dbceb1f32ae44e7ed7d2c",
+      "bytes": 57384
     },
     "tests/t06_store_staging.rs": {
       "sha256": "1a91e080d901ff45b3b145cf09fc49590c2be215ae92467b243585b0f0473593",
@@ -56080,8 +56114,8 @@
       "bytes": 9781
     },
     "tests/t06_terminal.rs": {
-      "sha256": "11dcf900fc31548e0456cdb52636261906e94eb2801d8ca13e45b67f47508326",
-      "bytes": 37747
+      "sha256": "1badf9e38cb5f2fff14c06e94e90aacc82d3c90e9e0625f57cc70077b4a19af4",
+      "bytes": 39980
     },
     "tests/t06_workspace.rs": {
       "sha256": "5a29425f78000e5ca08339b73f9a26a5a759ed770c131734c65635ecb3c2b939",
