@@ -4488,3 +4488,255 @@ fn run_records_read_back_only_through_the_commitment() {
         Some(Refusal::Encoding)
     ));
 }
+
+// ------------------------------------------------ the check's records (R13, B14a-3a)
+
+/// The receipt identity every R13 case checks under.
+fn check_identity() -> EvidenceIdentity<'static> {
+    EvidenceIdentity {
+        artifact_id: uuid(RECORD_A),
+        media_type: "application/json",
+        schema_id: "hee3.u64-receipt/1",
+    }
+}
+
+/// Asserts one committed record whole: identity, object and the observation that committed it.
+fn assert_committed(committed: &Committed, id: &str, object: &Object, observation: Observation) {
+    assert_eq!(
+        (
+            committed.artifact_id(),
+            committed.object(),
+            committed.observation()
+        ),
+        (id, object, observation)
+    );
+}
+
+/// The R13 fixture: the attempt settles with S = {clock, cleanup} over `objects[0..2]`, then its
+/// check fails with V = {outcome, readbacks} over `objects[2..4]` under `receipt`.
+fn settled_then_checked(area: &Area, store: &mut Store) -> (Vec<Object>, Object) {
+    running(store);
+    let objects: Vec<Object> = (0..4).map(|index| published(store, index)).collect();
+    let settle_set = [
+        record(RunRecordKind::RunClock, IDS[0], &objects[0]),
+        record(RunRecordKind::RunCleanup, IDS[1], &objects[1]),
+    ];
+    let observation = settled(Effect::None, Some(30), true, true);
+    assert_eq!(observed(store, 2, observation, &settle_set, SETTLED), "3");
+    let receipt = store
+        .publish(b"the receipt", uuid(STAGE), deadline())
+        .unwrap();
+    let check_set = [
+        record(RunRecordKind::RunOutcome, IDS[2], &objects[2]),
+        record(RunRecordKind::Readbacks, IDS[3], &objects[3]),
+    ];
+    assert!(matches!(
+        store.committed_check(&principal(), uuid(ATTEMPT), deadline()),
+        Err(Error::Outstanding)
+    ));
+    let mut failed = observe(&receipt, check_identity());
+    failed.verdict = VerificationVerdict::Failed;
+    store
+        .record_verification_with_records(
+            &expected(3, 1),
+            &failed,
+            &check_set,
+            uuid(OBS_1),
+            deadline(),
+        )
+        .unwrap();
+    assert_eq!(count(area, "attempt_records"), 4);
+    (objects, receipt)
+}
+
+/// R13 pin, off the origin: an attempt settles with set S, then its check commits set V, every
+/// field differing. `committed_run` is S whole and `committed_check` is V whole — never a union —
+/// with the check's own facts from the same snapshot; every committed record carries its
+/// observation.
+#[test]
+fn the_settle_and_the_check_each_commit_their_own_record_set() {
+    let area = Area::new();
+    let mut store = area.open();
+    let (objects, receipt) = settled_then_checked(&area, &mut store);
+    let run = store
+        .committed_run(&principal(), uuid(ATTEMPT), deadline())
+        .unwrap();
+    assert_eq!(run.len(), 2);
+    assert_committed(
+        run.record(RunRecordKind::RunClock).unwrap(),
+        IDS[0],
+        &objects[0],
+        Observation::Settle,
+    );
+    assert_committed(
+        run.record(RunRecordKind::RunCleanup).unwrap(),
+        IDS[1],
+        &objects[1],
+        Observation::Settle,
+    );
+    let checked = store
+        .committed_check(&principal(), uuid(ATTEMPT), deadline())
+        .unwrap();
+    assert_eq!(
+        (
+            checked.task(),
+            checked.attempt(),
+            checked.verification_event()
+        ),
+        (TASK, ATTEMPT, OBS_1)
+    );
+    assert_eq!((checked.verdict(), checked.subject()), ("failed", CRITERIA));
+    let sequence: u64 = area
+        .inspect()
+        .query_row("SELECT sequence FROM events WHERE id=?", [OBS_1], |row| {
+            read_number(row, 0)
+        })
+        .unwrap();
+    assert_eq!(checked.verification_sequence(), sequence);
+    assert_committed(checked.evidence(), RECORD_A, &receipt, Observation::Check);
+    assert_eq!(checked.len(), 2);
+    assert_committed(
+        checked.record(RunRecordKind::RunOutcome).unwrap(),
+        IDS[2],
+        &objects[2],
+        Observation::Check,
+    );
+    assert_committed(
+        checked.record(RunRecordKind::Readbacks).unwrap(),
+        IDS[3],
+        &objects[3],
+        Observation::Check,
+    );
+    assert_eq!(
+        checked.record(RunRecordKind::RunClock),
+        None,
+        "never a union"
+    );
+    assert_eq!(run.record(RunRecordKind::RunOutcome), None, "never a union");
+    // The settling event is the settle's alone.
+    let settled_event: String = area
+        .inspect()
+        .query_row(
+            "SELECT settled_event FROM attempts WHERE id=?",
+            [ATTEMPT],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(settled_event, SETTLED);
+}
+
+/// R13 pin: the check door refuses by name. A record naming the receipt's artifact id under another
+/// digest is `Conflict` (the verification row is written first); a second verification with records
+/// is `Conflict` and writes no record; an attempt whose verification predates migration 6 refuses
+/// the read `EvidenceIdentity`; another principal sees `NotFound`.
+#[test]
+fn check_record_refusals_each_by_name() {
+    let area = Area::new();
+    let mut store = area.open();
+    let active = verifying(&mut store);
+    let objects: Vec<Object> = (0..2).map(|index| published(&store, index)).collect();
+    let receipt = store
+        .publish(b"the receipt", uuid(STAGE), deadline())
+        .unwrap();
+    let check = check_identity();
+    let colliding = [record(RunRecordKind::RunOutcome, RECORD_A, &objects[0])];
+    assert!(matches!(
+        store.record_verification_with_records(
+            &active,
+            &observe(&receipt, check),
+            &colliding,
+            uuid(OBS_1),
+            deadline()
+        ),
+        Err(Error::Conflict)
+    ));
+    assert_eq!(
+        count(&area, "verifications"),
+        0,
+        "the refused check wrote nothing"
+    );
+    let sound = [record(RunRecordKind::RunOutcome, IDS[0], &objects[0])];
+    store
+        .record_verification_with_records(
+            &active,
+            &observe(&receipt, check),
+            &sound,
+            uuid(OBS_1),
+            deadline(),
+        )
+        .unwrap();
+    let again = [record(RunRecordKind::Readbacks, IDS[1], &objects[1])];
+    assert!(matches!(
+        store.record_verification_with_records(
+            &expected(4, 1),
+            &observe(&receipt, check),
+            &again,
+            uuid(OBS_2),
+            deadline()
+        ),
+        Err(Error::Conflict)
+    ));
+    assert_eq!(
+        count(&area, "attempt_records"),
+        1,
+        "a refused second check writes no record"
+    );
+    let other = Principal::new(1001, "operator").unwrap();
+    assert!(matches!(
+        store.committed_check(&other, uuid(ATTEMPT), deadline()),
+        Err(Error::NotFound)
+    ));
+    drop(store);
+    area.edit_closed("UPDATE verifications SET evidence_artifact_id=NULL, evidence_media_type=NULL, evidence_schema_id=NULL;");
+    let mut store = area.reopen();
+    assert!(matches!(
+        store.committed_check(&principal(), uuid(ATTEMPT), deadline()),
+        Err(Error::EvidenceIdentity)
+    ));
+}
+
+/// R13 pin: migration 6's first rule admits a record on the check's event only when that event is
+/// the verification of the record's own attempt — planted on a real ledger, each beside its mirror.
+#[test]
+fn a_check_record_must_be_bound_to_its_verification() {
+    let plant = |sql: &str| {
+        let area = Area::new();
+        let mut store = area.open();
+        let active = verifying(&mut store);
+        let receipt = store
+            .publish(b"the receipt", uuid(STAGE), deadline())
+            .unwrap();
+        let check = check_identity();
+        store
+            .record_verification(&active, &observe(&receipt, check), uuid(OBS_1), deadline())
+            .unwrap();
+        drop(store);
+        with_objects(&area);
+        area.edit_closed(sql);
+        Store::open(&area.path, uuid(GEN), uuid(EPOCH), false, deadline()).map(drop)
+    };
+    // The verification's own event: admitted.
+    plant(&format!(
+        "INSERT INTO attempt_records(event_id,kind,attempt_id,digest,artifact_id) \
+         VALUES('{OBS_1}','run_outcome','{ATTEMPT}','{DIGEST_B}','{RECORD_B}');"
+    ))
+    .unwrap();
+    // A verification event of another attempt (the row's attempt differs from the verification's).
+    assert!(matches!(
+        plant(&format!(
+            "INSERT INTO attempts(id,task_id,generation,state,effect,cleanup,used_ms) \
+             VALUES('{OTHER}','{TASK}','2','settled','none','settled',0); \
+             INSERT INTO attempt_records(event_id,kind,attempt_id,digest,artifact_id) \
+             VALUES('{OBS_1}','run_outcome','{OTHER}','{DIGEST_B}','{RECORD_B}');"
+        )),
+        Err(Error::Corrupt)
+    ));
+    // Neither kind of observation: the admission event.
+    assert!(matches!(
+        plant(&format!(
+            "INSERT INTO attempt_records(event_id,kind,attempt_id,digest,artifact_id) \
+             VALUES('{ADMITTED}','run_outcome','{ATTEMPT}','{DIGEST_B}','{RECORD_B}');"
+        )),
+        Err(Error::Corrupt)
+    ));
+}

@@ -350,7 +350,10 @@ pub use roster::{RequestSource, RosterAttempt, RosterSnapshot, RosterStart};
 
 pub use artifact::Object;
 pub use backup::{BackupReport, RestoreStatus};
-pub use run_records::{Committed, CommittedRun, RECORD_MEDIA_TYPE, RunRecord, RunRecordKind};
+pub use run_records::{
+    Committed, CommittedCheck, CommittedRun, Observation, RECORD_MEDIA_TYPE, RunRecord,
+    RunRecordKind,
+};
 pub use schema::Chain;
 
 use crate::contracts::control::{CancelReason, Disposition, EvidenceRef};
@@ -1446,6 +1449,24 @@ impl Store {
     ) -> Result<CommittedRun> {
         self.read_snapshot(deadline, |db| {
             run_records::committed_run(db, principal, attempt.as_str())
+        })
+    }
+
+    /// The run records the ledger committed when `attempt` was checked (R13): exactly the
+    /// verification's set, with the verification's own facts, from one read snapshot, visible to
+    /// `principal` only.
+    /// # Errors
+    /// `NotFound` when the attempt is not one of the principal's tasks'; `Outstanding` when it has
+    /// no verification; `EvidenceIdentity` when the verification recorded no identity; `Corrupt`
+    /// for a row the rules refuse.
+    pub fn committed_check(
+        &mut self,
+        principal: &Principal,
+        attempt: UuidV4<'_>,
+        deadline: Instant,
+    ) -> Result<CommittedCheck> {
+        self.read_snapshot(deadline, |db| {
+            run_records::committed_check(db, principal, attempt.as_str())
         })
     }
 

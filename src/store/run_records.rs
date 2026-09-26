@@ -1,14 +1,19 @@
-//! Run records: what the settle of an attempt commits about the run, keyed by the observation
-//! that committed it (DS2; decision record `~/hee3-evidence/T00-plan-20260926/DS1-DS2.md` §2).
+//! Run records: what an observation of an attempt commits about a run, keyed by the observation
+//! that committed it (DS2; decision record `~/hee3-evidence/T00-plan-20260926/DS1-DS2.md` §2;
+//! R13 in `~/hee3-evidence/T28/B14-store-runtime-20260926/DESIGN.md`).
 //!
-//! The ledger cannot certify that a record is *true*. It certifies **who committed it and when**:
-//! a record is committed only by the one call that observed attempt A settle, in that call's own
-//! transaction, keyed by that call's event. Nothing earlier, later, or belonging to another attempt
-//! can stand in for it, and a settled attempt admits no further observation
-//! (`require_attempt(.., false)`), so the settling event's record set is final. A composer that
-//! takes a [`CommittedRun`] cannot be handed a digest, so it cannot re-acquire a record from free
-//! bytes. The residual, named: an in-crate caller of the settle door handing in objects it made up
-//! is narrowed to one door and one production constructor per record type, not refused.
+//! Two observations commit records: the **settle** of the attempt's work (`attempt_observed`), and
+//! the **check** of its applied candidate (`verification_observed`), whose run is the workload in
+//! the U64 class. The ledger cannot certify that a record is *true*. It certifies **who committed
+//! it and when**: a record is committed only by the one call that observed attempt A settle or be
+//! checked, in that call's own transaction, keyed by that call's event. Nothing earlier, later, or
+//! belonging to another attempt can stand in for it. A settled attempt admits no further
+//! observation (`require_attempt(.., false)`) and an attempt has one verification
+//! (`verifications.attempt_id` is its key), so both sets are final. A composer that takes a
+//! [`CommittedRun`] or a [`CommittedCheck`] cannot be handed a digest, so it cannot re-acquire a
+//! record from free bytes. The residual, named: an in-crate caller of either door handing in
+//! objects it made up is narrowed to one door and one production constructor per record type, not
+//! refused.
 
 use super::{Error, Object, Result, number, read_number, register_evidence};
 use crate::contracts::{Generation, Principal, UuidV4};
@@ -88,12 +93,22 @@ pub struct RunRecord<'a> {
     pub object: &'a Object,
 }
 
+/// Which observation committed a record: the attempt's settle, or its check.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Observation {
+    /// The settle of the attempt's work (`attempt_observed`).
+    Settle,
+    /// The check of its applied candidate (`verification_observed`).
+    Check,
+}
+
 /// A record the ledger committed, read back from the ledger: never constructed from caller bytes.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Committed {
     artifact_id: String,
     object: Object,
     kind: RunRecordKind,
+    observation: Observation,
 }
 
 impl Committed {
@@ -115,10 +130,16 @@ impl Committed {
         self.kind.schema_id()
     }
 
-    /// The kind the settle committed the record under.
+    /// The kind the observation committed the record under.
     #[must_use]
     pub const fn kind(&self) -> RunRecordKind {
         self.kind
+    }
+
+    /// Which observation committed it (R13): a settle record never reads as a check record.
+    #[must_use]
+    pub const fn observation(&self) -> Observation {
+        self.observation
     }
 }
 
@@ -316,6 +337,7 @@ pub(super) fn committed_run(
             artifact_id,
             object: Object { digest, size },
             kind,
+            observation: Observation::Settle,
         };
         if records.insert(kind, committed).is_some() {
             return Err(Error::Corrupt);
@@ -327,6 +349,196 @@ pub(super) fn committed_run(
         attempt_generation,
         settled_event,
         settled_sequence,
+        records,
+    })
+}
+
+/// The record set the check of an attempt committed (R13): exactly the verification's set, with the
+/// verification's own facts from the same snapshot. The only constructor is
+/// [`super::Store::committed_check`].
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CommittedCheck {
+    task: String,
+    attempt: String,
+    verification_event: String,
+    verification_sequence: u64,
+    verdict: String,
+    subject: String,
+    evidence: Committed,
+    records: BTreeMap<RunRecordKind, Committed>,
+}
+
+impl CommittedCheck {
+    /// The task the attempt belongs to.
+    #[must_use]
+    pub fn task(&self) -> &str {
+        &self.task
+    }
+
+    /// The attempt whose check committed these records.
+    #[must_use]
+    pub fn attempt(&self) -> &str {
+        &self.attempt
+    }
+
+    /// The verification event that committed them.
+    #[must_use]
+    pub fn verification_event(&self) -> &str {
+        &self.verification_event
+    }
+
+    /// That event's ledger sequence.
+    #[must_use]
+    pub const fn verification_sequence(&self) -> u64 {
+        self.verification_sequence
+    }
+
+    /// The verdict the verification recorded, as stored.
+    #[must_use]
+    pub fn verdict(&self) -> &str {
+        &self.verdict
+    }
+
+    /// The subject digest the verification bound.
+    #[must_use]
+    pub fn subject(&self) -> &str {
+        &self.subject
+    }
+
+    /// The verification's evidence (the receipt), as committed with its recorded identity.
+    #[must_use]
+    pub const fn evidence(&self) -> &Committed {
+        &self.evidence
+    }
+
+    /// The committed record of `kind`, if the check committed one.
+    #[must_use]
+    pub fn record(&self, kind: RunRecordKind) -> Option<&Committed> {
+        self.records.get(&kind)
+    }
+
+    /// How many records the check committed.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.records.len()
+    }
+
+    /// Whether the check committed no record.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.records.is_empty()
+    }
+}
+
+/// One verification row as `committed_check` reads it: the facts the check committed beside its
+/// records.
+struct VerificationRow {
+    event: String,
+    sequence: u64,
+    verdict: String,
+    subject: String,
+    evidence_digest: String,
+    evidence_size: u64,
+    identity: Option<String>,
+}
+
+/// The check's record set for `attempt`, visible to `principal` only (R13).
+/// # Errors
+/// `NotFound` when the attempt is not one of the principal's tasks'; `Outstanding` when it has no
+/// verification; `EvidenceIdentity` when the verification recorded no identity (before migration
+/// 6); `Corrupt` for a row the rules refuse.
+pub(super) fn committed_check(
+    db: &Connection,
+    principal: &Principal,
+    attempt: &str,
+) -> Result<CommittedCheck> {
+    let task: String = db
+        .query_row(
+            "SELECT a.task_id FROM attempts a JOIN tasks t ON t.id=a.task_id \
+             WHERE a.id=? AND t.principal_uid=? AND t.principal_role=?",
+            params![attempt, principal.uid(), principal.role()],
+            |row| row.get(0),
+        )
+        .optional()?
+        .ok_or(Error::NotFound)?;
+    let row = db
+        .query_row(
+            "SELECT v.event_id,e.sequence,v.verdict,v.subject_digest,v.evidence_digest,f.size,v.evidence_artifact_id \
+             FROM verifications v JOIN events e ON e.id=v.event_id JOIN artifacts f ON f.digest=v.evidence_digest \
+             WHERE v.attempt_id=?",
+            [attempt],
+            |row| {
+                Ok(VerificationRow {
+                    event: row.get(0)?,
+                    sequence: read_number(row, 1)?,
+                    verdict: row.get(2)?,
+                    subject: row.get(3)?,
+                    evidence_digest: row.get(4)?,
+                    evidence_size: read_number(row, 5)?,
+                    identity: row.get(6)?,
+                })
+            },
+        )
+        .optional()?
+        .ok_or(Error::Outstanding)?;
+    let VerificationRow {
+        event: verification_event,
+        sequence: verification_sequence,
+        verdict,
+        subject,
+        evidence_digest,
+        evidence_size,
+        identity,
+    } = row;
+    let artifact_id = identity.ok_or(Error::EvidenceIdentity)?;
+    let evidence = Committed {
+        artifact_id,
+        object: Object {
+            digest: evidence_digest,
+            size: evidence_size,
+        },
+        // The receipt is committed under the check, though it is not a run record: `kind` names
+        // what its object is, `Capture` being the nearest kind, and readers use `evidence()`.
+        kind: RunRecordKind::Capture,
+        observation: Observation::Check,
+    };
+    let mut statement = db.prepare(
+        "SELECT r.kind,r.artifact_id,r.digest,f.size FROM attempt_records r \
+         JOIN artifacts f ON f.digest=r.digest \
+         WHERE r.event_id=? AND r.attempt_id=? ORDER BY r.kind LIMIT ?",
+    )?;
+    let bound = number(RunRecordKind::ALL.len() as u64 + 1)?;
+    let rows = statement
+        .query_map(params![verification_event, attempt, bound], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                read_number(row, 3)?,
+            ))
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let mut records = BTreeMap::new();
+    for (kind, artifact_id, digest, size) in rows {
+        let kind = RunRecordKind::parse(&kind)?;
+        let committed = Committed {
+            artifact_id,
+            object: Object { digest, size },
+            kind,
+            observation: Observation::Check,
+        };
+        if records.insert(kind, committed).is_some() {
+            return Err(Error::Corrupt);
+        }
+    }
+    Ok(CommittedCheck {
+        task,
+        attempt: attempt.to_owned(),
+        verification_event,
+        verification_sequence,
+        verdict,
+        subject,
+        evidence,
         records,
     })
 }

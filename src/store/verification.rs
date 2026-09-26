@@ -1,9 +1,9 @@
 //! Durable verification outcomes and conservative reservation settlement.
 
-use super::run_records::identity_bound_elsewhere;
+use super::run_records::{self, RunRecord, identity_bound_elsewhere};
 use super::{
     Error, Expected, Object, PublishedAcceptance, Result, Store, event, head, next, number,
-    require_attempt, same_generation,
+    register_evidence, require_attempt, same_generation,
 };
 use crate::contracts::control::{EvidenceRef, MAX_EVIDENCE_NAME_BYTES};
 use crate::contracts::{Sha256Digest, UuidV4};
@@ -182,6 +182,25 @@ impl Store {
         event_id: UuidV4<'_>,
         deadline: Instant,
     ) -> Result<String> {
+        self.record_verification_with_records(expected, observation, &[], event_id, deadline)
+    }
+
+    /// [`Store::record_verification`], committing the check's run records in the same transaction,
+    /// keyed by this verification's event (R13): the verdict, the receipt and the records commit or
+    /// vanish together. The verification row is written first, so a record whose artifact id is
+    /// the receipt's under another digest is refused `Conflict` by the same rule as any rebinding.
+    /// # Errors
+    /// As [`Store::record_verification`]; `Invalid` for a repeated kind (nothing written);
+    /// `Conflict` for an artifact id bound to another digest; `Corrupt` for an object registered
+    /// with another size; the inventory bound past what a backup copies.
+    pub fn record_verification_with_records(
+        &mut self,
+        expected: &Expected<'_>,
+        observation: &Verification<'_>,
+        records: &[RunRecord<'_>],
+        event_id: UuidV4<'_>,
+        deadline: Instant,
+    ) -> Result<String> {
         observation.identity.check()?;
         self.read_object(&observation.evidence, deadline)?;
         let body = serde_json::to_vec(&Observation {
@@ -229,13 +248,8 @@ impl Store {
             };
             let charged = if reconciled { observation.used_ms.unwrap_or(0) } else { 0 };
             let generation = next(expected.task_generation)?;
-            tx.execute(
-                "INSERT INTO artifacts(digest,size) VALUES(?,?) ON CONFLICT(digest) DO NOTHING",
-                params![observation.evidence.digest, number(observation.evidence.size)?],
-            )?;
-            let size: u64 = tx.query_row("SELECT size FROM artifacts WHERE digest=?",
-                [&observation.evidence.digest], |row| super::read_number(row, 0))?;
-            if size != observation.evidence.size { return Err(Error::Corrupt); }
+            // Registered through the one door that also keeps the inventory bound (R13 review).
+            register_evidence(tx, std::slice::from_ref(&observation.evidence))?;
             if identity_bound_elsewhere(tx, observation.identity.artifact_id.as_str(), &observation.evidence.digest)? {
                 return Err(Error::Conflict);
             }
@@ -254,6 +268,8 @@ impl Store {
                 "UPDATE tasks SET generation=?,state=?,spent_ms=spent_ms+?,reserved_verify_ms=reserved_verify_ms-? WHERE id=?",
                 params![generation,state,number(charged)?,number(charged)?,expected.task.as_str()],
             )?;
+            // The check's records, keyed by this verification's event; never the settling event.
+            run_records::commit(tx, expected.attempt.as_str(), event_id.as_str(), records, false)?;
             Ok(generation)
         })
     }

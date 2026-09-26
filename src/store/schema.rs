@@ -586,11 +586,13 @@ pub(super) fn validate(
     if bindings_invalid {
         return Err(Error::Corrupt);
     }
-    // B09b/DS2 (migration 6): a run record belongs to an observation of its own attempt's task; one
-    // observation's records name one attempt; `settled_event` is set only on a settled attempt and
+    // B09b/DS2 (migration 6): a run record belongs to an observation of its own attempt's task — the
+    // settle's `attempt_observed` event, or (R13) the check's `verification_observed` event bound to
+    // the same attempt through `verifications`; one observation's records name one attempt;
+    // `settled_event` is set only on a settled attempt and
     // names an observation of its task; and no artifact id names two digests across the identity
     // columns (no UNIQUE: a verified acceptance legitimately repeats its evidence as an object).
-    let records_invalid:bool=recorded>=6 && connection.query_row("SELECT EXISTS(SELECT 1 FROM attempt_records r JOIN attempts a ON a.id=r.attempt_id JOIN events e ON e.id=r.event_id WHERE e.task_id IS NOT a.task_id OR e.kind!='attempt_observed') OR EXISTS(SELECT 1 FROM attempt_records GROUP BY event_id HAVING count(DISTINCT attempt_id)>1) OR EXISTS(SELECT 1 FROM attempts a JOIN events e ON e.id=a.settled_event WHERE a.state!='settled' OR e.task_id IS NOT a.task_id OR e.kind!='attempt_observed') OR EXISTS(SELECT 1 FROM (SELECT artifact_id i, digest d FROM attempt_records UNION ALL SELECT evidence_artifact_id, evidence_digest FROM verifications WHERE evidence_artifact_id IS NOT NULL UNION ALL SELECT evidence_artifact_id, evidence_digest FROM task_stops WHERE evidence_artifact_id IS NOT NULL UNION ALL SELECT artifact_id, digest FROM acceptance_objects WHERE artifact_id IS NOT NULL UNION ALL SELECT manifest_artifact_id, manifest_digest FROM acceptances WHERE manifest_artifact_id IS NOT NULL) GROUP BY i HAVING count(DISTINCT d)>1)",[],|row|row.get(0))?;
+    let records_invalid:bool=recorded>=6 && connection.query_row("SELECT EXISTS(SELECT 1 FROM attempt_records r JOIN attempts a ON a.id=r.attempt_id JOIN events e ON e.id=r.event_id WHERE e.task_id IS NOT a.task_id OR NOT (e.kind='attempt_observed' OR (e.kind='verification_observed' AND EXISTS(SELECT 1 FROM verifications v WHERE v.event_id=r.event_id AND v.attempt_id=r.attempt_id)))) OR EXISTS(SELECT 1 FROM attempt_records GROUP BY event_id HAVING count(DISTINCT attempt_id)>1) OR EXISTS(SELECT 1 FROM attempts a JOIN events e ON e.id=a.settled_event WHERE a.state!='settled' OR e.task_id IS NOT a.task_id OR e.kind!='attempt_observed') OR EXISTS(SELECT 1 FROM (SELECT artifact_id i, digest d FROM attempt_records UNION ALL SELECT evidence_artifact_id, evidence_digest FROM verifications WHERE evidence_artifact_id IS NOT NULL UNION ALL SELECT evidence_artifact_id, evidence_digest FROM task_stops WHERE evidence_artifact_id IS NOT NULL UNION ALL SELECT artifact_id, digest FROM acceptance_objects WHERE artifact_id IS NOT NULL UNION ALL SELECT manifest_artifact_id, manifest_digest FROM acceptances WHERE manifest_artifact_id IS NOT NULL) GROUP BY i HAVING count(DISTINCT d)>1)",[],|row|row.get(0))?;
     if records_invalid {
         return Err(Error::Corrupt);
     }
