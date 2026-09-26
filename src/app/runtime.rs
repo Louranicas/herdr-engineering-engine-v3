@@ -134,6 +134,8 @@ const _: () = assert!(CHECK_TEARDOWN.as_millis() >= TERM_GRACE.as_millis());
 pub struct CheckWindow {
     /// When the window was computed: the check's own origin.
     pub begun: Instant,
+    /// The origin as unix milliseconds, read once with it (the clock record's `origin_unix_ms`).
+    pub begun_unix_ms: u64,
     /// The check's cutoff.
     pub until: Instant,
     /// The end of the check's teardown share.
@@ -146,6 +148,7 @@ pub struct CheckWindow {
 #[must_use]
 pub(crate) fn check_window(
     now: Instant,
+    now_unix_ms: u64,
     reserved_verify_ms: u64,
     task_deadline: Instant,
 ) -> Option<CheckWindow> {
@@ -158,6 +161,7 @@ pub(crate) fn check_window(
     }
     Some(CheckWindow {
         begun: now,
+        begun_unix_ms: now_unix_ms,
         until,
         teardown_until: task_deadline.min(until + CHECK_TEARDOWN),
     })
@@ -311,6 +315,21 @@ struct Begun {
     verified: bool,
     /// The check, once recorded, had a known cost and settled cleanup (review H1).
     check_settled: bool,
+}
+
+/// What a verification commits beside its row: the run records and the objects they cite.
+#[derive(Clone, Copy)]
+struct Committing<'a> {
+    records: &'a [StoreRunRecord<'a>],
+    cited: &'a [Object],
+}
+
+impl Committing<'static> {
+    /// The runtime's own checks: no run, no records.
+    const NONE: Self = Self {
+        records: &[],
+        cited: &[],
+    };
 }
 
 /// One verification as the ledger committed it, for the runtime's own bookkeeping.
@@ -636,7 +655,7 @@ impl<C: CandidateSource, V: Verifier> StoreRuntime<'_, C, V> {
         check: &Check,
         subject: &str,
         ids: &[String; 3],
-        records: &[StoreRunRecord<'_>],
+        committing: Committing<'_>,
     ) -> Result<Committed, Error> {
         let [staging, event, artifact] = ids;
         let head = self.current(store)?;
@@ -667,7 +686,8 @@ impl<C: CandidateSource, V: Verifier> StoreRuntime<'_, C, V> {
                 used_ms,
                 cleanup_settled: check.cleanup_settled,
             },
-            records,
+            committing.records,
+            committing.cited,
             uuid(event)?,
             self.deadline,
         )?;
@@ -689,9 +709,9 @@ impl<C: CandidateSource, V: Verifier> StoreRuntime<'_, C, V> {
     fn record(&mut self, index: usize, check: &Check, subject: &str) -> Result<Committed, Error> {
         let begun = self.attempts.get(index).ok_or(Error::Identity)?;
         let ids: [String; 3] = fresh_ids(self.deadline)?;
-        let committed = self
-            .tasks
-            .with_store(|store| self.commit(store, begun, check, subject, &ids, &[]))??;
+        let committed = self.tasks.with_store(|store| {
+            self.commit(store, begun, check, subject, &ids, Committing::NONE)
+        })??;
         self.recorded(index, committed)
     }
 
@@ -715,17 +735,20 @@ impl<C: CandidateSource, V: Verifier> StoreRuntime<'_, C, V> {
             .with_store(|store| -> Result<Committed, Error> {
                 let run = launched(observed.run)?;
                 let teardown = window.teardown_until.min(self.deadline);
+                let capture = capture_run(store, &run, teardown, self.deadline)?;
+                let complete = capture.complete();
                 let Captures {
                     steps: captures,
                     outputs,
-                    complete,
-                } = capture_run(store, &run, teardown, self.deadline)?;
+                    objects: cited_objects,
+                    failed_at,
+                } = capture;
                 let subjects_verified = applied.readback_source(teardown).is_ok();
                 let protected_unchanged = self.protected.readback_source(teardown).is_ok();
-                // The check's own teardown, within its share: the job root and everything the run
-                // retained under it.
-                let retained_removed = Instant::now() < teardown
-                    && (fs::remove_dir_all(job_root).is_ok() || !job_root.exists());
+                // The check's own teardown: the job root and everything the run retained under it,
+                // always attempted, settled only when it finished within the teardown share.
+                let removed = fs::remove_dir_all(job_root).is_ok() || !job_root.exists();
+                let retained_removed = removed && Instant::now() < teardown;
                 let (cleanup, cleanup_record) = cleanup_of(&run, retained_removed);
                 let clock = clock_of(window, observed.observed, run.decisive)?;
                 let outcome_record = if complete {
@@ -764,7 +787,12 @@ impl<C: CandidateSource, V: Verifier> StoreRuntime<'_, C, V> {
                         Some(encode(readbacks.to_bytes())?),
                     ],
                 )?;
-                let check = check_of(&published, OutcomeName::of(&run.outcome), complete, derived)?;
+                let check = check_of(
+                    &published,
+                    OutcomeName::of(&run.outcome),
+                    failed_at.as_deref(),
+                    derived,
+                )?;
                 let records = published
                     .iter()
                     .map(|(kind, id, object)| {
@@ -775,7 +803,17 @@ impl<C: CandidateSource, V: Verifier> StoreRuntime<'_, C, V> {
                         })
                     })
                     .collect::<Result<Vec<_>, Error>>()?;
-                self.commit(store, begun, &check, subject, &ids, &records)
+                self.commit(
+                    store,
+                    begun,
+                    &check,
+                    subject,
+                    &ids,
+                    Committing {
+                        records: &records,
+                        cited: &cited_objects,
+                    },
+                )
             })??;
         self.recorded(index, committed)
     }
@@ -1099,7 +1137,12 @@ impl<C: CandidateSource, V: Verifier> driver::Runtime for StoreRuntime<'_, C, V>
             let reserved_verify_ms = self.tasks.with_store(|store| -> Result<u64, Error> {
                 Ok(self.current(store)?.reserved_verify_ms)
             })??;
-            if let Some(window) = check_window(Instant::now(), reserved_verify_ms, self.deadline) {
+            if let Some(window) = check_window(
+                Instant::now(),
+                unix_ms_now()?,
+                reserved_verify_ms,
+                self.deadline,
+            ) {
                 // The verifier observes inside a job root of its own, a SIBLING of the applied
                 // snapshot's directory (never under it: the workload refuses a root inside its
                 // subject, and creating one would change the subject); the runtime then
@@ -1304,7 +1347,18 @@ fn number(value: &str) -> Result<u64, Error> {
 struct Captures {
     steps: Vec<Option<crate::contracts::receipt::Ref>>,
     outputs: Vec<OutputReadback>,
-    complete: bool,
+    /// Every object the captures and readbacks published: the ledger registers them with the
+    /// verification, so the inventory bound counts them and a backup copies them.
+    objects: Vec<Object>,
+    /// Which capture failed, if one did (the step's label, or `"output"` for a readback identity).
+    failed_at: Option<String>,
+}
+
+impl Captures {
+    /// Whether every step and output was captured.
+    fn complete(&self) -> bool {
+        self.failed_at.is_none()
+    }
 }
 
 /// Capture every completed step through the evidence sink and read every output back against
@@ -1317,9 +1371,15 @@ fn capture_run(
     deadline: Instant,
 ) -> Result<Captures, Error> {
     let mut sink = Sink::new(store, deadline);
+    let objects = |sink: Sink<'_>| {
+        sink.into_registered()
+            .into_values()
+            .map(|(_, object)| object)
+            .collect()
+    };
     let mut steps = Vec::with_capacity(run.steps.len());
     for step in &run.steps {
-        let Step::Completed { report, .. } = step else {
+        let Step::Completed { report, label } = step else {
             steps.push(None);
             continue;
         };
@@ -1327,7 +1387,8 @@ fn capture_run(
             return Ok(Captures {
                 steps,
                 outputs: Vec::new(),
-                complete: false,
+                objects: objects(sink),
+                failed_at: Some((*label).to_owned()),
             });
         };
         steps.push(Some(captured.producer_ref.into_inner()));
@@ -1345,7 +1406,8 @@ fn capture_run(
             return Ok(Captures {
                 steps,
                 outputs,
-                complete: false,
+                objects: objects(sink),
+                failed_at: Some("output".to_owned()),
             });
         };
         outputs.push(OutputReadback {
@@ -1356,7 +1418,8 @@ fn capture_run(
     Ok(Captures {
         steps,
         outputs,
-        complete: true,
+        objects: objects(sink),
+        failed_at: None,
     })
 }
 
@@ -1422,7 +1485,12 @@ fn launched(run: Result<Run, workload::Error>) -> Result<Run, Error> {
         Ok(run) => Ok(run),
         Err(workload::Error::Layout) => Err(Error::Identity),
         Err(workload::Error::Deadline) => Ok(Run::unlaunched(WorkloadOutcome::Timeout)),
-        Err(workload::Error::Subject(_)) => Ok(Run::unlaunched(WorkloadOutcome::InvalidSubject)),
+        // The refusal's cause IS a failed subject readback: the record must not say "unchanged".
+        Err(workload::Error::Subject(_)) => {
+            let mut run = Run::unlaunched(WorkloadOutcome::InvalidSubject);
+            run.subjects_unchanged = false;
+            Ok(run)
+        }
         Err(workload::Error::Oracle | workload::Error::Io) => {
             Ok(Run::unlaunched(WorkloadOutcome::SetupFailed))
         }
@@ -1444,7 +1512,7 @@ fn clock_of(
     RunClock::observe(
         &RuntimeClock {
             origin: window.begun,
-            origin_unix_ms: unix_ms_at(window.begun)?,
+            origin_unix_ms: window.begun_unix_ms,
             work_until: window.until,
             deadline: window.teardown_until,
         },
@@ -1460,7 +1528,7 @@ fn clock_of(
 fn check_of(
     published: &[(RunRecordKind, String, Object)],
     outcome: OutcomeName,
-    complete: bool,
+    capture_failed_at: Option<&str>,
     derived: super::live_verifier::Checked,
 ) -> Result<Check, Error> {
     let cited: serde_json::Map<String, serde_json::Value> = published
@@ -1482,7 +1550,8 @@ fn check_of(
         evidence: serde_json::to_vec(&serde_json::json!({
             "kind": "u64_check",
             "outcome": outcome,
-            "captured": complete,
+            "captured": capture_failed_at.is_none(),
+            "capture_failed_at": capture_failed_at,
             "records": cited,
         }))
         .map_err(|_| Error::Identity)?,
@@ -1492,11 +1561,9 @@ fn check_of(
     })
 }
 
-/// The unix time of a monotonic instant, in milliseconds, read from the clock now.
-fn unix_ms_at(at: Instant) -> Result<u64, Error> {
-    let now = SystemTime::now();
-    let then = now.checked_sub(at.elapsed()).ok_or(Error::Identity)?;
-    let since = then
+/// The wall clock now, in unix milliseconds — read once, beside the monotonic origin it pairs with.
+fn unix_ms_now() -> Result<u64, Error> {
+    let since = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|_| Error::Identity)?;
     u64::try_from(since.as_millis()).map_err(|_| Error::Identity)
@@ -1517,11 +1584,15 @@ fn cited<'a>(
         return Err(Error::Identity);
     }
     let body: serde_json::Value = serde_json::from_slice(bytes).map_err(|_| Error::Identity)?;
+    if body.get("kind").and_then(serde_json::Value::as_str) != Some("u64_check") {
+        return Err(Error::Identity);
+    }
     let records = body
         .get("records")
         .and_then(serde_json::Value::as_object)
         .ok_or(Error::Identity)?;
-    if records.len() > RunRecordKind::ALL.len() || committed(RunRecordKind::RunClock).is_none() {
+    let known = |key: &String| RunRecordKind::ALL.iter().any(|kind| kind.name() == key);
+    if !records.keys().all(known) || committed(RunRecordKind::RunClock).is_none() {
         return Err(Error::Identity);
     }
     for kind in RunRecordKind::ALL {
@@ -1603,17 +1674,25 @@ mod tests {
         let now = Instant::now();
         let teardown_ms = u64::try_from(CHECK_TEARDOWN.as_millis())?;
         let far = now + Duration::from_mins(20);
-        let window = check_window(now, 300_000, far).ok_or("a far deadline leaves a window")?;
+        let window = check_window(now, 1_700_000_000_000, 300_000, far)
+            .ok_or("a far deadline leaves a window")?;
         assert_eq!(
-            (window.begun, window.until, window.teardown_until),
+            (
+                window.begun,
+                window.begun_unix_ms,
+                window.until,
+                window.teardown_until
+            ),
             (
                 now,
+                1_700_000_000_000,
                 now + Duration::from_millis(300_000 - teardown_ms),
                 now + Duration::from_millis(300_000)
             )
         );
         let near = now + Duration::from_secs(45);
-        let cut = check_window(now, 300_000, near).ok_or("a near deadline cuts the window")?;
+        let cut = check_window(now, 1_700_000_000_000, 300_000, near)
+            .ok_or("a near deadline cuts the window")?;
         assert_eq!(
             (cut.begun, cut.until, cut.teardown_until),
             (
@@ -1623,14 +1702,22 @@ mod tests {
                 near
             )
         );
-        assert_eq!(check_window(now, teardown_ms, far), None, "R == T");
-        assert_eq!(check_window(now, teardown_ms - 1, far), None, "R < T");
         assert_eq!(
-            check_window(now, teardown_ms + 1, far).map(|w| w.until),
+            check_window(now, 1_700_000_000_000, teardown_ms, far),
+            None,
+            "R == T"
+        );
+        assert_eq!(
+            check_window(now, 1_700_000_000_000, teardown_ms - 1, far),
+            None,
+            "R < T"
+        );
+        assert_eq!(
+            check_window(now, 1_700_000_000_000, teardown_ms + 1, far).map(|w| w.until),
             Some(now + Duration::from_millis(1))
         );
         assert_eq!(
-            check_window(now, 300_000, now + CHECK_TEARDOWN),
+            check_window(now, 1_700_000_000_000, 300_000, now + CHECK_TEARDOWN),
             None,
             "deadline inside the teardown"
         );
@@ -1678,7 +1765,7 @@ mod tests {
             ),
             (ID, CHECK_MEDIA_TYPE, U64_CHECK_SCHEMA)
         );
-        let refused: [(&str, Vec<u8>); 6] = [
+        let refused: [(&str, Vec<u8>); 8] = [
             (
                 "id swapped",
                 body((CLEANUP.0, CLOCK.1, CLOCK.2), Some(CLEANUP))?,
@@ -1701,6 +1788,24 @@ mod tests {
                     );
                     bytes
                 })?,
+            ),
+            (
+                "a key that is no record kind",
+                body(CLOCK, Some(CLEANUP)).map(|mut bytes| {
+                    bytes.truncate(bytes.len() - 2);
+                    bytes.extend_from_slice(
+                        br#","receipt":{"artifact_id":"x","sha256":"y","byte_length":1}}}"#,
+                    );
+                    bytes
+                })?,
+            ),
+            (
+                "another kind of evidence",
+                serde_json::to_vec(
+                    &serde_json::json!({ "kind": "refused_candidate", "records": {
+                    "run_clock": { "artifact_id": CLOCK.0, "sha256": CLOCK.1, "byte_length": CLOCK.2 },
+                    "run_cleanup": { "artifact_id": CLEANUP.0, "sha256": CLEANUP.1, "byte_length": CLEANUP.2 } } }),
+                )?,
             ),
             ("malformed", b"{".to_vec()),
         ];

@@ -299,6 +299,27 @@ mod tests {
                 "{outcome:?} scratch held"
             );
         }
+        for (label, cleanup) in [
+            (
+                "processes live",
+                Cleanup {
+                    processes_settled: false,
+                    ..settled
+                },
+            ),
+            (
+                "retained paths kept",
+                Cleanup {
+                    retained_removed: false,
+                    ..settled
+                },
+            ),
+        ] {
+            assert!(
+                !checked(OutcomeName::Matched, cleanup, true, begun, at(5)).cleanup_settled,
+                "{label}"
+            );
+        }
         assert_ne!(declared_criteria(), 0, "a match earns the class's bits");
         // A step that could not be captured: nothing earned, whatever the outcome said.
         assert_eq!(

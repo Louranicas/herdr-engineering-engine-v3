@@ -1345,6 +1345,47 @@ fn a_verifier_s_cancelled_is_a_cancellation_only_when_the_task_was_cancelled() -
     Ok(())
 }
 
+/// The passed check's readbacks, outcome and cleanup records, decoded from their committed objects:
+/// the attempt they belong to, both subjects read back, no outputs (the model's run retains none);
+/// matched with no steps; the three cleanup predicates settled and the aggregate — which the runtime
+/// does not own — unknown (R15 round 2, MEDIUM-10).
+fn assert_run_records_decoded(
+    rig: &Rig,
+    records: &[Vec<String>],
+    evidence: &serde_json::Value,
+) -> Result<(), Box<dyn Error>> {
+    let object = |kind: &str| -> Result<serde_json::Value, Box<dyn Error>> {
+        let row = records.iter().find(|row| row[0] == kind).ok_or(kind)?;
+        object_json(rig, &row[2])
+    };
+    let attempt_id = rows(rig, "SELECT id FROM attempts WHERE task_id=?")?;
+    assert_eq!(
+        object("readbacks")?,
+        serde_json::json!({
+            "attempt": attempt_id[0][0],
+            "subjects_verified": true,
+            "protected_unchanged": true,
+            "outputs": [],
+        })
+    );
+    let outcome = object("run_outcome")?;
+    assert_eq!(outcome["outcome"], "matched");
+    assert_eq!(outcome["steps"], serde_json::json!([]));
+    assert_eq!(evidence["capture_failed_at"], serde_json::Value::Null);
+    let cleanup = object("run_cleanup")?;
+    assert_eq!(cleanup["aggregate"], "settled");
+    assert_eq!(
+        cleanup["obligations"],
+        serde_json::json!([
+            {"id": "process", "state": "settled"},
+            {"id": "scratch", "state": "settled"},
+            {"id": "retained_paths", "state": "settled"},
+            {"id": "aggregate", "state": "unknown"},
+        ])
+    );
+    Ok(())
+}
+
 /// R15 · a passed check commits its four records with the verification and `accept` reads them
 /// back: the evidence (`hee3.u64-check/1`) cites exactly the committed set — kind, artifact id,
 /// digest and size — and the clock record read back from its object carries the window and the
@@ -1426,23 +1467,7 @@ fn a_passed_check_commits_four_records_that_accept_reads_back() -> Outcome_ {
     assert_eq!(clock["decisive_ms"], 6);
     assert_eq!(clock["timeout_intent_ms"], serde_json::Value::Null);
     assert!(window.until > window.begun);
-    // The cleanup record: the three predicates the runtime observed, settled, and the aggregate it
-    // does not own, unknown (R15 round 2, MEDIUM-10).
-    let cleanup_row = records
-        .iter()
-        .find(|row| row[0] == "run_cleanup")
-        .ok_or("a cleanup")?;
-    let cleanup = object_json(&rig, &cleanup_row[2])?;
-    assert_eq!(cleanup["aggregate"], "settled");
-    assert_eq!(
-        cleanup["obligations"],
-        serde_json::json!([
-            {"id": "process", "state": "settled"},
-            {"id": "scratch", "state": "settled"},
-            {"id": "retained_paths", "state": "settled"},
-            {"id": "aggregate", "state": "unknown"},
-        ])
-    );
+    assert_run_records_decoded(&rig, &records, &evidence)?;
     Ok(())
 }
 
@@ -1498,12 +1523,14 @@ fn a_run_that_never_launched_is_recorded_with_four_records() -> Outcome_ {
     Ok(())
 }
 
-/// R15.9(c) · the live verifier in the gate: the fixed workload under scopes whose systemd-run pin
-/// is wrong refuses to launch its first stage (`LauncherFailed`, one refused step, no process), the
-/// runtime records `error` with four records — the outcome record naming the refused step — and
-/// the task stops `verifier_error`; the check's job root is torn down.
+/// R15.9(c) · the live verifier in the gate: the fixed workload refuses to launch its first stage
+/// at the namespace's own pin validation — the rig's shim pin (`/opt/shim`, a zero digest) does
+/// not match, so `prepare` refuses before any scope is consulted (the bad systemd-run pin behind it
+/// is never reached; the review of d5a68c6 traced this). `LauncherFailed`: one refused step, no
+/// process; the runtime records `error` with four records — the outcome record naming the refused
+/// step and its refusal — and the task stops `verifier_error`; the check's job root is torn down.
 #[test]
-fn the_live_verifier_records_a_launcher_failure_with_four_records() -> Outcome_ {
+fn the_live_verifier_records_a_refused_launch_with_four_records() -> Outcome_ {
     let rig = rig(&Shape::default())?;
     let principal = owner();
     let (source, _) = script(vec![Candidate::Replacement(SECOND.to_vec())]);
@@ -1526,7 +1553,15 @@ fn the_live_verifier_records_a_launcher_failure_with_four_records() -> Outcome_ 
         .ok_or("an outcome")?;
     let recorded = object_json(&rig, &outcome_row[2])?;
     assert_eq!(recorded["outcome"], "launcher_failed");
-    assert_eq!(recorded["steps"].as_array().map(Vec::len), Some(1));
+    let steps = recorded["steps"].as_array().ok_or("steps")?;
+    assert_eq!(steps.len(), 1);
+    assert_eq!(steps[0]["label"], "compile-library");
+    assert_eq!(steps[0]["capture"], serde_json::Value::Null);
+    assert!(
+        !steps[0]["refused"].is_null(),
+        "the refusal is named: {}",
+        steps[0]
+    );
     assert_eq!(
         rows(&rig, "SELECT reason FROM task_stops WHERE task_id=?")?,
         vec![vec!["verifier_error".to_owned()]]
@@ -1536,5 +1571,43 @@ fn the_live_verifier_records_a_launcher_failure_with_four_records() -> Outcome_ 
         .filter(|entry| entry.file_name().to_string_lossy().ends_with(".check"))
         .count();
     assert_eq!(check_roots, 0, "the check's job root was torn down");
+    Ok(())
+}
+
+/// R15.4 (review of d5a68c6, MEDIUM-4) · a workload refused because a subject changed under it is
+/// still a run with four records, and its outcome record says so: `subjects: changed`, never
+/// "unchanged" for a refusal whose cause IS a failed subject readback. The verdict is `error`.
+#[test]
+fn a_subject_refusal_is_recorded_as_a_changed_subject() -> Outcome_ {
+    let rig = rig(&Shape::default())?;
+    let principal = owner();
+    let (source, _) = script(vec![Candidate::Replacement(SECOND.to_vec())]);
+    let (verifier, _) = oracle(vec![Answer {
+        run: Err(workload::Error::Subject(
+            habitat_engine::worker::workspace::Error::Changed,
+        )),
+        elapsed: Duration::from_millis(41),
+        cleanup_pending: false,
+    }]);
+    let outcome = run(&rig, &principal, source, verifier, 5_000).map_err(|e| format!("{e:?}"))?;
+    assert_eq!(
+        outcome,
+        Outcome::Driven(Driven::Stopped(StopReason::VerifierError))
+    );
+    let found = verifications(&rig)?;
+    assert_eq!(
+        (found[0][0].as_str(), found[0][2].as_str()),
+        ("error", "41")
+    );
+    let records = committed_records(&rig)?;
+    assert_eq!(records.len(), 4);
+    let outcome_row = records
+        .iter()
+        .find(|row| row[0] == "run_outcome")
+        .ok_or("an outcome")?;
+    let recorded = object_json(&rig, &outcome_row[2])?;
+    assert_eq!(recorded["outcome"], "invalid_subject");
+    assert_eq!(recorded["observations"]["subjects"], "changed");
+    assert_eq!(recorded["observations"]["process_cleanup"], "complete");
     Ok(())
 }

@@ -4549,6 +4549,7 @@ fn settled_then_checked(area: &Area, store: &mut Store) -> (Vec<Object>, Object)
             &expected(3, 1),
             &failed,
             &check_set,
+            &[],
             uuid(OBS_1),
             deadline(),
         )
@@ -4671,6 +4672,7 @@ fn check_record_refusals_each_by_name() {
             &active,
             &observe(&receipt, check),
             &colliding,
+            &[],
             uuid(OBS_1),
             deadline()
         ),
@@ -4703,6 +4705,7 @@ fn check_record_refusals_each_by_name() {
             &active,
             &observe(&receipt, check),
             &sound,
+            &[],
             uuid(OBS_1),
             deadline(),
         )
@@ -4713,6 +4716,7 @@ fn check_record_refusals_each_by_name() {
             &expected(4, 1),
             &observe(&receipt, check),
             &again,
+            &[],
             uuid(OBS_2),
             deadline()
         ),

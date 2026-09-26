@@ -184,13 +184,15 @@ impl Store {
         event_id: UuidV4<'_>,
         deadline: Instant,
     ) -> Result<String> {
-        self.record_verification_with_records(expected, observation, &[], event_id, deadline)
+        self.record_verification_with_records(expected, observation, &[], &[], event_id, deadline)
     }
 
     /// [`Store::record_verification`], committing the check's run records in the same transaction,
     /// keyed by this verification's event (R13): the verdict, the receipt and the records commit or
     /// vanish together. The verification row is written first, so a record whose artifact id is
     /// the receipt's under another digest is refused `Conflict` by the same rule as any rebinding.
+    /// `cited` are the objects the records name (a step's captures, an output's readback identity):
+    /// registered here so the inventory bound counts them and a backup copies them (B14a-3c review).
     /// # Errors
     /// As [`Store::record_verification`]; `Invalid` for a repeated kind (nothing written);
     /// `Conflict` for an artifact id bound to another digest; `Corrupt` for an object registered
@@ -200,6 +202,7 @@ impl Store {
         expected: &Expected<'_>,
         observation: &Verification<'_>,
         records: &[RunRecord<'_>],
+        cited: &[Object],
         event_id: UuidV4<'_>,
         deadline: Instant,
     ) -> Result<String> {
@@ -272,6 +275,7 @@ impl Store {
             )?;
             // The check's records, keyed by this verification's event; never the settling event.
             run_records::commit(tx, expected.attempt.as_str(), event_id.as_str(), records, false)?;
+            register_evidence(tx, cited)?;
             Ok(generation)
         })
     }
