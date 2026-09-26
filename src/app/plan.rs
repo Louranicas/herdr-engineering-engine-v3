@@ -64,6 +64,7 @@ pub const COLLECTOR_UNREAD: &str = "R16r2.3: the engine does not read its own ex
 /// value — F5), the class profile (its typed reviewed references and directory), the baseline
 /// and protected snapshots the runtime already holds, a plan root that must not exist yet, the
 /// dispatch's own deadline passed through (no limit is created here), and the cancellation flag.
+#[derive(Clone, Copy)]
 pub struct Inputs<'a> {
     pub tools: &'a Tools,
     pub profile: &'a Profile,
@@ -584,9 +585,10 @@ mod tests {
     use crate::app::evidence::Evidence;
     use crate::app::workload::{COMPILER_DESTINATION, Tools};
     use crate::check::graph::{Graph, Objects as _};
+    use crate::check::u64_oracle::FrozenOracle;
     use crate::contracts::receipt::{
-        LockPageV1, StandardPageV1, SubjectFilePageV1, SubjectFileV1Origin, SubjectV1, ToolPageV1,
-        decode,
+        BuildProfileV1, LanguageFlagsPageV1, LockPageV1, StandardPageV1, SubjectFilePageV1,
+        SubjectFileV1Origin, SubjectV1, ToolPageV1, decode,
     };
     use crate::store::ArtifactStaging;
     use crate::worker::namespace::ReadOnlyFile;
@@ -743,7 +745,10 @@ mod tests {
         })
     }
 
-    fn subject_paths(sink: &Evidence<'_>, subject: &SubjectV1) -> Vec<(String, bool)> {
+    fn subject_paths(
+        sink: &Evidence<'_>,
+        subject: &SubjectV1,
+    ) -> Vec<(String, SubjectFileV1Origin)> {
         let mut bytes = Vec::new();
         assert!(
             sink.open(subject.files.as_ref())
@@ -755,12 +760,7 @@ mod tests {
         page.rows
             .as_slice()
             .iter()
-            .map(|row| {
-                (
-                    row.path.as_str().to_owned(),
-                    row.origin == SubjectFileV1Origin::Excluded,
-                )
-            })
+            .map(|row| (row.path.as_str().to_owned(), row.origin))
             .collect()
     }
 
@@ -809,6 +809,43 @@ mod tests {
             row.executable.as_ref().byte_length as usize,
             fs::read(&f.tools.compiler.host)?.len()
         );
+        let build: BuildProfileV1 = resolved(sink, &shared.build);
+        assert_eq!(
+            (
+                build.target.as_str(),
+                build.default_features,
+                build.features.as_slice().len(),
+                build.build_profile.as_str()
+            ),
+            (super::BUILD_TARGET, false, 0, super::BUILD_PROFILE)
+        );
+        let flags: LanguageFlagsPageV1 = resolved(sink, &build.language_flags);
+        let argv: Vec<&str> = flags.rows.as_slice()[0]
+            .argv
+            .as_slice()
+            .iter()
+            .map(crate::contracts::receipt::Text::as_str)
+            .collect();
+        assert_eq!(argv, super::COMPILE_FLAGS.to_vec());
+        // The fixtures subject holds the oracle's PUBLIC projection, never the oracle itself.
+        let fixtures: SubjectV1 = resolved(sink, &shared.fixtures);
+        let fixtures_page: SubjectFilePageV1 = resolved(sink, &fixtures.files);
+        let projection = fixtures_page.rows.as_slice()[0]
+            .content
+            .value
+            .as_ref()
+            .ok_or("fixtures content")?;
+        let expected = FrozenOracle::from_bytes(ORACLE)
+            .map_err(|e| format!("{e:?}"))?
+            .public_inputs();
+        assert_eq!(
+            projection.as_ref().sha256.as_str(),
+            crate::app::evidence::digest(&expected)
+        );
+        assert_ne!(
+            projection.as_ref().sha256.as_str(),
+            crate::app::evidence::digest(ORACLE)
+        );
         let locks: LockPageV1 = resolved(sink, &shared.locks);
         assert_eq!((locks.row_count, locks.total_rows), (0, 0));
         let standards: StandardPageV1 = resolved(sink, &shared.standards);
@@ -821,36 +858,53 @@ mod tests {
         assert_eq!(shared.schema.as_ref().byte_length as usize, SCHEMA.len());
         assert_eq!(shared.schema.as_ref().sha256.as_str(), schema_sha256());
         assert!(serde_json::from_slice::<serde_json::Value>(&isolation_profile()).is_ok());
+        assert_subjects(sink, shared, f)?;
+        Ok(())
+    }
+
+    /// The six subjects by role, and the closures' nodes in the registry.
+    fn assert_subjects(
+        sink: &Evidence<'_>,
+        shared: &super::Shared,
+        f: &Fixture,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         // The subjects: each role's files, the collector excluded with its reason.
         for (role, reference, files) in [
-            ("seed", &shared.seed, vec![("lib.rs".to_owned(), false)]),
+            (
+                "seed",
+                &shared.seed,
+                vec![("lib.rs".to_owned(), SubjectFileV1Origin::Authored)],
+            ),
             (
                 "fixtures",
                 &shared.fixtures,
-                vec![("inputs.hex".to_owned(), false)],
+                vec![("inputs.hex".to_owned(), SubjectFileV1Origin::Authored)],
             ),
             (
                 "oracle",
                 &shared.oracle,
-                vec![("oracle.json".to_owned(), false)],
+                vec![("oracle.json".to_owned(), SubjectFileV1Origin::Authored)],
             ),
             (
                 "harness",
                 &shared.harness,
-                vec![("public-wrapper.rs".to_owned(), false)],
+                vec![(
+                    "public-wrapper.rs".to_owned(),
+                    SubjectFileV1Origin::Authored,
+                )],
             ),
             (
                 "launcher",
                 &shared.launcher,
                 vec![
-                    ("bwrap".to_owned(), false),
-                    ("namespace-shim".to_owned(), false),
+                    ("bwrap".to_owned(), SubjectFileV1Origin::Authored),
+                    ("namespace-shim".to_owned(), SubjectFileV1Origin::Authored),
                 ],
             ),
             (
                 "collector",
                 &shared.collector,
-                vec![("collector".to_owned(), true)],
+                vec![("collector".to_owned(), SubjectFileV1Origin::Excluded)],
             ),
         ] {
             let subject: SubjectV1 = resolved(sink, reference);
@@ -956,10 +1010,59 @@ mod tests {
             ),
             Err(Refusal::Protected("oracle.json"))
         ));
+        assert_refused_probe(&mut sink, &base, &plan_root, f)?;
+        Ok(())
+    }
+
+    /// A compiler whose bytes are its pin but whose version report is not one, then a leftover plan
+    /// root and a missing closure member: each refused at its own site.
+    fn assert_refused_probe(
+        sink: &mut Evidence<'_>,
+        base: &Inputs<'_>,
+        plan_root: &Path,
+        f: &Fixture,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let base = *base;
+        // A compiler whose bytes ARE its pin but which exits non-zero, and one whose version report
+        // has no release: each refused at its own site.
+        for (script, why) in [
+            (&b"#!/bin/sh\nexit 3\n"[..], "exit"),
+            (
+                &b"#!/bin/sh\nprintf 'rustc 0.0.0\\nrelease:  \\n'\n"[..],
+                "release",
+            ),
+        ] {
+            let stand_in = f.root.join(format!("compiler-{why}"));
+            write(&stand_in, script);
+            fs::set_permissions(&stand_in, fs::Permissions::from_mode(0o700))?;
+            let tools = Tools {
+                bwrap: f.tools.bwrap.clone(),
+                compiler: ReadOnlyFile {
+                    host: stand_in,
+                    namespace: f.tools.compiler.namespace.clone(),
+                    sha256: sha(script),
+                },
+                shim: f.tools.shim.clone(),
+                runtime_files: Vec::new(),
+                namespace_directories: Vec::new(),
+            };
+            let refused = shared(
+                sink,
+                &Inputs {
+                    tools: &tools,
+                    ..base
+                },
+            );
+            assert!(
+                matches!(refused, Err(Refusal::CompilerVersion { why: site }) if site == why),
+                "{why}: {refused:?}"
+            );
+            assert!(!plan_root.exists());
+        }
         let leftover = tree(&f.root, "leftover.plan", &[]);
         assert!(matches!(
             shared(
-                &mut sink,
+                sink,
                 &Inputs {
                     plan_root: &leftover,
                     ..base
@@ -974,7 +1077,7 @@ mod tests {
             .join("8352c1851cfba4e85f26d180f4174bc572cdecc01d08b40d7efeab16f1dc0d81");
         fs::remove_file(&member)?;
         assert!(matches!(
-            shared(&mut sink, &base),
+            shared(sink, &base),
             Err(Refusal::Closure(
                 crate::app::class_profile::ReviewedError::Closure(
                     crate::check::graph::Error::Missing
