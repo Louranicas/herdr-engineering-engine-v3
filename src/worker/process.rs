@@ -834,45 +834,160 @@ impl Census {
                 return Ok(GroupState::Empty);
             };
             self.count += 1;
-            if self.count > 65_536 {
+            if self.count > MAX_CENSUS_ENTRIES {
                 return Err(ScanError::Io);
             }
-            let entry = entry.map_err(|_| ScanError::Io)?;
-            if entry
-                .file_name()
-                .to_str()
-                .and_then(|s| s.parse::<u32>().ok())
-                .is_none()
+            if let Some((_, stat)) = census_entry(entry, deadline, cancelled)?
+                && stat.pgrp == group.as_raw_nonzero().get()
+                && !matches!(stat.state, 'Z' | 'X')
             {
-                continue;
-            }
-            check_scan_budget(deadline, cancelled)?;
-            let fd = match open(
-                entry.path().join("stat"),
-                OFlags::RDONLY | OFlags::NONBLOCK | OFlags::CLOEXEC,
-                Mode::empty(),
-            ) {
-                Ok(fd) => fd,
-                Err(error) if exited_during_census(Some(error.raw_os_error())) => continue,
-                Err(_) => return Err(ScanError::Io),
-            };
-            check_scan_budget(deadline, cancelled)?;
-            let mut bytes = [0_u8; 4097];
-            let size = match File::from(fd).read(&mut bytes) {
-                Ok(size) => size,
-                Err(error) if exited_during_census(error.raw_os_error()) => continue,
-                Err(_) => return Err(ScanError::Io),
-            };
-            check_scan_budget(deadline, cancelled)?;
-            if size == 0 || size == bytes.len() {
-                return Err(ScanError::Io);
-            }
-            if stat_is_live(&bytes[..size], group)? {
                 return Ok(GroupState::Live);
             }
         }
         Ok(GroupState::Unknown)
     }
+}
+
+/// The most `/proc` entries one census lists: the group census's bound and the descendant census's.
+pub const MAX_CENSUS_ENTRIES: usize = 65_536;
+
+/// One `/proc` entry read the census's one way (native `/proc` only): a non-pid entry, or a process
+/// that exited between the listing and the read (`exited_during_census`), is `None`; otherwise the
+/// stat opened `NONBLOCK`, read in at most 4097 bytes (a full buffer is refused as unbounded), and
+/// parsed by [`parse_stat`]. The budget is checked before and after each system call.
+fn census_entry(
+    entry: io::Result<std::fs::DirEntry>,
+    deadline: Instant,
+    cancelled: Option<&AtomicBool>,
+) -> Result<Option<(u32, Stat)>, ScanError> {
+    let entry = entry.map_err(|_| ScanError::Io)?;
+    let Some(pid) = entry
+        .file_name()
+        .to_str()
+        .and_then(|s| s.parse::<u32>().ok())
+    else {
+        return Ok(None);
+    };
+    check_scan_budget(deadline, cancelled)?;
+    let fd = match open(
+        entry.path().join("stat"),
+        OFlags::RDONLY | OFlags::NONBLOCK | OFlags::CLOEXEC,
+        Mode::empty(),
+    ) {
+        Ok(fd) => fd,
+        Err(error) if exited_during_census(Some(error.raw_os_error())) => return Ok(None),
+        Err(_) => return Err(ScanError::Io),
+    };
+    check_scan_budget(deadline, cancelled)?;
+    let mut bytes = [0_u8; 4097];
+    let size = match File::from(fd).read(&mut bytes) {
+        Ok(size) => size,
+        Err(error) if exited_during_census(error.raw_os_error()) => return Ok(None),
+        Err(_) => return Err(ScanError::Io),
+    };
+    check_scan_budget(deadline, cancelled)?;
+    if size == 0 || size == bytes.len() {
+        return Err(ScanError::Io);
+    }
+    let stat = parse_stat(&bytes[..size]).ok_or(ScanError::Io)?;
+    Ok(Some((pid, stat)))
+}
+
+/// Why a descendant census was not observed.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CensusError {
+    /// `/proc` could not be listed, or an entry could not be read or parsed.
+    Io,
+    /// More than [`MAX_CENSUS_ENTRIES`] entries were listed: `listed` is the count at the refusal.
+    Bound { listed: usize, limit: usize },
+    /// The caller's deadline passed.
+    Deadline,
+    /// The caller's cancellation was raised.
+    Cancelled,
+}
+
+impl From<ScanError> for CensusError {
+    fn from(error: ScanError) -> Self {
+        match error {
+            ScanError::Io => Self::Io,
+            ScanError::Stopped(Interruption::Cancelled) => Self::Cancelled,
+            ScanError::Stopped(_) => Self::Deadline,
+        }
+    }
+}
+
+/// Every process `/proc` lists, with its stat (R21 N7): the resolver's census, read entry by entry
+/// the group census's way ([`census_entry`]) under the caller's deadline and cancellation, and
+/// refused past [`MAX_CENSUS_ENTRIES`] listed entries by both numbers.
+///
+/// # Errors
+/// [`CensusError`], by name.
+pub fn census(deadline: Instant, cancelled: &AtomicBool) -> Result<Vec<(u32, Stat)>, CensusError> {
+    check_scan_budget(deadline, Some(cancelled))?;
+    let entries = std::fs::read_dir("/proc").map_err(|_| CensusError::Io)?;
+    let mut found = Vec::new();
+    for (index, entry) in entries.enumerate() {
+        let listed = index + 1;
+        if listed > MAX_CENSUS_ENTRIES {
+            return Err(CensusError::Bound {
+                listed,
+                limit: MAX_CENSUS_ENTRIES,
+            });
+        }
+        check_scan_budget(deadline, Some(cancelled))?;
+        if let Some(read) = census_entry(entry, deadline, Some(cancelled))? {
+            found.push(read);
+        }
+    }
+    check_scan_budget(deadline, Some(cancelled))?;
+    Ok(found)
+}
+
+/// A descendant set larger than its bound: how many were found, and the bound.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DescendantBound {
+    pub found: usize,
+    pub limit: usize,
+}
+
+/// Every descendant of `root` in `census` — its children, theirs, and so on — breadth first, each
+/// generation in pid order (F95: pure over a census, so it is reachable by argument). A pid is
+/// visited once, so a cycle a racing census could show (pid reuse between reads) ends the walk. The
+/// set is bounded by the census it is derived from; more than `limit` members is refused with the
+/// whole count beside the bound.
+///
+/// # Errors
+/// [`DescendantBound`] when more than `limit` descendants are found.
+pub fn descendants(
+    census: &[(u32, Stat)],
+    root: u32,
+    limit: usize,
+) -> Result<Vec<u32>, DescendantBound> {
+    let mut children: std::collections::BTreeMap<u32, Vec<u32>> = std::collections::BTreeMap::new();
+    for (pid, stat) in census {
+        children.entry(stat.ppid).or_default().push(*pid);
+    }
+    let mut seen = BTreeSet::from([root]);
+    let mut found = Vec::new();
+    let mut next = 0;
+    let mut parent = root;
+    loop {
+        let mut young = children.get(&parent).cloned().unwrap_or_default();
+        young.sort_unstable();
+        found.extend(young.into_iter().filter(|pid| seen.insert(*pid)));
+        let Some(pid) = found.get(next) else {
+            break;
+        };
+        parent = *pid;
+        next += 1;
+    }
+    if found.len() > limit {
+        return Err(DescendantBound {
+            found: found.len(),
+            limit,
+        });
+    }
+    Ok(found)
 }
 /// Whether a failed `/proc/<pid>/stat` open or read means only that the process exited
 /// between the census listing it and reading it: `ENOENT` at the open, `ESRCH` at the open or
@@ -890,11 +1005,6 @@ pub fn exited_during_census(raw_os_error: Option<i32>) -> bool {
         code == rustix::io::Errno::NOENT.raw_os_error()
             || code == rustix::io::Errno::SRCH.raw_os_error()
     })
-}
-
-fn stat_is_live(bytes: &[u8], group: Pid) -> Result<bool, ScanError> {
-    let stat = parse_stat(bytes).ok_or(ScanError::Io)?;
-    Ok(stat.pgrp == group.as_raw_nonzero().get() && !matches!(stat.state, 'Z' | 'X'))
 }
 
 /// The fields of one `/proc/<pid>/stat` line this crate reads (proc(5)): field 3 the state, 4 the

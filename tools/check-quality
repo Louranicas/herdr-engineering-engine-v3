@@ -248,7 +248,7 @@ T07_INPUTS = ("src/store/recovery.rs", "tests/t07_inventory.rs")
 # interpreter is an evidence pin (see native_client_interpreter), never a
 # candidate input; the other files under tests/fixtures/native are not read by
 # any registered Rust test and earn no input status here.
-T08_TARGET_COUNTS = {"t08_native": 23}
+T08_TARGET_COUNTS = {"t08_native": 24}
 T08_INPUTS = ("src/worker/native.rs", "tests/t08_native.rs", "tests/fixtures/native/client.py")
 NATIVE_CLIENT_FIXTURE = "tests/fixtures/native/client.py"
 # Reviewed T07 engine reconciliation policy target: 58 controls. tests/recovery.rs

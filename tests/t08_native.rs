@@ -684,3 +684,67 @@ fn descendant_exiting_before_leader_keeps_completion_and_provenance()
     );
     Ok(())
 }
+
+/// R21 N7 · the resolver's candidate set is `MainPID` and its descendants: `descendants` follows
+/// parent links through a `/proc` census, breadth first, and refuses a set larger than its bound
+/// naming both numbers. Over DS18's measured chain (`1901` toolbox → `2668` podman exec → `2693`
+/// ollama, `DS18-daemon-20260927.json`) with two unrelated processes it returns the two below
+/// 1901; a cycle a racing census could show (pid reuse) ends the walk rather than looping. The
+/// census itself is read live and checked against the kernel's own `getppid` for this process.
+#[test]
+fn descendants_follow_ppid_links_and_refuse_past_their_bound_with_both_numbers()
+-> Result<(), Box<dyn std::error::Error>> {
+    use habitat_engine::worker::process::{
+        CensusError, DescendantBound, Stat, census, descendants,
+    };
+    let stat = |ppid: u32| Stat {
+        state: 'S',
+        ppid,
+        pgrp: 1,
+        start_ticks: 3_119,
+    };
+    let measured = vec![
+        (1, stat(0)),
+        (1901, stat(1)),
+        (2668, stat(1901)),
+        (2693, stat(2668)),
+        (2700, stat(1)),
+        (2701, stat(2700)),
+    ];
+    assert_eq!(descendants(&measured, 1901, 64), Ok(vec![2668, 2693]));
+    assert_eq!(
+        descendants(&measured, 1901, 2),
+        Ok(vec![2668, 2693]),
+        "a set exactly at its bound is admitted"
+    );
+    assert_eq!(
+        descendants(&measured, 1901, 1),
+        Err(DescendantBound { found: 2, limit: 1 })
+    );
+    assert_eq!(
+        descendants(&measured, 1, 3),
+        Err(DescendantBound { found: 5, limit: 3 })
+    );
+    assert_eq!(descendants(&measured, 2693, 64), Ok(vec![]));
+    let cycle = vec![(5, stat(6)), (6, stat(5))];
+    assert_eq!(descendants(&cycle, 5, 64), Ok(vec![6]));
+    let running = AtomicBool::new(false);
+    let live = census(Instant::now() + Duration::from_secs(10), &running)
+        .map_err(|error| format!("the live census: {error:?}"))?;
+    let me = std::process::id();
+    assert_eq!(
+        live.iter()
+            .find(|(pid, _)| *pid == me)
+            .map(|(_, stat)| stat.ppid),
+        Some(std::os::unix::process::parent_id())
+    );
+    assert_eq!(
+        census(
+            Instant::now() + Duration::from_secs(10),
+            &AtomicBool::new(true)
+        ),
+        Err(CensusError::Cancelled)
+    );
+    assert_eq!(census(Instant::now(), &running), Err(CensusError::Deadline));
+    Ok(())
+}
