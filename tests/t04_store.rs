@@ -4109,9 +4109,11 @@ fn stop_identity_refusals_each_by_name() {
         .record_verification(&active, &observe(&receipt, check), uuid(OBS_1), deadline())
         .unwrap();
     let reason = crate::contracts::receipt::Name::new("fixture_stop").unwrap();
+    // The verification advanced the task to generation 4: a stale generation would be refused
+    // `Conflict` before the identity is looked at (plant J2 first survived on exactly that).
     let stop = |identity: EvidenceIdentity<'static>| terminal::Stop {
         task: uuid(TASK),
-        generation: revision(3),
+        generation: revision(4),
         reason: &reason,
         evidence: &other,
         identity,
