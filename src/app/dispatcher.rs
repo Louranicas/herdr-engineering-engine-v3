@@ -22,6 +22,7 @@ use crate::store::{Dispatchable, Error as StoreError, ResolveRefusal};
 use crate::task::driver;
 use std::path::Path;
 use std::sync::atomic::AtomicBool;
+use std::time::Instant;
 
 /// Where the dispatcher's candidate source and verifier come from, per dispatch (B14b-1 D7).
 pub trait Provider {
@@ -65,6 +66,20 @@ impl CandidateSource for Never {
             candidate: super::runtime::Candidate::Exhausted,
             settle: None,
         }
+    }
+    fn ready(
+        &mut self,
+        _deadline: Instant,
+        _cancelled: &AtomicBool,
+    ) -> Result<super::runtime::Readiness, crate::worker::native::Error> {
+        Err(crate::worker::native::Error::Profile)
+    }
+    fn settle_retained(
+        &mut self,
+        _deadline: Instant,
+        _cancelled: &AtomicBool,
+    ) -> super::runtime::Custody {
+        super::runtime::Custody::default()
     }
 }
 

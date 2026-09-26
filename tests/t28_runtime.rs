@@ -17,8 +17,8 @@ use habitat_engine::app::dispatcher;
 use habitat_engine::app::live_verifier::LiveVerifier;
 use habitat_engine::app::runtime::{
     Admission, Answer as SourceAnswer, CHECK_TEARDOWN, Candidate, CandidateSource, CheckPlan,
-    CheckWindow, Dispatch, Error as RuntimeError, Observed, Outcome, Previous, Refusal, Verifier,
-    admit, dispatch, drive,
+    CheckWindow, Custody, Dispatch, Error as RuntimeError, Observed, Outcome, Previous, Readiness,
+    Refusal, Verifier, admit, dispatch, drive,
 };
 use habitat_engine::app::tasks::StoreTasks;
 use habitat_engine::app::workload::{self, Outcome as RunOutcome, Run};
@@ -416,6 +416,13 @@ struct Script<'h> {
     /// A worker settle to attach to every answer — a script that claims a provider was asked (the
     /// identity-refusal proof hands one naming another attempt).
     settle: Option<Settle>,
+    /// The readiness `ready` answers with (R21 N4), and the custody `settle_retained` answers with
+    /// (N18): scripted, so a proof can arrange either.
+    readiness: Result<Readiness, habitat_engine::worker::native::Error>,
+    custody: Custody,
+    /// Every `ready` and `settle_retained` call: which, the deadline and the cancellation it was
+    /// handed (F101). No runtime path asks a source to be ready yet; S10's proofs read this.
+    readied: Vec<(&'static str, Instant, bool)>,
 }
 
 impl CandidateSource for Script<'_> {
@@ -441,6 +448,23 @@ impl CandidateSource for Script<'_> {
             candidate: self.answers.pop_front().unwrap_or(Candidate::Exhausted),
             settle: self.settle.clone(),
         }
+    }
+    fn ready(
+        &mut self,
+        deadline: Instant,
+        cancelled: &AtomicBool,
+    ) -> Result<Readiness, habitat_engine::worker::native::Error> {
+        self.readied
+            .push(("ready", deadline, cancelled.load(Ordering::Acquire)));
+        self.readiness.clone()
+    }
+    fn settle_retained(&mut self, deadline: Instant, cancelled: &AtomicBool) -> Custody {
+        self.readied.push((
+            "settle_retained",
+            deadline,
+            cancelled.load(Ordering::Acquire),
+        ));
+        self.custody
     }
 }
 
@@ -550,6 +574,14 @@ fn script<'h>(answers: Vec<Candidate>) -> (Script<'h>, Asked) {
             seen: Arc::clone(&seen),
             hook: None,
             settle: None,
+            readiness: Ok(Readiness {
+                actual_identity: "fixture/worker".to_owned(),
+                immutable_revision: None,
+                capabilities: vec!["text".to_owned()],
+                evidence: b"fixture catalogue".to_vec(),
+            }),
+            custody: Custody::default(),
+            readied: Vec::new(),
         },
         seen,
     )

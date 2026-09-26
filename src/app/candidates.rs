@@ -11,15 +11,22 @@
 //! called; B14b's dispatcher establishes it — the identity readback refuses anything else by name.
 
 use super::evidence::digest;
-use super::runtime::{Answer, Ask, Candidate, CandidateSource, Previous, REFUSED_CANDIDATE_SCHEMA};
+use super::runtime::{
+    Answer, Ask, Candidate, CandidateSource, Custody, Previous, REFUSED_CANDIDATE_SCHEMA, Readiness,
+};
 use crate::check::consistency::U64_EDITABLE;
 use crate::store::VerificationVerdict;
 use crate::worker::native::{self, AdapterProfile, ProviderState};
-use crate::worker::process::PendingChild;
+use crate::worker::process::{self, PendingChild, SettleStep};
 use crate::worker::{
     Capabilities, Feature, Finish, Invocation, MAX_PROMPT_BYTES, Request, Selection, Usage,
 };
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
+
+/// The capabilities a native source's provider evidences, in one place: the readiness it observes
+/// and the roster selection that admits it name the same list.
+pub const CAPABILITIES: [&str; 1] = ["text"];
 
 /// Why the source's text is not a candidate, by name — each recorded by the class check as a
 /// refused candidate under [`Refusal::name`] (one path with a repair refusal, R18 A5).
@@ -316,11 +323,12 @@ impl NativeCandidates {
         }
     }
 
-    /// Take every pending child out of the run's exchanges (A4) and say whether every exchange's
-    /// custody settled — the decision is [`custody_settled`], pure over what each report says.
-    fn custody(&mut self, run: &mut native::Run<'_>) -> bool {
+    /// Take every pending child out of the exchanges — a run's, a load's or a readback's (A4, R21
+    /// N5) — and say whether every exchange's custody settled; the decision is [`custody_settled`],
+    /// pure over what each report says.
+    fn custody(&mut self, exchanges: &mut [native::Exchange]) -> bool {
         let mut settled = true;
-        for exchange in &mut run.exchanges {
+        for exchange in exchanges {
             if let Ok(report) = &mut exchange.result {
                 let pending = report.pending.take();
                 settled &= custody_settled(
@@ -377,7 +385,7 @@ impl NativeCandidates {
                         }
                     }
                     Ok(mut run) => {
-                        let cleanup_settled = self.custody(&mut run);
+                        let cleanup_settled = self.custody(&mut run.exchanges);
                         self.judge(&run, cleanup_settled, &mut settle)
                     }
                 }
@@ -452,6 +460,65 @@ const fn custody_settled(pending: bool, leader_reaped: bool, group_settled: bool
 impl CandidateSource for NativeCandidates {
     fn next(&mut self, ask: &Ask<'_>) -> Answer {
         self.ask(ask)
+    }
+
+    /// The readback (the daemon's incarnation, the catalogue, the resident model); a model the
+    /// resident readback refuses (absent, or resident at another context) is loaded once and read
+    /// back again (R21 N4) — a catalogue refusal repeats in the load's own catalogue and ends it
+    /// before any generate. Every exchange's pending child is retained. The readiness names the
+    /// daemon incarnation, the manifest, [`CAPABILITIES`], and the catalogue bytes the deciding
+    /// readback read.
+    fn ready(
+        &mut self,
+        deadline: Instant,
+        cancelled: &AtomicBool,
+    ) -> Result<Readiness, native::Error> {
+        let mut observed = native::readback(&self.profile, self.adapter, deadline, cancelled)?;
+        self.custody(&mut observed.exchanges);
+        let readback = match observed.readback {
+            Err(native::Error::Identity) => {
+                let mut loaded = native::load(&self.profile, self.adapter, deadline, cancelled)?;
+                self.custody(&mut loaded.exchanges);
+                loaded.readback?
+            }
+            other => other?,
+        };
+        Ok(Readiness {
+            actual_identity: readback.identity.runtime_instance,
+            immutable_revision: readback.identity.provider_revision,
+            capabilities: CAPABILITIES.iter().map(|&label| label.to_owned()).collect(),
+            evidence: readback.catalogue,
+        })
+    }
+
+    /// Each retained child polled to its end under the caller's deadline, paced by
+    /// [`process::SETTLE_PAUSE`]; one [`process::settle_step`] decides every turn (R21 N18). A
+    /// settled child is released; a refused one (wait ownership lost, or the deadline) and every
+    /// child not reached before a raised cancellation stay retained, counted pending.
+    fn settle_retained(&mut self, deadline: Instant, cancelled: &AtomicBool) -> Custody {
+        let mut custody = Custody::default();
+        let mut kept = Vec::new();
+        for mut child in std::mem::take(&mut self.retained) {
+            let settled = loop {
+                if cancelled.load(Ordering::Acquire) {
+                    break false;
+                }
+                let poll = child.poll_cleanup(deadline);
+                match process::settle_step(&poll, Instant::now(), deadline) {
+                    SettleStep::Settled => break true,
+                    SettleStep::Refused => break false,
+                    SettleStep::Wait => std::thread::sleep(process::SETTLE_PAUSE),
+                }
+            };
+            if settled {
+                custody.settled += 1;
+            } else {
+                kept.push(child);
+            }
+        }
+        custody.pending = kept.len();
+        self.retained = kept;
+        custody
     }
 }
 

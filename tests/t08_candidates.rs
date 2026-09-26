@@ -6,7 +6,7 @@ use super::{LOADED, MODEL, Rig, digest, rendered};
 use habitat_engine::app::candidates::{
     ClassPrompt, ClassPromptError, FilePins, NativeCandidates, Outcome, Refusal, Settle, render,
 };
-use habitat_engine::app::runtime::{Ask, Candidate, CandidateSource, Previous};
+use habitat_engine::app::runtime::{Ask, Candidate, CandidateSource, Custody, Previous, Readiness};
 use habitat_engine::contracts::{Sha256Digest, UuidV4};
 use habitat_engine::store::VerificationVerdict;
 use habitat_engine::worker::Finish;
@@ -356,4 +356,103 @@ fn t08n_05_the_fake_refuses_a_generate_past_its_scripted_answers() {
         "{:?}",
         rig.calls()
     );
+}
+
+/// The readiness the source must report over a rig: the daemon incarnation the stand-in reader
+/// (`DaemonStandIn::daemon`) pinned, the manifest the rig pinned, the one capability, and the
+/// catalogue bytes the fake printed.
+fn readiness(rig: &Rig) -> Readiness {
+    let daemon = &rig.profile.daemon;
+    Readiness {
+        actual_identity: format!("{}:{}:{}", daemon.boot_id, daemon.pid, daemon.start_ticks),
+        immutable_revision: Some(rig.profile.manifest.sha256.clone()),
+        capabilities: vec!["text".to_owned()],
+        evidence: rendered(&rig.scenario["tags"]),
+    }
+}
+
+/// R21 N4, N18 · `ready` before an attempt: a model resident at the row's context is ready on the
+/// readback alone (no generate); an absent one (DS18's idle `/api/ps`) is loaded — an empty prompt
+/// under the row's options — and decided by the `/api/ps` readback after it, with the load's own
+/// catalogue as the evidence; a daemon still idle after the load is `Identity`; the caller's
+/// deadline and cancellation stop it before any exchange. The two ready rigs differ in the daemon
+/// incarnation and the catalogue row, so each readiness is pinned whole against its own fixture.
+/// Nothing in the fake leaves a child pending, so `settle_retained` settles nothing (a real
+/// retained child is Tier-3, F95).
+#[test]
+fn ready_loads_an_absent_model_and_names_the_catalogue_as_its_evidence() {
+    let running = AtomicBool::new(false);
+    // Resident at the /2 context already.
+    let resident = full_file_rig(None);
+    resident.save();
+    let mut source = NativeCandidates::new(resident.profile.clone(), FULL_FILE, class_prompt());
+    let deadline = resident.origin + Duration::from_secs(60);
+    assert_eq!(source.ready(deadline, &running), Ok(readiness(&resident)));
+    assert_eq!(resident.calls(), ["version", "tags", "ps"]);
+    assert_eq!(
+        source.settle_retained(deadline, &running),
+        Custody::default()
+    );
+    // Absent: loaded, then read back.
+    let absent = |post: serde_json::Value| {
+        let mut rig = full_file_rig(None);
+        rig.prompt("");
+        rig.scenario["tags"]["models"][0]["modified_at"] = json!("2026-09-22T07:54:00Z");
+        rig.scenario["post_ps"] = post;
+        rig.scenario["ps"] = json!({"models": []});
+        rig.save();
+        rig
+    };
+    let loads = absent(resident.scenario["ps"].clone());
+    let mut source = NativeCandidates::new(loads.profile.clone(), FULL_FILE, class_prompt());
+    let deadline = loads.origin + Duration::from_secs(60);
+    let ready = source.ready(deadline, &running);
+    assert_eq!(ready, Ok(readiness(&loads)));
+    assert_ne!(ready, Ok(readiness(&resident)), "the fixtures differ");
+    assert_eq!(
+        loads.calls(),
+        ["version", "tags", "ps", "version", "tags", "generate", "ps"]
+    );
+    assert_eq!(captured(&loads)["prompt"], json!(""));
+    assert_eq!(source.retained(), 0);
+    assert_eq!(
+        source.settle_retained(deadline, &running),
+        Custody::default()
+    );
+    // Still idle after the load: the readback decides.
+    let idle = absent(json!({"models": []}));
+    let mut source = NativeCandidates::new(idle.profile.clone(), FULL_FILE, class_prompt());
+    assert_eq!(
+        source.ready(idle.origin + Duration::from_secs(60), &running),
+        Err(native::Error::Identity)
+    );
+    assert_eq!(
+        idle.calls(),
+        ["version", "tags", "ps", "version", "tags", "generate", "ps"]
+    );
+    // The caller's deadline and cancellation, before any exchange.
+    let stopped = full_file_rig(None);
+    stopped.save();
+    let mut source = NativeCandidates::new(stopped.profile.clone(), FULL_FILE, class_prompt());
+    assert_eq!(
+        source.ready(Instant::now(), &running),
+        Err(native::Error::Deadline)
+    );
+    assert_eq!(
+        source.ready(
+            stopped.origin + Duration::from_secs(60),
+            &AtomicBool::new(true)
+        ),
+        Err(native::Error::Cancelled)
+    );
+    // The incarnation the readiness would claim is checked first: a stale start is refused by
+    // name before any exchange, never reported as the running instance.
+    let mut stale = stopped.profile.clone();
+    stale.daemon.start_ticks += 1;
+    let mut source = NativeCandidates::new(stale, FULL_FILE, class_prompt());
+    assert_eq!(
+        source.ready(stopped.origin + Duration::from_secs(60), &running),
+        Err(native::Error::Identity)
+    );
+    assert!(stopped.calls().is_empty(), "{:?}", stopped.calls());
 }

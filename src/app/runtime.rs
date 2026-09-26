@@ -127,6 +127,38 @@ pub struct Answer {
 /// Where candidates come from. `next` is asked once per attempt, inside `execute`.
 pub trait CandidateSource {
     fn next(&mut self, ask: &Ask<'_>) -> Answer;
+    /// Whether the source can be asked now (R21 N4): the provider's own readback, and whatever it
+    /// takes to make it so (a native source loads an absent model), under the caller's deadline and
+    /// cancellation. Asked before each attempt's begin.
+    ///
+    /// # Errors
+    /// The provider's refusal, by name.
+    fn ready(
+        &mut self,
+        deadline: Instant,
+        cancelled: &AtomicBool,
+    ) -> Result<Readiness, crate::worker::native::Error>;
+    /// Settle every child the source retained (R21 N18), polling each under the caller's deadline
+    /// and cancellation; what settled, and what is still pending.
+    fn settle_retained(&mut self, deadline: Instant, cancelled: &AtomicBool) -> Custody;
+}
+
+/// What a ready source observed of its provider (R21 N4): the provider-response observation's
+/// content — the running instance, the immutable revision it serves, the capabilities it evidences
+/// — and the raw bytes it was read from, published as the observation's evidence.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Readiness {
+    pub actual_identity: String,
+    pub immutable_revision: Option<String>,
+    pub capabilities: Vec<String>,
+    pub evidence: Vec<u8>,
+}
+
+/// The retained children one settle turn came to (R21 N18): settled now, and still pending.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct Custody {
+    pub settled: usize,
+    pub pending: usize,
 }
 
 /// One independent check of an applied candidate: its verdict, the criterion bits it satisfied,

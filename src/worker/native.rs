@@ -1347,9 +1347,9 @@ pub struct Readback {
     pub identity: Identity,
 }
 
-/// One load's record (R21 N5): every exchange with its report — any pending child stays inside its
-/// report for the caller's custody sweep, never dropped here — the provider observation, and the
-/// readback that decides residency, or the refusal that stopped the load.
+/// One load's or readback's record (R21 N5): every exchange with its report — any pending child
+/// stays inside its report for the caller's custody sweep, never dropped here — the provider
+/// observation, and the readback that decides residency, or the refusal that stopped it.
 #[derive(Debug)]
 pub struct Loaded {
     pub exchanges: Vec<Exchange>,
@@ -1396,6 +1396,39 @@ pub fn load(
     Ok(Loaded {
         exchanges,
         provider,
+        readback,
+    })
+}
+/// Whether the profile's model is resident at the adapter row's context, without loading it (R21
+/// N4): the daemon's incarnation (pid, start ticks, boot id and executable, the identity the
+/// readiness claims), then the catalogue and the resident readback. No generate is sent, so the
+/// provider observation stays `NotDispatched`.
+///
+/// # Errors
+/// Before any exchange: `Deadline`/`Cancelled` at the door, `Profile` for a model name the adapter
+/// would not send, and the daemon check's refusal. Once an exchange is attempted, `Ok` carries every
+/// report and the refusal in `readback`.
+pub fn readback(
+    profile: &Profile,
+    adapter: &AdapterProfile,
+    deadline: Instant,
+    cancelled: &AtomicBool,
+) -> Result<Loaded, Error> {
+    tick(deadline, cancelled)?;
+    if !model_name(&profile.model) {
+        return Err(Error::Profile);
+    }
+    daemon(profile, deadline, cancelled)?;
+    let mut exchanges = Vec::new();
+    let readback = catalogue(&mut exchanges, profile, deadline, cancelled).and_then(|catalogue| {
+        Ok(Readback {
+            catalogue,
+            identity: resident(&mut exchanges, profile, adapter, deadline, cancelled)?,
+        })
+    });
+    Ok(Loaded {
+        exchanges,
+        provider: ProviderState::NotDispatched,
         readback,
     })
 }
