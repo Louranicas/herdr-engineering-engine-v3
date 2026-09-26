@@ -9,8 +9,10 @@
 
 use super::capture::{Captured, MAX_RAW_BYTES};
 use super::evidence::Evidence;
-use super::run_records::{OutcomeName, RunCleanup, RunClock, Settlement as RecordSettlement};
-use super::runtime::{CheckWindow, declared_criteria};
+use super::run_records::{
+    OutcomeName, RunCleanup, RunClock, RunOutcome, Settlement as RecordSettlement,
+};
+use super::runtime::declared_criteria;
 use crate::check::collector::{self, CaseObservation, Observed, Publisher, VerdictBinding};
 use crate::check::consistency::{self, Prepared};
 use crate::check::decision::{
@@ -36,7 +38,7 @@ use crate::worker::resources::{ATTEMPT_LIMITS, TERM_GRACE};
 /// The owner every runtime obligation and the cleanup contract name.
 pub const RUNTIME_OWNER: &str = "hee3.runtime";
 /// The four obligations the runtime's cleanup record settles, in its order.
-pub const OBLIGATIONS: [&str; 4] = ["process", "scratch", "retained_paths", "aggregate"];
+pub const OBLIGATIONS: [&str; 4] = ["process", "scratch", "retained_paths", "resources"];
 use std::io::{Cursor, Read};
 use std::time::Instant;
 
@@ -82,14 +84,15 @@ pub fn verdict_of(state: VerdictV1State) -> (VerificationVerdict, u64) {
 pub const STRICT_EMPTY_DIAGNOSTICS: &str = "strict_empty_diagnostics_observed";
 
 /// The diagnostics fact for a run, by the strict-empty rule the 003 lane proved (R16 round 2,
-/// decision 2): both toolchain steps' stderr empty is a clean baseline of zero; any bytes are an
-/// unavailable count — there is no `rustc` diagnostic parser (R16-G2), and a guess is not a count.
+/// decision 2): both toolchain steps' stderr captured AND empty is a clean baseline of zero; any
+/// bytes, or a step never captured, are an unavailable count — there is no `rustc` diagnostic
+/// parser (R16-G2), and a guess is not a count.
 #[must_use]
 pub const fn diagnostics_of(
-    compile_stderr_empty: bool,
-    link_stderr_empty: bool,
+    compile_stderr_empty: Option<bool>,
+    link_stderr_empty: Option<bool>,
 ) -> (bool, DiagnosticState) {
-    if compile_stderr_empty && link_stderr_empty {
+    if let (Some(true), Some(true)) = (compile_stderr_empty, link_stderr_empty) {
         (
             true,
             DiagnosticState::Complete {
@@ -158,7 +161,7 @@ pub fn environment_rows() -> Result<Vec<EnvironmentV1>, crate::contracts::receip
             Ok(EnvironmentV1 {
                 name: Name::new(name)?,
                 value: Maybe::present(Text::new(value)?),
-                secret_handle: Maybe::unavailable(Text::new("no_secret")?),
+                secret_handle: Maybe::unavailable(Text::new("not_a_secret")?),
             })
         })
         .collect()
@@ -182,6 +185,11 @@ pub fn limits(
     wall_ms: u64,
     cleanup_deadline_ms: u64,
 ) -> Result<LimitsV1, crate::contracts::receipt::Error> {
+    // `validate`'s clocks rule: the cleanup deadline within the wall (R16r2.9: they are equal for a
+    // check); refused here so a receipt never carries the pair `validate` would reject.
+    if cleanup_deadline_ms > wall_ms {
+        return Err(crate::contracts::receipt::Error::Bound);
+    }
     let decimal = |value: u64| U64::new(value.to_string());
     let count =
         |value: u64| u32::try_from(value).map_err(|_| crate::contracts::receipt::Error::Scalar);
@@ -195,7 +203,10 @@ pub fn limits(
         artifact_bytes: decimal(MAX_RAW_BYTES as u64)?,
         external_requests: decimal(0)?,
         external_cost_microunits: decimal(0)?,
-        term_grace_ms: decimal(u64::try_from(TERM_GRACE.as_millis()).unwrap_or(u64::MAX))?,
+        term_grace_ms: decimal(
+            u64::try_from(TERM_GRACE.as_millis())
+                .map_err(|_| crate::contracts::receipt::Error::Scalar)?,
+        )?,
         cleanup_deadline_ms: decimal(cleanup_deadline_ms)?,
         cpu_quota_percent: count(ATTEMPT_LIMITS.cpu_percent)?,
         tasks_max: count(ATTEMPT_LIMITS.tasks)?,
@@ -320,7 +331,6 @@ mod tests {
         verdict_of,
     };
     use crate::app::evidence::Evidence;
-    use crate::app::run_records::OutcomeName;
     use crate::app::runtime::{CheckWindow, declared_criteria};
     use crate::check::collector;
     use crate::check::consistency::{self, Prepared};
@@ -401,9 +411,13 @@ mod tests {
     #[test]
     fn the_limits_are_the_003_object_where_the_enforcer_is_the_same()
     -> Result<(), Box<dyn std::error::Error>> {
-        let limits = limits(290_000, 300_000)?;
+        assert!(
+            limits(290_000, 300_000).is_err(),
+            "a cleanup deadline past the wall"
+        );
+        let limits = limits(300_000, 300_000)?;
         let known = [
-            (limits.wall_ms.get(), 290_000),
+            (limits.wall_ms.get(), 300_000),
             (limits.memory_bytes.get(), 8_589_934_592),
             (limits.memory_swap_bytes.get(), 0),
             (limits.scratch_bytes.get(), 4_294_967_296),
@@ -585,11 +599,12 @@ mod tests {
         assert_ne!(declared_criteria(), 0);
     }
 
-    /// R16.2 · the strict-empty rule: both empty is a clean zero; either with bytes is unavailable.
+    /// R16.2 · the strict-empty rule: both captured and empty is a clean zero; either with bytes,
+    /// or either never captured, is unavailable.
     #[test]
     fn diagnostics_are_a_clean_zero_only_when_both_stderrs_are_empty() {
         assert!(matches!(
-            diagnostics_of(true, true),
+            diagnostics_of(Some(true), Some(true)),
             (
                 true,
                 DiagnosticState::Complete {
@@ -598,7 +613,14 @@ mod tests {
                 }
             )
         ));
-        for (compile, link) in [(false, true), (true, false), (false, false)] {
+        for (compile, link) in [
+            (Some(false), Some(true)),
+            (Some(true), Some(false)),
+            (Some(false), Some(false)),
+            (None, Some(true)),
+            (Some(true), None),
+            (None, None),
+        ] {
             assert!(matches!(
                 diagnostics_of(compile, link),
                 (false, DiagnosticState::Unavailable)
@@ -767,7 +789,7 @@ mod tests {
                 state: Settlement::Settled,
             },
             ObligationRecord {
-                id: "aggregate".to_owned(),
+                id: "resources".to_owned(),
                 state: Settlement::Unknown,
             },
         ];
@@ -792,11 +814,12 @@ mod tests {
                 .map_err(|e| format!("{e:?}"))?;
             records.push((kind, id, object));
         }
-        Ok((clock, cleanup, records))
+        Ok((clock, outcome, cleanup, records))
     }
 
     type BuiltRecords = (
         crate::app::run_records::RunClock,
+        crate::app::run_records::RunOutcome,
         crate::app::run_records::RunCleanup,
         Vec<(RunRecordKind, String, crate::store::Object)>,
     );
@@ -876,7 +899,7 @@ mod tests {
                 row.evidence.as_slice()[0].artifact_id.as_str(),
             ),
             (
-                "aggregate",
+                "resources",
                 ObligationV1State::Unknown,
                 true,
                 RUNTIME_OWNER,
@@ -934,19 +957,19 @@ mod tests {
             teardown_until: begun + Duration::from_secs(300),
         };
         let observed = begun + Duration::from_millis(41);
-        let (clock, cleanup, records) = built_records(&staging, deadline, &window, observed)?;
+        let (clock, outcome, cleanup, records) =
+            built_records(&staging, deadline, &window, observed)?;
         let host_facts = host_fixture();
+        let obligation_ids = ["28f60000-0000-4000-8000-000000000031".to_owned()];
         let composing = Composing {
             prepared: &prepared,
             clock: &clock,
+            outcome: &outcome,
             cleanup: &cleanup,
             records: &records,
             captures: &[],
-            outcome: OutcomeName::SetupFailed,
             evaluation: None,
-            window,
-            observed,
-            cancelled: false,
+            obligation_ids: &obligation_ids,
             host: &host_facts,
             readbacks: Readbacks {
                 seed: Some(true),
@@ -958,8 +981,6 @@ mod tests {
                 toolchain: Some(true),
                 profile: Some(true),
             },
-            compile_stderr_empty: true,
-            link_stderr_empty: true,
         };
         let composed = compose(&mut sink, &composing).map_err(|e| format!("{e:?}"))?;
         // The decision: Invalid, and its reasons name the gaps and the run.
@@ -1007,21 +1028,19 @@ mod tests {
 pub struct Composing<'a> {
     pub prepared: &'a Prepared,
     pub clock: &'a RunClock,
+    pub outcome: &'a RunOutcome,
     pub cleanup: &'a RunCleanup,
     pub records: &'a [(RunRecordKind, String, Object)],
     /// One capture per step, `None` for a refused step; the execute step's is the producer.
     pub captures: &'a [Option<Captured>],
-    pub outcome: OutcomeName,
-    /// The oracle's counts on a match or mismatch, from the run's own `Evaluation`.
+    /// The oracle's counts on a match or mismatch — the one fact the records do not carry (the
+    /// vectors stay in the captured stdout); 2c-iii passes them from the run's own `Evaluation`.
     pub evaluation: Option<(usize, usize)>,
-    pub window: CheckWindow,
-    pub observed: Instant,
-    pub cancelled: bool,
+    /// Fresh ids for the unsettled-obligation rows, one per obligation the cleanup record left
+    /// unsettled (minted by the caller, as every receipt row id is).
+    pub obligation_ids: &'a [String],
     pub host: &'a host::Facts,
     pub readbacks: Readbacks,
-    /// Whether the compile and link steps' stderr were empty (the diagnostics rule).
-    pub compile_stderr_empty: bool,
-    pub link_stderr_empty: bool,
 }
 
 /// The composed receipt: its root reference and bytes (published through the sink), the decision
@@ -1099,7 +1118,7 @@ pub fn compose(sink: &mut Evidence<'_>, composing: &Composing<'_>) -> Result<Com
     // An unselected plan case is unmeasured whatever the run did (RC04's case rule); the class's
     // one case is selected, so this arm is the fixture lane's.
     let (case_outcome, oracle_result, oracle_fact) = if plan.selected {
-        case_of(composing.outcome, execute.is_some())
+        case_of(composing.outcome.outcome(), execute.is_some())
     } else {
         (
             CaseV1Outcome::Unmeasured,
@@ -1122,14 +1141,20 @@ pub fn compose(sink: &mut Evidence<'_>, composing: &Composing<'_>) -> Result<Com
             raw_evidence_refs: List::new(raw_evidence.clone())?,
             reason: Text::new(match composing.evaluation {
                 Some((matched, failed)) => format!("vectors matched {matched}, failed {failed}"),
-                None => format!("no evaluation: {}", outcome_name(composing.outcome)),
+                None => format!(
+                    "no evaluation: {}",
+                    outcome_name(composing.outcome.outcome())
+                ),
             })?,
         })
         .map_err(at("oracle result"))?;
-    let (baseline, diagnostic_state) =
-        diagnostics_of(composing.compile_stderr_empty, composing.link_stderr_empty);
+    let (baseline, diagnostic_state) = diagnostics_of(
+        captured_stderr_empty(composing.captures, 0),
+        captured_stderr_empty(composing.captures, 1),
+    );
     let complete = composing.captures.len() == STEPS.len() && execute.is_some()
-        || composing.outcome != OutcomeName::Matched && composing.outcome != OutcomeName::Mismatch;
+        || composing.outcome.outcome() != OutcomeName::Matched
+            && composing.outcome.outcome() != OutcomeName::Mismatch;
     let observed = observed_of(
         &mut publisher,
         composing,
@@ -1223,9 +1248,9 @@ fn observed_of(
             outcome: case.outcome,
             producer: case.producer.clone(),
             detector_id: case.plan.case_id.clone(),
-            benign_pair_id: Maybe::unavailable(Text::new("no benign pair")?),
+            benign_pair_id: Maybe::unavailable(Text::new("single_workload_case")?),
             raw_evidence_refs: List::new(case.raw_evidence)?,
-            reason: Text::new(outcome_name(composing.outcome))?,
+            reason: Text::new(outcome_name(composing.outcome.outcome()))?,
         }],
         diagnostic_baseline: baseline,
         diagnostics: Vec::new(),
@@ -1240,10 +1265,10 @@ fn observed_of(
         verdict: VerdictBinding {
             oracle_result: case.oracle,
             intended_detector: case.plan.case_id.clone(),
-            benign_pair: Maybe::unavailable(Text::new("no benign pair")?),
+            benign_pair: Maybe::unavailable(Text::new("single_workload_case")?),
         },
         availability: AvailabilityV1 {
-            observed_unix_ms: decimal(composing.window.begun_unix_ms + timing.observed_ms)?,
+            observed_unix_ms: decimal(composing.clock.origin_unix_ms() + timing.observed_ms)?,
             state: if complete {
                 AvailabilityV1State::Complete
             } else {
@@ -1253,6 +1278,15 @@ fn observed_of(
             retention_policy: AvailabilityV1RetentionPolicy::RetainV1,
         },
     })
+}
+
+/// Whether the step's captured stderr is empty — `None` for a step never captured, which the
+/// diagnostics rule reads as unavailable, never as empty (review of 4d8a8eb, HIGH-1).
+fn captured_stderr_empty(captures: &[Option<Captured>], step: usize) -> Option<bool> {
+    captures
+        .get(step)
+        .and_then(Option::as_ref)
+        .map(|captured| captured.payloads.candidate_stderr.as_ref().byte_length == 0)
 }
 
 /// The run outcome's wire name, for the receipt's reasons.
@@ -1277,20 +1311,24 @@ fn observations_of(
         .record(&host_record(composing.host, facts)?)
         .map_err(at("host"))?;
     let resources = publisher.resource_pages(&[]).map_err(at("resources"))?;
-    let unresolved = unresolved_rows(composing.cleanup, composing.records)?;
+    let unresolved = unresolved_rows(
+        composing.cleanup,
+        composing.records,
+        composing.obligation_ids,
+    )?;
     let unresolved_obligations = publisher
         .obligation_pages(&unresolved)
         .map_err(at("obligations"))?;
     Ok(ObservationsV1 {
         host,
-        start_unix_ms: decimal(composing.window.begun_unix_ms)?,
-        end_unix_ms: decimal(composing.window.begun_unix_ms + timing.observed_ms)?,
+        start_unix_ms: decimal(composing.clock.origin_unix_ms())?,
+        end_unix_ms: decimal(composing.clock.origin_unix_ms() + timing.observed_ms)?,
         start_monotonic_ns: decimal(0)?,
         end_monotonic_ns: decimal(timing.observed_ms.saturating_mul(1_000_000))?,
-        cutoff_unix_ms: decimal(composing.window.begun_unix_ms + timing.work_deadline_ms)?,
+        cutoff_unix_ms: decimal(composing.clock.origin_unix_ms() + timing.work_deadline_ms)?,
         resources,
         producer,
-        cancellation: if composing.cancelled {
+        cancellation: if timing.cancellation_intent_ms.is_some() {
             ObservationsV1Cancellation::Requested
         } else {
             ObservationsV1Cancellation::NotRequested
@@ -1338,10 +1376,10 @@ fn decide_over(composing: &Composing<'_>, deciding: Deciding<'_>) -> Result<Deci
         expected: ExpectedProducerV1 {
             status: ExpectedProducerV1Status::Exited,
             exit_code: Maybe::present(0),
-            signal: Maybe::unavailable(Text::new("exit expected")?),
+            signal: Maybe::unavailable(Text::new("ordinary_exit_expected")?),
         },
         actual: process_state(producer),
-        termination: match composing.outcome {
+        termination: match composing.outcome.outcome() {
             OutcomeName::Timeout => Termination::Deadline,
             OutcomeName::Cancelled => Termination::Cancellation,
             OutcomeName::PendingCleanup | OutcomeName::SetupFailed => Termination::Unknown,
@@ -1354,7 +1392,7 @@ fn decide_over(composing: &Composing<'_>, deciding: Deciding<'_>) -> Result<Deci
         case_id: plan.case_id.clone(),
         executed: execute.is_some(),
         outcome: case_outcome,
-        incomplete_cause: incomplete_cause(composing.outcome),
+        incomplete_cause: incomplete_cause(composing.outcome.outcome()),
         producer: process_state(producer),
     };
     Ok(decision::decide(&decision::Input {
@@ -1362,9 +1400,11 @@ fn decide_over(composing: &Composing<'_>, deciding: Deciding<'_>) -> Result<Deci
         plans: &plans,
         cases: &[case],
         producer: &process,
-        checker: &CheckerFact::Process(process.clone()),
+        // The oracle evaluates in-process (the frontend reads the driver's stdout); the checker is
+        // not the producer's process (review of 4d8a8eb, MEDIUM-4).
+        checker: &CheckerFact::InProcessComplete,
         oracle: oracle_fact,
-        oracle_unavailable_cause: incomplete_cause(composing.outcome),
+        oracle_unavailable_cause: incomplete_cause(composing.outcome.outcome()),
         logs: Streams {
             stdout: log_state(execute.map(|c| c.flags.candidate_stdout_complete)),
             stderr: log_state(execute.map(|c| c.flags.candidate_stderr_complete)),
@@ -1375,7 +1415,7 @@ fn decide_over(composing: &Composing<'_>, deciding: Deciding<'_>) -> Result<Deci
         },
         cleanup: CleanupFacts {
             descendants: settlement(composing.cleanup, "process"),
-            resources: settlement(composing.cleanup, "aggregate"),
+            resources: settlement(composing.cleanup, "resources"),
             obligations: composing.cleanup.aggregate().into(),
         },
         evidence: if complete {
@@ -1410,7 +1450,7 @@ fn decision_plans(
                 expected_producer: ExpectedProducerV1 {
                     status: ExpectedProducerV1Status::Exited,
                     exit_code: Maybe::present(0),
-                    signal: Maybe::unavailable(Text::new("exit expected")?),
+                    signal: Maybe::unavailable(Text::new("ordinary_exit_expected")?),
                 },
                 design: if plan.reviewed_design.is_some() {
                     decision::Design::Reviewed
@@ -1470,6 +1510,7 @@ fn record_rows(
 fn unresolved_rows(
     cleanup: &RunCleanup,
     records: &[(RunRecordKind, String, Object)],
+    ids: &[String],
 ) -> Result<Vec<ObligationV1>, crate::contracts::receipt::Error> {
     let cited = records
         .iter()
@@ -1489,10 +1530,10 @@ fn unresolved_rows(
         .obligations()
         .iter()
         .filter(|obligation| obligation.state != RecordSettlement::Settled)
-        .enumerate()
-        .map(|(index, obligation)| {
+        .zip(ids)
+        .map(|(obligation, id)| {
             Ok(ObligationV1 {
-                obligation_id: Id::new(format!("28f50000-0000-4000-8000-{index:012x}"))?,
+                obligation_id: Id::new(id.as_str())?,
                 owner_id: Name::new(RUNTIME_OWNER)?,
                 scope: Text::new(obligation.id.as_str())?,
                 material: true,

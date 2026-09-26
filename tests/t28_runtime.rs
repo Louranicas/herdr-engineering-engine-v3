@@ -1380,7 +1380,7 @@ fn assert_run_records_decoded(
             {"id": "process", "state": "settled"},
             {"id": "scratch", "state": "settled"},
             {"id": "retained_paths", "state": "settled"},
-            {"id": "aggregate", "state": "unknown"},
+            {"id": "resources", "state": "unknown"},
         ])
     );
     Ok(())

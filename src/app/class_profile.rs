@@ -712,6 +712,9 @@ pub enum ReviewedError {
     /// The bytes are not the record the profile names.
     Mismatch,
     Io,
+    /// A member of the record's closure is absent, of another size or digest, over the bound, or
+    /// unreadable — named at the reference its parent cited.
+    Closure(crate::check::graph::Error),
 }
 
 /// Read the reviewed record `which` names under custody, at most [`MAX_REVIEWED_BYTES`], and return
@@ -745,6 +748,81 @@ pub fn read_reviewed(profile: &Profile, which: Which) -> Result<Vec<u8>, Reviewe
         return Err(ReviewedError::Mismatch);
     }
     Ok(bytes)
+}
+
+/// The class's `reviewed/` directory as a graph owner (B14a-2c-ii-a): a reference resolves to the
+/// file named by its sha256 hex, read under [`MAX_REVIEWED_BYTES`] and returned only when its size
+/// and digest are the reference's — so the one graph walker that exists walks a reviewed record's
+/// whole closure (its specification, assumption, finding and obligation pages) and names the
+/// member it cannot find at the reference its parent cited.
+pub struct ReviewedObjects {
+    held: PrivateDirectory,
+}
+
+impl ReviewedObjects {
+    /// Open the class's `reviewed/` directory under custody.
+    ///
+    /// # Errors
+    /// [`ReviewedError::NotInstalled`] when absent; [`ReviewedError::Custody`] unless 0700 and owned.
+    pub fn open(profile: &Profile) -> Result<Self, ReviewedError> {
+        match PrivateDirectory::open(&profile.directory.join(REVIEWED_DIRECTORY)) {
+            Ok(held) => Ok(Self { held }),
+            Err(DirectoryError::NotFound) => Err(ReviewedError::NotInstalled),
+            Err(DirectoryError::Custody) => Err(ReviewedError::Custody),
+            Err(DirectoryError::Io(_)) => Err(ReviewedError::Io),
+        }
+    }
+}
+
+impl crate::check::graph::Objects for ReviewedObjects {
+    fn open(
+        &self,
+        reference: &crate::contracts::receipt::Ref,
+    ) -> Result<Box<dyn std::io::Read + '_>, crate::check::graph::Error> {
+        use crate::check::graph::Error;
+        let name = reference
+            .sha256
+            .as_str()
+            .strip_prefix("sha256:")
+            .ok_or(Error::Identity)?;
+        let bytes = match self.held.read(name, MAX_REVIEWED_BYTES) {
+            Ok(bytes) => bytes,
+            Err(FileError::NotFound) => return Err(Error::Missing),
+            Err(FileError::TooLarge) => return Err(Error::Bound),
+            Err(FileError::Custody | FileError::Io(_)) => return Err(Error::Io),
+        };
+        if u64::try_from(bytes.len()).ok() != Some(u64::from(reference.byte_length))
+            || super::evidence::digest(&bytes) != reference.sha256.as_str()
+        {
+            return Err(Error::Identity);
+        }
+        Ok(Box::new(std::io::Cursor::new(bytes)))
+    }
+}
+
+/// The whole closure of the reviewed record `root` names, resolved from the class's `reviewed/`
+/// directory: every member present, of its declared size and digest, or the walk names the one that
+/// is not (B14a-2c-ii-a). The root is the reference the receipt will cite; its digest must be the
+/// one the profile declares for `which`, or the closure is `Mismatch` — a profile names records,
+/// a caller cannot substitute one.
+///
+/// # Errors
+/// [`ReviewedError::Mismatch`] when `root`'s digest is not the profile's; the directory's own
+/// refusals; `Missing`/`Identity`/`Bound`/`Io` from the walk, wrapped as [`ReviewedError::Closure`].
+pub fn read_reviewed_closure(
+    profile: &Profile,
+    which: Which,
+    root: &crate::contracts::receipt::Ref,
+) -> Result<crate::check::graph::Graph, ReviewedError> {
+    let declared = match which {
+        Which::Expectation => &profile.declared.reviewed.expectation,
+        Which::Review => &profile.declared.reviewed.review,
+    };
+    if root.sha256.as_str() != format!("sha256:{}", hex(declared)) {
+        return Err(ReviewedError::Mismatch);
+    }
+    let objects = ReviewedObjects::open(profile)?;
+    crate::check::graph::Graph::resolve(&objects, root).map_err(ReviewedError::Closure)
 }
 
 /// The 64 lowercase hex of a digest's bytes: a reviewed record's file name.
@@ -1596,6 +1674,91 @@ review_sha256 = "{REV}"
                 why: ReviewedWhy::Same
             }
         );
+        Ok(())
+    }
+
+    /// B14a-2c-ii-a · a reviewed record's whole closure resolves from the class directory through
+    /// the one graph walker: the receipt-import fixture's objects installed by digest, its root
+    /// walked to every member; a member removed is `Missing` at its reference, a member's bytes
+    /// changed is `Identity`, a root the profile does not name is `Mismatch`, an absent directory
+    /// `NotInstalled`.
+    #[test]
+    fn a_reviewed_closure_resolves_whole_or_names_the_member_it_cannot()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use crate::contracts::receipt::{ReceiptV1, Ref, TypedRef};
+        #[derive(serde::Deserialize)]
+        struct FixtureObject {
+            reference: Ref,
+            bytes: String,
+        }
+        #[derive(serde::Deserialize)]
+        struct Fixture {
+            root: TypedRef<ReceiptV1>,
+            objects: Vec<FixtureObject>,
+        }
+        let fixture: Fixture = serde_json::from_str(include_str!(
+            "../../tests/fixtures/receipt-import/nonpass.json"
+        ))?;
+        let root_ref = fixture.root.as_ref().clone();
+        // A profile naming the fixture root as its review (its digest), the expectation as-is.
+        let review_hex = root_ref
+            .sha256
+            .as_str()
+            .trim_start_matches("sha256:")
+            .to_owned();
+        let text = valid().replace(REV, &format!("sha256:{review_hex}"));
+        let root = private("reviewed-closure");
+        let profile = Profile {
+            declared: compose(text.as_bytes()).map_err(|e| format!("{e:?}"))?,
+            directory: root.clone(),
+            digest: String::new(),
+        };
+        assert!(matches!(
+            read_reviewed_closure(&profile, Which::Review, &root_ref),
+            Err(ReviewedError::NotInstalled)
+        ));
+        let store = root.join(REVIEWED_DIRECTORY);
+        fs::DirBuilder::new().mode(0o700).create(&store)?;
+        for object in &fixture.objects {
+            let name = object
+                .reference
+                .sha256
+                .as_str()
+                .trim_start_matches("sha256:");
+            write(&store.join(name), object.bytes.as_bytes(), 0o600);
+        }
+        let graph = read_reviewed_closure(&profile, Which::Review, &root_ref)
+            .map_err(|e| format!("{e:?}"))?;
+        assert_eq!(graph.object_count(), fixture.objects.len());
+        // A root the profile does not name.
+        let mut other = root_ref.clone();
+        other.sha256 = fixture.objects[1].reference.sha256.clone();
+        assert!(matches!(
+            read_reviewed_closure(&profile, Which::Review, &other),
+            Err(ReviewedError::Mismatch)
+        ));
+        // A member removed: named at its reference.
+        let victim = fixture
+            .objects
+            .iter()
+            .find(|object| object.reference != root_ref)
+            .ok_or("a member")?;
+        let victim_name = victim
+            .reference
+            .sha256
+            .as_str()
+            .trim_start_matches("sha256:");
+        fs::remove_file(store.join(victim_name))?;
+        assert!(matches!(
+            read_reviewed_closure(&profile, Which::Review, &root_ref),
+            Err(ReviewedError::Closure(crate::check::graph::Error::Missing))
+        ));
+        // A member's bytes changed under its name: not the reference.
+        write(&store.join(victim_name), b"{}", 0o600);
+        assert!(matches!(
+            read_reviewed_closure(&profile, Which::Review, &root_ref),
+            Err(ReviewedError::Closure(crate::check::graph::Error::Identity))
+        ));
         Ok(())
     }
 

@@ -1447,7 +1447,7 @@ fn cleanup_of(run: &Run, retained_removed: bool) -> (Cleanup, RunCleanup) {
         obligation("process", state(run.process_cleanup_complete)),
         obligation("scratch", state(run.scratch_released)),
         obligation("retained_paths", state(retained_removed)),
-        obligation("aggregate", RecordSettlement::Unknown),
+        obligation("resources", RecordSettlement::Unknown),
     ];
     let record = RunCleanup::of(state(cleanup.settled()), &obligations, &[]);
     (cleanup, record)
