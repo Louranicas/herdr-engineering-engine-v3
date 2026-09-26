@@ -467,50 +467,9 @@ impl Aggregate {
         if self.calls.len() >= 64 {
             return Err(Error::Bound);
         }
-        io::pin(&self.config, deadline)?;
-        let mut argv = vec![
-            OsString::from("--user"),
-            "--json=short".into(),
-            "--no-pager".into(),
-            "--allow-interactive-authorization=no".into(),
-        ];
-        argv.extend(parameters.into_iter().map(Into::into));
-        let spec = process::ProcessSpec {
-            executable: self.config.busctl.clone(),
-            arguments: argv.clone(),
-            directory: "/".into(),
-            environment: vec![(
-                "XDG_RUNTIME_DIR".into(),
-                self.config.runtime_dir.clone().into_os_string(),
-            )],
-            input: vec![],
-            stream_limit: 65536,
-        };
-        let report = process::run(&spec, deadline, cancelled);
-        self.calls.push(Call { argv, report });
-        let report = self
-            .calls
-            .last()
-            .and_then(|c| c.report.as_ref().ok())
-            .ok_or(Error::Process)?;
-        if report.pending.is_some()
-            || !report.leader_reaped
-            || !report.process_group_settled
-            || report.interruption.is_some()
-            || !report.stdout.eof
-            || !report.stderr.eof
-            || report.stdout.truncated
-            || report.stderr.truncated
-            || report.stdout.failed
-            || report.stderr.failed
-        {
-            return Err(Error::Process);
-        }
-        if report.exit_code != Some(0) || report.signal.is_some() || !report.stderr.bytes.is_empty()
-        {
-            return Err(Error::Manager);
-        }
-        Ok(report.stdout.bytes.clone())
+        let call = busctl(&self.config, parameters, deadline, cancelled)?;
+        self.calls.push(call);
+        self.calls.last().ok_or(Error::Process)?.stdout()
     }
     fn query(
         &mut self,
@@ -557,6 +516,137 @@ impl Aggregate {
         Ok(observation)
     }
 }
+/// The one busctl door (R21 N6): the pinned `/usr/bin/busctl` (`io::pin`, re-checked per call)
+/// run with a cleared environment holding only `XDG_RUNTIME_DIR`, against the user manager, with
+/// no interactive authorization, under the caller's deadline and cancellation. A refused pin
+/// starts nothing and returns `Err`; otherwise the call is returned whole for its owner to record,
+/// and [`Call::stdout`] decides what it printed.
+fn busctl(
+    config: &Config,
+    parameters: Vec<String>,
+    deadline: Instant,
+    cancelled: &AtomicBool,
+) -> Result<Call, Error> {
+    io::pin(config, deadline)?;
+    let mut argv = vec![
+        OsString::from("--user"),
+        "--json=short".into(),
+        "--no-pager".into(),
+        "--allow-interactive-authorization=no".into(),
+    ];
+    argv.extend(parameters.into_iter().map(Into::into));
+    let spec = process::ProcessSpec {
+        executable: config.busctl.clone(),
+        arguments: argv.clone(),
+        directory: "/".into(),
+        environment: vec![(
+            "XDG_RUNTIME_DIR".into(),
+            config.runtime_dir.clone().into_os_string(),
+        )],
+        input: vec![],
+        stream_limit: 65536,
+    };
+    let report = process::run(&spec, deadline, cancelled);
+    Ok(Call { argv, report })
+}
+
+impl Call {
+    /// What the call printed, if it is an observation: the leader reaped, its group settled, both
+    /// streams complete and unfailed (else `Process`), and exit 0 with no signal and no stderr
+    /// (else `Manager`).
+    ///
+    /// # Errors
+    /// `Process` or `Manager`, as above.
+    fn stdout(&self) -> Result<Vec<u8>, Error> {
+        let report = self.report.as_ref().map_err(|_| Error::Process)?;
+        if report.pending.is_some()
+            || !report.leader_reaped
+            || !report.process_group_settled
+            || report.interruption.is_some()
+            || !report.stdout.eof
+            || !report.stderr.eof
+            || report.stdout.truncated
+            || report.stderr.truncated
+            || report.stdout.failed
+            || report.stderr.failed
+        {
+            return Err(Error::Process);
+        }
+        if report.exit_code != Some(0) || report.signal.is_some() || !report.stderr.bytes.is_empty()
+        {
+            return Err(Error::Manager);
+        }
+        Ok(report.stdout.bytes.clone())
+    }
+}
+
+/// A service unit's main process id as the user manager reports it (R21 N6), over the one busctl
+/// door: `ListUnitsByNames` finds the unit's object path (read at run time, never a host constant;
+/// K2), the unit must be loaded and active (else `State`), and `MainPID` is read from that path's
+/// `Service` interface. Two calls, each under the caller's deadline and cancellation.
+///
+/// # Errors
+/// `Invalid` for a name that is not a `.service` of at most 256 bytes; the door's errors; `State`
+/// for a unit not loaded and active; `Manager` for any reply outside its shape, or `MainPID` 0.
+pub fn main_pid(
+    config: &Config,
+    unit: &str,
+    deadline: Instant,
+    cancelled: &AtomicBool,
+) -> Result<u32, Error> {
+    if unit.len() > 256 || !unit.ends_with(".service") || unit.len() == ".service".len() {
+        return Err(Error::Invalid);
+    }
+    let listed = busctl(
+        config,
+        vec![
+            "call".into(),
+            SERVICE.into(),
+            OBJECT.into(),
+            MANAGER.into(),
+            "ListUnitsByNames".into(),
+            "as".into(),
+            "1".into(),
+            unit.into(),
+        ],
+        deadline,
+        cancelled,
+    )?
+    .stdout()?;
+    let (observation, object) = unit_reply(&listed, unit)?;
+    if observation.load_state != "loaded" || observation.active_state != "active" {
+        return Err(Error::State);
+    }
+    let property = busctl(
+        config,
+        vec![
+            "get-property".into(),
+            SERVICE.into(),
+            object,
+            "org.freedesktop.systemd1.Service".into(),
+            "MainPID".into(),
+        ],
+        deadline,
+        cancelled,
+    )?
+    .stdout()?;
+    main_pid_reply(&property)
+}
+
+/// One `MainPID` property reply: exactly `{"type":"u","data":N}`. `N` = 0 is the manager's answer
+/// for a unit with no main process (measured: an unloaded unit's path reads 0 with rc 0), so it is
+/// refused as `Manager`, never returned as a pid.
+///
+/// # Errors
+/// `Manager` for any other shape, signature, or 0.
+pub fn main_pid_reply(bytes: &[u8]) -> Result<u32, Error> {
+    let reply: Reply<u32> = serde_json::from_slice(bytes).map_err(|_| Error::Manager)?;
+    if reply.signature != "u" || reply.data == 0 {
+        return Err(Error::Manager);
+    }
+    Ok(reply.data)
+}
+
 fn identity() -> Result<[u32; 4], Error> {
     Ok([
         std::process::id(),

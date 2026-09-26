@@ -748,3 +748,32 @@ fn descendants_follow_ppid_links_and_refuse_past_their_bound_with_both_numbers()
     assert_eq!(census(Instant::now(), &running), Err(CensusError::Deadline));
     Ok(())
 }
+
+/// R21 N6 · the resolver reads the unit's `MainPID` over the one pinned busctl door; its reply is
+/// one `u` and zero means no process. Independent source: the host's own replies, recorded
+/// read-only in `~/hee3-evidence/T00-plan-20260926/DS18-busctl-20260927.json` (2026-09-27):
+/// `busctl --user --json=short get-property … ollama_2eservice … MainPID` printed the first fixture,
+/// and the same property on an unloaded unit's path printed the second with rc=0 — "0 = no
+/// process" is systemd's own answer, not an error it raises.
+#[test]
+fn a_main_pid_reply_is_one_u32_and_zero_is_no_process() {
+    use habitat_engine::worker::aggregate::{Error as ManagerError, main_pid_reply};
+    assert_eq!(main_pid_reply(br#"{"type":"u","data":1901}"#), Ok(1901));
+    assert_eq!(
+        main_pid_reply(br#"{"type":"u","data":0}"#),
+        Err(ManagerError::Manager),
+        "an unloaded unit's MainPID is 0: no process to resolve"
+    );
+    assert_eq!(
+        main_pid_reply(br#"{"type":"s","data":"1901"}"#),
+        Err(ManagerError::Manager)
+    );
+    assert_eq!(
+        main_pid_reply(br#"{"type":"u","data":1901,"extra":1}"#),
+        Err(ManagerError::Manager)
+    );
+    assert_eq!(
+        main_pid_reply(br#"{"type":"u","data":4294967296}"#),
+        Err(ManagerError::Manager)
+    );
+}
