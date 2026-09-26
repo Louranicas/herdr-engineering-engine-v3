@@ -2042,7 +2042,7 @@ class T06QualityInventoryControls(unittest.TestCase):
         # The recheck reads the pin's own path and digest, after the Rust commands.
         recheck = text.index("Pinned interpreter changed")
         self.assertGreater(recheck, text.index("run_rust_test_partitions(ROOT, run, cargo, common, label, test_expectations, parallel_main)"))
-        self.assertIn("required_text='Ran 118 tests' if has_t09(ROOT) else", text)
+        self.assertIn("required_text='Ran 121 tests' if has_t09(ROOT) else", text)
         self.assertIn("'Ran 93 tests' if has_t08_contract(ROOT) or has_recovery(ROOT) else", text)
 
     def test_t06_partition_holds_every_t06_target_once_and_nothing_else(self):
@@ -2356,13 +2356,21 @@ class IncludeCensusControls(unittest.TestCase):
     def test_census_over_the_tree_counts_every_site_and_sees_the_new_fixture(self):
         deadline = time.monotonic() + 120
         declared = quality.quality_subject_paths(ROOT, deadline, False)
-        sites, count = quality.include_census(ROOT, declared, deadline)
-        # An independent count of the macro sites: plain substring counting, not the census regex.
+        sites, files = quality.include_census(ROOT, declared, deadline)
+        # An independent count of the macro sites: plain substring counting, not the census regex,
+        # over the roots cargo declares.
+        roots = quality.rust_source_roots(ROOT)
+        self.assertEqual(roots, ["src", "tests"])
         expected = sum((ROOT / name).read_text().count("include_str!") + (ROOT / name).read_text().count("include_bytes!")
-                       for directory in ("src", "tests") for name in quality.tree_files(ROOT, directory, deadline, ".rs"))
+                       for directory in roots for name in quality.tree_files(ROOT, directory, deadline, ".rs"))
         self.assertEqual(sites, expected)
         self.assertGreaterEqual(sites, 1)
-        self.assertEqual(count, len(set(declared)))
+        # The files are measured: distinct, every one declared and present, the new fixture among them.
+        self.assertEqual(files, sorted(set(files)))
+        self.assertLessEqual(len(files), sites)
+        self.assertTrue(set(files) <= set(declared), set(files) - set(declared))
+        self.assertTrue(all((ROOT / name).is_file() for name in files))
+        self.assertIn(self.FIXTURE, files)
         self.assertIn(self.FIXTURE, declared)
         # Negative control on the live tree: the fixture undeclared is the H1 shape, named from its site.
         with self.assertRaisesRegex(ValueError, r"Undeclared include input: " + re.escape(self.FIXTURE)
@@ -2383,8 +2391,9 @@ class IncludeCensusControls(unittest.TestCase):
                                           'const B: &[u8] = include_bytes!(\n    "../tests/fixtures/y.json"\n);\n')
             (root / "tests/b.rs").write_text('const C: &str = include_str!(concat!(\n    env!("CARGO_MANIFEST_DIR"),\n'
                                             '    "/tests/fixtures/y.json"\n));\n')
+            (root / "Cargo.toml").write_text('[lib]\nname = "a"\npath = "src/a.rs"\n[[test]]\nname = "b"\npath = "tests/b.rs"\n')
             self.assertEqual(quality.include_census(root, ["docs/x.md", "tests/fixtures/y.json", "src/a.rs"], deadline),
-                             (3, 3))
+                             (3, ["docs/x.md", "tests/fixtures/y.json"]))
             with self.assertRaisesRegex(ValueError, r"Undeclared include input: docs/x\.md \(from src/a\.rs:1\)"):
                 quality.include_census(root, ["tests/fixtures/y.json"], deadline)
             with self.assertRaisesRegex(ValueError, r"Undeclared include input: tests/fixtures/y\.json \(from src/a\.rs:2\)"):
@@ -2400,14 +2409,39 @@ class IncludeCensusControls(unittest.TestCase):
                 quality.include_census(root, ["tests/fixtures/y.json"], deadline)
             (root / "src/a.rs").write_text("// none\n")
             (root / "tests/b.rs").write_text("// none\n")
-            self.assertEqual(quality.include_census(root, [], deadline), (0, 0))
+            self.assertEqual(quality.include_census(root, [], deadline), (0, []))
+            # A target cargo compiles from a third root joins the census's world; one without a path refuses.
+            (root / "checks").mkdir()
+            (root / "checks/c.rs").write_text('const D: &str = include_str!("../docs/x.md");\n')
+            (root / "Cargo.toml").write_text('[lib]\nname = "a"\npath = "src/a.rs"\n[[test]]\nname = "c"\npath = "checks/c.rs"\n')
+            self.assertEqual(quality.rust_source_roots(root), ["checks", "src"])
+            self.assertEqual(quality.include_census(root, ["docs/x.md"], deadline), (1, ["docs/x.md"]))
+            with self.assertRaisesRegex(ValueError, r"Undeclared include input: docs/x\.md \(from checks/c\.rs:1\)"):
+                quality.include_census(root, [], deadline)
+            (root / "Cargo.toml").write_text('[[test]]\nname = "c"\n')
+            with self.assertRaisesRegex(ValueError, r"Cargo target without a path in \[\[test\]\]: c"):
+                quality.rust_source_roots(root)
+            (root / "Cargo.toml").write_text('[[test]]\nname = "c"\npath = "/etc/c.rs"\n')
+            with self.assertRaisesRegex(ValueError, "Cargo target path outside the tree"):
+                quality.rust_source_roots(root)
+            (root / "Cargo.toml").write_text("[package]\nname = \"a\"\n")
+            self.assertEqual(quality.rust_source_roots(root), ["src"])
 
-    def test_main_runs_the_census_and_prints_its_count(self):
-        text = ast.unparse(next(node for node in ast.parse((ROOT / "tools/check-quality").read_text()).body
-                                if isinstance(node, ast.FunctionDef) and node.name == "main"))
-        self.assertIn("include_sites, include_declared = include_census(ROOT, required, work_deadline)", text)
-        self.assertIn("print('include-census: sites=' + str(include_sites) + ' declared=' + str(include_declared), flush=True)", text)
-        self.assertIn("report['include_census'] = {'sites': include_sites, 'declared': include_declared}", text)
+    def test_main_runs_the_census_before_the_subject_copy_and_prints_its_count(self):
+        main = next(node for node in ast.parse((ROOT / "tools/check-quality").read_text()).body
+                    if isinstance(node, ast.FunctionDef) and node.name == "main")
+        text = ast.unparse(main)
+        self.assertIn("include_sites, include_files = include_census(ROOT, required, work_deadline)", text)
+        self.assertIn("print('include-census: sites=' + str(include_sites) + ' files=' + str(len(include_files)) + ' declared=' + str(len(set(required))), flush=True)", text)
+        self.assertIn("report['include_census'] = {'sites': include_sites, 'files': include_files, 'declared': len(set(required))}", text)
+        # The order is the rule (review of 5341076, finding 4): after the subject is enumerated,
+        # before any copy of it is made or any command runs.
+        def line_of(needle):
+            return next(node.lineno for node in ast.walk(main) if isinstance(node, ast.Assign)
+                        and needle in ast.unparse(node))
+        census = line_of("include_census(ROOT, required, work_deadline)")
+        self.assertGreater(census, line_of("required = quality_subject_paths(ROOT, work_deadline"))
+        self.assertLess(census, line_of("work = Path(tempfile.mkdtemp(prefix='hee3-quality-'))"))
 
 
 if __name__ == "__main__":

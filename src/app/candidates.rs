@@ -55,6 +55,26 @@ pub enum ClassPromptError {
     Base,
 }
 
+impl ClassPromptError {
+    /// The refused input, by the name the class profile gives it.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Task => "task",
+            Self::Cargo => "cargo",
+            Self::Base => "base",
+        }
+    }
+}
+
+impl std::fmt::Display for ClassPromptError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "class prompt input refused: {}", self.name())
+    }
+}
+
+impl std::error::Error for ClassPromptError {}
+
 impl Refusal {
     /// The reason the refused-candidate record carries, in the `candidate_*` family the repair
     /// refusals use.

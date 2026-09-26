@@ -72,6 +72,9 @@ if operation == 'generate':
         served = int(counter.read_text()) if counter.exists() else 0
         counter.write_text(str(served + 1))
         if served >= len(value):
+            # The double records what it refused (F101): a test can assert the refusal itself, not
+            # merely a process failure that any other fault would also produce.
+            (root / 'past-list.json').write_text(json.dumps({'asked': served + 1, 'scripted': len(value)}))
             sys.stderr.write(f'fixture: asked for generate answer {served + 1} of {len(value)} scripted\n')
             sys.exit(3)
         value = value[served]

@@ -265,13 +265,16 @@ RECOVERY_INPUTS = ("src/recovery.rs", "tests/recovery.rs")
 # battery too, and a file is pinned once by the battery that owns it.
 T07_STARTUP_TARGET_COUNTS = {"t07_startup": 107}
 T07_STARTUP_INPUTS = ("src/app/startup.rs", "src/store/reconciliation.rs", "tests/t07_startup.rs")
-# Reviewed T08 contract battery: 23 controls, no library-unit namespace. The
-# inputs are what tests/t08_contract.rs reads (the offline contract client it
-# copies and executes, the overbound prompt recipe, the two retained actual
-# cohort envelopes and their raw streams) plus the two example drivers those
-# cohorts were produced with, registered in the manifest as an exact inventory
-# that Clippy checks and nothing runs. control-v1/ and README.stub.md under
-# tests/fixtures/native are read by no registered Rust target and stay unpinned.
+# Reviewed T08 contract battery (the count is the pin below), no library-unit
+# namespace. The inputs are what tests/t08_contract.rs and its child module
+# tests/t08_candidates.rs read (the offline contract client it copies and
+# executes, the overbound prompt recipe, the two retained actual cohort envelopes
+# and their raw streams) plus the two example drivers those cohorts were produced
+# with, registered in the manifest as an exact inventory that Clippy checks and
+# nothing runs. The DS13 measured prompt fixture is read by the lib unit tests and
+# by t28 as well; it is pinned here once, beside the battery whose fake it was
+# measured against. control-v1/ and README.stub.md under tests/fixtures/native
+# are read by no registered Rust target and stay unpinned.
 T08_CONTRACT_TARGET_COUNTS = {"t08_contract": 29}
 T08_CONTRACT_INPUTS = (
     "src/worker/native.rs", "src/worker/mod.rs", "tests/t08_contract.rs", "tests/t08_candidates.rs",
@@ -786,6 +789,24 @@ def refuse_untracked_inputs(root, names, deadline):
                          + ", ".join(unexcused))
 
 
+def rust_source_roots(root):
+    """The directories cargo compiles Rust from, derived from the manifest that decides (F147): the
+    first path component of the lib (default `src/lib.rs`), every bin, test and example target. One
+    home for the census and the subject inventory, so neither holds a literal the other repeats."""
+    manifest = tomllib.loads((root / "Cargo.toml").read_text())
+    paths = [manifest.get("lib", {}).get("path", "src/lib.rs")]
+    for section in ("bin", "test", "example"):
+        for target in manifest.get(section, []):
+            path = target.get("path")
+            if not isinstance(path, str) or not path:
+                raise ValueError("Cargo target without a path in [[" + section + "]]: " + str(target.get("name")))
+            paths.append(path)
+    roots = sorted({Path(path).parts[0] for path in paths})
+    if any(root_name in ("", ".", "..") or root_name.startswith("/") for root_name in roots):
+        raise ValueError("Cargo target path outside the tree: " + str(roots))
+    return roots
+
+
 INCLUDE_MACRO = re.compile(r"include_(?:str|bytes)!\s*\(")
 INCLUDE_LITERAL = re.compile(r'^\s*"([^"\\]+)"\s*\)')
 INCLUDE_MANIFEST = re.compile(r'^\s*concat!\s*\(\s*env!\s*\(\s*"CARGO_MANIFEST_DIR"\s*\)\s*,\s*"(/[^"\\]+)"\s*\)\s*\)')
@@ -801,10 +822,13 @@ def include_census(root, declared, deadline):
     file's directory as rustc does, and `concat!(env!("CARGO_MANIFEST_DIR"), "/path")`, resolved
     against the root; any other argument refuses by file and line, so the census is a count of
     every macro site, never of the ones it happened to understand. Returns (sites, declared) once
-    every site's file is declared and lies under the root."""
+    every site's file is declared and lies under the root. Returns (sites, files): the site count
+    and the sorted set of distinct files the sites include -- a measured value, never the size of
+    the declared list handed in (review of 5341076, finding 2)."""
     declared = set(declared)
     sites = 0
-    for directory in ("src", "tests"):
+    files = set()
+    for directory in rust_source_roots(root):
         for name in tree_files(root, directory, deadline, ".rs"):
             require_work_time(deadline, "include census")
             text = (root / name).read_text()
@@ -826,7 +850,8 @@ def include_census(root, declared, deadline):
                 relative = os.path.relpath(normal, str(root))
                 if relative not in declared:
                     raise ValueError("Undeclared include input: " + relative + " (from " + name + ":" + str(line) + ")")
-    return sites, len(declared)
+                files.add(relative)
+    return sites, sorted(files)
 
 
 def quality_subject_paths(root, deadline, rust_only):
@@ -841,7 +866,7 @@ def quality_subject_paths(root, deadline, rust_only):
                 "docs/corpus-schematics.md",
                 # tests/t01_contracts.rs pins the RC01 limits to the published decision (include_str!).
                 "docs/contract-decisions.md"]
-    required += [name for directory in ("src", "tests") for name in tree_files(root, directory, deadline, ".rs")]
+    required += [name for directory in rust_source_roots(root) for name in tree_files(root, directory, deadline, ".rs")]
     required += tree_files(root, RUST_OFFLINE_BUNDLE, deadline)
     if (root / "tests/t02_pi.rs").is_file():
         required += tree_files(root, "tests/fixtures/pi", deadline)
@@ -1307,9 +1332,9 @@ def main():
         "inventory_byte_limit": INVENTORY_BYTE_LIMIT,
         "stream_limit_bytes": STREAM_LIMIT,
     }
-    include_sites, include_declared = include_census(ROOT, required, work_deadline)
-    print("include-census: sites=" + str(include_sites) + " declared=" + str(include_declared), flush=True)
-    report["include_census"] = {"sites": include_sites, "declared": include_declared}
+    include_sites, include_files = include_census(ROOT, required, work_deadline)
+    print("include-census: sites=" + str(include_sites) + " files=" + str(len(include_files)) + " declared=" + str(len(set(required))), flush=True)
+    report["include_census"] = {"sites": include_sites, "files": include_files, "declared": len(set(required))}
     work = None
     cleanup_complete = True
     try:
@@ -1390,7 +1415,7 @@ def main():
             return texts
 
         run("process-controls", [sys.executable, "-W", "error", "tests/t25_process.py"], required_text="17 tests")
-        run("quality-integration-controls", [sys.executable, "-W", "error", "tests/t25_quality.py"], required_text="Ran 118 tests" if has_t09(ROOT) else "Ran 93 tests" if has_t08_contract(ROOT) or has_recovery(ROOT) else ("Ran 83 tests" if has_t08(ROOT) else ("Ran 73 tests" if has_t07(ROOT) else ("Ran 66 tests" if has_t21(ROOT) or has_t13(ROOT) else ("Ran 47 tests" if has_t06(ROOT) else "Ran 43 tests")))), required_stream="stderr")
+        run("quality-integration-controls", [sys.executable, "-W", "error", "tests/t25_quality.py"], required_text="Ran 121 tests" if has_t09(ROOT) else "Ran 93 tests" if has_t08_contract(ROOT) or has_recovery(ROOT) else ("Ran 83 tests" if has_t08(ROOT) else ("Ran 73 tests" if has_t07(ROOT) else ("Ran 66 tests" if has_t21(ROOT) or has_t13(ROOT) else ("Ran 47 tests" if has_t06(ROOT) else "Ran 43 tests")))), required_stream="stderr")
         run("workflow-procedure-controls", [sys.executable, "-W", "error", "tests/procedure_schema.py"],
             required_text="run=103 failures=0 errors=0")
         run("workflow-site-sweep", [sys.executable, "tools/check-workflow-sites"],

@@ -320,4 +320,18 @@ fn t08n_05_the_fake_refuses_a_generate_past_its_scripted_answers() {
             ..
         }
     ));
+    // The refusal itself, as the double recorded it: the second ask of a one-answer script. Any
+    // other process failure leaves no such record.
+    let refused: serde_json::Value =
+        serde_json::from_slice(&fs::read(rig.root.join("past-list.json")).unwrap()).unwrap();
+    assert_eq!(refused, json!({"asked": 2, "scripted": 1}));
+    assert_eq!(
+        rig.calls()
+            .iter()
+            .filter(|call| *call == "generate")
+            .count(),
+        2,
+        "{:?}",
+        rig.calls()
+    );
 }
