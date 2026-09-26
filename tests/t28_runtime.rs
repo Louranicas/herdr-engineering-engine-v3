@@ -2047,6 +2047,70 @@ fn a_failed_check_is_repaired_and_the_second_attempt_is_accepted() -> Outcome_ {
     Ok(())
 }
 
+/// The names under `directory`, sorted: the world a check ran beside.
+fn entries(directory: &Path) -> Vec<String> {
+    let mut names: Vec<String> = fs::read_dir(directory)
+        .map(|read| {
+            read.filter_map(Result::ok)
+                .map(|entry| entry.file_name().to_string_lossy().into_owned())
+                .collect()
+        })
+        .unwrap_or_default();
+    names.sort();
+    names
+}
+
+/// B14b-2 S13 (R21 N13) · the ledger's root names the directories the runtime materialised: over two
+/// attempts, each `attempt_paths` row holds the rig's attempts directory, and while each check ran the
+/// directory held exactly that attempt's workspace `<attempt>` and job root `<attempt>.check` beside
+/// the earlier attempts' workspaces (the job root is torn down after its check). The names are
+/// derived here from the ledger's attempt ids, not from the runtime.
+#[test]
+fn the_ledger_root_names_the_directories_the_runtime_materialised() -> Outcome_ {
+    let rig = rig(&Shape::default())?;
+    let (source, _) = script(vec![
+        Candidate::Replacement(FIRST.to_vec()),
+        Candidate::Replacement(SECOND.to_vec()),
+    ]);
+    let (mut verifier, _) = oracle(vec![mismatched(7), matched(7)]);
+    let seen: Arc<Mutex<Vec<Vec<String>>>> = Arc::new(Mutex::new(Vec::new()));
+    let (seen_by_hook, attempts) = (Arc::clone(&seen), rig.attempts.clone());
+    verifier.hook = Some(Box::new(move || {
+        record(&seen_by_hook, entries(&attempts));
+    }));
+    let principal = owner();
+    let outcome = run(&rig, &principal, source, verifier, 5_000).map_err(|e| format!("{e:?}"))?;
+    assert_eq!(outcome, Outcome::Driven(Driven::Accepted));
+    let ids: Vec<String> = rows(
+        &rig,
+        "SELECT id FROM attempts WHERE task_id=? ORDER BY CAST(generation AS INTEGER)",
+    )?
+    .into_iter()
+    .flatten()
+    .collect();
+    let [first, second] = ids.as_slice() else {
+        return Err(format!("two attempts, found {ids:?}").into());
+    };
+    let root = rig.attempts.to_str().ok_or("a UTF-8 rig root")?.to_owned();
+    assert_eq!(
+        rows(
+            &rig,
+            "SELECT p.attempt_id,p.root FROM attempt_paths p JOIN attempts a ON a.id=p.attempt_id \
+             WHERE a.task_id=? ORDER BY CAST(a.generation AS INTEGER)",
+        )?,
+        vec![
+            vec![first.clone(), root.clone()],
+            vec![second.clone(), root]
+        ]
+    );
+    let mut during_first = vec![first.clone(), format!("{first}.check")];
+    during_first.sort();
+    let mut during_second = vec![first.clone(), second.clone(), format!("{second}.check")];
+    during_second.sort();
+    assert_eq!(taken(&seen), vec![during_first, during_second]);
+    Ok(())
+}
+
 /// B14a-1c · exhaustion after begin is truthful (B14a-R2.3): one attempt, never verified, the task
 /// stops `failed` as `WorkerFailed`.
 #[test]

@@ -33,9 +33,9 @@ use crate::contracts::roster::{
 };
 use crate::contracts::{Generation, Sha256Digest, UuidV4};
 use crate::store::{
-    self, Binding, Effect, EvidenceIdentity, Expected, Identified, Object, Principal, RosterStart,
-    RunRecord as StoreRunRecord, RunRecordKind, Settlement, Stop, Store, TaskHead, Verification,
-    VerificationVerdict,
+    self, AttemptPaths, Binding, Effect, EvidenceIdentity, Expected, Identified, Object, Principal,
+    RosterStart, RunRecord as StoreRunRecord, RunRecordKind, Settlement, Stop, Store, TaskHead,
+    Verification, VerificationVerdict,
 };
 use crate::task::LoopRefusal;
 use crate::task::driver::{self, Acceptance, Checked as DriverChecked, StopReason, Work};
@@ -502,6 +502,9 @@ pub struct Evidence {
 struct Begun {
     id: String,
     generation: String,
+    /// The leaves the store derived from the root it recorded for this attempt (R21 N13): the
+    /// workspace `apply_candidate` materialises and the check's job root. Never re-derived here.
+    paths: AttemptPaths,
     /// Where this attempt's measured cost starts: the origin for the first (preparation is
     /// charged to it, B14a-R2.5), its begin for later ones.
     charged_from: Instant,
@@ -1306,6 +1309,46 @@ impl<C: CandidateSource, V: Verifier> StoreRuntime<'_, C, V> {
         })
     }
 
+    /// Materialise a replacement at the attempt's own workspace leaf — the one the store derived from
+    /// the root it recorded (R21 N13), never re-derived here — and return whether its cleanup
+    /// settled: a refused apply's partial path is removed within the teardown share, and the
+    /// refusal is kept for the check.
+    fn apply(&mut self, index: usize, bytes: Vec<u8>, work_until: Instant) -> Result<bool, Error> {
+        let (parent, name) = self
+            .attempts
+            .get(index)
+            .ok_or(Error::Identity)?
+            .paths
+            .workspace_parts();
+        let applied = repair::apply_candidate(
+            &self.baseline,
+            U64_EDITABLE,
+            &bytes,
+            U64_BOUNDS,
+            parent,
+            name,
+            work_until,
+        );
+        Ok(match applied {
+            Ok(snapshot) => {
+                if let Some(begun) = self.attempts.get_mut(index) {
+                    begun.applied = Some(snapshot);
+                }
+                true
+            }
+            Err(failure) => {
+                let removed = remove(
+                    &failure,
+                    teardown_deadline(work_until, self.dispatch.teardown_ms, self.deadline),
+                );
+                if let Some(begun) = self.attempts.get_mut(index) {
+                    begun.refused = Some((bytes, refusal_name(failure.error)));
+                }
+                removed
+            }
+        })
+    }
+
     /// Record one of the runtime's own checks (a refused candidate, an empty window): no run, no
     /// records.
     fn record(&mut self, index: usize, check: &Check, subject: &str) -> Result<Committed, Error> {
@@ -1887,9 +1930,11 @@ impl<C: CandidateSource, V: Verifier> driver::Runtime for StoreRuntime<'_, C, V>
             return Err(Error::Identity.into());
         }
         self.written(&roster.attempt.task_generation, event)?;
+        let paths = roster.paths.ok_or(Error::Identity)?;
         self.attempts.push(Begun {
             id: roster.attempt.id,
             generation: roster.attempt.generation,
+            paths,
             charged_from,
             work_until,
             applied: None,
@@ -1944,33 +1989,7 @@ impl<C: CandidateSource, V: Verifier> driver::Runtime for StoreRuntime<'_, C, V>
                 })
             }
             Candidate::Replacement(bytes) => {
-                let applied = repair::apply_candidate(
-                    &self.baseline,
-                    U64_EDITABLE,
-                    &bytes,
-                    U64_BOUNDS,
-                    self.dispatch.attempts,
-                    &id,
-                    work_until,
-                );
-                let cleanup_settled = match applied {
-                    Ok(snapshot) => {
-                        if let Some(begun) = self.attempts.get_mut(index) {
-                            begun.applied = Some(snapshot);
-                        }
-                        true
-                    }
-                    Err(failure) => {
-                        let removed = remove(
-                            &failure,
-                            teardown_deadline(work_until, self.dispatch.teardown_ms, self.deadline),
-                        );
-                        if let Some(begun) = self.attempts.get_mut(index) {
-                            begun.refused = Some((bytes, refusal_name(failure.error)));
-                        }
-                        removed
-                    }
-                };
+                let cleanup_settled = self.apply(index, bytes, work_until)?;
                 self.settle(index, cleanup_settled && held, true, worker.as_ref())?;
                 Ok(if self.begun(attempt)?.settled {
                     Work::ReadyForCheck
@@ -2057,7 +2076,7 @@ impl<C: CandidateSource, V: Verifier> driver::Runtime for StoreRuntime<'_, C, V>
                 // snapshot's directory (never under it: the workload refuses a root inside its
                 // subject, and creating one would change the subject); the runtime then
                 // records what was observed (R15 round 2).
-                let id = begun.id.clone();
+                let job_root = begun.paths.job_root();
                 let applied = applied.clone();
                 // The per-check plan (R17 round 2, shape C), in a hold of its own, before the
                 // producer runs; its ids are the verification's, the run id the root's.
@@ -2081,7 +2100,6 @@ impl<C: CandidateSource, V: Verifier> driver::Runtime for StoreRuntime<'_, C, V>
                 if let Some(begun) = self.attempts.get_mut(index) {
                     begun.planned = Some(planned);
                 }
-                let job_root = self.dispatch.attempts.join(format!("{id}.check"));
                 fs::DirBuilder::new()
                     .mode(0o700)
                     .create(&job_root)
