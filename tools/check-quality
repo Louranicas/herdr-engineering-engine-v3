@@ -194,6 +194,26 @@ T06_INPUTS = (
     # t28_tasks checks the fixture's recorded generator digest against the committed generator.
     "tests/fixtures/digest/gen-digest-fixtures.sh",
 )
+# The 003 lane's reviewed closure, copied by digest from its staging CAS (B14a-2c-ii-a): the class
+# profile's unit tests include_bytes! its two roots and walk the whole directory. The set is the
+# DIRECTORY's, never a hand-kept list of its members (F65): a member added to the fixture is an
+# input the moment it lands, and `reviewed_closure_inputs` refuses a file whose name is not the
+# sha256 of its bytes, so the fixture cannot drift from what it claims to be.
+REVIEWED_CLOSURE_DIRECTORY = "tests/fixtures/reviewed-003"
+
+
+def reviewed_closure_inputs(root, deadline):
+    """Every file of the reviewed-closure fixture, each named by the digest of its own bytes."""
+    names = tree_files(root, REVIEWED_CLOSURE_DIRECTORY, deadline)
+    if not names:
+        raise ValueError("Empty reviewed-closure fixture: " + REVIEWED_CLOSURE_DIRECTORY)
+    for name in names:
+        path = root / name
+        if path.name != digest(path):
+            raise ValueError("Reviewed-closure member is not named by its digest: " + name)
+    return names
+
+
 T06_UNIT_COUNTS = {
     "store::staging_tests::": 13, "check::u64_oracle::tests::": 22,
     "app::capture::tests::": 6, "app::durable_control::tests::": 6,
@@ -784,6 +804,7 @@ def quality_subject_paths(root, deadline, rust_only):
                      "tools/check-store-mutations"]
     if has_t06(root):
         required += T06_INPUTS
+        required += reviewed_closure_inputs(root, deadline)
     if has_t07(root):
         required += T07_INPUTS
     if has_t08(root):
@@ -964,6 +985,7 @@ def rust_test_expectations(root):
         for path in T06_INPUTS:
             if not (root / path).is_file() or (root / path).is_symlink():
                 raise ValueError("Missing or substituted required T06 fixture: " + path)
+        reviewed_closure_inputs(root, time.monotonic() + 30)
         # The library target's own count is the sum of its reviewed unit namespaces, never a second
         # literal beside them: a literal here went stale when T05_STORE_TEST_COUNT moved (B05e).
         library = T04_TEST_COUNT + T05_STORE_TEST_COUNT + sum(T06_UNIT_COUNTS.values())

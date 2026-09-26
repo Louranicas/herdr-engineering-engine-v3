@@ -1419,7 +1419,7 @@ class T06QualityInventoryControls(unittest.TestCase):
             declared = quality.tomllib.loads((ROOT / "Cargo.toml").read_text())
             inputs = {"Cargo.toml", "src/store.rs", *quality.T03_IMPLEMENTATION_PATHS,
                       *quality.T04_IMPLEMENTATION_PATHS, *quality.T05_IMPLEMENTATION_PATHS,
-                      *quality.T06_INPUTS, *(quality.T07_INPUTS if quality.has_t07(ROOT) else ()), *(quality.T13_INPUTS if quality.has_t13(ROOT) else ()),
+                      *quality.T06_INPUTS, *quality.reviewed_closure_inputs(ROOT, time.monotonic() + 30), *(quality.T07_INPUTS if quality.has_t07(ROOT) else ()), *(quality.T13_INPUTS if quality.has_t13(ROOT) else ()),
                       *(quality.T21_INPUTS if quality.has_t21(ROOT) else ()), *(quality.T08_INPUTS if quality.has_t08(ROOT) else ()),
                       *(quality.RECOVERY_INPUTS if quality.has_recovery(ROOT) else ()), *(quality.T08_CONTRACT_INPUTS if quality.has_t08_contract(ROOT) else ()),
                       *(quality.T09_INPUTS if quality.has_t09(ROOT) else ()),
@@ -1458,7 +1458,7 @@ class T06QualityInventoryControls(unittest.TestCase):
         declared = quality.tomllib.loads((ROOT / "Cargo.toml").read_text())
         inputs = {"Cargo.toml", "src/store.rs", *quality.T03_IMPLEMENTATION_PATHS,
                   *quality.T04_IMPLEMENTATION_PATHS, *quality.T05_IMPLEMENTATION_PATHS,
-                  *quality.T06_INPUTS, *(quality.T07_INPUTS if quality.has_t07(ROOT) else ()), *quality.T13_INPUTS, *quality.T21_INPUTS,
+                  *quality.T06_INPUTS, *quality.reviewed_closure_inputs(ROOT, time.monotonic() + 30), *(quality.T07_INPUTS if quality.has_t07(ROOT) else ()), *quality.T13_INPUTS, *quality.T21_INPUTS,
                   *(quality.T08_INPUTS if quality.has_t08(ROOT) else ()),
                   *(quality.RECOVERY_INPUTS if quality.has_recovery(ROOT) else ()), *(quality.T08_CONTRACT_INPUTS if quality.has_t08_contract(ROOT) else ()),
                   *(quality.T09_INPUTS if quality.has_t09(ROOT) else ()),
