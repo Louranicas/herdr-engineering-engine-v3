@@ -38,7 +38,8 @@ pub enum RunRecordKind {
     /// The bounded capture of the run's output.
     Capture,
     /// What the worker's one call to the model came to: usage, identity, wall, how it ended
-    /// (B14a-5, R19). Committed by the attempt's settle, never by a check.
+    /// (B14a-5, R19). Committed by the attempt's settle, never by a check — a rule `commit` keeps
+    /// (`Invalid` from the check door), not a comment.
     WorkerSettle,
 }
 
@@ -247,11 +248,18 @@ pub(super) fn commit(
     event_id: &str,
     records: &[RunRecord<'_>],
     settled: bool,
+    observation: Observation,
 ) -> Result<()> {
     let mut kinds = records.iter().map(|record| record.kind).collect::<Vec<_>>();
     kinds.sort_unstable();
     kinds.dedup();
     if kinds.len() != records.len() {
+        return Err(Error::Invalid);
+    }
+    // The worker's settle is the attempt's settle's to commit (B14a-5, R19 round 2 finding 5): a
+    // check that hands one in is refused before any write. The settle door stays the generic
+    // run-record door DS2 specified (the five kinds have committed there since B14a-2b-ii).
+    if observation == Observation::Check && kinds.contains(&RunRecordKind::WorkerSettle) {
         return Err(Error::Invalid);
     }
     for (index, record) in records.iter().enumerate() {

@@ -219,10 +219,11 @@ fn t08n_03_a_second_attempt_renders_the_previous_refusal_by_name() {
     );
     assert!(prompt.starts_with(std::str::from_utf8(TASK).unwrap()));
     assert!(prompt.contains("Current src/lib.rs:\n"));
-    assert!(
-        answer.settle.is_some(),
-        "one call, one settle, on the answer"
-    );
+    let settle = answer.settle.as_ref().unwrap();
+    assert_eq!(settle.outcome, Outcome::Replacement(REFERENCE.len()));
+    assert_eq!(settle.adapter, FULL_FILE.id);
+    assert_eq!(settle.finish, Some(Finish::Stop));
+    assert_eq!(settle.attempt, ATTEMPT_ID);
     assert_eq!(source.retained(), 0);
 }
 

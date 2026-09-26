@@ -109,9 +109,10 @@ pub struct Ask<'a> {
 }
 
 /// What a source hands back for one ask (B14a-5, R19.3): the candidate, and the worker's settle of
-/// the call when a provider was asked — `None` only when none was (an exhausted script). The settle
-/// travels with the candidate so the runtime never re-acquires it from the source, and is committed
-/// as the attempt's `worker_settle` run record in the settle's own hold.
+/// the call — the native source settles every call, a provider asked or the prompt refused before
+/// one was (Q3); `None` is a source that made no settle at all (the scripted double, an exhausted
+/// script). The settle travels with the candidate so the runtime never re-acquires it from the
+/// source, and is committed as the attempt's `worker_settle` run record in the settle's own hold.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Answer {
     pub candidate: Candidate,
@@ -813,7 +814,12 @@ impl<C: CandidateSource, V: Verifier> StoreRuntime<'_, C, V> {
     /// when the measured time overran what the reservation holds now (an overrun is not a clean
     /// failure). With a worker settle (B14a-5, R19.4), its sealed record is published and committed
     /// in the same hold, keyed by this observation's event; `execute` has already refused a settle
-    /// naming another attempt, before anything was applied or written.
+    /// naming another attempt, before anything was applied or written. STATED (R19 round 2, finding
+    /// 7): when this observation does not settle the attempt (an unknown cost, an unsettled
+    /// cleanup), the record is committed under this event but `attempts.settled_event` is not set,
+    /// so `committed_run` cannot return it; the later observation that settles the attempt (B14b,
+    /// which settles retained children) must commit the worker settle again or the run's record
+    /// set has none — B14b's obligation, named here.
     fn settle(
         &mut self,
         index: usize,
@@ -824,7 +830,10 @@ impl<C: CandidateSource, V: Verifier> StoreRuntime<'_, C, V> {
         let begun = self.attempts.get(index).ok_or(Error::Identity)?;
         let used = millis(begun.charged_from.elapsed());
         let event = fresh(self.deadline)?;
-        let record_ids: [String; 2] = fresh_ids(self.deadline)?;
+        // Two ids only when there is a record to publish (round 2, finding 8): a settle that records
+        // nothing spends no entropy and cannot fail on it.
+        let record_ids: Option<[String; 2]> =
+            worker.map(|_| fresh_ids(self.deadline)).transpose()?;
         let (generation, known) = self.tasks.with_store(|store| -> Result<_, Error> {
             let head = self.current(store)?;
             let used_ms = (used <= head.reserved_work_ms).then_some(used);
@@ -834,8 +843,8 @@ impl<C: CandidateSource, V: Verifier> StoreRuntime<'_, C, V> {
                 cleanup_settled,
                 ready_to_verify,
             };
-            let generation = match worker {
-                Some(settle) => {
+            let generation = match worker.zip(record_ids.as_ref()) {
+                Some((settle, record_ids)) => {
                     let bytes = WorkerSettle::of(settle)
                         .to_bytes()
                         .map_err(|_| Error::Identity)?;
@@ -1867,7 +1876,6 @@ fn expected<'b>(head: &'b TaskHead, begun: &'b Begun) -> Result<Expected<'b>, Er
     })
 }
 
-/// `N` fresh identities, or the first entropy refusal.
 /// Ask the source for this attempt's candidate. The cheap question first (R19.3): a settle naming
 /// another attempt is the source's error, refused before any candidate is applied or any row
 /// written.
@@ -1883,6 +1891,7 @@ fn answered<C: CandidateSource>(source: &mut C, ask: &Ask<'_>) -> Result<Answer,
     Ok(answer)
 }
 
+/// `N` fresh identities, or the first entropy refusal.
 fn fresh_ids<const N: usize>(deadline: Instant) -> Result<[String; N], Error> {
     let mut ids = Vec::with_capacity(N);
     for _ in 0..N {

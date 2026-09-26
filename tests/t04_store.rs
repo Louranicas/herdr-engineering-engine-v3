@@ -3696,17 +3696,28 @@ fn migration_seven_admits_the_worker_settle_kind_and_kept_the_key() {
             [],
         )
     };
+    // The CHECK's own diagnostic, not a bare error (F96).
     for (kind, admitted) in [
         ("settle", false),
         ("worker-settle", false),
         ("worker_settle", true),
     ] {
         let result = insert(kind);
-        assert_eq!(result.is_ok(), admitted, "{kind}: {result:?}");
+        if admitted {
+            assert!(result.is_ok(), "{kind}: {result:?}");
+        } else {
+            assert!(
+                matches!(&result, Err(rusqlite::Error::SqliteFailure(_, Some(message)))
+                    if message.contains("CHECK constraint failed")),
+                "{kind}: {result:?}"
+            );
+        }
     }
+    let again = insert("worker_settle");
     assert!(
-        insert("worker_settle").is_err(),
-        "the (event, kind) key: a second worker settle for one observation is refused"
+        matches!(&again, Err(rusqlite::Error::SqliteFailure(_, Some(message)))
+            if message.contains("UNIQUE constraint failed: attempt_records.event_id, attempt_records.kind")),
+        "the (event, kind) key: a second worker settle for one observation is refused: {again:?}"
     );
     let indexed: i64 = db
         .query_row(
@@ -4444,6 +4455,157 @@ fn refs_at_and_over_the_bound_count_what_they_would_list() {
 }
 
 // ------------------------------------------------ the worker's settle through the commitment (B14a-5)
+
+/// A migration's exact DDL for the table that `head` opens, read from the file itself (through the
+/// statement's `;`).
+fn ddl_of(sql: &'static str, head: &str) -> &'static str {
+    let start = sql.find(head).unwrap();
+    &sql[start..=start + sql[start..].find(';').unwrap()]
+}
+
+/// Every `attempt_records` row, every value, in key order: compared whole.
+fn attempt_records_rows(area: &Area) -> Vec<Vec<rusqlite::types::Value>> {
+    let db = area.inspect();
+    let mut statement = db
+        .prepare("SELECT * FROM attempt_records ORDER BY event_id,kind")
+        .unwrap();
+    let width = statement.column_count();
+    statement
+        .query_map([], |row| (0..width).map(|index| row.get(index)).collect())
+        .unwrap()
+        .collect::<std::result::Result<_, _>>()
+        .unwrap()
+}
+
+/// B14a-5 (R19 round 2, finding 3) · step 7 rebuilds `attempt_records` over ROWS: a ledger holding a
+/// committed record set, downgraded to migration 6 by hand (no production path does), is refused by an
+/// ordinary open, upgrades behind a backup, and keeps every row through the rebuild — the step's
+/// `Preserved` compare has now run over a non-empty table.
+#[test]
+fn a_migration_six_ledger_with_run_records_upgrades_through_seven_keeping_every_row() {
+    let area = Area::new();
+    let mut store = area.open();
+    let active = running(&mut store);
+    let objects: Vec<Object> = (0..2).map(|index| published(&store, index)).collect();
+    let records = [
+        record(RunRecordKind::RunClock, IDS[0], &objects[0]),
+        record(RunRecordKind::RunCleanup, IDS[1], &objects[1]),
+    ];
+    store
+        .settle_attempt_with_records(
+            &active,
+            settled(Effect::None, Some(30), true, true),
+            &records,
+            uuid(SETTLED),
+            deadline(),
+        )
+        .unwrap();
+    drop(store);
+    let rows = attempt_records_rows(&area);
+    assert_eq!(rows.len(), 2, "the fixture holds two run records");
+    area.edit_closed(&format!(
+        "BEGIN; CREATE TEMP TABLE held AS SELECT * FROM attempt_records; DROP TABLE attempt_records; \
+         {} INSERT INTO attempt_records SELECT * FROM held; DROP TABLE held; \
+         CREATE INDEX attempt_records_by_attempt ON attempt_records(attempt_id); \
+         DELETE FROM migration_history WHERE version=7; PRAGMA user_version=6; COMMIT;",
+        ddl_of(
+            include_str!("../migrations/006.sql"),
+            "CREATE TABLE attempt_records ("
+        )
+    ));
+    assert_eq!(
+        attempt_records_rows(&area),
+        rows,
+        "the downgrade kept the rows"
+    );
+    assert!(matches!(
+        Store::open(&area.path, uuid(GEN), uuid(EPOCH), false, deadline()),
+        Err(Error::UpgradeRequired {
+            recorded: 6,
+            current: 7
+        })
+    ));
+    let backup = Area::new();
+    let upgrade =
+        Store::upgrade(&area.path, uuid(GEN), uuid(EPOCH), &backup.path, deadline()).unwrap();
+    assert_eq!((upgrade.from, upgrade.to), (6, 7));
+    assert_eq!(
+        attempt_records_rows(&area),
+        rows,
+        "every run record survives the rebuild"
+    );
+    assert_eq!(user_version(&area.inspect()), 7);
+    drop(area.open());
+}
+
+/// B14a-5 (R19 round 2, finding 2) · the acceptance compare-and-set itself, pinned: an acceptance
+/// prepared at generation 3 whose task's generation then moved by a door that did NOT cancel it (a
+/// verification observed, generation 4) is refused `Conflict` at `head.generation !=
+/// data.task_generation`; nothing is accepted. (`finish_unaccepted` cannot serve as the bump: a
+/// verifying task refuses it `Outstanding` — measured.)
+#[test]
+fn an_acceptance_prepared_at_a_stale_generation_is_refused_conflict() {
+    let area = Area::new();
+    let mut store = area.open();
+    let active = verifying(&mut store);
+    let published = proof(&store, &active);
+    let receipt = store
+        .publish(b"the receipt", uuid(OTHER), deadline())
+        .unwrap();
+    assert_eq!(
+        store
+            .record_verification_with_records(
+                &active,
+                &observe(&receipt, check_identity()),
+                &[],
+                &[],
+                uuid(OBS_1),
+                deadline()
+            )
+            .unwrap(),
+        "4",
+        "the generation moved without a cancellation"
+    );
+    let cancellation: i64 = area
+        .inspect()
+        .query_row("SELECT cancellation FROM tasks WHERE id=?", [TASK], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(cancellation, 0, "not cancelled");
+    assert!(matches!(
+        store.accept(&published, 20, deadline()),
+        Err(Error::Conflict)
+    ));
+    assert_eq!(count(&area, "acceptances"), 0);
+}
+
+/// B14a-5 (R19 round 2, finding 5) · the worker's settle is the attempt's settle's to commit: a check
+/// that hands one in is refused `Invalid` before any write — no verification row, no record.
+#[test]
+fn the_check_door_refuses_a_worker_settle_record() {
+    let area = Area::new();
+    let mut store = area.open();
+    let active = verifying(&mut store);
+    let object = published(&store, 0);
+    let receipt = store
+        .publish(b"the receipt", uuid(OTHER), deadline())
+        .unwrap();
+    let records = [record(RunRecordKind::WorkerSettle, RECORD_B, &object)];
+    assert!(matches!(
+        store.record_verification_with_records(
+            &active,
+            &observe(&receipt, check_identity()),
+            &records,
+            &[],
+            uuid(OBS_1),
+            deadline()
+        ),
+        Err(Error::Invalid)
+    ));
+    assert_eq!(count(&area, "verifications"), 0);
+    assert_eq!(count(&area, "attempt_records"), 0);
+}
 
 /// B14a-5 (R19.1, R19.4) pin: a worker settle published and committed by the attempt's settle is the
 /// one record `committed_run` returns, under its kind's schema; read through the commitment it comes

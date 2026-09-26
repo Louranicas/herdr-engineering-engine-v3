@@ -731,11 +731,12 @@ fn scripted_settle(
     outcome: &serde_json::Value,
     replacement_bytes: Option<usize>,
 ) -> serde_json::Value {
+    let answered = &scenario["generated"][answer];
     serde_json::json!({
         "attempt": attempt,
         "adapter_profile": "ollama-fc44-12ff8654/2",
-        "input_tokens": 552,
-        "output_tokens": 258,
+        "input_tokens": answered["prompt_eval_count"],
+        "output_tokens": answered["eval_count"],
         "finish": "stop",
         "identity_sha256": t08_rig::digest(&t08_rig::rendered(&scenario["ps"])),
         "raw_sha256": t08_rig::digest(&t08_rig::rendered(&scenario["generated"][answer])),

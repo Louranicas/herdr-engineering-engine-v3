@@ -1431,7 +1431,7 @@ impl Store {
             let used=if settled {used_ms.unwrap_or(0)}else{0};
             tx.execute("UPDATE tasks SET generation=?,state=?,spent_ms=spent_ms+?,reserved_work_ms=reserved_work_ms-? WHERE id=?",params![generation,state,number(used)?,number(used)?,expected.task.as_str()])?;
             event(tx,event_id.as_str(),expected.task.as_str(),&generation,"attempt_observed")?;
-            run_records::commit(tx, expected.attempt.as_str(), event_id.as_str(), records, settled)?;
+            run_records::commit(tx, expected.attempt.as_str(), event_id.as_str(), records, settled, run_records::Observation::Settle)?;
             Ok(generation)
         })
     }
@@ -1900,8 +1900,11 @@ impl Store {
                 if run_records::identity_bound_elsewhere(tx,&identity.artifact_id,&object.digest)? {return Err(Error::Conflict);}
             }
             let sequence=event(tx,&data.event,&data.task,&generation,"accepted")?;
-            // Named, not positional (B14a-5, K5K6 item 6): a column-order slip is a SQL error here,
-            // never a value written under another column's name.
+            // Named parameters (B14a-5, K5K6 item 6): each value is bound by the name it is written
+            // under, so the ORDER of the bindings cannot mis-assign a value and a misspelt or missing
+            // name is a SQL error. What stays positional is SQL's own VALUES list against the column
+            // list: a slip THERE is still silent (every column is TEXT), and is pinned only by the
+            // acceptance round-trip proofs (t04 `an_acceptances_manifest_and_objects_round_trip_whole`).
             tx.execute("INSERT INTO acceptances(event_id,task_id,attempt_id,generation,criteria_digest,manifest_digest,manifest_artifact_id) VALUES(:event_id,:task_id,:attempt_id,:generation,:criteria_digest,:manifest_digest,:manifest_artifact_id)",named_params!{":event_id":data.event,":task_id":data.task,":attempt_id":data.attempt,":generation":data.attempt_generation,":criteria_digest":data.criteria,":manifest_digest":published.manifest.digest,":manifest_artifact_id":data.artifact_id})?;
             for (object,identity) in data.objects.iter().zip(&data.identities) {tx.execute("INSERT INTO acceptance_objects(event_id,digest,artifact_id,media_type,schema_id) VALUES(:event_id,:digest,:artifact_id,:media_type,:schema_id)",named_params!{":event_id":data.event,":digest":object.digest,":artifact_id":identity.artifact_id,":media_type":identity.media_type,":schema_id":identity.schema_id})?;}
             tx.execute("UPDATE tasks SET generation=?,state='accepted',accepted_event=?,spent_ms=spent_ms+?,reserved_work_ms=0,reserved_verify_ms=0 WHERE id=?",params![generation,data.event,number(verification_ms)?,data.task])?;

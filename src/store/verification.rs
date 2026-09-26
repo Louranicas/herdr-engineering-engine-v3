@@ -274,7 +274,7 @@ impl Store {
                 params![generation,state,number(charged)?,number(charged)?,expected.task.as_str()],
             )?;
             // The check's records, keyed by this verification's event; never the settling event.
-            run_records::commit(tx, expected.attempt.as_str(), event_id.as_str(), records, false)?;
+            run_records::commit(tx, expected.attempt.as_str(), event_id.as_str(), records, false, run_records::Observation::Check)?;
             register_evidence(tx, cited)?;
             Ok(generation)
         })
