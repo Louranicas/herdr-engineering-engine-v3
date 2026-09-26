@@ -745,13 +745,13 @@ fn duplicate_startup_cannot_take_inventory_custody() {
     assert_eq!(r.snapshot().attempts.len(), 1);
 }
 
-fn rostered() -> Rig {
+/// An installed, observed agent record on `r`'s store and the one selection that pins it.
+fn roster_fixture(r: &mut Rig) -> (String, Vec<habitat_engine::contracts::roster::Selection>) {
     use habitat_engine::contracts::roster::{
         Availability, Kind, Locality, ObservationInput, ObservationSource, RosterDefinitionV1,
         Selection, Update,
     };
-    use habitat_engine::store::{RequestSource, RosterStart};
-    let mut r = Rig::admitted();
+    use habitat_engine::store::RequestSource;
     let input = Update {
         idempotency_key: OTHER.to_owned(),
         record_id: None,
@@ -801,7 +801,7 @@ fn rostered() -> Rig {
             deadline(),
         )
         .unwrap();
-    let selections = [Selection {
+    let selections = vec![Selection {
         record_id: head.record_id.clone(),
         expected_revision: head.record_version,
         capabilities: vec!["text".to_owned()],
@@ -809,6 +809,12 @@ fn rostered() -> Rig {
         version: Some("v1".to_owned()),
         ttl_ms: 60_000,
     }];
+    (head.record_id, selections)
+}
+fn rostered() -> Rig {
+    use habitat_engine::store::RosterStart;
+    let mut r = Rig::admitted();
+    let (agent, selections) = roster_fixture(&mut r);
     r.store()
         .begin_rostered_attempt(
             RosterStart {
@@ -817,7 +823,7 @@ fn rostered() -> Rig {
                 expected: generation("1"),
                 attempt: id(ATTEMPT),
                 event: id(START),
-                agent_record_id: &head.record_id,
+                agent_record_id: &agent,
                 session: id(KEY),
                 workspace: id(STAGE),
                 selections: &selections,
@@ -827,6 +833,140 @@ fn rostered() -> Rig {
         )
         .unwrap();
     r
+}
+
+/// B14b-2 S14 (R21 N14) · startup's inventory carries each SELECTED attempt's recorded root, read
+/// under the one selected set and budget: two open attempts (a `repair_pending` one and a running
+/// one) differing in id and root both carry theirs; once the task is terminal and a batch of one is
+/// taken, only the batch's attempt carries its root and the other is absent. The whole-ledger
+/// inventory carries both.
+#[test]
+fn the_startup_inventory_carries_each_selected_attempt_s_root() {
+    use habitat_engine::store::AttemptRoot;
+    const SECOND: &str = "07000000-0000-4000-8000-00000000000f";
+    let mut r = Rig::admitted();
+    let (agent, selections) = roster_fixture(&mut r);
+    let first = AttemptRoot {
+        attempt: ATTEMPT.to_owned(),
+        root: "/r1".to_owned(),
+    };
+    let second = AttemptRoot {
+        attempt: SECOND.to_owned(),
+        root: "/srv/hee/r2".to_owned(),
+    };
+    let pins = (agent.as_str(), selections.as_slice());
+    bound_begin(&mut r, pins, (ATTEMPT, START), "/r1");
+    settle_to_repair(&mut r, ATTEMPT, "1", SETTLE);
+    bound_begin(
+        &mut r,
+        pins,
+        (SECOND, "07000000-0000-4000-8000-000000000010"),
+        "/srv/hee/r2",
+    );
+    let open = startup_read(&mut r, 0);
+    assert_eq!(
+        (open.inventory.roots, open.cleanup_attempts),
+        (vec![first.clone(), second.clone()], vec![])
+    );
+    settle_to_repair(&mut r, SECOND, "2", "07000000-0000-4000-8000-000000000011");
+    let evidence = r.evidence.clone();
+    let revision = generation(&r.revision());
+    r.store()
+        .finish_unaccepted(
+            &principal(),
+            Stop {
+                task: id(TASK),
+                generation: revision,
+                reason: &Name::new("fixture_failed").unwrap(),
+                evidence: &evidence,
+                identity: habitat_engine::store::EvidenceIdentity {
+                    artifact_id: id(STOP),
+                    media_type: "application/json",
+                    schema_id: "hee3.test-evidence/1",
+                },
+                event: id(STOP),
+            },
+            deadline(),
+        )
+        .unwrap();
+    let batch = startup_read(&mut r, 1);
+    assert_eq!(
+        (batch.inventory.roots, batch.cleanup_attempts),
+        (vec![first.clone()], vec![ATTEMPT.to_owned()])
+    );
+    assert_eq!(r.snapshot().roots, vec![first, second]);
+}
+
+/// A bound begin of `TASK` at its current revision under `root`, pinned by the fixture's record.
+fn bound_begin(
+    r: &mut Rig,
+    (agent, selections): (&str, &[habitat_engine::contracts::roster::Selection]),
+    (attempt, event): (&str, &str),
+    root: &str,
+) {
+    use habitat_engine::store::{Binding, RosterStart};
+    let expected = generation(&r.revision());
+    r.store()
+        .begin_bound_attempt(
+            RosterStart {
+                principal: &principal(),
+                task: id(TASK),
+                expected,
+                attempt: id(attempt),
+                event: id(event),
+                agent_record_id: agent,
+                session: id(KEY),
+                workspace: id(STAGE),
+                selections,
+                lease_ms: 60_000,
+            },
+            &Binding {
+                baseline: Sha256Digest::parse(DIGEST).unwrap(),
+                protected: Sha256Digest::parse(DIGEST).unwrap(),
+                profile: Sha256Digest::parse(DIGEST).unwrap(),
+                root: std::path::Path::new(root),
+            },
+            deadline(),
+        )
+        .unwrap();
+}
+
+/// Settle `attempt` (ordinal `ordinal`) with a known cost and settled cleanup, not ready to verify.
+fn settle_to_repair(r: &mut Rig, attempt: &str, ordinal: &str, event: &str) {
+    let expected = Expected {
+        task: id(TASK),
+        task_generation: generation(&r.revision()),
+        attempt: id(attempt),
+        attempt_generation: generation(ordinal),
+    };
+    r.store()
+        .settle_attempt(
+            &expected,
+            Settlement {
+                effect: Effect::None,
+                used_ms: Some(10),
+                cleanup_settled: true,
+                ready_to_verify: false,
+            },
+            id(event),
+            deadline(),
+        )
+        .unwrap();
+}
+
+/// Startup's read with a cleanup batch of `cleanup_batch`.
+fn startup_read(r: &mut Rig, cleanup_batch: usize) -> habitat_engine::store::StartupInventory {
+    r.store()
+        .startup_inventory(
+            id(EPOCH),
+            habitat_engine::store::StartupLimits {
+                open: 16,
+                cleanup_batch,
+                read: limits(),
+            },
+            deadline(),
+        )
+        .unwrap()
 }
 #[test]
 fn rostered_attempt_retains_actual_session_workspace_and_pin() {

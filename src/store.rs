@@ -2658,7 +2658,7 @@ pub use terminal::{Stop, Stopped};
 mod staging_tests;
 
 pub use recovery::{
-    DurableAcceptance, DurableAttempt, DurableStop, DurableTask, DurableVerification,
+    AttemptRoot, DurableAcceptance, DurableAttempt, DurableStop, DurableTask, DurableVerification,
     PendingDelivery, RecoveryInventory, RecoveryLimits, StartupInventory, StartupLimits,
     TaskFilter, TaskListing, TaskView,
 };

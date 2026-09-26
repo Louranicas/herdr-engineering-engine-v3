@@ -241,7 +241,7 @@ def has_t06(root):
 
 # Reviewed current T07 inventory target: 52 controls (51 + B14-P2c's workspace case; the earlier 43-control
 # inventory is superseded; this recipe does not accept it).
-T07_TARGET_COUNTS = {"t07_inventory": 52}
+T07_TARGET_COUNTS = {"t07_inventory": 53}
 T07_INPUTS = ("src/store/recovery.rs", "tests/t07_inventory.rs")
 # Reviewed T08 native adapter extension: one registered offline-client target
 # with 26 controls and no library-unit namespace. The Rust tests copy the

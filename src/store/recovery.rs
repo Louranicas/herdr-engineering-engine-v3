@@ -96,8 +96,19 @@ pub struct RecoveryInventory {
     pub pending_delivery: Vec<PendingDelivery>,
     pub instances: Vec<Instance>,
     pub pins: Vec<Pin>,
+    /// Each included attempt's recorded root (B14b-2, R21 N14; migration 8), by attempt id. An
+    /// unbound attempt, or one begun before migration 8, has none.
+    pub roots: Vec<AttemptRoot>,
     pub rows: usize,
     pub payload_bytes: usize,
+}
+
+/// One attempt's recorded root (B14b-2, R21 N14): the directory its workspace and job root were
+/// materialised under. The leaves are derived from it by [`super::attempt_leaves`], never stored.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AttemptRoot {
+    pub attempt: String,
+    pub root: String,
 }
 
 impl RecoveryInventory {
@@ -268,6 +279,7 @@ const ATTEMPT_COLUMNS: &str =
 const VERIFICATION_COLUMNS: &str = "SELECT attempt_id,event_id,subject_digest,evidence_digest,verdict,used_ms,cleanup_settled FROM verifications";
 const INSTANCE_COLUMNS: &str = "SELECT id,task_id,attempt_id,agent_record_id,agent_record_version,revision,body FROM roster_instances";
 const PIN_COLUMNS: &str = "SELECT attempt_id,record_id,record_version,body FROM roster_pins";
+const ROOT_COLUMNS: &str = "SELECT attempt_id,root FROM attempt_paths";
 
 /// One task row, validated: the one reader of `tasks` for both inventories.
 fn durable_task_row(row: &Row<'_>) -> Result<DurableTask> {
@@ -416,6 +428,15 @@ fn pin_row(row: &Row<'_>) -> Result<Pin> {
 }
 
 /// One attempt row, validated. The one reader of `attempts`, for the inventory and a task's view.
+fn root_row(row: &Row<'_>) -> Result<AttemptRoot> {
+    let r = AttemptRoot {
+        attempt: row.get(0)?,
+        root: row.get(1)?,
+    };
+    uuid(&r.attempt)?;
+    Ok(r)
+}
+
 fn attempt_row(row: &Row<'_>) -> Result<DurableAttempt> {
     let r = DurableAttempt {
         id: row.get(0)?,
@@ -798,7 +819,7 @@ pub struct StartupLimits {
 
 /// What startup reads (B03b): the selected attempts — every effect-bearing open attempt, plus
 /// this boot's batch of terminal attempts not yet confirmed clean — with ONLY their tasks,
-/// verifications, instances and pins. The `inventory` is therefore NOT the whole ledger's; its
+/// verifications, instances, pins and recorded roots. The `inventory` is therefore NOT the whole ledger's; its
 /// acceptances, stops and pending deliveries are empty because startup reads none of them.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct StartupInventory {
@@ -936,6 +957,7 @@ fn collect_open(
     let verifications = budget.read(db, &format!("{selected}{VERIFICATION_COLUMNS} WHERE attempt_id IN (SELECT id FROM selected) ORDER BY attempt_id LIMIT ?"), verification_row)?;
     let instances = budget.read(db, &format!("{selected}{INSTANCE_COLUMNS} WHERE attempt_id IN (SELECT id FROM selected) ORDER BY id LIMIT ?"), instance_row)?;
     let pins = budget.read(db, &format!("{selected}{PIN_COLUMNS} WHERE attempt_id IN (SELECT id FROM selected) ORDER BY attempt_id,record_id LIMIT ?"), pin_row)?;
+    let roots = budget.read(db, &format!("{selected}{ROOT_COLUMNS} WHERE attempt_id IN (SELECT id FROM selected) ORDER BY attempt_id LIMIT ?"), root_row)?;
     validate_roster_bindings(&instances, &pins, &attempts, event_high_water, deadline)?;
     let mut statement = db.prepare(&format!(
         "SELECT a.id FROM attempts a JOIN tasks t ON t.id=a.task_id WHERE {} ORDER BY a.rowid LIMIT {batch}",
@@ -963,6 +985,7 @@ fn collect_open(
             pending_delivery: Vec::new(),
             instances,
             pins,
+            roots,
             rows: budget.rows,
             payload_bytes: budget.bytes,
         },
@@ -1028,6 +1051,11 @@ fn collect(
         &format!("{PIN_COLUMNS} ORDER BY attempt_id,record_id LIMIT ?"),
         pin_row,
     )?;
+    let roots = budget.read(
+        db,
+        &format!("{ROOT_COLUMNS} ORDER BY attempt_id LIMIT ?"),
+        root_row,
+    )?;
     validate_roster_bindings(&instances, &pins, &attempts, event_high_water, deadline)?;
     remaining(deadline)?;
     Ok(RecoveryInventory {
@@ -1043,6 +1071,7 @@ fn collect(
         pending_delivery,
         instances,
         pins,
+        roots,
         rows: budget.rows,
         payload_bytes: budget.bytes,
     })
