@@ -309,7 +309,9 @@ fn clean_absolute(path: &Path) -> bool {
             .all(|part| !matches!(part, std::path::Component::ParentDir))
 }
 
-fn sha256(path: &Path, deadline: Instant) -> Result<[u8; 32], NamespaceError> {
+/// Open a pinned host file the one way every pin read does: no symlink followed, a regular file,
+/// at most 256 MiB by its own metadata (`Digest` otherwise).
+fn open_regular(path: &Path) -> Result<(File, rustix::fs::Stat), NamespaceError> {
     let fd = open(
         path,
         OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC | OFlags::NONBLOCK,
@@ -323,25 +325,13 @@ fn sha256(path: &Path, deadline: Instant) -> Result<[u8; 32], NamespaceError> {
     {
         return Err(NamespaceError::Digest);
     }
-    let mut file = File::from(fd);
-    let mut digest = Sha256::new();
-    let mut buffer = [0_u8; 8192];
-    let mut observed = 0_u64;
-    loop {
-        if Instant::now() >= deadline {
-            return Err(NamespaceError::Deadline);
-        }
-        let count = file.read(&mut buffer).map_err(|_| NamespaceError::Digest)?;
-        if count == 0 {
-            break;
-        }
-        observed = observed
-            .checked_add(count as u64)
-            .filter(|total| *total <= 256 * 1024 * 1024)
-            .ok_or(NamespaceError::Bound)?;
-        digest.update(&buffer[..count]);
-    }
-    let after = fstat(&file).map_err(|_| NamespaceError::Digest)?;
+    Ok((File::from(fd), before))
+}
+
+/// Whether the file read is the file opened: every byte its size claimed, and identity and
+/// timestamps unchanged across the read (`Digest` otherwise).
+fn stable(file: &File, before: &rustix::fs::Stat, observed: u64) -> Result<(), NamespaceError> {
+    let after = fstat(file).map_err(|_| NamespaceError::Digest)?;
     if observed != before.st_size.cast_unsigned()
         || (
             before.st_dev,
@@ -363,6 +353,29 @@ fn sha256(path: &Path, deadline: Instant) -> Result<[u8; 32], NamespaceError> {
     {
         return Err(NamespaceError::Digest);
     }
+    Ok(())
+}
+
+pub(crate) fn sha256(path: &Path, deadline: Instant) -> Result<[u8; 32], NamespaceError> {
+    let (mut file, before) = open_regular(path)?;
+    let mut digest = Sha256::new();
+    let mut buffer = [0_u8; 8192];
+    let mut observed = 0_u64;
+    loop {
+        if Instant::now() >= deadline {
+            return Err(NamespaceError::Deadline);
+        }
+        let count = file.read(&mut buffer).map_err(|_| NamespaceError::Digest)?;
+        if count == 0 {
+            break;
+        }
+        observed = observed
+            .checked_add(count as u64)
+            .filter(|total| *total <= 256 * 1024 * 1024)
+            .ok_or(NamespaceError::Bound)?;
+        digest.update(&buffer[..count]);
+    }
+    stable(&file, &before, observed)?;
     Ok(digest.finalize().into())
 }
 
@@ -378,7 +391,31 @@ pub(crate) fn pinned_bytes(
     cap: usize,
     deadline: Instant,
 ) -> Result<Vec<u8>, NamespaceError> {
-    let bytes = read_bounded(path, cap, deadline)?;
+    let (mut file, before) = open_regular(path)?;
+    if before.st_size.cast_unsigned() > cap as u64 {
+        return Err(NamespaceError::Bound);
+    }
+    let mut bytes = Vec::new();
+    let mut buffer = [0_u8; 8192];
+    loop {
+        if Instant::now() >= deadline {
+            return Err(NamespaceError::Deadline);
+        }
+        let count = file.read(&mut buffer).map_err(|_| NamespaceError::Io)?;
+        if count == 0 {
+            break;
+        }
+        if bytes
+            .len()
+            .checked_add(count)
+            .as_ref()
+            .is_none_or(|total| *total > cap)
+        {
+            return Err(NamespaceError::Bound);
+        }
+        bytes.extend_from_slice(&buffer[..count]);
+    }
+    stable(&file, &before, bytes.len() as u64)?;
     if <[u8; 32]>::from(Sha256::digest(&bytes)) != *pin {
         return Err(NamespaceError::Digest);
     }

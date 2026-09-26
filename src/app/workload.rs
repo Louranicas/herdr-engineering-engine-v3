@@ -257,15 +257,27 @@ fn execute_stages(
     run: &mut Run,
 ) -> Result<(), Error> {
     let source = binding(plan.source, "src/lib.rs", SOURCE_DESTINATION)?;
+    // Every compile flag, then the input and the output: a flag added to the constant is a flag
+    // added here (the destructuring refuses a length the receipt's row would then not match).
+    let [
+        sysroot,
+        toolchain,
+        edition,
+        crate_name,
+        name,
+        crate_type,
+        kind,
+        warnings,
+    ] = COMPILE_FLAGS;
     let lib_args = [
-        COMPILE_FLAGS[0],
-        COMPILE_FLAGS[1],
-        COMPILE_FLAGS[2],
-        COMPILE_FLAGS[3],
-        COMPILE_FLAGS[4],
-        COMPILE_FLAGS[5],
-        COMPILE_FLAGS[6],
-        COMPILE_FLAGS[7],
+        sysroot,
+        toolchain,
+        edition,
+        crate_name,
+        name,
+        crate_type,
+        kind,
+        warnings,
         SOURCE_DESTINATION,
         "-o",
         "/work/libstrict_u64_workload.rlib",

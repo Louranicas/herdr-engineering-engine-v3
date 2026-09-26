@@ -221,7 +221,7 @@ T06_UNIT_COUNTS = {
     "store::staging_tests::": 13, "check::u64_oracle::tests::": 22,
     "app::capture::tests::": 6, "app::durable_control::tests::": 6,
     "app::repair::tests::": 7, "worker::namespace::": 8,
-    "check::patch::tests::": 6, "app::class_profile::tests::": 15,
+    "check::patch::tests::": 6, "app::class_profile::tests::": 17,
     "worker::resources::limit_tests::": 3, "worker::workspace::manifest_tests::": 2,
     "app::runtime::tests::": 5, "app::run_records::tests::": 8,
     "app::live_verifier::tests::": 2, "app::plan::tests::": 2, "app::u64_receipt::tests::": 9, "worker::host::tests::": 1,

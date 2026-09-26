@@ -16,23 +16,23 @@
 //! The collector subject is [`crate::app::subjects::unread`]: the engine does not read its own
 //! executable (R16r2.3), and the wire's form for an unread subject says so (Q1).
 
-use super::class_profile::{Profile, ReviewedError, Which, read_reviewed_closure};
+use super::class_profile::{Profile, ReviewedError, Which, read_declared, read_reviewed_closure};
 use super::evidence::{self, Evidence};
 use super::live_verifier::BWRAP;
 use super::subjects;
-use super::u64_receipt::environment_rows;
+use super::u64_receipt::{RUNTIME_OWNER, environment_rows};
 use super::workload::{COMPILE_FLAGS, FIXED_DESTINATIONS, Tools};
 use crate::check::collector::{self, Publisher, Sink as _};
 use crate::check::u64_oracle::{self, FrozenOracle};
 use crate::contracts::receipt::{
-    BuildProfileV1, EnvironmentPageV1, LanguageFlagsPageV1, LanguageFlagsV1, List, LockPageV1,
-    Maybe, Name, Payload, Ref, StandardPageV1, StandardV1, SubjectFileV1Origin, SubjectV1, Text,
-    ToolPageV1, ToolV1, TypedRef,
+    BuildProfileV1, EffectPageV1, EffectV1, EnvironmentPageV1, GrantPageV1, GrantV1,
+    LanguageFlagsPageV1, LanguageFlagsV1, List, LockPageV1, Maybe, Name, Payload, Ref, Sha,
+    StandardPageV1, StandardV1, SubjectFileV1Origin, SubjectV1, Text, ToolPageV1, ToolV1, TypedRef,
 };
 use crate::store::Object;
 use crate::worker::namespace::{self, NamespaceError, pinned_bytes};
 use crate::worker::namespace_shim::ENVIRONMENT;
-use crate::worker::process::{self, GroupState, ProcessSpec};
+use crate::worker::process::{self, GroupState, Interruption, ProcessSpec, WaitOwnership};
 use crate::worker::workspace::{self, Snapshot};
 use std::ffi::OsString;
 use std::fs;
@@ -51,6 +51,8 @@ pub const SCHEMA_STANDARD: (&str, &str) = ("hee3-receipt-schema", "1");
 pub const MAX_TOOL_BYTES: usize = 64 * 1024 * 1024;
 /// The most stdout a `<compiler> -Vv` may print before it is refused as not a version report.
 pub const MAX_VERSION_BYTES: usize = 4096;
+/// The pause between polls while a probe's child is settled: pacing under the caller's deadline.
+const SETTLE_PAUSE: std::time::Duration = std::time::Duration::from_millis(10);
 /// The build profile's fixed facts: the target the compiler pin is for and the profile name.
 pub const BUILD_TARGET: &str = "x86_64-unknown-linux-gnu";
 pub const BUILD_PROFILE: &str = "frozen";
@@ -87,6 +89,8 @@ pub struct Shared {
     pub standards: TypedRef<StandardPageV1>,
     pub environment: TypedRef<EnvironmentPageV1>,
     pub isolation: Payload,
+    pub grants: TypedRef<GrantPageV1>,
+    pub effects: TypedRef<EffectPageV1>,
     pub seed: TypedRef<SubjectV1>,
     pub fixtures: TypedRef<SubjectV1>,
     pub oracle: TypedRef<SubjectV1>,
@@ -95,9 +99,14 @@ pub struct Shared {
     pub collector: TypedRef<SubjectV1>,
     /// The compiler's `-Vv` `release:` value, as observed on this host.
     pub compiler_version: String,
-    /// Every `(reference, object)` this publication registered, in registry order.
+    /// The sink's whole registry after this publication, in artifact-id order — the carry-over
+    /// into each check's sink (decision 7). The runtime's prepare sink is fresh, so this is the
+    /// shared set; over a sink that already held objects it holds those too.
     pub objects: Vec<(Ref, Object)>,
-    /// How many distinct objects the sink gained: the `S_new` of decision 9.
+    /// How many registry entries this publication added — receipt-graph nodes with fresh ids. The
+    /// store's inventory counts DISTINCT DIGESTS, which the CAS dedupes across dispatches (the
+    /// schema, the compiler, the closure), so N4's `S_new` is measured from the store side by
+    /// 2c-iii's proof; this is the graph-side count.
     pub added: usize,
 }
 
@@ -109,6 +118,14 @@ pub enum Refusal {
     Cancelled,
     /// The plan root already exists: a leftover this runtime will not reuse.
     PlanRootExists,
+    /// The plan root's parent is not a canonical path: `Snapshot::capture` would refuse it later,
+    /// after pages were published.
+    PlanRootNotCanonical,
+    /// One artifact id reached the closure walk under two different references (the profile's
+    /// expectation and the review's citation of it disagree): nothing is published under it.
+    ClosureConflict {
+        artifact_id: String,
+    },
     /// The plan root or a subject tree could not be created or removed.
     PlanTeardown,
     /// A pinned tool's bytes are not the pin's, or could not be read under the bound.
@@ -121,6 +138,11 @@ pub enum Refusal {
     Oracle(u64_oracle::OracleError),
     /// A reviewed closure did not resolve from the class directory.
     Closure(ReviewedError),
+    /// A declared grant or effect file (`authority`, `specification`) was not read as declared.
+    Declared {
+        which: &'static str,
+        error: ReviewedError,
+    },
     /// The publisher refused at the named stage.
     Publish {
         stage: &'static str,
@@ -142,15 +164,6 @@ pub enum Refusal {
     },
     /// A value had no rendering the receipt admits.
     Encoding,
-}
-
-impl From<subjects::Error> for Refusal {
-    fn from(error: subjects::Error) -> Self {
-        Self::Subject {
-            role: "seed",
-            error: error.kind,
-        }
-    }
 }
 
 /// Name the stage a publisher refusal came from.
@@ -212,8 +225,15 @@ pub fn shared(sink: &mut Evidence<'_>, inputs: &Inputs<'_>) -> Result<Shared, Re
     if Instant::now() >= inputs.deadline {
         return Err(Refusal::Deadline);
     }
-    if inputs.plan_root.exists() {
+    if inputs.plan_root.symlink_metadata().is_ok() {
         return Err(Refusal::PlanRootExists);
+    }
+    let parent = inputs
+        .plan_root
+        .parent()
+        .ok_or(Refusal::PlanRootNotCanonical)?;
+    if parent.canonicalize().ok().as_deref() != Some(parent) {
+        return Err(Refusal::PlanRootNotCanonical);
     }
     fs::DirBuilder::new()
         .mode(0o700)
@@ -221,6 +241,8 @@ pub fn shared(sink: &mut Evidence<'_>, inputs: &Inputs<'_>) -> Result<Shared, Re
         .map_err(|_| Refusal::PlanTeardown)?;
     let before = sink.registered().len();
     let published = publish_shared(sink, inputs);
+    // The root is removed whether or not the publication refused; a refusal is returned as itself
+    // (a root that could not be removed after a refusal is the refusal's, not a second finding).
     let removed = fs::remove_dir_all(inputs.plan_root).is_ok();
     let mut shared = published?;
     if !removed {
@@ -263,6 +285,8 @@ struct Pages {
     standards: TypedRef<StandardPageV1>,
     environment: TypedRef<EnvironmentPageV1>,
     isolation: Payload,
+    grants: TypedRef<GrantPageV1>,
+    effects: TypedRef<EffectPageV1>,
 }
 
 fn pages(
@@ -275,9 +299,11 @@ fn pages(
     let schema = payload(sink, SCHEMA, "application/schema+json")?;
     let compiler_payload = payload(sink, compiler, "application/octet-stream")?;
     let version_payload = payload(sink, version_output, "application/octet-stream")?;
-    let isolation = payload(sink, &isolation_profile(), "application/json")?;
+    let isolation = payload(sink, &isolation_profile()?, "application/json")?;
     let environment_rows = environment_rows().map_err(|_| Refusal::Encoding)?;
+    let (authority, specification) = declared_payloads(sink, inputs)?;
     let mut publisher = Publisher::new(sink);
+    let (grants, effects) = authority_pages(&mut publisher, inputs, authority, specification)?;
     let toolchain = page!(
         publisher,
         ToolPageV1,
@@ -347,7 +373,71 @@ fn pages(
         standards,
         environment,
         isolation,
+        grants,
+        effects,
     })
+}
+
+/// The declared grant and effect files, read as declared (digest-bound, F11) and published.
+fn declared_payloads(
+    sink: &mut Evidence<'_>,
+    inputs: &Inputs<'_>,
+) -> Result<(Payload, Payload), Refusal> {
+    let grant = &inputs.profile.declared.grant;
+    let effect = &inputs.profile.declared.effect;
+    let authority =
+        read_declared(inputs.profile, &grant.authority).map_err(|error| Refusal::Declared {
+            which: "authority",
+            error,
+        })?;
+    let specification = read_declared(inputs.profile, &effect.specification).map_err(|error| {
+        Refusal::Declared {
+            which: "specification",
+            error,
+        }
+    })?;
+    Ok((
+        payload(sink, &authority, "application/json")?,
+        payload(sink, &specification, "application/json")?,
+    ))
+}
+
+/// The grant and effect pages: one row each from the profile's declarations, the grant's
+/// `scope_sha256` the authority document's digest, the effect under that grant, owned by the
+/// runtime (R17 round 2, decision 6).
+fn authority_pages(
+    publisher: &mut Publisher<'_, Evidence<'_>>,
+    inputs: &Inputs<'_>,
+    authority: Payload,
+    specification: Payload,
+) -> Result<(TypedRef<GrantPageV1>, TypedRef<EffectPageV1>), Refusal> {
+    let grant = &inputs.profile.declared.grant;
+    let effect = &inputs.profile.declared.effect;
+    let grants = page!(
+        publisher,
+        GrantPageV1,
+        vec![GrantV1 {
+            grant_id: grant.grant_id.clone(),
+            scope_sha256: Sha::new(authority.as_ref().sha256.as_str().to_owned())
+                .map_err(|_| Refusal::Encoding)?,
+            issuer_id: grant.issuer_id.clone(),
+            grant: authority,
+        }],
+        "grants"
+    );
+    let effects = page!(
+        publisher,
+        EffectPageV1,
+        vec![EffectV1 {
+            effect_id: effect.effect_id.clone(),
+            grant_id: grant.grant_id.clone(),
+            owner_id: name(RUNTIME_OWNER)?,
+            scope: effect.scope.clone(),
+            specification,
+        }],
+        "effects"
+    );
+    Ok((grants, effects))
 }
 
 /// The six subjects that do not change per attempt, by role.
@@ -373,7 +463,11 @@ fn subjects(
         inputs.baseline,
         SubjectFileV1Origin::Authored,
         inputs.deadline,
-    )?;
+    )
+    .map_err(|error| Refusal::Subject {
+        role: "seed",
+        error: error.kind,
+    })?;
     let fixtures = materialised(sink, inputs, "fixtures", &[("inputs.hex", public_inputs)])?;
     let oracle = materialised(sink, inputs, "oracle", &[("oracle.json", oracle_bytes)])?;
     let harness = materialised(sink, inputs, "harness", &[("public-wrapper.rs", wrapper)])?;
@@ -421,12 +515,15 @@ fn publish_shared(sink: &mut Evidence<'_>, inputs: &Inputs<'_>) -> Result<Shared
             // The expectation's closure lies inside the review's: a node already registered under
             // the same reference is the same object; the same id under another reference is a
             // conflict the sink refuses.
-            if sink
-                .registered()
-                .get(node.reference().artifact_id.as_str())
-                .is_some_and(|(registered, _)| registered == node.reference())
+            if let Some((registered, _)) =
+                sink.registered().get(node.reference().artifact_id.as_str())
             {
-                continue;
+                if registered == node.reference() {
+                    continue;
+                }
+                return Err(Refusal::ClosureConflict {
+                    artifact_id: node.reference().artifact_id.as_str().to_owned(),
+                });
             }
             sink.publish(node.reference(), node.bytes())
                 .map_err(|error| Refusal::Publish {
@@ -443,6 +540,8 @@ fn publish_shared(sink: &mut Evidence<'_>, inputs: &Inputs<'_>) -> Result<Shared
         standards: pages.standards,
         environment: pages.environment,
         isolation: pages.isolation,
+        grants: pages.grants,
+        effects: pages.effects,
         seed: subjects.seed,
         fixtures: subjects.fixtures,
         oracle: subjects.oracle,
@@ -497,10 +596,12 @@ fn materialised(
         role,
         error: error.kind,
     });
-    if fs::remove_dir_all(&root).is_err() {
+    let removed = fs::remove_dir_all(&root).is_ok();
+    let published = published?;
+    if !removed {
         return Err(Refusal::PlanTeardown);
     }
-    published
+    Ok(published)
 }
 
 /// Observe the compiler's version once: `<compiler> -Vv` under the dispatch's deadline, stdout
@@ -529,16 +630,42 @@ fn compiler_version(inputs: &Inputs<'_>) -> Result<(String, Vec<u8>), Refusal> {
             if poll.leader_terminal && poll.group == GroupState::Empty {
                 break;
             }
-            if Instant::now() >= inputs.deadline {
+            if poll.ownership == WaitOwnership::Lost || Instant::now() >= inputs.deadline {
                 return Err(refuse("child"));
             }
+            // `poll_cleanup` returns at once; a pause between polls keeps this from burning a core
+            // for the whole deadline (pacing under the passed-through deadline, not a limit).
+            std::thread::sleep(SETTLE_PAUSE);
         }
+    }
+    // The stream's own interruptions first, then the bytes, then the exit: an over-limit report is
+    // refused as a stream, a cancelled or timed-out one as what it was.
+    match report.interruption {
+        Some(Interruption::Cancelled) => return Err(Refusal::Cancelled),
+        Some(Interruption::Timeout) => return Err(Refusal::Deadline),
+        Some(Interruption::OutputLimit) => return Err(refuse("stream")),
+        Some(_) => return Err(refuse("child")),
+        None => {}
+    }
+    if report.stdout.truncated || !report.stdout.eof {
+        return Err(refuse("stream"));
     }
     if report.exit_code != Some(0) {
         return Err(refuse("exit"));
     }
-    if report.stdout.truncated || !report.stdout.eof {
-        return Err(refuse("stream"));
+    // The bytes verified before the probe are shown to be the bytes still at the path after it
+    // (F5 named: the window between the read and the exec is not closed, it is measured).
+    if namespace::sha256(&inputs.tools.compiler.host, inputs.deadline).map_err(|error| {
+        Refusal::Pin {
+            which: "compiler",
+            error,
+        }
+    })? != inputs.tools.compiler.sha256
+    {
+        return Err(Refusal::Pin {
+            which: "compiler",
+            error: NamespaceError::Digest,
+        });
     }
     let output = std::str::from_utf8(&report.stdout.bytes).map_err(|_| refuse("utf8"))?;
     let release = output
@@ -553,8 +680,10 @@ fn compiler_version(inputs: &Inputs<'_>) -> Result<(String, Vec<u8>), Refusal> {
 /// The isolation profile: a JSON rendering of the namespace's own constants — `--unshare-all`,
 /// the fixed destinations and the environment table — by one function, so the receipt and the
 /// namespace read one source (R17 round 2, decision 3). A derived document, recorded as such.
-#[must_use]
-pub fn isolation_profile() -> Vec<u8> {
+///
+/// # Errors
+/// `Encoding` when the rendering fails — never an empty document in its place.
+pub fn isolation_profile() -> Result<Vec<u8>, Refusal> {
     let destinations: Vec<&str> = FIXED_DESTINATIONS.to_vec();
     let environment: Vec<(&str, &str)> = ENVIRONMENT.to_vec();
     let value = serde_json::json!({
@@ -564,9 +693,7 @@ pub fn isolation_profile() -> Vec<u8> {
         "environment": environment.iter().map(|(k, v)| serde_json::json!({"name": k, "value": v})).collect::<Vec<_>>(),
         "launcher": BWRAP,
     });
-    // A `Value` built from constants always serialises; an empty document would be refused by the
-    // sink's own payload rules rather than invented here.
-    serde_json::to_vec(&value).unwrap_or_default()
+    serde_json::to_vec(&value).map_err(|_| Refusal::Encoding)
 }
 
 /// The digest the receipt's `schema_sha256` names: the schema bytes this binary carries.
@@ -587,8 +714,8 @@ mod tests {
     use crate::check::graph::{Graph, Objects as _};
     use crate::check::u64_oracle::FrozenOracle;
     use crate::contracts::receipt::{
-        BuildProfileV1, LanguageFlagsPageV1, LockPageV1, StandardPageV1, SubjectFilePageV1,
-        SubjectFileV1Origin, SubjectV1, ToolPageV1, decode,
+        BuildProfileV1, EffectPageV1, GrantPageV1, LanguageFlagsPageV1, LockPageV1, Ref,
+        StandardPageV1, SubjectFilePageV1, SubjectFileV1Origin, SubjectV1, ToolPageV1, decode,
     };
     use crate::store::ArtifactStaging;
     use crate::worker::namespace::ReadOnlyFile;
@@ -606,6 +733,14 @@ mod tests {
     const WRAPPER: &[u8] = include_bytes!("../../evaluation/harnesses/u64-public-wrapper.rs");
     const BASE: &[u8] =
         include_bytes!("../../evaluation/tasks/WL-U64-PARSE-001/v1/base/src/lib.rs");
+    const AUTHORITY: &[u8] = b"{\"authority\":\"WL-U64 fixed workload\",\"issuer\":\"operator\"}\n";
+    const SPECIFICATION: &[u8] = b"{\"isolation\":\"bwrap --unshare-all; no network\"}\n";
+    const PAYLOADS: usize = 6;
+    const PAGES: usize = 8;
+    const SUBJECT_OBJECTS: usize = 3 * 4 + 4 + 2;
+    const CLOSURE_NODES: usize = 22;
+    const SCOPE: &str =
+        "compile, link and execute the fixed workload in a private bounded scratch; no network";
 
     fn deadline() -> Instant {
         Instant::now() + Duration::from_secs(120)
@@ -701,12 +836,20 @@ mod tests {
              shim = {{ host = \"{}\", sha256 = \"sha256:{}\" }}\nruntime_files = []\n\
              namespace_directories = []\nbusctl_sha256 = \"{zero}\"\nsystemd_run_sha256 = \"{zero}\"\n\
              [reviewed]\nexpectation = {{ artifact_id = \"c220e7ce-0753-47ef-bdac-15710bc4981c\", sha256 = \"sha256:3a7faa5510790c20322ad5829091211eb8c04ab6016e16ec8391433dae3392b9\", byte_length = 794, media_type = \"application/json\", schema_id = \"hee3.receipt/1:ExpectationV1\" }}\n\
-             review = {{ artifact_id = \"a47470c5-f11c-4f64-9ac8-6dcf80750ed6\", sha256 = \"sha256:f288225476120254f5c3a93266fc8f2a8763810462fbddd7c62161107cb39adb\", byte_length = 1145, media_type = \"application/json\", schema_id = \"hee3.receipt/1:ReviewV1\" }}\n",
+             review = {{ artifact_id = \"a47470c5-f11c-4f64-9ac8-6dcf80750ed6\", sha256 = \"sha256:f288225476120254f5c3a93266fc8f2a8763810462fbddd7c62161107cb39adb\", byte_length = 1145, media_type = \"application/json\", schema_id = \"hee3.receipt/1:ReviewV1\" }}\n\
+             [grant]\ngrant_id = \"28f90000-0000-4000-8000-000000000001\"\nissuer_id = \"operator\"\n\
+             authority = {{ file = \"authority.json\", sha256 = \"{}\" }}\n\
+             [effect]\neffect_id = \"fixed-u64-workload-output\"\nscope = \"{SCOPE}\"\n\
+             specification = {{ file = \"isolation.json\", sha256 = \"{}\" }}\n",
             compiler.display(),
             hex(&sha(&compiler_bytes)),
             shim.display(),
             hex(&sha(shim_bytes)),
+            crate::app::evidence::digest(AUTHORITY),
+            crate::app::evidence::digest(SPECIFICATION),
         );
+        write(&class.join("authority.json"), AUTHORITY);
+        write(&class.join("isolation.json"), SPECIFICATION);
         let declared = compose(text.as_bytes()).map_err(|e| format!("{e:?}"))?;
         let tools = Tools {
             bwrap: PathBuf::from(super::BWRAP),
@@ -779,6 +922,56 @@ mod tests {
         .unwrap_or_else(|_| unreachable!("a typed record"))
     }
 
+    /// The grant and effect rows, whole.
+    fn assert_authority(
+        sink: &Evidence<'_>,
+        shared: &super::Shared,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        // The grant and effect rows, whole: the declaration's ids, the authority's digest as the
+        // grant's scope, the effect under the grant and owned by the runtime.
+        let grants: GrantPageV1 = resolved(sink, &shared.grants);
+        let grant = &grants.rows.as_slice()[0];
+        assert_eq!(
+            (
+                grant.grant_id.as_str(),
+                grant.issuer_id.as_str(),
+                grant.scope_sha256.as_str(),
+                grant.grant.as_ref().sha256.as_str()
+            ),
+            (
+                "28f90000-0000-4000-8000-000000000001",
+                "operator",
+                crate::app::evidence::digest(AUTHORITY).as_str(),
+                crate::app::evidence::digest(AUTHORITY).as_str()
+            )
+        );
+        let effects: EffectPageV1 = resolved(sink, &shared.effects);
+        let effect = &effects.rows.as_slice()[0];
+        assert_eq!(
+            (
+                effect.effect_id.as_str(),
+                effect.grant_id.as_str(),
+                effect.owner_id.as_str(),
+                effect.scope.as_str(),
+                effect.specification.as_ref().sha256.as_str()
+            ),
+            (
+                "fixed-u64-workload-output",
+                "28f90000-0000-4000-8000-000000000001",
+                crate::app::u64_receipt::RUNTIME_OWNER,
+                SCOPE,
+                crate::app::evidence::digest(SPECIFICATION).as_str()
+            )
+        );
+        assert!(
+            serde_json::from_slice::<serde_json::Value>(
+                &isolation_profile().map_err(|e| format!("{e:?}"))?
+            )
+            .is_ok()
+        );
+        Ok(())
+    }
+
     /// One dispatch's shared publication, asserted whole against the sink that holds it.
     fn assert_dispatch(
         sink: &Evidence<'_>,
@@ -786,7 +979,6 @@ mod tests {
         f: &Fixture,
     ) -> Result<(), Box<dyn std::error::Error>> {
         assert_eq!(shared.objects.len(), sink.registered().len());
-        assert_eq!(shared.added, sink.registered().len());
         // The toolchain row: the pinned compiler, its version as an independent probe reads it.
         let toolchain: ToolPageV1 = resolved(sink, &shared.toolchain);
         let row = &toolchain.rows.as_slice()[0];
@@ -857,7 +1049,7 @@ mod tests {
         assert_eq!(standard.document, shared.schema);
         assert_eq!(shared.schema.as_ref().byte_length as usize, SCHEMA.len());
         assert_eq!(shared.schema.as_ref().sha256.as_str(), schema_sha256());
-        assert!(serde_json::from_slice::<serde_json::Value>(&isolation_profile()).is_ok());
+        assert_authority(sink, shared)?;
         assert_subjects(sink, shared, f)?;
         Ok(())
     }
@@ -1010,7 +1202,80 @@ mod tests {
             ),
             Err(Refusal::Protected("oracle.json"))
         ));
+        assert_refused_sink(&mut sink, staging, &base, f)?;
         assert_refused_probe(&mut sink, &base, &plan_root, f)?;
+        Ok(())
+    }
+
+    /// A sink already holding a closure id under another reference, a declared file whose bytes
+    /// are not the declaration's, and a plan root under a symlinked parent: each refused by name.
+    fn assert_refused_sink(
+        sink: &mut Evidence<'_>,
+        staging: &ArtifactStaging,
+        base: &Inputs<'_>,
+        f: &Fixture,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let base = *base;
+        // A sink already holding the expectation's id under another reference: named, not skipped.
+        {
+            use crate::check::collector::Sink as _;
+            let mut held = Evidence::staged(staging, deadline());
+            let other = b"{\"not\":\"the expectation\"}";
+            let reference = Ref {
+                artifact_id: f
+                    .profile
+                    .declared
+                    .reviewed
+                    .expectation()
+                    .as_ref()
+                    .artifact_id
+                    .clone(),
+                sha256: crate::contracts::receipt::Sha::new(crate::app::evidence::digest(other))?,
+                byte_length: u32::try_from(other.len())?,
+                media_type: crate::contracts::receipt::Name::new("application/json")?,
+                schema_id: crate::contracts::receipt::Name::new("hee3.raw/1")?,
+            };
+            held.publish(&reference, other)
+                .map_err(|e| format!("{e:?}"))?;
+            let conflict_root = f.root.join("conflict.plan");
+            let refused = shared(
+                &mut held,
+                &Inputs {
+                    plan_root: &conflict_root,
+                    ..base
+                },
+            );
+            assert!(
+                matches!(&refused, Err(Refusal::ClosureConflict { artifact_id }) if artifact_id == reference.artifact_id.as_str()),
+                "{refused:?}"
+            );
+            assert!(!conflict_root.exists());
+        }
+        // A declared file whose bytes are not the declaration's: refused by name, then restored.
+        write(&f.profile.directory.join("authority.json"), SPECIFICATION);
+        assert!(matches!(
+            shared(sink, &base),
+            Err(Refusal::Declared {
+                which: "authority",
+                error: crate::app::class_profile::ReviewedError::Mismatch
+            })
+        ));
+        write(&f.profile.directory.join("authority.json"), AUTHORITY);
+        // A plan root under a symlinked parent is refused before anything is published.
+        let alias = f.root.join("alias");
+        std::os::unix::fs::symlink(&f.root, &alias)?;
+        let before = sink.registered().len();
+        assert!(matches!(
+            shared(
+                sink,
+                &Inputs {
+                    plan_root: &alias.join("aliased.plan"),
+                    ..base
+                }
+            ),
+            Err(Refusal::PlanRootNotCanonical)
+        ));
+        assert_eq!(sink.registered().len(), before);
         Ok(())
     }
 
@@ -1104,8 +1369,11 @@ mod tests {
             ArtifactStaging::open(&staging_root, true, deadline()).map_err(|e| format!("{e:?}"))?;
         let cancelled = AtomicBool::new(false);
         let mut added = Vec::new();
+        // One sink across two dispatches: the second finds the closures already registered under
+        // the same references and adds only the fresh-id part, so both counts are pinned off the
+        // origin and the registry delta (`before`) is exercised (F129, review MED-3).
+        let mut sink = Evidence::staged(&staging, deadline());
         for dispatch in 0..2 {
-            let mut sink = Evidence::staged(&staging, deadline());
             let plan_root = f.root.join(format!("dispatch-{dispatch}.plan"));
             let inputs = Inputs {
                 tools: &f.tools,
@@ -1121,11 +1389,19 @@ mod tests {
             added.push(shared.added);
             assert_dispatch(&sink, &shared, &f)?;
         }
-        assert_eq!(
-            added[0], added[1],
-            "a dispatch adds a fixed number of digests: {added:?}"
+        // The graph-side count, derived from the parts: 6 payloads (schema, compiler, version,
+        // isolation, authority, specification) + 8 pages/records (grants, effects, toolchain, flags,
+        // build, locks, standards, environment) + 18 subject objects (seed, fixtures, oracle, harness
+        // 3 each; launcher 4; collector 2) + the review closure's 22 nodes; the second dispatch on
+        // the same sink skips the 22 it finds registered.
+        let s_new = PAYLOADS + PAGES + SUBJECT_OBJECTS + CLOSURE_NODES;
+        assert_eq!(added, vec![s_new, s_new - CLOSURE_NODES], "{added:?}");
+        assert_eq!(sink.registered().len(), 2 * s_new - CLOSURE_NODES);
+        println!(
+            "S_new={s_new} registry entries per dispatch (graph side); per_dispatch_after_first={}; \
+             store-side distinct digests are measured by 2c-iii's proof (N4)",
+            s_new - CLOSURE_NODES
         );
-        assert!(added[0] >= 22 + 6 + 5, "{added:?}");
         assert_refused(&f, &staging, &cancelled)?;
         fs::remove_dir_all(&f.root)?;
         Ok(())
@@ -1142,7 +1418,8 @@ mod tests {
             "sha256:b926a67e80bc326af582898c3e865fd50618786ef27b71d1fd2f66523776e62b"
         );
         assert!(!SCHEMA.is_empty());
-        let value: serde_json::Value = serde_json::from_slice(&isolation_profile())?;
+        let value: serde_json::Value =
+            serde_json::from_slice(&isolation_profile().map_err(|e| format!("{e:?}"))?)?;
         assert_eq!(value["unshare_all"], true);
         assert_eq!(
             value["fixed_destinations"].as_array().map(Vec::len),

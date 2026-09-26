@@ -160,7 +160,9 @@ pub fn checked(
 #[cfg(test)]
 mod tests {
     use super::{BWRAP, Checked, Cleanup, checked, tools};
-    use crate::app::class_profile::{Declared, HostPin, Reviewed, RuntimeFile};
+    use crate::app::class_profile::{
+        Declared, DeclaredFile, Effect, Grant, HostPin, Reviewed, RuntimeFile,
+    };
     use crate::app::run_records::OutcomeName;
     use crate::app::runtime::declared_criteria;
     use crate::app::workload::COMPILER_DESTINATION;
@@ -205,6 +207,22 @@ mod tests {
                 reference("28f70000-0000-4000-8000-00000000000f", 0x05)?,
             )
             .map_err(|e| format!("{e:?}"))?,
+            grant: Grant {
+                grant_id: Id::new("28f90000-0000-4000-8000-000000000001")?,
+                issuer_id: Name::new("operator")?,
+                authority: DeclaredFile {
+                    file: "authority.json".to_owned(),
+                    sha256: Sha::new(format!("sha256:{}", "a".repeat(64)))?,
+                },
+            },
+            effect: Effect {
+                effect_id: Name::new("fixed-u64-workload-output")?,
+                scope: crate::contracts::receipt::Text::new("the fixture's scope")?,
+                specification: DeclaredFile {
+                    file: "isolation.json".to_owned(),
+                    sha256: Sha::new(format!("sha256:{}", "b".repeat(64)))?,
+                },
+            },
         })
     }
 

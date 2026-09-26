@@ -11,7 +11,7 @@
 use super::custody::{DirectoryError, FileError, PrivateDirectory};
 use super::workload::FIXED_DESTINATIONS;
 use crate::contracts::receipt::{
-    Address, ExpectationV1, Id, Name, RECORD_MEDIA_TYPE, Ref, ReviewV1, Sha, TypedRef,
+    Address, ExpectationV1, Id, Name, RECORD_MEDIA_TYPE, Ref, ReviewV1, Sha, Text, TypedRef,
 };
 use crate::contracts::{Sha256Digest, UuidV4};
 use crate::worker::namespace::{self, MAX_MOUNTS, SHIM_DESTINATION};
@@ -162,6 +162,37 @@ pub struct Declared {
     pub busctl_sha256: String,
     pub systemd_run_sha256: String,
     pub reviewed: Reviewed,
+    pub grant: Grant,
+    pub effect: Effect,
+}
+
+/// A file beside `profile.toml` the profile declares by name AND digest (B14a-2c-ii-c, R17 round 2
+/// F11): read through [`read_declared`], which returns only bytes hashing to `sha256` — the
+/// reviewed-reference discipline for the two declared inputs the receipt's grant and effect rows
+/// carry, so swapping the file cannot leave the profile identity reading `Matched`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DeclaredFile {
+    /// One path component under the class directory.
+    pub file: String,
+    pub sha256: Sha,
+}
+
+/// The one grant a class's invocation carries (`GrantV1`): its id, the issuer the operator names,
+/// and the authority document the row cites — the receipt's `scope_sha256` is that document's.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Grant {
+    pub grant_id: Id,
+    pub issuer_id: Name,
+    pub authority: DeclaredFile,
+}
+
+/// The one effect a class's invocation allows (`EffectV1`), under the grant above: its id, its
+/// scope text, and the isolation specification the row cites. The runtime is its owner.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Effect {
+    pub effect_id: Name,
+    pub scope: Text,
+    pub specification: DeclaredFile,
 }
 
 /// A read profile: its declaration, the directory it was read from, and the `sha256:` of the exact
@@ -265,6 +296,27 @@ pub enum ProfileError {
         path: String,
         why: ReviewedWhy,
     },
+    /// A `[grant]` or `[effect]` field, at its key path: not the scalar the receipt row needs, or a
+    /// file name that is not one component.
+    Declared {
+        path: String,
+        why: DeclaredWhy,
+    },
+}
+
+/// Why a `[grant]`/`[effect]` field is refused.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DeclaredWhy {
+    /// Not a v4 UUID.
+    Id,
+    /// Not a receipt name (1..=128 ASCII).
+    Name,
+    /// Not a receipt text.
+    Text,
+    /// Not a `sha256:` digest.
+    Digest,
+    /// Not one path component (empty, `.`, `..`, or holding `/`).
+    FileName,
 }
 
 /// Why a `[reviewed]` entry is refused.
@@ -401,7 +453,15 @@ pub fn compose(bytes: &[u8]) -> Result<Declared, ProfileError> {
     only(
         &table,
         "",
-        &["schema", "class", "workspace", "pins", "reviewed"],
+        &[
+            "schema",
+            "class",
+            "workspace",
+            "pins",
+            "reviewed",
+            "grant",
+            "effect",
+        ],
     )?;
     let schema = string(&table, "", "schema")?;
     if schema != SCHEMA {
@@ -439,7 +499,88 @@ pub fn compose(bytes: &[u8]) -> Result<Declared, ProfileError> {
         busctl_sha256: digest_text(pins, "busctl_sha256")?,
         systemd_run_sha256: digest_text(pins, "systemd_run_sha256")?,
         reviewed: reviewed(&table)?,
+        grant: grant(&table)?,
+        effect: effect(&table)?,
     })
+}
+
+/// The `[grant]` table: `grant_id`, `issuer_id`, `authority = { file, sha256 }`.
+fn grant(table: &toml::Table) -> Result<Grant, ProfileError> {
+    let grant = sub_table(table, "", "grant")?;
+    only(grant, "grant", &["grant_id", "issuer_id", "authority"])?;
+    let refuse = |field: &str, why| ProfileError::Declared {
+        path: key_path("grant", field),
+        why,
+    };
+    Ok(Grant {
+        grant_id: Id::new(string(grant, "grant", "grant_id")?)
+            .map_err(|_| refuse("grant_id", DeclaredWhy::Id))?,
+        issuer_id: Name::new(string(grant, "grant", "issuer_id")?)
+            .map_err(|_| refuse("issuer_id", DeclaredWhy::Name))?,
+        authority: declared_file(grant, "grant", "authority")?,
+    })
+}
+
+/// The `[effect]` table: `effect_id`, `scope`, `specification = { file, sha256 }`.
+fn effect(table: &toml::Table) -> Result<Effect, ProfileError> {
+    let effect = sub_table(table, "", "effect")?;
+    only(effect, "effect", &["effect_id", "scope", "specification"])?;
+    let refuse = |field: &str, why| ProfileError::Declared {
+        path: key_path("effect", field),
+        why,
+    };
+    Ok(Effect {
+        effect_id: Name::new(string(effect, "effect", "effect_id")?)
+            .map_err(|_| refuse("effect_id", DeclaredWhy::Name))?,
+        scope: Text::new(string(effect, "effect", "scope")?)
+            .map_err(|_| refuse("scope", DeclaredWhy::Text))?,
+        specification: declared_file(effect, "effect", "specification")?,
+    })
+}
+
+/// A `{ file, sha256 }` sub-table: the file one path component, the digest a `sha256:` spelling.
+fn declared_file(table: &toml::Table, at: &str, key: &str) -> Result<DeclaredFile, ProfileError> {
+    let path = key_path(at, key);
+    let entry = sub_table(table, at, key)?;
+    only(entry, &path, &["file", "sha256"])?;
+    let file = string(entry, &path, "file")?;
+    if file.is_empty() || file == "." || file == ".." || file.contains('/') {
+        return Err(ProfileError::Declared {
+            path: key_path(&path, "file"),
+            why: DeclaredWhy::FileName,
+        });
+    }
+    let sha256 = Sha::new(string(entry, &path, "sha256")?).map_err(|_| ProfileError::Declared {
+        path: key_path(&path, "sha256"),
+        why: DeclaredWhy::Digest,
+    })?;
+    Ok(DeclaredFile { file, sha256 })
+}
+
+/// Read a declared file beside `profile.toml` under the class directory's custody (0700 directory,
+/// 0600 file, at most [`MAX_PROFILE_BYTES`]) and return it only if its bytes hash to the digest the
+/// profile declares (B14a-2c-ii-c). The refusals are the reviewed records' own.
+///
+/// # Errors
+/// Each [`ReviewedError`], named; `Mismatch` when the bytes are not the declaration's.
+pub fn read_declared(profile: &Profile, declared: &DeclaredFile) -> Result<Vec<u8>, ReviewedError> {
+    let held = match PrivateDirectory::open(&profile.directory) {
+        Ok(held) => held,
+        Err(DirectoryError::NotFound) => return Err(ReviewedError::NotInstalled),
+        Err(DirectoryError::Custody) => return Err(ReviewedError::Custody),
+        Err(DirectoryError::Io(_)) => return Err(ReviewedError::Io),
+    };
+    let bytes = match held.read(&declared.file, MAX_PROFILE_BYTES) {
+        Ok(bytes) => bytes,
+        Err(FileError::NotFound) => return Err(ReviewedError::NotInstalled),
+        Err(FileError::Custody) => return Err(ReviewedError::Custody),
+        Err(FileError::TooLarge) => return Err(ReviewedError::TooLarge),
+        Err(FileError::Io(_)) => return Err(ReviewedError::Io),
+    };
+    if super::evidence::digest(&bytes) != declared.sha256.as_str() {
+        return Err(ReviewedError::Mismatch);
+    }
+    Ok(bytes)
 }
 
 /// 1-based line and column of byte `offset` in `text`, the column in characters. That is the toml
@@ -993,6 +1134,13 @@ mod tests {
     /// The review's `shared_assumptions` page: a closure member that is neither root.
     const REVIEW_ASSUMPTIONS: &str =
         "8352c1851cfba4e85f26d180f4174bc572cdecc01d08b40d7efeab16f1dc0d81";
+    /// The declared grant and effect files: bytes the operator would install beside the profile,
+    /// their digests coreutils `sha256sum` of these constants.
+    const AUTHORITY: &[u8] = b"{\"authority\":\"WL-U64 fixed workload\",\"issuer\":\"operator\"}\n";
+    const SPECIFICATION: &[u8] = b"{\"isolation\":\"bwrap --unshare-all; no network\"}\n";
+    const AUTH: &str = "sha256:e4b4fcd5d15d45eed7a553536e73027e7aedbd72f466be6dee168986b6fe1234";
+    const SPEC: &str = "sha256:61ac0e7ad368ef48bd6d34e7cd6995ca5ff992693b700b9fccf3f58c8cfc32f1";
+    const GRANT_ID: &str = "28f90000-0000-4000-8000-000000000001";
     /// Nodes of the review's and the expectation's closures (the expectation's is inside the
     /// review's), counted by an independent walk over the fixture directory keyed by artifact id
     /// as the graph is: 22 references over 21 files, because the review's empty finding and
@@ -1034,6 +1182,16 @@ systemd_run_sha256 = "{HEX2}"
 [reviewed]
 expectation = {{ artifact_id = "{EXP_ID}", sha256 = "{EXP}", byte_length = {EXP_LEN}, media_type = "application/json", schema_id = "{EXP_SCHEMA}" }}
 review = {{ artifact_id = "{REV_ID}", sha256 = "{REV}", byte_length = {REV_LEN}, media_type = "application/json", schema_id = "{REV_SCHEMA}" }}
+
+[grant]
+grant_id = "{GRANT_ID}"
+issuer_id = "operator"
+authority = {{ file = "authority.json", sha256 = "{AUTH}" }}
+
+[effect]
+effect_id = "fixed-u64-workload-output"
+scope = "compile, link and execute the fixed workload in a private bounded scratch; no network"
+specification = {{ file = "isolation.json", sha256 = "{SPEC}" }}
 "#,
             EXP_LEN = EXPECTATION.len(),
             REV_LEN = REVIEW.len(),
@@ -1556,7 +1714,7 @@ review = {{ artifact_id = "{REV_ID}", sha256 = "{REV}", byte_length = {REV_LEN},
             Ok((
                 good.clone(),
                 2,
-                "sha256:114043157ec3ffd1b20fa291845143888749133f5615e8b2e60d907d83e16bdc"
+                "sha256:4eb32e8bcb253168d1a64a6dcf3b4cdc0cae2fe183624101291eda06e2611264"
                     .to_owned()
             ))
         );
@@ -2121,6 +2279,134 @@ review = {{ artifact_id = "{REV_ID}", sha256 = "{REV}", byte_length = {REV_LEN},
             Err(ReviewedError::Custody)
         );
         let _ = fs::remove_dir_all(&root);
+        Ok(())
+    }
+
+    /// B14a-2c-ii-c · `[grant]` and `[effect]` are required, each field the receipt row's own
+    /// scalar, each file declared with its digest; every refusal named at its key path.
+    #[test]
+    fn the_grant_and_effect_tables_are_declared_by_digest() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let declared = compose(valid().as_bytes()).map_err(|e| format!("{e:?}"))?;
+        assert_eq!(
+            declared.grant,
+            Grant {
+                grant_id: Id::new(GRANT_ID)?,
+                issuer_id: Name::new("operator")?,
+                authority: DeclaredFile {
+                    file: "authority.json".to_owned(),
+                    sha256: Sha::new(AUTH)?,
+                },
+            }
+        );
+        assert_eq!(
+            declared.effect,
+            Effect {
+                effect_id: Name::new("fixed-u64-workload-output")?,
+                scope: Text::new(
+                    "compile, link and execute the fixed workload in a private bounded scratch; no network"
+                )?,
+                specification: DeclaredFile {
+                    file: "isolation.json".to_owned(),
+                    sha256: Sha::new(SPEC)?,
+                },
+            }
+        );
+        for (old, new, expected) in [
+            (
+                format!("grant_id = \"{GRANT_ID}\""),
+                "grant_id = \"not-a-uuid\"".to_owned(),
+                ProfileError::Declared {
+                    path: "grant.grant_id".into(),
+                    why: DeclaredWhy::Id,
+                },
+            ),
+            (
+                "issuer_id = \"operator\"".to_owned(),
+                "issuer_id = \"\"".to_owned(),
+                ProfileError::Declared {
+                    path: "grant.issuer_id".into(),
+                    why: DeclaredWhy::Name,
+                },
+            ),
+            (
+                "file = \"authority.json\"".to_owned(),
+                "file = \"../authority.json\"".to_owned(),
+                ProfileError::Declared {
+                    path: "grant.authority.file".into(),
+                    why: DeclaredWhy::FileName,
+                },
+            ),
+            (
+                format!("sha256 = \"{SPEC}\""),
+                "sha256 = \"x\"".to_owned(),
+                ProfileError::Declared {
+                    path: "effect.specification.sha256".into(),
+                    why: DeclaredWhy::Digest,
+                },
+            ),
+            (
+                "effect_id = \"fixed-u64-workload-output\"".to_owned(),
+                "effect_id = \"\"".to_owned(),
+                ProfileError::Declared {
+                    path: "effect.effect_id".into(),
+                    why: DeclaredWhy::Name,
+                },
+            ),
+            (
+                "issuer_id = \"operator\"".to_owned(),
+                "issuer_id = \"operator\"\nextra = 1".to_owned(),
+                ProfileError::UnknownKey {
+                    path: "grant.extra".into(),
+                },
+            ),
+            (
+                "[effect]\n".to_owned(),
+                "[effect_]\n".to_owned(),
+                ProfileError::UnknownKey {
+                    path: "effect_".into(),
+                },
+            ),
+        ] {
+            assert_eq!(refused(&with(&old, &new)), expected, "{old} -> {new}");
+        }
+        Ok(())
+    }
+
+    /// B14a-2c-ii-c · a declared file is returned only from the class directory's custody and only
+    /// when its bytes hash to the declared digest; absence, substitution and custody each refused.
+    #[test]
+    fn a_declared_file_is_read_only_as_declared() -> Result<(), Box<dyn std::error::Error>> {
+        let root = private("declared");
+        let profile = Profile {
+            declared: compose(valid().as_bytes()).map_err(|e| format!("{e:?}"))?,
+            directory: root.clone(),
+            digest: String::new(),
+        };
+        let authority = &profile.declared.grant.authority;
+        assert_eq!(
+            read_declared(&profile, authority),
+            Err(ReviewedError::NotInstalled)
+        );
+        write(&root.join("authority.json"), SPECIFICATION, 0o600);
+        assert_eq!(
+            read_declared(&profile, authority),
+            Err(ReviewedError::Mismatch)
+        );
+        write(&root.join("authority.json"), AUTHORITY, 0o600);
+        assert_eq!(read_declared(&profile, authority), Ok(AUTHORITY.to_vec()));
+        write(&root.join("authority.json"), AUTHORITY, 0o644);
+        assert_eq!(
+            read_declared(&profile, authority),
+            Err(ReviewedError::Custody)
+        );
+        let big = vec![b'x'; usize::try_from(MAX_PROFILE_BYTES)? + 1];
+        write(&root.join("isolation.json"), &big, 0o600);
+        assert_eq!(
+            read_declared(&profile, &profile.declared.effect.specification),
+            Err(ReviewedError::TooLarge)
+        );
+        fs::remove_dir_all(&root)?;
         Ok(())
     }
 

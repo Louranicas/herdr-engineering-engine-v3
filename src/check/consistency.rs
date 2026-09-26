@@ -350,7 +350,6 @@ fn patch_binding(graph: &Graph, subjects: &SubjectsV1, editable: &Editable) -> R
     Ok(())
 }
 
-/// The changed entry's content reference: it must be a regular file with content.
 /// The most changed lines a class patch may carry, plus the two the derivation needs: the ceiling
 /// both `patch_binding` and the runtime's plan bound their `limit` by.
 #[must_use]
@@ -381,6 +380,7 @@ pub fn derive_patch(
     patch::unified(before, after, editable.path.as_str(), limit, None)
 }
 
+/// The changed entry's content reference: it must be a regular file with content.
 fn changed_text(file: &SubjectFileV1) -> Result<&Ref, Error> {
     match (&file.kind, &file.content.value) {
         (SubjectFileV1Kind::File, Some(content)) => Ok(content.as_ref()),
