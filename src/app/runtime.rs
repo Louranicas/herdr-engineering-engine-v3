@@ -2495,17 +2495,62 @@ mod tests {
         ]
     }
 
+    /// Four receipts over the fixture plan, each committed under `ROOT`: one citing all four
+    /// records, one citing three (a committed kind not cited), one citing the clock twice (the same
+    /// object under a second id), one citing no clock at all.
+    fn receipts(
+        store: &crate::store::Store,
+        deadline: Instant,
+        built: &crate::app::u64_receipt::fixtures::BuiltRecords,
+        records: &Committed,
+    ) -> Result<[crate::store::Object; 4], Box<dyn std::error::Error>> {
+        const ROOT: &str = "73000000-0000-4000-8000-000000000002";
+        let clock_at = records
+            .iter()
+            .position(|(kind, ..)| *kind == RunRecordKind::RunClock)
+            .ok_or("a clock")?;
+        let mut twice = records.clone();
+        twice.push((
+            RunRecordKind::RunClock,
+            "28fb0000-0000-4000-8000-0000000000c2".to_owned(),
+            records[clock_at].2.clone(),
+        ));
+        let mut clockless = records.clone();
+        clockless.remove(clock_at);
+        let whole = composed_into(store, deadline, built, records, ROOT)?;
+        let partial = composed_into(store, deadline, built, &records[..3], ROOT)?;
+        assert_ne!(whole, partial, "three records cited is another receipt");
+        Ok([
+            whole,
+            partial,
+            composed_into(store, deadline, built, &twice, ROOT)?,
+            composed_into(store, deadline, built, &clockless, ROOT)?,
+        ])
+    }
+
+    /// The evidence `accept` is handed for a receipt: `object` under `artifact_id`, the receipt schema.
+    fn receipt_evidence(artifact_id: &str, object: &crate::store::Object) -> super::Evidence {
+        use crate::contracts::receipt::{Address as _, ReceiptV1};
+        super::Evidence {
+            object: object.clone(),
+            subject: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+                .to_owned(),
+            artifact_id: artifact_id.to_owned(),
+            schema_id: ReceiptV1::SCHEMA_ID.to_owned(),
+        }
+    }
+
     /// R17 round 2, 2c-iii · the accept walk over a receipt: composed into the ledger through the
     /// runtime's own sink and read back as the graph the ledger holds, the receipt yields its
     /// identity — its root under the verification's artifact id, which is its `run_id` (decision
     /// 3). It is refused `Identity` when the commitment differs from what it cites (an id, a
-    /// digest, a size, a cited kind not committed, a committed kind not cited, no clock), when the
-    /// evidence names another artifact id, when the evidence's object is not a receipt, and when
-    /// the root is not in the ledger at all.
+    /// digest, a size, a cited kind not committed, a committed kind not cited, a kind cited twice,
+    /// no clock committed, no clock on either side), when the evidence names another artifact id,
+    /// when the evidence's object is not a receipt, and when the root is not in the ledger at all.
     #[test]
     fn a_receipt_is_accepted_only_as_the_graph_the_ledger_committed()
     -> Result<(), Box<dyn std::error::Error>> {
-        use super::{CheckWindow, Evidence, cited_receipt};
+        use super::{CheckWindow, cited_receipt};
         use crate::app::u64_receipt::fixtures::built_records;
         use crate::contracts::UuidV4;
         use crate::contracts::receipt::{Address as _, ReceiptV1};
@@ -2540,18 +2585,14 @@ mod tests {
             begun + Duration::from_millis(41),
         )?;
         let records: Committed = built.3.clone();
-        // One receipt over all four records; a second over three — a committed kind it does not
-        // cite.
-        let whole = composed_into(&store, deadline, &built, &records, ROOT)?;
-        let partial = composed_into(&store, deadline, &built, &records[..3], ROOT)?;
-        assert_ne!(whole, partial, "three records cited is another receipt");
-        let evidence = |artifact_id: &str, object: &Object| Evidence {
-            object: object.clone(),
-            subject: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
-                .to_owned(),
-            artifact_id: artifact_id.to_owned(),
-            schema_id: ReceiptV1::SCHEMA_ID.to_owned(),
-        };
+        let [whole, partial, doubled, unclocked] = receipts(&store, deadline, &built, &records)?;
+        let clock_at = records
+            .iter()
+            .position(|(kind, ..)| *kind == RunRecordKind::RunClock)
+            .ok_or("a clock")?;
+        let mut clockless = records.clone();
+        clockless.remove(clock_at);
+        let evidence = receipt_evidence;
         let sound = evidence(ROOT, &whole);
         let identity = cited_receipt(&store, deadline, &sound, lookup(&records))
             .map_err(|e| format!("{e:?}"))?;
@@ -2572,22 +2613,18 @@ mod tests {
                 "{label}"
             );
         }
-        // The evidence itself: a committed kind the receipt does not cite, another artifact id
-        // over the same bytes, a committed object that is not a receipt, and a root the ledger
-        // does not hold.
-        let clock = records
-            .iter()
-            .find(|(kind, ..)| *kind == RunRecordKind::RunClock)
-            .map(|(_, _, object)| object.clone())
-            .ok_or("a clock")?;
+        // The evidence itself: a committed kind the receipt does not cite, a kind cited twice,
+        // another artifact id over the same bytes, a committed object that is not a receipt, and a
+        // root the ledger does not hold.
         let absent = Object::of(
             "sha256:00000000000000000000000000000000000000000000000000000000000000ab",
             17,
         );
         for (label, wrong) in [
             ("a committed kind not cited", evidence(ROOT, &partial)),
+            ("a kind cited twice", evidence(ROOT, &doubled)),
             ("another artifact id", evidence(OTHER, &whole)),
-            ("not a receipt", evidence(ROOT, &clock)),
+            ("not a receipt", evidence(ROOT, &records[clock_at].2)),
             ("not in the ledger", evidence(ROOT, &absent)),
         ] {
             assert!(
@@ -2598,6 +2635,18 @@ mod tests {
                 "{label}"
             );
         }
+        assert!(
+            matches!(
+                cited_receipt(
+                    &store,
+                    deadline,
+                    &evidence(ROOT, &unclocked),
+                    lookup(&clockless)
+                ),
+                Err(Error::Identity)
+            ),
+            "no clock on either side"
+        );
         drop(store);
         std::fs::remove_dir_all(&area)?;
         Ok(())
