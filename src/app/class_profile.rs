@@ -2002,6 +2002,15 @@ review = {{ artifact_id = "{REV_ID}", sha256 = "{REV}", byte_length = {REV_LEN},
             read_reviewed(&profile, Which::Expectation),
             Err(ReviewedError::Mismatch)
         );
+        // The expectation's bytes with one bit changed, at its declared length: the digest alone
+        // sees it.
+        let mut altered = EXPECTATION.to_vec();
+        altered[0] ^= 0x01;
+        write(&store.join(name(EXP)), &altered, 0o600);
+        assert_eq!(
+            read_reviewed(&profile, Which::Expectation),
+            Err(ReviewedError::Mismatch)
+        );
         write(&store.join(name(EXP)), EXPECTATION, 0o644);
         assert_eq!(
             read_reviewed(&profile, Which::Expectation),
