@@ -212,7 +212,7 @@ impl OutcomeName {
 
 /// Why a step was refused before it ran.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum RefusedKind {
     /// The namespace could not be prepared.
     Prepare,
@@ -605,9 +605,20 @@ impl Readbacks {
     }
 }
 
+/// The decoders, sealed: the trait lives in a private module, so no code outside this one can name
+/// it, and `decode_bytes` is reachable only through [`RunRecord::read`] (review of b2b7b85, gap 1:
+/// a required method of a public trait is public by construction).
+mod sealed {
+    use super::Refusal;
+
+    pub trait Decode: Sized {
+        fn decode_bytes(bytes: &[u8]) -> Result<Self, Refusal>;
+    }
+}
+
 /// A run record: its kind, its bytes, and the one way to read it back — through the ledger's
 /// commitment of it.
-pub trait RunRecord: Sized + Serialize {
+pub trait RunRecord: Sized + Serialize + sealed::Decode {
     /// The kind the settle commits this record under.
     const KIND: RunRecordKind;
 
@@ -634,18 +645,21 @@ pub trait RunRecord: Sized + Serialize {
             });
         }
         let bytes = store.read_object(committed.object(), deadline)?;
-        Self::decode_bytes(&bytes)
+        <Self as sealed::Decode>::decode_bytes(&bytes)
     }
+}
 
-    /// This record's own decoder, reachable only through [`RunRecord::read`].
-    ///
-    /// # Errors
-    /// [`Refusal::Encoding`].
-    fn decode_bytes(bytes: &[u8]) -> Result<Self, Refusal>;
+impl sealed::Decode for RunClock {
+    fn decode_bytes(bytes: &[u8]) -> Result<Self, Refusal> {
+        Self::decode(bytes)
+    }
 }
 
 impl RunRecord for RunClock {
     const KIND: RunRecordKind = RunRecordKind::RunClock;
+}
+
+impl sealed::Decode for RunOutcome {
     fn decode_bytes(bytes: &[u8]) -> Result<Self, Refusal> {
         Self::decode(bytes)
     }
@@ -653,6 +667,9 @@ impl RunRecord for RunClock {
 
 impl RunRecord for RunOutcome {
     const KIND: RunRecordKind = RunRecordKind::RunOutcome;
+}
+
+impl sealed::Decode for RunCleanup {
     fn decode_bytes(bytes: &[u8]) -> Result<Self, Refusal> {
         Self::decode(bytes)
     }
@@ -660,6 +677,9 @@ impl RunRecord for RunOutcome {
 
 impl RunRecord for RunCleanup {
     const KIND: RunRecordKind = RunRecordKind::RunCleanup;
+}
+
+impl sealed::Decode for Readbacks {
     fn decode_bytes(bytes: &[u8]) -> Result<Self, Refusal> {
         Self::decode(bytes)
     }
@@ -667,13 +687,11 @@ impl RunRecord for RunCleanup {
 
 impl RunRecord for Readbacks {
     const KIND: RunRecordKind = RunRecordKind::Readbacks;
-    fn decode_bytes(bytes: &[u8]) -> Result<Self, Refusal> {
-        Self::decode(bytes)
-    }
 }
 
 #[cfg(test)]
 mod tests {
+    use super::sealed::Decode as _;
     use super::{
         Cancellation, Intents, ObligationRecord, Observations, OutcomeName, OutputReadback,
         ProcessCleanup, Readbacks, Refusal, RefusedKind, RunCleanup, RunClock, RunOutcome,
