@@ -1857,10 +1857,23 @@ review = {{ artifact_id = "{REV_ID}", sha256 = "{REV}", byte_length = {REV_LEN},
             read_reviewed_closure(&profile, Which::Review, &root_ref),
             Err(ReviewedError::Closure(crate::check::graph::Error::Missing))
         ));
-        // A member's bytes changed under its name: not the reference.
-        write(&store.join(victim_name), b"{}", 0o600);
+        // A member's bytes changed under its name, at the same length: not the reference (the
+        // digest alone sees it).
+        let mut altered = victim.bytes.as_bytes().to_vec();
+        altered[0] ^= 0x01;
+        write(&store.join(victim_name), &altered, 0o600);
         assert!(matches!(
             read_reviewed_closure(&profile, Which::Review, &root_ref),
+            Err(ReviewedError::Closure(crate::check::graph::Error::Identity))
+        ));
+        write(&store.join(victim_name), victim.bytes.as_bytes(), 0o600);
+        // The declared root's length is not the file's while its digest is: the length alone sees
+        // it, at the root the profile names.
+        let mut profile = profile;
+        profile.declared.reviewed.review.byte_length += 1;
+        let longer = profile.declared.reviewed.review.clone();
+        assert!(matches!(
+            read_reviewed_closure(&profile, Which::Review, &longer),
             Err(ReviewedError::Closure(crate::check::graph::Error::Identity))
         ));
         Ok(())
