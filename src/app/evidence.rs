@@ -200,6 +200,13 @@ impl Sink for Evidence<'_> {
                 .any(|(reference, _)| reference.artifact_id == *id))
     }
 
+    /// Publish `bytes` under a reference the caller already holds (a reviewed closure's member,
+    /// whose id the record that cites it fixed): validated, digest and length checked against the
+    /// reference, published to the owner and registered (R17 round 2, F3).
+    ///
+    /// # Errors
+    /// Refuses an invalid reference, bytes that are not the reference's, a registry conflict, or
+    /// a publication failure.
     fn publish(&mut self, reference: &Ref, bytes: &[u8]) -> Result<Ref, SinkError> {
         reference.validate().map_err(|_| SinkError::Publication)?;
         if self

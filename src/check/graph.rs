@@ -93,6 +93,11 @@ impl Graph {
         Ok(node)
     }
 
+    /// Every resolved node, in artifact-id order: what a caller re-publishes into another owner.
+    pub fn nodes(&self) -> impl Iterator<Item = &Node> {
+        self.nodes.values()
+    }
+
     #[must_use]
     pub fn object_count(&self) -> usize {
         self.nodes.len()

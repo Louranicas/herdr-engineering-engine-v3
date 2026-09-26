@@ -27,7 +27,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-const BWRAP_SHA256: [u8; 32] = [
+pub(crate) const BWRAP_SHA256: [u8; 32] = [
     0x6d, 0xa0, 0x6f, 0x15, 0x2b, 0x08, 0x65, 0x17, 0x2d, 0x73, 0x34, 0x8c, 0x34, 0xcb, 0x88, 0x48,
     0x7c, 0x32, 0x6c, 0xe2, 0xf2, 0x1c, 0xd9, 0x80, 0xfc, 0x25, 0xff, 0x10, 0xc4, 0xdb, 0xcd, 0xfb,
 ];
@@ -364,6 +364,25 @@ fn sha256(path: &Path, deadline: Instant) -> Result<[u8; 32], NamespaceError> {
         return Err(NamespaceError::Digest);
     }
     Ok(digest.finalize().into())
+}
+
+/// Read a pinned file's bytes under `cap` and return them only when they hash to `pin`: the one
+/// door for "the bytes of this pin" (R17 round 2, F5) — a mismatch is `Digest`, a file over the
+/// bound `Bound`, and nothing is copied, executed or published from a file that did not match.
+///
+/// # Errors
+/// `Io`, `Deadline`, `Bound` from the read; `Digest` when the bytes are not the pin's.
+pub(crate) fn pinned_bytes(
+    path: &Path,
+    pin: &[u8; 32],
+    cap: usize,
+    deadline: Instant,
+) -> Result<Vec<u8>, NamespaceError> {
+    let bytes = read_bounded(path, cap, deadline)?;
+    if <[u8; 32]>::from(Sha256::digest(&bytes)) != *pin {
+        return Err(NamespaceError::Digest);
+    }
+    Ok(bytes)
 }
 
 fn read_bounded(path: &Path, cap: usize, deadline: Instant) -> Result<Vec<u8>, NamespaceError> {

@@ -193,6 +193,9 @@ T06_INPUTS = (
     "tests/fixtures/digest/cases.json",
     # t28_tasks checks the fixture's recorded generator digest against the committed generator.
     "tests/fixtures/digest/gen-digest-fixtures.sh",
+    # app::plan include_bytes! the receipt schema (R17 round 2, decision 5 / F8); its generator beside it.
+    "schemas/receipts/receipt-v1.schema.json",
+    "schemas/receipts/generate_receipt_schema.py",
 )
 # The 003 lane's reviewed closure, copied by digest from its staging CAS (B14a-2c-ii-a): the class
 # profile's unit tests include_bytes! its two roots and walk the whole directory. The set is the
@@ -221,7 +224,7 @@ T06_UNIT_COUNTS = {
     "check::patch::tests::": 6, "app::class_profile::tests::": 15,
     "worker::resources::limit_tests::": 3, "worker::workspace::manifest_tests::": 2,
     "app::runtime::tests::": 5, "app::run_records::tests::": 8,
-    "app::live_verifier::tests::": 2, "app::u64_receipt::tests::": 9, "worker::host::tests::": 1,
+    "app::live_verifier::tests::": 2, "app::plan::tests::": 2, "app::u64_receipt::tests::": 9, "worker::host::tests::": 1,
 }
 
 

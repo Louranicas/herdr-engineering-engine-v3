@@ -31,6 +31,18 @@ pub const WRAPPER_DESTINATION: &str = "/frozen/public-wrapper.rs";
 pub const LIBRARY_DESTINATION: &str = "/frozen/libstrict_u64_workload.rlib";
 pub const DRIVER_DESTINATION: &str = "/frozen/bin/workload-driver";
 pub const INPUTS_DESTINATION: &str = "/frozen/inputs.hex";
+/// The compile step's flags before its input and output paths: the receipt's language-flags row
+/// and the workload read one constant (R17 round 2, decision 3).
+pub const COMPILE_FLAGS: [&str; 8] = [
+    "--sysroot",
+    "/toolchain",
+    "--edition=2024",
+    "--crate-name",
+    "strict_u64_workload",
+    "--crate-type",
+    "rlib",
+    "-Dwarnings",
+];
 pub const FIXED_DESTINATIONS: [&str; 6] = [
     COMPILER_DESTINATION,
     SOURCE_DESTINATION,
@@ -246,14 +258,14 @@ fn execute_stages(
 ) -> Result<(), Error> {
     let source = binding(plan.source, "src/lib.rs", SOURCE_DESTINATION)?;
     let lib_args = [
-        "--sysroot",
-        "/toolchain",
-        "--edition=2024",
-        "--crate-name",
-        "strict_u64_workload",
-        "--crate-type",
-        "rlib",
-        "-Dwarnings",
+        COMPILE_FLAGS[0],
+        COMPILE_FLAGS[1],
+        COMPILE_FLAGS[2],
+        COMPILE_FLAGS[3],
+        COMPILE_FLAGS[4],
+        COMPILE_FLAGS[5],
+        COMPILE_FLAGS[6],
+        COMPILE_FLAGS[7],
         SOURCE_DESTINATION,
         "-o",
         "/work/libstrict_u64_workload.rlib",
