@@ -54806,8 +54806,8 @@
       "bytes": 6019
     },
     "tools/check-quality": {
-      "sha256": "db7880af26c6f4e01a690f2bc4d9913cde13e67370b50cca6b19db1f8cbbab58",
-      "bytes": 91988
+      "sha256": "7c7d67b373b27ca86c43059e5fb4e5b59e46c633d6590f8eb32cbe7d4ee56aaf",
+      "bytes": 92026
     },
     "tools/development_process.py": {
       "sha256": "e76e3a794193e5df7ee96fabf700113d718527745a0f9a9dba1e04fd5c7baaf3",
@@ -55558,8 +55558,8 @@
       "bytes": 14607
     },
     "tests/t04_store.rs": {
-      "sha256": "d664a9e99a26f4b393644fad3951a181a9c7106ee51e37d08b9a8c4b246885b4",
-      "bytes": 166346
+      "sha256": "115bd150dbca301568c051110a47579d34f8d568c999e70547e029f7eddeed38",
+      "bytes": 166414
     },
     "docs/store-contract.md": {
       "sha256": "b65ffe744d2abf93c3b0c40345787940213806ade52e9ef010e17f3012a81396",
@@ -55926,8 +55926,8 @@
       "bytes": 9926
     },
     "src/app/mod.rs": {
-      "sha256": "0e1e8d497447f101b11db3172088961db2aacb08e6799419da653d3c476226f5",
-      "bytes": 412
+      "sha256": "37233cda1fe94ad5d15cfdf5e1b61beef087a8a8b034e642009a769d21cf7b20",
+      "bytes": 435
     },
     "src/app/receipt_import.rs": {
       "sha256": "393bd6b147ebe968ffe29532665c1e542972d9f1ea9708699cc6ef962ba0735d",
@@ -55942,8 +55942,8 @@
       "bytes": 9133
     },
     "src/app/workload.rs": {
-      "sha256": "2e261cbe4ceb1c06123567bfb9a21df34e2bde570230461813026c261638b393",
-      "bytes": 20046
+      "sha256": "a95581bf7394b222fe5060f5d6f5769dafed55403392d129dbf0f6b13c543b4b",
+      "bytes": 21318
     },
     "src/bin/namespace_shim.rs": {
       "sha256": "fb6d07323426e5ed5c5624cf9e21cb4fbd3d4ef8c25f17b0e49868f8d25ace8e",
@@ -55958,8 +55958,8 @@
       "bytes": 27895
     },
     "src/check/decision.rs": {
-      "sha256": "fae25d6a420eafb1e15e0c849822161a73e83c6999040604261d5fdd37091e58",
-      "bytes": 29268
+      "sha256": "58d799f6ca549a34263479ab589c0bab16dbd7f1098a6a8d4db3a4b3242ed091",
+      "bytes": 29499
     },
     "src/check/graph.rs": {
       "sha256": "02c8a99fd89f9eae3df9533f5eb85b788a4e4457e62b4ea9fac859fe4c4704a4",
@@ -56006,8 +56006,8 @@
       "bytes": 10484
     },
     "src/store/verification.rs": {
-      "sha256": "87b48aab5e4a1e9ec3a9e52e8943fe732470cb54890e0b202463c5d94e6ddeb0",
-      "bytes": 15017
+      "sha256": "7ab792d747bb79374d7551d4f1e449c8deb61943c272a5c247d0b3b1ff47bc4a",
+      "bytes": 15294
     },
     "src/task/driver.rs": {
       "sha256": "8a45f9cd3bbf6628d767888cce5b422cfaa113f1bd9545edd98562e17cd92eb6",
@@ -56030,8 +56030,8 @@
       "bytes": 11132
     },
     "src/worker/process.rs": {
-      "sha256": "a5bf43a7dba6fbfe8a8fb91766846df6eebd5f6db9f7887d719d8671f226e542",
-      "bytes": 29928
+      "sha256": "8fcb1c1c8719c647a32caf8a531ab9e841001539bd4c71012691115661e73fca",
+      "bytes": 30056
     },
     "src/worker/resources.rs": {
       "sha256": "a0bfdd7dc0162dc1bb0c66d0b9748b434076eff84a54bf345fac2682194924e2",
@@ -56054,8 +56054,8 @@
       "bytes": 14263
     },
     "tests/t06_bounded_preflight.rs": {
-      "sha256": "a7c4970f0143978e0dff0daeae289e85fa6ebe11380d638e2d922be6f7f235c8",
-      "bytes": 7391
+      "sha256": "a19164a1918cd03ba020fa2d3a2c1f3a6c898710d9c928077b5dc538e6b3fd44",
+      "bytes": 7468
     },
     "tests/t06_collector.rs": {
       "sha256": "79613dad2e5e576aa1e68c54f7f247ad41e68c381063f630ecf033de316f2f75",
@@ -56074,8 +56074,8 @@
       "bytes": 21770
     },
     "tests/t06_durable_control.rs": {
-      "sha256": "c1ceccba499df69d0f15eab5f41e0c9ec22117f8f31665c0a3292999995928df",
-      "bytes": 6619
+      "sha256": "7fb7a73a944fd16dc49a847bedd8e4de1984e10d252efa1f42b8d29ccff0a449",
+      "bytes": 6762
     },
     "tests/t06_evidence.rs": {
       "sha256": "8d4ba5209311cd787dea28dcef51b953eef1cd9519e0b9a1e807047e9f06be14",
