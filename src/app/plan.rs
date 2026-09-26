@@ -954,7 +954,7 @@ pub fn check(sink: &mut Evidence<'_>, inputs: &CheckInputs<'_>) -> Result<Planne
     })
 }
 
-/// A file of a snapshot by path, or the patch refusal naming the editable as missing.
+/// A file of a snapshot by path, or `Editable` naming the path the snapshot lacks.
 fn snapshot_file<'a>(snapshot: &'a Snapshot, file: &'static str) -> Result<&'a [u8], Refusal> {
     snapshot
         .entries()
@@ -962,7 +962,7 @@ fn snapshot_file<'a>(snapshot: &'a Snapshot, file: &'static str) -> Result<&'a [
             workspace::Content::File { bytes, .. } if entry.path == file => Some(bytes.as_slice()),
             _ => None,
         })
-        .ok_or(Refusal::Editable(U64_EDITABLE))
+        .ok_or(Refusal::Editable(file))
 }
 
 /// One turn of the settle loop, decided from a cleanup poll (F95: the policy apart from the I/O):
@@ -1826,9 +1826,10 @@ mod tests {
     }
 
     /// Review 2c-ii-c MED-1/MED-2 · the doors the first proof never reached: a compiler that
-    /// rewrites itself while the probe runs is refused by the post-probe re-hash; one that leaves a
-    /// child behind is settled and refused at `child`; a symlink and a FIFO at the compiler's path
-    /// are refused at the open, before any byte is read, whatever digest they are pinned under.
+    /// rewrites itself while the probe runs is refused by the post-probe re-hash; a symlink at the
+    /// compiler's path is refused at the open whatever digest it is pinned under; a FIFO pinned at
+    /// the empty input's digest is refused by the regular-file check alone (a child-leaving probe is
+    /// not exercised here — see the comment in the body).
     #[test]
     fn the_probe_and_the_pin_doors_refuse_what_the_first_proof_never_reached()
     -> Result<(), Box<dyn std::error::Error>> {

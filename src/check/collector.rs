@@ -46,6 +46,8 @@ pub enum Error {
     Bound,
     CasePlan,
     UnsupportedRoot,
+    /// A caller-minted root id that is not the plan's `identity.run_id` (R17 round 2, decision 3).
+    RootId,
 }
 impl From<SinkError> for Error {
     fn from(e: SinkError) -> Self {
@@ -296,8 +298,8 @@ impl<'a, S: Sink> Publisher<'a, S> {
     /// decision 3): the receipt's `identity.run_id` is then its own artifact id.
     ///
     /// # Errors
-    /// As [`Self::finalize`]; `Identity` when `root_id` is already held by the sink or is not the
-    /// plan's `identity.run_id`.
+    /// As [`Self::finalize`]; `RootId` when `root_id` is not the plan's `identity.run_id`;
+    /// `Identity` when it is already held by the sink.
     pub fn finalize_as(
         &mut self,
         prepared: &consistency::Prepared,
@@ -321,7 +323,7 @@ impl<'a, S: Sink> Publisher<'a, S> {
             .as_ref()
             .is_some_and(|id| *id != prepared.identity.run_id)
         {
-            return Err(Error::Identity);
+            return Err(Error::RootId);
         }
         let reasons = decided
             .reasons()

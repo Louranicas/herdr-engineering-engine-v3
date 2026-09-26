@@ -599,6 +599,11 @@ fn bad_pin_scopes() -> [Scope; 3] {
     })
 }
 
+/// Every distinct object the store's CAS holds — the inventory `OBJECT_INVENTORY_BOUND` counts.
+fn artifact_count(rig: &Rig) -> Result<i64, Box<dyn Error>> {
+    Ok(ledger(rig)?.query_row("SELECT count(*) FROM artifacts", [], |row| row.get(0))?)
+}
+
 /// The ledger, read on its own connection.
 fn ledger(rig: &Rig) -> Result<rusqlite::Connection, Box<dyn Error>> {
     Ok(rusqlite::Connection::open_with_flags(
@@ -780,6 +785,8 @@ fn a_failed_check_is_repaired_and_the_second_attempt_is_accepted() -> Outcome_ {
         vec![bound.clone(), bound],
         "both attempts are bound to what they were dispatched on"
     );
+    // N4, store side: two checks leave 89 distinct objects against the one-check rig's 72.
+    assert_eq!(artifact_count(&rig)?, 89);
     Ok(())
 }
 
@@ -1423,10 +1430,6 @@ fn a_verifier_s_cancelled_is_a_cancellation_only_when_the_task_was_cancelled() -
     Ok(())
 }
 
-/// The passed check's readbacks, outcome and cleanup records, decoded from their committed objects:
-/// the attempt they belong to, both subjects read back, no outputs (the model's run retains none);
-/// matched with no steps; the three cleanup predicates settled and the aggregate — which the runtime
-/// does not own — unknown (R15 round 2, MEDIUM-10).
 /// One cited run record as a receipt's artifact row names it: `(kind, artifact id, digest, bytes)`.
 type CitedRecord = (String, String, String, String);
 
@@ -1464,6 +1467,67 @@ fn receipt_run_records(
     Ok(cited)
 }
 
+/// The receipt's own decision under the double, whole: INVALID, its reasons in order (six unsourced
+/// identities — R16-G3 — the accounting of a run with no producer, the unsettled resources); the
+/// case cites the reviewed design the plan named (the profile's `[reviewed] review`) and nothing else,
+/// and the oracle result cites the producer's streams only — none.
+fn assert_receipt_decision(rig: &Rig, root: &serde_json::Value) -> Result<(), Box<dyn Error>> {
+    assert_eq!(root["verdict"]["state"], "INVALID");
+    // The decision's reasons, whole: six unsourced identities (R16-G3), the accounting of a run
+    // with no producer, and the unsettled resources — what the double's run IS, named.
+    assert_eq!(
+        root["verdict"]["reasons"],
+        serde_json::json!([
+            "UnavailableIdentity",
+            "UnavailableIdentity",
+            "UnavailableIdentity",
+            "UnavailableIdentity",
+            "UnavailableIdentity",
+            "UnavailableIdentity",
+            "InvalidAccounting",
+            "RequiredNotExecuted",
+            "NoExecution",
+            "ProducerNotStarted",
+            "StdoutMissing",
+            "StderrMissing",
+            "DiagnosticsUnavailable",
+            "ResourcesUnsettled",
+            "EvidenceIncomplete",
+        ])
+    );
+    // The case cites the reviewed design the plan named (the profile's `[reviewed] review`) and
+    // nothing else under the double; the oracle result cites the producer's streams only — none.
+    let review = serde_json::json!({
+        "artifact_id": "a47470c5-f11c-4f64-9ac8-6dcf80750ed6",
+        "sha256": "sha256:f288225476120254f5c3a93266fc8f2a8763810462fbddd7c62161107cb39adb",
+        "byte_length": 1145,
+        "media_type": "application/json",
+        "schema_id": "hee3.receipt/1:ReviewV1",
+    });
+    let cases = object_json(
+        rig,
+        root["cases"]["inventory"]["sha256"]
+            .as_str()
+            .ok_or("a case page")?,
+    )?;
+    assert_eq!(
+        cases["rows"][0]["raw_evidence_refs"],
+        serde_json::json!([review])
+    );
+    let oracle = object_json(
+        rig,
+        root["verdict"]["oracle_result"]["sha256"]
+            .as_str()
+            .ok_or("an oracle result")?,
+    )?;
+    assert_eq!(oracle["raw_evidence_refs"], serde_json::json!([]));
+    Ok(())
+}
+
+/// The passed check's readbacks, outcome and cleanup records, decoded from their committed objects:
+/// the attempt they belong to, both subjects read back, no outputs (the model's run retains none);
+/// matched with no steps; the three cleanup predicates settled and the aggregate — which the runtime
+/// does not own — unknown (R15 round 2, MEDIUM-10).
 fn assert_run_records_decoded(rig: &Rig, records: &[Vec<String>]) -> Result<(), Box<dyn Error>> {
     let object = |kind: &str| -> Result<serde_json::Value, Box<dyn Error>> {
         let row = records.iter().find(|row| row[0] == kind).ok_or(kind)?;
@@ -1547,17 +1611,10 @@ fn a_passed_check_commits_four_records_that_accept_reads_back() -> Outcome_ {
     let root = object_json(&rig, &evidence[0][0])?;
     assert_eq!(root["protocol"], "hee3.receipt");
     assert_eq!(root["identity"]["run_id"], evidence[0][1].as_str());
-    assert_eq!(root["verdict"]["state"], "INVALID");
-    let reasons = root["verdict"]["reasons"]
-        .as_array()
-        .ok_or("reasons")?
-        .iter()
-        .filter_map(serde_json::Value::as_str)
-        .collect::<Vec<_>>();
-    assert!(
-        reasons.contains(&"ProducerNotStarted") && reasons.contains(&"EvidenceIncomplete"),
-        "{reasons:?}"
-    );
+    assert_receipt_decision(&rig, &root)?;
+    // N4, store side: one dispatch and one check leave 72 distinct objects in the CAS (the two-check
+    // rig leaves 89, so a check adds 17 and the dispatch 55).
+    assert_eq!(artifact_count(&rig)?, 72);
     let cited = receipt_run_records(&rig, &root)?;
     assert_eq!(
         cited,

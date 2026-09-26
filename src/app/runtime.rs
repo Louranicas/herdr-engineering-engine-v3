@@ -396,8 +396,8 @@ type Composition = Result<(u64_receipt::Composed, Vec<(Ref, Object)>), ComposeRe
 /// obligation rows, or the composer's own refusal — each named in the 3c evidence.
 #[derive(Debug)]
 enum ComposeRefusal {
-    HostFacts,
-    FreshIds,
+    HostFacts(host::Error),
+    FreshIds(Error),
     Compose(u64_receipt::Refusal),
 }
 
@@ -411,8 +411,8 @@ impl ComposeRefusal {
     /// The refusal as the 3c evidence names it.
     fn describe(&self) -> String {
         match self {
-            Self::HostFacts => "host_facts".to_owned(),
-            Self::FreshIds => "fresh_ids".to_owned(),
+            Self::HostFacts(error) => format!("host_facts: {error:?}"),
+            Self::FreshIds(error) => format!("fresh_ids: {error:?}"),
             Self::Compose(refusal) => format!("{refusal:?}"),
         }
     }
@@ -1009,7 +1009,7 @@ impl<C: CandidateSource, V: Verifier> StoreRuntime<'_, C, V> {
         ids: &[String; 3],
         obligation_ids: &[String; 4],
         window: CheckWindow,
-    ) -> Result<Result<plan::Planned, (plan::Refusal, Vec<String>)>, Error> {
+    ) -> Result<PlanOutcome, Error> {
         let begun = self.attempts.get(index).ok_or(Error::Identity)?;
         let parent_run = index
             .checked_sub(1)
@@ -1036,14 +1036,23 @@ impl<C: CandidateSource, V: Verifier> StoreRuntime<'_, C, V> {
             // share is the run's.
             deadline: window.until.min(self.deadline),
         };
-        Ok(self.tasks.with_store(|store| {
-            let mut sink = Sink::new(store, self.deadline);
-            plan::check(&mut sink, &inputs).map_err(|refusal| {
-                // The objects a refused plan left in the CAS, by id (N13): uncited, not backed
-                // up, listed so a reclaim door can find them.
-                (refusal, sink.registered().keys().cloned().collect())
-            })
-        })?)
+        self.tasks
+            .with_store(|store| -> Result<PlanOutcome, Error> {
+                // A cancellation committed since the driver's last read (decision 8, N7), read in the
+                // plan's own hold: no plan is published and no check runs.
+                if self.current(store)?.cancellation {
+                    return Ok(PlanOutcome::Cancelled);
+                }
+                let mut sink = Sink::new(store, self.deadline);
+                Ok(match plan::check(&mut sink, &inputs) {
+                    Ok(planned) => PlanOutcome::Planned(Box::new(planned)),
+                    // The objects a refused plan left in the CAS, by id (N13): uncited, not backed
+                    // up, listed so a reclaim door can find them.
+                    Err(refusal) => {
+                        PlanOutcome::Refused(refusal, sink.registered().keys().cloned().collect())
+                    }
+                })
+            })?
     }
 
     /// The check's evidence: the receipt when a plan exists and the run was captured whole
@@ -1080,7 +1089,7 @@ impl<C: CandidateSource, V: Verifier> StoreRuntime<'_, C, V> {
                     error: collector::Error::Sink(error),
                 })?;
         }
-        let facts = host::facts().map_err(|_| ComposeRefusal::HostFacts)?;
+        let facts = host::facts().map_err(ComposeRefusal::HostFacts)?;
         let unsettled = inputs
             .cleanup
             .obligations()
@@ -1088,7 +1097,7 @@ impl<C: CandidateSource, V: Verifier> StoreRuntime<'_, C, V> {
             .filter(|obligation| obligation.state != RecordSettlement::Settled)
             .count();
         let obligation_ids: [String; 4] =
-            fresh_ids(self.deadline).map_err(|_| ComposeRefusal::FreshIds)?;
+            fresh_ids(self.deadline).map_err(ComposeRefusal::FreshIds)?;
         let readbacks = self.readbacks_of(
             inputs.run,
             inputs.seed_verified,
@@ -1483,18 +1492,9 @@ impl<C: CandidateSource, V: Verifier> driver::Runtime for StoreRuntime<'_, C, V>
             let subject = applied.content_digest().ok_or(Error::Identity)?;
             // The window comes from the reservation the ledger holds now, read in a hold of its
             // own so a second writer is caught before a check is spent (R14.3, R14.4).
-            let admitted = self
-                .tasks
-                .with_store(|store| -> Result<Option<u64>, Error> {
-                    let head = self.current(store)?;
-                    Ok(admitted_window(head.cancellation, head.reserved_verify_ms))
-                })??;
-            // A cancellation committed since the driver's last read (decision 8, N7): no plan is
-            // published and no check runs; nothing is recorded here — the driver's next
-            // cancellation read stops the task, and `stop_task` records the check as not started.
-            let Some(reserved_verify_ms) = admitted else {
-                return Ok(DriverChecked::Failed { criteria: 0 });
-            };
+            let reserved_verify_ms = self.tasks.with_store(|store| -> Result<u64, Error> {
+                Ok(self.current(store)?.reserved_verify_ms)
+            })??;
             if let Some(window) = check_window(
                 Instant::now(),
                 unix_ms_now()?,
@@ -1513,8 +1513,8 @@ impl<C: CandidateSource, V: Verifier> driver::Runtime for StoreRuntime<'_, C, V>
                 let obligation_ids: [String; 4] = fresh_ids(self.deadline)?;
                 let planned = self.plan_check(index, &applied, &ids, &obligation_ids, window)?;
                 let planned = match planned {
-                    Ok(planned) => planned,
-                    Err((refusal, orphans)) => {
+                    PlanOutcome::Planned(planned) => *planned,
+                    PlanOutcome::Refused(refusal, orphans) => {
                         // A refused plan is a check that never ran (N2): recorded under its own
                         // schema, `Error`, at the cost the plan spent, naming its orphans.
                         let check =
@@ -1522,6 +1522,9 @@ impl<C: CandidateSource, V: Verifier> driver::Runtime for StoreRuntime<'_, C, V>
                         let recorded = self.record(index, &check, &subject)?;
                         return Ok(Self::checked(recorded, subject));
                     }
+                    // Nothing is recorded here: the driver's next cancellation read stops the
+                    // task, and `stop_task` records the check as not started (B14a-R1.4a).
+                    PlanOutcome::Cancelled => return Ok(DriverChecked::Failed { criteria: 0 }),
                 };
                 if let Some(begun) = self.attempts.get_mut(index) {
                     begun.planned = Some(planned);
@@ -2206,14 +2209,12 @@ fn every_stage_launched(completed: impl ExactSizeIterator<Item = bool>) -> bool 
     completed.len() == u64_receipt::STEPS.len() && completed.into_iter().all(|step| step)
 }
 
-/// Whether a check may begin (decision 8, N7): never once the task carries a cancellation; else the
-/// verify reservation the ledger holds now.
-const fn admitted_window(cancellation: bool, reserved_verify_ms: u64) -> Option<u64> {
-    if cancellation {
-        None
-    } else {
-        Some(reserved_verify_ms)
-    }
+/// What the per-check plan's hold came to: the plan, its refusal with the ids the refusal left in
+/// the CAS, or a task cancelled since the driver's last read (decision 8, N7).
+enum PlanOutcome {
+    Planned(Box<plan::Planned>),
+    Refused(plan::Refusal, Vec<String>),
+    Cancelled,
 }
 
 /// The check recorded for a per-check plan the runtime refused (N2): `Error` under
@@ -2473,7 +2474,10 @@ mod tests {
         built: &crate::app::u64_receipt::fixtures::BuiltRecords,
         cited: &[(RunRecordKind, String, crate::store::Object)],
         root_id: &str,
-    ) -> Result<crate::store::Object, Box<dyn std::error::Error>> {
+    ) -> Result<
+        Result<crate::store::Object, crate::app::u64_receipt::Refusal>,
+        Box<dyn std::error::Error>,
+    > {
         use super::Sink;
         use crate::app::u64_receipt::fixtures::{fixture_objects, fixture_prepared, host_fixture};
         use crate::app::u64_receipt::{Composing, Readbacks, compose};
@@ -2511,14 +2515,12 @@ mod tests {
                     profile: Some(true),
                 },
             },
-        )
-        .map_err(|e| format!("{e:?}"))?;
-        let root = composed.root.as_ref();
-        assert_eq!(root.artifact_id.as_str(), root_id);
-        Ok(crate::store::Object::of(
-            root.sha256.as_str(),
-            u64::from(root.byte_length),
-        ))
+        );
+        Ok(composed.map(|composed| {
+            let root = composed.root.as_ref();
+            assert_eq!(root.artifact_id.as_str(), root_id);
+            crate::store::Object::of(root.sha256.as_str(), u64::from(root.byte_length))
+        }))
     }
 
     /// The commitment varied one field at a time from `records`: the clock's id, digest and size
@@ -2594,15 +2596,34 @@ mod tests {
         ));
         let mut clockless = records.clone();
         clockless.remove(clock_at);
-        let whole = composed_into(store, deadline, built, records, ROOT)?;
-        let partial = composed_into(store, deadline, built, &records[..3], ROOT)?;
+        let composed = |cited: &[(RunRecordKind, String, crate::store::Object)]| -> Result<
+            crate::store::Object,
+            Box<dyn std::error::Error>,
+        > {
+            Ok(composed_into(store, deadline, built, cited, ROOT)?.map_err(|e| format!("{e:?}"))?)
+        };
+        let whole = composed(records)?;
+        let partial = composed(&records[..3])?;
         assert_ne!(whole, partial, "three records cited is another receipt");
-        Ok([
-            whole,
-            partial,
-            composed_into(store, deadline, built, &twice, ROOT)?,
-            composed_into(store, deadline, built, &clockless, ROOT)?,
-        ])
+        // A root id that is not the plan's run id is refused at the composer's finalize door
+        // (decision 3), before any page of the receipt is published.
+        assert!(
+            matches!(
+                composed_into(
+                    store,
+                    deadline,
+                    built,
+                    records,
+                    "73000000-0000-4000-8000-0000000000ee"
+                )?,
+                Err(crate::app::u64_receipt::Refusal::Publisher {
+                    stage: "finalize",
+                    error: crate::check::collector::Error::RootId,
+                })
+            ),
+            "a root id that is not the run id"
+        );
+        Ok([whole, partial, composed(&twice)?, composed(&clockless)?])
     }
 
     /// The evidence `accept` is handed for a receipt: `object` under `artifact_id`, the receipt schema.
@@ -2749,17 +2770,6 @@ mod tests {
             !every_stage_launched([true, true, true, true].into_iter()),
             "four steps is not the workload"
         );
-    }
-
-    /// Decision 8 / N7 · a task carrying a cancellation admits no check; otherwise the window is the
-    /// reservation the ledger holds now (two values, off the origin).
-    #[test]
-    fn a_cancelled_task_admits_no_check_window() {
-        use super::admitted_window;
-        assert_eq!(admitted_window(true, 300_000), None);
-        assert_eq!(admitted_window(true, 0), None);
-        assert_eq!(admitted_window(false, 300_000), Some(300_000));
-        assert_eq!(admitted_window(false, 7), Some(7));
     }
 
     /// N2, N13 · the plan-refused check, asserted whole over two refusals differing in every field

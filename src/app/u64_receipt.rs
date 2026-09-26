@@ -1246,18 +1246,25 @@ impl From<crate::contracts::receipt::Error> for Refusal {
     }
 }
 
-/// The case's raw evidence: the producer's two streams when it ran, and the reviewed design the
-/// plan names — `validate` credits a case only when its evidence cites the review it was run under
-/// (`consistency::reviewed_case`), and refuses the receipt `CasePlan` when the plan names a review
-/// the case does not cite. Found 2026-09-26 by the independent review of 2c-iii: every runtime
-/// check had composed into that refusal.
-fn raw_evidence_of(execute: Option<&Captured>, plan: &consistency::CasePlan) -> Vec<Ref> {
-    let mut raw_evidence = execute.map_or_else(Vec::new, |captured| {
+/// The producer's two streams when it ran — the oracle result's raw evidence, as the 003 lane's
+/// oracle result cites raw payloads and nothing else.
+fn producer_streams(execute: Option<&Captured>) -> Vec<Ref> {
+    execute.map_or_else(Vec::new, |captured| {
         vec![
             captured.payloads.candidate_stdout.as_ref().clone(),
             captured.payloads.candidate_stderr.as_ref().clone(),
         ]
-    });
+    })
+}
+
+/// The case's raw evidence: the producer's streams and the reviewed design the plan names —
+/// `validate` credits a case only when its evidence cites the review it was run under
+/// (`consistency::reviewed_case`), and refuses the receipt `CasePlan` when the plan names a review
+/// the case does not cite (found 2026-09-26 by the independent review of 2c-iii: every runtime
+/// check had composed into that refusal). The oracle result does not cite the review: the 003
+/// lane's case page cites the `ReviewV1`, its oracle result does not.
+fn case_evidence(streams: &[Ref], plan: &consistency::CasePlan) -> Vec<Ref> {
+    let mut raw_evidence = streams.to_vec();
     if let Some(reviewed) = &plan.reviewed_design {
         raw_evidence.push(reviewed.as_ref().clone());
     }
@@ -1312,14 +1319,14 @@ pub fn compose(sink: &mut Evidence<'_>, composing: &Composing<'_>) -> Result<Com
             OracleFact::Unavailable,
         )
     };
-    let raw_evidence = raw_evidence_of(execute, plan);
+    let streams = producer_streams(execute);
     let oracle = publisher
         .record(&OracleResultV1 {
             oracle_id: plan.oracle_id.clone(),
             expected: plan.expected.clone(),
             result: oracle_result,
             detector_id: Maybe::present(plan.case_id.clone()),
-            raw_evidence_refs: List::new(raw_evidence.clone())?,
+            raw_evidence_refs: List::new(streams.clone())?,
             reason: Text::new(match composing.evaluation {
                 Some((matched, failed)) => format!("vectors matched {matched}, failed {failed}"),
                 None => format!(
@@ -1344,7 +1351,7 @@ pub fn compose(sink: &mut Evidence<'_>, composing: &Composing<'_>) -> Result<Com
             plan,
             outcome: case_outcome,
             producer: &producer,
-            raw_evidence,
+            raw_evidence: case_evidence(&streams, plan),
             oracle,
         },
         baseline,
