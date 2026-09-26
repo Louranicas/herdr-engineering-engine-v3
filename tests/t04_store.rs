@@ -4414,7 +4414,7 @@ fn run_records_read_back_only_through_the_commitment() {
     let cleanup = RunCleanup::of(
         Settlement::Settled,
         &[ObligationRecord {
-            id: "aggregate".to_owned(),
+            id: "resources".to_owned(),
             state: Settlement::Settled,
         }],
         &[],

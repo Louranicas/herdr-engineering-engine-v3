@@ -61,7 +61,7 @@ pub fn cited_kind(role: &str) -> Option<RunRecordKind> {
     let name = role.strip_prefix(RUN_RECORD_ROLE)?;
     RunRecordKind::ALL
         .into_iter()
-        .find(|kind| name.starts_with(kind.name()) || kind.name().starts_with(name))
+        .find(|kind| kind.name() == name)
 }
 
 /// The ledger's verdict and criteria for an RC04 verdict state — one arm per state, so a new state
@@ -838,6 +838,50 @@ mod tests {
         }
     }
 
+    /// The three refusals by name: too few obligation ids (with both numbers), vector counts
+    /// without a match, and a plan with no case.
+    fn assert_refused(sink: &mut Evidence<'_>, composing: &Composing<'_>) {
+        // Too few obligation ids for the unsettled obligations, and vector counts without a
+        // match: each refused by name, with its numbers, before anything is published.
+        assert!(matches!(
+            compose(
+                sink,
+                &Composing {
+                    obligation_ids: &[],
+                    ..*composing
+                }
+            ),
+            Err(Refusal::ObligationIds {
+                unsettled: 1,
+                ids: 0
+            })
+        ));
+        assert!(matches!(
+            compose(
+                sink,
+                &Composing {
+                    evaluation: Some((1, 0)),
+                    ..*composing
+                }
+            ),
+            Err(Refusal::Evaluation)
+        ));
+        // A plan with no case is refused by name.
+        let mut planless = composing.prepared.clone();
+        planless.cases.clear();
+        let refused = Composing {
+            prepared: &planless,
+            ..*composing
+        };
+        assert!(matches!(
+            compose(sink, &refused),
+            Err(Refusal::Publisher {
+                stage: "plan",
+                error: collector::Error::CasePlan
+            })
+        ));
+    }
+
     /// The receipt decodes, its verdict is the decision's, it cites the four records as
     /// `run_record:<kind>` rows equal to what was published, and its unsettled-obligations page
     /// carries exactly the aggregate (unknown) citing the cleanup record; returns the decoded root.
@@ -850,6 +894,8 @@ mod tests {
         use crate::contracts::receipt::{ArtifactV1, decode};
         let root: ReceiptV1 = decode(&composed.bytes)?;
         assert_eq!(root.verdict.state, VerdictV1State::Invalid);
+        // No toolchain step was captured: the diagnostics are unavailable, never a clean zero.
+        assert!(!root.diagnostics.baseline);
         assert_eq!(root.artifacts.count, 4);
         let graph = Graph::resolve(sink, composed.root.as_ref()).map_err(|e| format!("{e:?}"))?;
         let rows = graph
@@ -995,6 +1041,7 @@ mod tests {
             ReasonKind::UnavailableIdentity,
             ReasonKind::ResourcesUnsettled,
             ReasonKind::ProducerNotStarted,
+            ReasonKind::DiagnosticsUnavailable,
         ] {
             assert!(kinds.contains(&expected), "{expected:?} in {kinds:?}");
         }
@@ -1003,20 +1050,7 @@ mod tests {
         assert_eq!(root.observations.end_unix_ms.get(), 1_758_900_000_041);
         assert_eq!(root.observations.cutoff_unix_ms.get(), 1_758_900_290_000);
         assert_eq!(root.observations.cleanup, ObservationsV1Cleanup::Settled);
-        // A plan with no case is refused by name.
-        let mut planless = prepared.clone();
-        planless.cases.clear();
-        let refused = Composing {
-            prepared: &planless,
-            ..composing
-        };
-        assert!(matches!(
-            compose(&mut sink, &refused),
-            Err(Refusal::Publisher {
-                stage: "plan",
-                error: collector::Error::CasePlan
-            })
-        ));
+        assert_refused(&mut sink, &composing);
         std::fs::remove_dir_all(&area)?;
         Ok(())
     }
@@ -1067,6 +1101,11 @@ pub enum Refusal {
         stage: &'static str,
         error: collector::Error,
     },
+    /// The caller minted a different number of obligation ids than the cleanup record left
+    /// unsettled: with fewer, a row would be dropped in the flattering direction (re-check N1).
+    ObligationIds { unsettled: usize, ids: usize },
+    /// The oracle's vector counts are present without a match or mismatch, or absent with one.
+    Evaluation,
 }
 
 /// Name the stage a publisher refusal came from.
@@ -1100,6 +1139,7 @@ pub fn compose(sink: &mut Evidence<'_>, composing: &Composing<'_>) -> Result<Com
         .captures
         .get(STEPS.len() - 1)
         .and_then(Option::as_ref);
+    admit(composing)?;
     register_records(sink, composing.records)?;
     let facts = sink
         .payload(&composing.host.raw, "application/octet-stream")
@@ -1506,7 +1546,40 @@ fn record_rows(
         .collect()
 }
 
+/// The two counts the caller must agree with the records on, refused by name before anything
+/// is registered: one obligation id per unsettled obligation (re-check N1), and vector counts
+/// exactly when the outcome was an evaluation.
+fn admit(composing: &Composing<'_>) -> Result<(), Refusal> {
+    let unsettled = unsettled_count(composing.cleanup);
+    if unsettled != composing.obligation_ids.len() {
+        return Err(Refusal::ObligationIds {
+            unsettled,
+            ids: composing.obligation_ids.len(),
+        });
+    }
+    let evaluated = matches!(
+        composing.outcome.outcome(),
+        OutcomeName::Matched | OutcomeName::Mismatch
+    );
+    if evaluated == composing.evaluation.is_some() {
+        Ok(())
+    } else {
+        Err(Refusal::Evaluation)
+    }
+}
+
+/// How many obligations the cleanup record left unsettled: the row count `unresolved_rows`
+/// produces, and the number of ids the caller must mint.
+fn unsettled_count(cleanup: &RunCleanup) -> usize {
+    cleanup
+        .obligations()
+        .iter()
+        .filter(|obligation| obligation.state != RecordSettlement::Settled)
+        .count()
+}
+
 /// The obligations the cleanup record left unsettled, as receipt rows citing the record itself.
+/// `ids` has one entry per unsettled obligation; `compose` refuses otherwise.
 fn unresolved_rows(
     cleanup: &RunCleanup,
     records: &[(RunRecordKind, String, Object)],
