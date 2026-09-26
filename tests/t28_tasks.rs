@@ -4599,7 +4599,7 @@ fn profile_declaring(declared: &str) -> Result<Profile, Box<dyn Error>> {
          protected = \"protected\"\nprotected_digest = \"{digest}\"\n\n\
          [pins]\ncompiler = {{ host = \"/opt/rustc\", sha256 = \"{digest}\" }}\n\
          shim = {{ host = \"/opt/shim\", sha256 = \"{digest}\" }}\nruntime_files = []\n\
-         namespace_directories = []\nbusctl_sha256 = \"{digest}\"\nsystemd_run_sha256 = \"{digest}\"\n[reviewed]\nexpectation = {{ artifact_id = \"28f70000-0000-4000-8000-00000000000e\", sha256 = \"sha256:7a1f9aa11864adf4fdc42e57bccf14c9721c288f749cf314525c8c183df64f13\", byte_length = 23, media_type = \"application/json\", schema_id = \"hee3.receipt/1:ExpectationV1\" }}\nreview = {{ artifact_id = \"28f70000-0000-4000-8000-00000000000f\", sha256 = \"sha256:7676d865aaf08640fa14c6526535f9e8e47da1a955bdf479688c5f3800423740\", byte_length = 23, media_type = \"application/json\", schema_id = \"hee3.receipt/1:ReviewV1\" }}\n"
+         namespace_directories = []\nbusctl_sha256 = \"{digest}\"\nsystemd_run_sha256 = \"{digest}\"\n[reviewed]\nexpectation = {{ artifact_id = \"c220e7ce-0753-47ef-bdac-15710bc4981c\", sha256 = \"sha256:3a7faa5510790c20322ad5829091211eb8c04ab6016e16ec8391433dae3392b9\", byte_length = 794, media_type = \"application/json\", schema_id = \"hee3.receipt/1:ExpectationV1\" }}\nreview = {{ artifact_id = \"a47470c5-f11c-4f64-9ac8-6dcf80750ed6\", sha256 = \"sha256:f288225476120254f5c3a93266fc8f2a8763810462fbddd7c62161107cb39adb\", byte_length = 1145, media_type = \"application/json\", schema_id = \"hee3.receipt/1:ReviewV1\" }}\n"
     );
     Ok(Profile {
         declared: class_profile::compose(text.as_bytes()).map_err(|error| format!("{error:?}"))?,

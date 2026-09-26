@@ -1,0 +1,28 @@
+{
+  "scope": "independent static expected-answer/source/metadata review; no production evaluator or candidate execution",
+  "prepared_objects_verified": 5,
+  "frozen_vectors_checked": 335,
+  "literal_rows": 16,
+  "basis_counts": {
+    "fixed_boundary": 16,
+    "grammar_arbitrary_precision": 319
+  },
+  "answer_counts": {
+    "Empty": 1,
+    "Value": 192,
+    "Overflow": 3,
+    "LeadingZero": 4,
+    "InvalidCharacter": 135
+  },
+  "public_projection_bytes": 13385,
+  "public_projection_sha256": "a7a9ce15c6c50ee2732e8f7461c63acf0a707486182e345b3d30f1f08bc5d6c6",
+  "recipe": {
+    "candidate_cutoff_ms": 900000,
+    "verification_cutoff_ms": 1190000,
+    "total_wall_ms": 1200000
+  },
+  "request_sha256": "a663bfb4abfbb11e3c458abace7c0922e06d3c20b7b5d59f696e2a5742c96d5c",
+  "expectation_sha256": "sha256:3a7faa5510790c20322ad5829091211eb8c04ab6016e16ec8391433dae3392b9",
+  "candidate_or_wrapper_executions": 0,
+  "module_admission": false
+}

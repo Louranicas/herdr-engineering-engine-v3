@@ -1,0 +1,78 @@
+"""Read-only finite pre-execution review checks; never invokes candidate or oracle code."""
+from pathlib import Path
+from collections import Counter
+import hashlib
+import json
+
+BASE = Path(__file__).resolve().parent
+T06 = BASE.parent
+PREP = T06 / 'u64-receipt-bridge/expectation-preparation'
+WORKLOAD = Path('/run/host/var/home/herdr-engineering-engine-v3/evaluation/tasks/WL-U64-PARSE-001/v1')
+
+def sha(data):
+    return hashlib.sha256(data).hexdigest()
+
+def require(condition, reason):
+    if not condition:
+        raise ValueError(reason)
+
+request_bytes = (PREP / 'review-request.json').read_bytes()
+require(sha(request_bytes) == 'a663bfb4abfbb11e3c458abace7c0922e06d3c20b7b5d59f696e2a5742c96d5c', 'request changed')
+request = json.loads(request_bytes)
+registry = json.loads((PREP / 'registry.json').read_bytes())
+require(len(registry) == 5, 'five preparation objects')
+objects = {}
+for reference, obj in registry:
+    checksum = reference['sha256'].removeprefix('sha256:')
+    payload = (PREP / 'staging/sha256' / checksum[:2] / checksum).read_bytes()
+    require(sha(payload) == checksum and len(payload) == reference['byte_length'], 'reference bytes')
+    require(obj == {'digest': reference['sha256'], 'size': len(payload)}, 'CAS object metadata')
+    require(reference['artifact_id'] not in objects, 'duplicate preparation UUID')
+    objects[reference['artifact_id']] = (reference, payload)
+expectation_ref = request['expectation']
+expectation = json.loads(objects[expectation_ref['artifact_id']][1])
+require(expectation_ref['sha256'] == 'sha256:3a7faa5510790c20322ad5829091211eb8c04ab6016e16ec8391433dae3392b9', 'subject identity')
+require(expectation['specification'] == request['specification'], 'specification binding')
+require(expectation['expected_producer']['status'] == 'exited' and expectation['expected_producer']['exit_code']['value'] == 0 and expectation['expected_producer']['signal']['value'] is None, 'ordinary producer expectation')
+require(expectation['expected_oracle'] == 'satisfied' and expectation['intended_detector'] == 'u64-exact-output-agreement', 'oracle condition')
+assumptions = json.loads(objects[expectation['shared_assumptions']['artifact_id']][1])
+for key in ('specification', 'wrapper', 'recipe'):
+    require(request[key] in assumptions['rows'][0]['evidence'], key + ' bound through assumptions')
+recipe = json.loads(objects[request['recipe']['artifact_id']][1])
+require(recipe == {'candidate_cutoff_ms':900000, 'verification_cutoff_ms':1190000, 'total_wall_ms':1200000}, 'exact reviewed recipe')
+require(recipe['total_wall_ms'] - recipe['verification_cutoff_ms'] == 10000, 'final cleanup reserve')
+manifest = json.loads((WORKLOAD / 'manifest.json').read_bytes())
+source_files = ['TASK.md', 'oracle/build_cases.py', 'oracle/cases.json']
+for relative in source_files:
+    require(sha((WORKLOAD / relative).read_bytes()) == manifest['files_sha256'][relative], 'original manifest source binding ' + relative)
+require(objects[request['specification']['artifact_id']][1] == (WORKLOAD / 'oracle/cases.json').read_bytes(), 'exact original oracle reused')
+require(objects[request['wrapper']['artifact_id']][1] == (T06 / 'workload-oracle/fixtures/public-wrapper.rs').read_bytes(), 'exact fixed wrapper reused')
+oracle = json.loads(objects[request['specification']['artifact_id']][1])
+rows = oracle['cases']
+require(len(rows) == 335 and oracle['case_count_is_not_module_credit'] is True, 'finite335 table')
+require(len({row['id'] for row in rows}) == 335 and len({row['input'] for row in rows}) == 335, 'unique vectors')
+# Independent decimal-language check: no imported generator, Rust parser or numeric
+# conversion. Canonical decimal length/lexicographic ordering proves the u64 bound.
+def hand_checked_answer(value):
+    if not value:
+        return {'error':'Empty'}
+    if any(not ('0' <= character <= '9') for character in value):
+        return {'error':'InvalidCharacter'}
+    if len(value) > 1 and value[0] == '0':
+        return {'error':'LeadingZero'}
+    maximum = '18446744073709551615'
+    if len(value) > len(maximum) or (len(value) == len(maximum) and value > maximum):
+        return {'error':'Overflow'}
+    return {'value':value}
+for row in rows:
+    require(hand_checked_answer(row['input']) == row['expected'], 'independent expected answer ' + row['id'])
+fixed = {row['id']:row for row in rows if row['basis'] == 'fixed_boundary'}
+require(len(fixed) == 16, 'sixteen literal control rows')
+for name, answer in {'empty':{'error':'Empty'}, 'maximum':{'value':'18446744073709551615'}, 'one_past_maximum':{'error':'Overflow'}, 'leading_zero_overflow':{'error':'LeadingZero'}, 'invalid_after_overflow':{'error':'InvalidCharacter'}, 'invalid_after_leading_zero':{'error':'InvalidCharacter'}}.items():
+    require(fixed[name]['expected'] == answer, 'literal precedence or boundary ' + name)
+public = b''.join(row['input'].encode().hex().encode() + b'\n' for row in rows)
+require(len(public) == 13385 and sha(public) == 'a7a9ce15c6c50ee2732e8f7461c63acf0a707486182e345b3d30f1f08bc5d6c6', 'public projection exact bytes')
+require(max(len(row['input'].encode()) for row in rows) == 1025, 'inclusive input bound')
+result = {'scope':'independent static expected-answer/source/metadata review; no production evaluator or candidate execution', 'prepared_objects_verified':5, 'frozen_vectors_checked':335, 'literal_rows':16, 'basis_counts':dict(Counter(row['basis'] for row in rows)), 'answer_counts':dict(Counter(next(iter(row['expected'].values())) if 'error' in row['expected'] else 'Value' for row in rows)), 'public_projection_bytes':len(public), 'public_projection_sha256':sha(public), 'recipe':recipe, 'request_sha256':sha(request_bytes), 'expectation_sha256':expectation_ref['sha256'], 'candidate_or_wrapper_executions':0, 'module_admission':False}
+(BASE / 'source-checks.json').write_text(json.dumps(result,indent=2)+'\n')
+print(json.dumps(result))

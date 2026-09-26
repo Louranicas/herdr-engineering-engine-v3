@@ -1,0 +1,2686 @@
+{
+  "id": "ORACLE-U64-001/v1",
+  "case_count_is_not_module_credit": true,
+  "cases": [
+    {
+      "id": "empty",
+      "input": "",
+      "expected": {
+        "error": "Empty"
+      },
+      "basis": "fixed_boundary"
+    },
+    {
+      "id": "zero",
+      "input": "0",
+      "expected": {
+        "value": "0"
+      },
+      "basis": "fixed_boundary"
+    },
+    {
+      "id": "maximum",
+      "input": "18446744073709551615",
+      "expected": {
+        "value": "18446744073709551615"
+      },
+      "basis": "fixed_boundary"
+    },
+    {
+      "id": "one_past_maximum",
+      "input": "18446744073709551616",
+      "expected": {
+        "error": "Overflow"
+      },
+      "basis": "fixed_boundary"
+    },
+    {
+      "id": "leading_zero",
+      "input": "01",
+      "expected": {
+        "error": "LeadingZero"
+      },
+      "basis": "fixed_boundary"
+    },
+    {
+      "id": "leading_zero_overflow",
+      "input": "018446744073709551616",
+      "expected": {
+        "error": "LeadingZero"
+      },
+      "basis": "fixed_boundary"
+    },
+    {
+      "id": "invalid_after_overflow",
+      "input": "18446744073709551616x",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "fixed_boundary"
+    },
+    {
+      "id": "invalid_after_leading_zero",
+      "input": "00x",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "fixed_boundary"
+    },
+    {
+      "id": "plus_sign",
+      "input": "+1",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "fixed_boundary"
+    },
+    {
+      "id": "minus_sign",
+      "input": "-1",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "fixed_boundary"
+    },
+    {
+      "id": "non_ascii_digit",
+      "input": "١",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "fixed_boundary"
+    },
+    {
+      "id": "full_width_digit",
+      "input": "１",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "fixed_boundary"
+    },
+    {
+      "id": "embedded_nul",
+      "input": "1\u00000",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "fixed_boundary"
+    },
+    {
+      "id": "trailing_newline",
+      "input": "1\n",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "fixed_boundary"
+    },
+    {
+      "id": "leading_space",
+      "input": " 1",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "fixed_boundary"
+    },
+    {
+      "id": "internal_zero",
+      "input": "10001",
+      "expected": {
+        "value": "10001"
+      },
+      "basis": "fixed_boundary"
+    },
+    {
+      "id": "grammar_arithmetic_000",
+      "input": "00",
+      "expected": {
+        "error": "LeadingZero"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_001",
+      "input": "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+      "expected": {
+        "error": "LeadingZero"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_002",
+      "input": "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000!",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_003",
+      "input": "0x10",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_004",
+      "input": "1",
+      "expected": {
+        "value": "1"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_005",
+      "input": "1\u00010",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_006",
+      "input": "1\u00020",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_007",
+      "input": "1\u00030",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_008",
+      "input": "1\u00040",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_009",
+      "input": "1\u00050",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_010",
+      "input": "1\u00060",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_011",
+      "input": "1\u00070",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_012",
+      "input": "1\b0",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_013",
+      "input": "1\t0",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_014",
+      "input": "1\n0",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_015",
+      "input": "1\u000b0",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_016",
+      "input": "1\f0",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_017",
+      "input": "1\r0",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_018",
+      "input": "1\u000e0",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_019",
+      "input": "1\u000f0",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_020",
+      "input": "1\u00100",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_021",
+      "input": "1\u00110",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_022",
+      "input": "1\u00120",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_023",
+      "input": "1\u00130",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_024",
+      "input": "1\u00140",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_025",
+      "input": "1\u00150",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_026",
+      "input": "1\u00160",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_027",
+      "input": "1\u00170",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_028",
+      "input": "1\u00180",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_029",
+      "input": "1\u00190",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_030",
+      "input": "1\u001a0",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_031",
+      "input": "1\u001b0",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_032",
+      "input": "1\u001c0",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_033",
+      "input": "1\u001d0",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_034",
+      "input": "1\u001e0",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_035",
+      "input": "1\u001f0",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_036",
+      "input": "1 0",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_037",
+      "input": "1!0",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_038",
+      "input": "1\"0",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_039",
+      "input": "1#0",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_040",
+      "input": "1$0",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_041",
+      "input": "1%0",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_042",
+      "input": "1&0",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_043",
+      "input": "1'0",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_044",
+      "input": "1(0",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_045",
+      "input": "1)0",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_046",
+      "input": "1*0",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_047",
+      "input": "1+0",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_048",
+      "input": "1,0",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_049",
+      "input": "1-0",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_050",
+      "input": "1.0",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_051",
+      "input": "1/0",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_052",
+      "input": "1023",
+      "expected": {
+        "value": "1023"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_053",
+      "input": "1024",
+      "expected": {
+        "value": "1024"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_054",
+      "input": "1025",
+      "expected": {
+        "value": "1025"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_055",
+      "input": "1048575",
+      "expected": {
+        "value": "1048575"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_056",
+      "input": "1048576",
+      "expected": {
+        "value": "1048576"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_057",
+      "input": "1048577",
+      "expected": {
+        "value": "1048577"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_058",
+      "input": "1073741823",
+      "expected": {
+        "value": "1073741823"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_059",
+      "input": "1073741824",
+      "expected": {
+        "value": "1073741824"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_060",
+      "input": "1073741825",
+      "expected": {
+        "value": "1073741825"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_061",
+      "input": "1099511627775",
+      "expected": {
+        "value": "1099511627775"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_062",
+      "input": "1099511627776",
+      "expected": {
+        "value": "1099511627776"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_063",
+      "input": "1099511627777",
+      "expected": {
+        "value": "1099511627777"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_064",
+      "input": "1125899906842623",
+      "expected": {
+        "value": "1125899906842623"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_065",
+      "input": "1125899906842624",
+      "expected": {
+        "value": "1125899906842624"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_066",
+      "input": "1125899906842625",
+      "expected": {
+        "value": "1125899906842625"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_067",
+      "input": "1152921504606846975",
+      "expected": {
+        "value": "1152921504606846975"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_068",
+      "input": "1152921504606846976",
+      "expected": {
+        "value": "1152921504606846976"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_069",
+      "input": "1152921504606846977",
+      "expected": {
+        "value": "1152921504606846977"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_070",
+      "input": "127",
+      "expected": {
+        "value": "127"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_071",
+      "input": "128",
+      "expected": {
+        "value": "128"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_072",
+      "input": "129",
+      "expected": {
+        "value": "129"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_073",
+      "input": "131071",
+      "expected": {
+        "value": "131071"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_074",
+      "input": "131072",
+      "expected": {
+        "value": "131072"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_075",
+      "input": "131073",
+      "expected": {
+        "value": "131073"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_076",
+      "input": "134217727",
+      "expected": {
+        "value": "134217727"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_077",
+      "input": "134217728",
+      "expected": {
+        "value": "134217728"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_078",
+      "input": "134217729",
+      "expected": {
+        "value": "134217729"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_079",
+      "input": "137438953471",
+      "expected": {
+        "value": "137438953471"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_080",
+      "input": "137438953472",
+      "expected": {
+        "value": "137438953472"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_081",
+      "input": "137438953473",
+      "expected": {
+        "value": "137438953473"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_082",
+      "input": "140737488355327",
+      "expected": {
+        "value": "140737488355327"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_083",
+      "input": "140737488355328",
+      "expected": {
+        "value": "140737488355328"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_084",
+      "input": "140737488355329",
+      "expected": {
+        "value": "140737488355329"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_085",
+      "input": "144115188075855871",
+      "expected": {
+        "value": "144115188075855871"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_086",
+      "input": "144115188075855872",
+      "expected": {
+        "value": "144115188075855872"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_087",
+      "input": "144115188075855873",
+      "expected": {
+        "value": "144115188075855873"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_088",
+      "input": "15",
+      "expected": {
+        "value": "15"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_089",
+      "input": "16",
+      "expected": {
+        "value": "16"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_090",
+      "input": "16383",
+      "expected": {
+        "value": "16383"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_091",
+      "input": "16384",
+      "expected": {
+        "value": "16384"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_092",
+      "input": "16385",
+      "expected": {
+        "value": "16385"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_093",
+      "input": "16777215",
+      "expected": {
+        "value": "16777215"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_094",
+      "input": "16777216",
+      "expected": {
+        "value": "16777216"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_095",
+      "input": "16777217",
+      "expected": {
+        "value": "16777217"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_096",
+      "input": "17",
+      "expected": {
+        "value": "17"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_097",
+      "input": "17179869183",
+      "expected": {
+        "value": "17179869183"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_098",
+      "input": "17179869184",
+      "expected": {
+        "value": "17179869184"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_099",
+      "input": "17179869185",
+      "expected": {
+        "value": "17179869185"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_100",
+      "input": "17592186044415",
+      "expected": {
+        "value": "17592186044415"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_101",
+      "input": "17592186044416",
+      "expected": {
+        "value": "17592186044416"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_102",
+      "input": "17592186044417",
+      "expected": {
+        "value": "17592186044417"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_103",
+      "input": "18014398509481983",
+      "expected": {
+        "value": "18014398509481983"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_104",
+      "input": "18014398509481984",
+      "expected": {
+        "value": "18014398509481984"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_105",
+      "input": "18014398509481985",
+      "expected": {
+        "value": "18014398509481985"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_106",
+      "input": "18446744073709551617",
+      "expected": {
+        "error": "Overflow"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_107",
+      "input": "1:0",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_108",
+      "input": "1;0",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_109",
+      "input": "1<0",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_110",
+      "input": "1=0",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_111",
+      "input": "1>0",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_112",
+      "input": "1?0",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_113",
+      "input": "1@0",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_114",
+      "input": "1A0",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_115",
+      "input": "1B0",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_116",
+      "input": "1C0",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_117",
+      "input": "1D0",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_118",
+      "input": "1E0",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_119",
+      "input": "1F0",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_120",
+      "input": "1G0",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_121",
+      "input": "1H0",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_122",
+      "input": "1I0",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_123",
+      "input": "1J0",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_124",
+      "input": "1K0",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_125",
+      "input": "1L0",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_126",
+      "input": "1M0",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_127",
+      "input": "1N0",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_128",
+      "input": "1O0",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_129",
+      "input": "1P0",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_130",
+      "input": "1Q0",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_131",
+      "input": "1R0",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_132",
+      "input": "1S0",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_133",
+      "input": "1T0",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_134",
+      "input": "1U0",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_135",
+      "input": "1V0",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_136",
+      "input": "1W0",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_137",
+      "input": "1X0",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_138",
+      "input": "1Y0",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_139",
+      "input": "1Z0",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_140",
+      "input": "1[0",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_141",
+      "input": "1\\0",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_142",
+      "input": "1]0",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_143",
+      "input": "1^0",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_144",
+      "input": "1_0",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_145",
+      "input": "1_000",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_146",
+      "input": "1`0",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_147",
+      "input": "1a0",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_148",
+      "input": "1b0",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_149",
+      "input": "1c0",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_150",
+      "input": "1d0",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_151",
+      "input": "1e0",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_152",
+      "input": "1e3",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_153",
+      "input": "1f0",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_154",
+      "input": "1g0",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_155",
+      "input": "1h0",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_156",
+      "input": "1i0",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_157",
+      "input": "1j0",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_158",
+      "input": "1k0",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_159",
+      "input": "1l0",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_160",
+      "input": "1m0",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_161",
+      "input": "1n0",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_162",
+      "input": "1o0",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_163",
+      "input": "1p0",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_164",
+      "input": "1q0",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_165",
+      "input": "1r0",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_166",
+      "input": "1s0",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_167",
+      "input": "1t0",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_168",
+      "input": "1u0",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_169",
+      "input": "1v0",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_170",
+      "input": "1w0",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_171",
+      "input": "1x0",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_172",
+      "input": "1y0",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_173",
+      "input": "1z0",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_174",
+      "input": "1{0",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_175",
+      "input": "1|0",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_176",
+      "input": "1}0",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_177",
+      "input": "1~0",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_178",
+      "input": "10",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_179",
+      "input": "1 ",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_180",
+      "input": "1​",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_181",
+      "input": "1😀",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_182",
+      "input": "2",
+      "expected": {
+        "value": "2"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_183",
+      "input": "2047",
+      "expected": {
+        "value": "2047"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_184",
+      "input": "2048",
+      "expected": {
+        "value": "2048"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_185",
+      "input": "2049",
+      "expected": {
+        "value": "2049"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_186",
+      "input": "2097151",
+      "expected": {
+        "value": "2097151"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_187",
+      "input": "2097152",
+      "expected": {
+        "value": "2097152"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_188",
+      "input": "2097153",
+      "expected": {
+        "value": "2097153"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_189",
+      "input": "2147483647",
+      "expected": {
+        "value": "2147483647"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_190",
+      "input": "2147483648",
+      "expected": {
+        "value": "2147483648"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_191",
+      "input": "2147483649",
+      "expected": {
+        "value": "2147483649"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_192",
+      "input": "2199023255551",
+      "expected": {
+        "value": "2199023255551"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_193",
+      "input": "2199023255552",
+      "expected": {
+        "value": "2199023255552"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_194",
+      "input": "2199023255553",
+      "expected": {
+        "value": "2199023255553"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_195",
+      "input": "2251799813685247",
+      "expected": {
+        "value": "2251799813685247"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_196",
+      "input": "2251799813685248",
+      "expected": {
+        "value": "2251799813685248"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_197",
+      "input": "2251799813685249",
+      "expected": {
+        "value": "2251799813685249"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_198",
+      "input": "2305843009213693951",
+      "expected": {
+        "value": "2305843009213693951"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_199",
+      "input": "2305843009213693952",
+      "expected": {
+        "value": "2305843009213693952"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_200",
+      "input": "2305843009213693953",
+      "expected": {
+        "value": "2305843009213693953"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_201",
+      "input": "255",
+      "expected": {
+        "value": "255"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_202",
+      "input": "256",
+      "expected": {
+        "value": "256"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_203",
+      "input": "257",
+      "expected": {
+        "value": "257"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_204",
+      "input": "262143",
+      "expected": {
+        "value": "262143"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_205",
+      "input": "262144",
+      "expected": {
+        "value": "262144"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_206",
+      "input": "262145",
+      "expected": {
+        "value": "262145"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_207",
+      "input": "268435455",
+      "expected": {
+        "value": "268435455"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_208",
+      "input": "268435456",
+      "expected": {
+        "value": "268435456"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_209",
+      "input": "268435457",
+      "expected": {
+        "value": "268435457"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_210",
+      "input": "274877906943",
+      "expected": {
+        "value": "274877906943"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_211",
+      "input": "274877906944",
+      "expected": {
+        "value": "274877906944"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_212",
+      "input": "274877906945",
+      "expected": {
+        "value": "274877906945"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_213",
+      "input": "281474976710655",
+      "expected": {
+        "value": "281474976710655"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_214",
+      "input": "281474976710656",
+      "expected": {
+        "value": "281474976710656"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_215",
+      "input": "281474976710657",
+      "expected": {
+        "value": "281474976710657"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_216",
+      "input": "288230376151711743",
+      "expected": {
+        "value": "288230376151711743"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_217",
+      "input": "288230376151711744",
+      "expected": {
+        "value": "288230376151711744"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_218",
+      "input": "288230376151711745",
+      "expected": {
+        "value": "288230376151711745"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_219",
+      "input": "3",
+      "expected": {
+        "value": "3"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_220",
+      "input": "31",
+      "expected": {
+        "value": "31"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_221",
+      "input": "32",
+      "expected": {
+        "value": "32"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_222",
+      "input": "32767",
+      "expected": {
+        "value": "32767"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_223",
+      "input": "32768",
+      "expected": {
+        "value": "32768"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_224",
+      "input": "32769",
+      "expected": {
+        "value": "32769"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_225",
+      "input": "33",
+      "expected": {
+        "value": "33"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_226",
+      "input": "33554431",
+      "expected": {
+        "value": "33554431"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_227",
+      "input": "33554432",
+      "expected": {
+        "value": "33554432"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_228",
+      "input": "33554433",
+      "expected": {
+        "value": "33554433"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_229",
+      "input": "34359738367",
+      "expected": {
+        "value": "34359738367"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_230",
+      "input": "34359738368",
+      "expected": {
+        "value": "34359738368"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_231",
+      "input": "34359738369",
+      "expected": {
+        "value": "34359738369"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_232",
+      "input": "35184372088831",
+      "expected": {
+        "value": "35184372088831"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_233",
+      "input": "35184372088832",
+      "expected": {
+        "value": "35184372088832"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_234",
+      "input": "35184372088833",
+      "expected": {
+        "value": "35184372088833"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_235",
+      "input": "36028797018963967",
+      "expected": {
+        "value": "36028797018963967"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_236",
+      "input": "36028797018963968",
+      "expected": {
+        "value": "36028797018963968"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_237",
+      "input": "36028797018963969",
+      "expected": {
+        "value": "36028797018963969"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_238",
+      "input": "4",
+      "expected": {
+        "value": "4"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_239",
+      "input": "4095",
+      "expected": {
+        "value": "4095"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_240",
+      "input": "4096",
+      "expected": {
+        "value": "4096"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_241",
+      "input": "4097",
+      "expected": {
+        "value": "4097"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_242",
+      "input": "4194303",
+      "expected": {
+        "value": "4194303"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_243",
+      "input": "4194304",
+      "expected": {
+        "value": "4194304"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_244",
+      "input": "4194305",
+      "expected": {
+        "value": "4194305"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_245",
+      "input": "4294967295",
+      "expected": {
+        "value": "4294967295"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_246",
+      "input": "4294967296",
+      "expected": {
+        "value": "4294967296"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_247",
+      "input": "4294967297",
+      "expected": {
+        "value": "4294967297"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_248",
+      "input": "4398046511103",
+      "expected": {
+        "value": "4398046511103"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_249",
+      "input": "4398046511104",
+      "expected": {
+        "value": "4398046511104"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_250",
+      "input": "4398046511105",
+      "expected": {
+        "value": "4398046511105"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_251",
+      "input": "4503599627370495",
+      "expected": {
+        "value": "4503599627370495"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_252",
+      "input": "4503599627370496",
+      "expected": {
+        "value": "4503599627370496"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_253",
+      "input": "4503599627370497",
+      "expected": {
+        "value": "4503599627370497"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_254",
+      "input": "4611686018427387903",
+      "expected": {
+        "value": "4611686018427387903"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_255",
+      "input": "4611686018427387904",
+      "expected": {
+        "value": "4611686018427387904"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_256",
+      "input": "4611686018427387905",
+      "expected": {
+        "value": "4611686018427387905"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_257",
+      "input": "5",
+      "expected": {
+        "value": "5"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_258",
+      "input": "511",
+      "expected": {
+        "value": "511"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_259",
+      "input": "512",
+      "expected": {
+        "value": "512"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_260",
+      "input": "513",
+      "expected": {
+        "value": "513"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_261",
+      "input": "524287",
+      "expected": {
+        "value": "524287"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_262",
+      "input": "524288",
+      "expected": {
+        "value": "524288"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_263",
+      "input": "524289",
+      "expected": {
+        "value": "524289"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_264",
+      "input": "536870911",
+      "expected": {
+        "value": "536870911"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_265",
+      "input": "536870912",
+      "expected": {
+        "value": "536870912"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_266",
+      "input": "536870913",
+      "expected": {
+        "value": "536870913"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_267",
+      "input": "549755813887",
+      "expected": {
+        "value": "549755813887"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_268",
+      "input": "549755813888",
+      "expected": {
+        "value": "549755813888"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_269",
+      "input": "549755813889",
+      "expected": {
+        "value": "549755813889"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_270",
+      "input": "562949953421311",
+      "expected": {
+        "value": "562949953421311"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_271",
+      "input": "562949953421312",
+      "expected": {
+        "value": "562949953421312"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_272",
+      "input": "562949953421313",
+      "expected": {
+        "value": "562949953421313"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_273",
+      "input": "576460752303423487",
+      "expected": {
+        "value": "576460752303423487"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_274",
+      "input": "576460752303423488",
+      "expected": {
+        "value": "576460752303423488"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_275",
+      "input": "576460752303423489",
+      "expected": {
+        "value": "576460752303423489"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_276",
+      "input": "6",
+      "expected": {
+        "value": "6"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_277",
+      "input": "63",
+      "expected": {
+        "value": "63"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_278",
+      "input": "64",
+      "expected": {
+        "value": "64"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_279",
+      "input": "65",
+      "expected": {
+        "value": "65"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_280",
+      "input": "65535",
+      "expected": {
+        "value": "65535"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_281",
+      "input": "65536",
+      "expected": {
+        "value": "65536"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_282",
+      "input": "65537",
+      "expected": {
+        "value": "65537"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_283",
+      "input": "67108863",
+      "expected": {
+        "value": "67108863"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_284",
+      "input": "67108864",
+      "expected": {
+        "value": "67108864"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_285",
+      "input": "67108865",
+      "expected": {
+        "value": "67108865"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_286",
+      "input": "68719476735",
+      "expected": {
+        "value": "68719476735"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_287",
+      "input": "68719476736",
+      "expected": {
+        "value": "68719476736"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_288",
+      "input": "68719476737",
+      "expected": {
+        "value": "68719476737"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_289",
+      "input": "7",
+      "expected": {
+        "value": "7"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_290",
+      "input": "70368744177663",
+      "expected": {
+        "value": "70368744177663"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_291",
+      "input": "70368744177664",
+      "expected": {
+        "value": "70368744177664"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_292",
+      "input": "70368744177665",
+      "expected": {
+        "value": "70368744177665"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_293",
+      "input": "72057594037927935",
+      "expected": {
+        "value": "72057594037927935"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_294",
+      "input": "72057594037927936",
+      "expected": {
+        "value": "72057594037927936"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_295",
+      "input": "72057594037927937",
+      "expected": {
+        "value": "72057594037927937"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_296",
+      "input": "8",
+      "expected": {
+        "value": "8"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_297",
+      "input": "8191",
+      "expected": {
+        "value": "8191"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_298",
+      "input": "8192",
+      "expected": {
+        "value": "8192"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_299",
+      "input": "8193",
+      "expected": {
+        "value": "8193"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_300",
+      "input": "8388607",
+      "expected": {
+        "value": "8388607"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_301",
+      "input": "8388608",
+      "expected": {
+        "value": "8388608"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_302",
+      "input": "8388609",
+      "expected": {
+        "value": "8388609"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_303",
+      "input": "8589934591",
+      "expected": {
+        "value": "8589934591"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_304",
+      "input": "8589934592",
+      "expected": {
+        "value": "8589934592"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_305",
+      "input": "8589934593",
+      "expected": {
+        "value": "8589934593"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_306",
+      "input": "8796093022207",
+      "expected": {
+        "value": "8796093022207"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_307",
+      "input": "8796093022208",
+      "expected": {
+        "value": "8796093022208"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_308",
+      "input": "8796093022209",
+      "expected": {
+        "value": "8796093022209"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_309",
+      "input": "9",
+      "expected": {
+        "value": "9"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_310",
+      "input": "9007199254740991",
+      "expected": {
+        "value": "9007199254740991"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_311",
+      "input": "9007199254740992",
+      "expected": {
+        "value": "9007199254740992"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_312",
+      "input": "9007199254740993",
+      "expected": {
+        "value": "9007199254740993"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_313",
+      "input": "9223372036854775807",
+      "expected": {
+        "value": "9223372036854775807"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_314",
+      "input": "9223372036854775808",
+      "expected": {
+        "value": "9223372036854775808"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_315",
+      "input": "9223372036854775809",
+      "expected": {
+        "value": "9223372036854775809"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_316",
+      "input": "9999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999",
+      "expected": {
+        "error": "Overflow"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_317",
+      "input": "9999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999!",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    },
+    {
+      "id": "grammar_arithmetic_318",
+      "input": "﻿1",
+      "expected": {
+        "error": "InvalidCharacter"
+      },
+      "basis": "grammar_arbitrary_precision"
+    }
+  ]
+}

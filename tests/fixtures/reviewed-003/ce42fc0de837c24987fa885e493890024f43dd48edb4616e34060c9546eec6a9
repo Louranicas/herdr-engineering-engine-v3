@@ -1,0 +1,90 @@
+# Fixed u64 workload → RC04 receipt bridge
+
+Private app-owned composition. No process owner, Store ledger transition, desired verdict input, generic recipe registry or admission authority. Source snapshots are retained in `evidence/inputs.json`. Implementation is in `src/app/u64_receipt.rs` and its three focused subordinate files.
+
+## Public composition order
+
+1. `publish_expectation(&mut Evidence, &protected_snapshot, &Recipe, deadline)` publishes the exact frozen oracle, exact fixed public wrapper, three common-origin cutoffs, black-box assumptions and `ExpectationV1`. Returned `FrozenExpectation` exposes `reference`, `specification`, `wrapper`, and `recipe`. It grants no approval.
+2. An independent reviewer examines that exact expectation graph and publishes `ReviewV1` with source-grounded provenance. Required action is `case_design_review`, disposition accepted, exact expectation SHA, no material open/accepted-residual finding or unsettled material obligation. An unrelated bootstrap review cannot substitute.
+3. The trusted front end prepares one selected mandatory case, all source/support subjects, actual host/tool observations, and exact patch. It calls `prepare(&Evidence, Preparation)` before dispatch. The result `Frozen` owns clones of `Prepared`, source/protected snapshots and tool pins; no self-referential borrows or post-run reconstruction. `Frozen::prepared()` provides a shared reference for later import.
+4. Existing workload/process/namespace/aggregate owners execute and settle. The app retains the actual `Run` and aggregate cleanup observations.
+5. `observe(&Frozen, &Run)` invokes the trusted in-process `FrozenOracle` against retained driver stdout and stamps its actual completion. It can run after aggregate cleanup. `OracleObservation` is opaque and binds stdout SHA and sampled terminal report end. No external checker exit0 is invented.
+6. `finalize(&mut Evidence, &Frozen, &Run, &OracleObservation, Clock, &Cleanup, deadline)` derives `decision::Decision`, publishes exact typed graph via Publisher, and returns `Collected { receipt, decision, decision_inputs, oracle_observation }`. The caller transfers the exact closure through `receipt_import` before Store verification. No task transition occurs here.
+
+```rust
+pub struct Recipe {
+    pub candidate_cutoff_ms: u64,
+    pub verification_cutoff_ms: u64,
+    pub total_wall_ms: u64,
+}
+// Current runtime selection: 900_000 / 1_190_000 / 1_200_000.
+// Values must be strictly increasing and nonzero; no origin reset.
+
+pub struct SubjectBinding<'a> {
+    pub snapshot: &'a workspace::Snapshot,
+    pub origin: receipt::SubjectFileV1Origin,
+}
+pub struct SourceBindings<'a> {
+    pub seed: SubjectBinding<'a>, pub result: SubjectBinding<'a>,
+    pub fixtures: SubjectBinding<'a>, pub oracle: SubjectBinding<'a>,
+    pub harness: SubjectBinding<'a>, pub collector: SubjectBinding<'a>,
+    pub launcher: SubjectBinding<'a>,
+}
+pub enum Patch<'a> { Baseline, Repair(&'a [u8]) }
+pub struct Preparation<'a> {
+    pub prepared: &'a consistency::Prepared,
+    pub sources: SourceBindings<'a>,
+    pub protected: &'a workspace::Snapshot,
+    pub tools: &'a workload::Tools,
+    pub patch: Patch<'a>,
+    pub recipe: receipt::Payload,
+    pub host: receipt::TypedRef<receipt::HostV1>,
+    pub review_provenance: receipt::Payload,
+    pub deadline: Instant,
+}
+pub struct Clock {
+    pub origin: Instant,
+    pub start_unix_ms: u64,
+    pub end_unix_ms: u64,
+    pub candidate_deadline: Instant,
+    pub work_deadline: Instant, // coordinator verification cutoff
+    pub cleanup_deadline: Instant,
+    pub observed_at: Instant,
+    pub cancellation_observed_at: Option<Instant>,
+}
+pub struct Cleanup {
+    pub aggregate: decision::Settlement,
+    pub obligations: decision::Settlement,
+    pub evidence: receipt::Payload,
+    pub unresolved: Vec<receipt::ObligationV1>,
+}
+```
+
+Caller owns `Run`, aggregate lifecycle and `Evidence` across failures. `Error { kind, attempted_refs }` retains typed publisher attempts; raw registered/pending objects remain in Evidence. A capture error retains its existing rich partial-publication error. No rollback is claimed.
+
+## Exact boundaries
+
+* The result subject is the frozen baseline/repaired source **before verification**, never compiler output or scratch. Seven role subjects are checked with `subjects::verify` before and after collection. Baseline requires exact empty patch and same source inventory/content. Repair requires the existing reference.patch SHA `12db53d34f3a388d19d1b971d2bd5dfeb67f8c0e1a459d25e1012954c7b22f8e`, the fixed base/reference lib.rs bytes, and unchanged other source content; existing `app::repair` owns effects.
+* Oracle accepts only ORACLE-U64-001/v1 SHA `9354a52b2539e562ec8c3b957dbe693d75411e29c88d19a446b7cc488862b427`; wrapper SHA is `2fb599c68f57cb8b777f595f1217762531f9c6784c72765d15e83c553b4c5f59`. Both plus frozen recipe are bound into the reviewed expectation graph.
+* Actual ordered stages are `compile-library`, `link-driver`, `execute-driver`. Native and launcher status stay separate. Completed prefixes can retain producer failure/nonexecution; `Step::Refused` or an empty run has insufficient capture support and refuses root assembly, retaining caller-owned Run and unresolved cleanup. It cannot become a clean stop.
+* Actual namespace before/inside/after input maps must match frozen runtime/tool pins plus the exact stage source, wrapper, rlib, driver and public input projection. Captured rlib/driver bytes are published as separate artifacts. Missing/changed binding blocks PASS. Resource scope, exact 4GiB scratch and namespace protection/descriptors must have actual readback; unbounded workload collection cannot acquire PASS here.
+* All three absolute Clock deadlines must project to the frozen recipe from one origin. Actual candidate timeout selects the frozen candidate cutoff for the existing decision API; otherwise it selects the coordinator verification cutoff. Raw decision evidence names that selected phase. Actual interruption/durable cancellation timestamps are retained, never replaced by the cutoff. The process report end is a conservative sample, not an exact native exit timestamp. Oracle checked_at is sampled on the actual coordinator-local check. No refreshed deadline is introduced.
+* `capture::capture` correctly reports diagnostic counting unmeasured. The bridge's fixed baseline only measures zero diagnostics when compiler stdout and all candidate/launcher stderr are complete and empty. Nonempty/partial diagnostic bytes remain retained with unavailable counting and block PASS; no artificial warning/error counts.
+* One reviewed workload case contains 335 vector observations. They are never 335 engine cases. Ordinary valid mismatch yields FAIL; decision policy handles broken evidence, native errors, causal stop and cleanup separately. The baseline does not redefine mismatch as an expected negative producer pass.
+* Cleanup is supplied by the trusted aggregate owner with its actual readback payload; bridge combines it with direct process/channel/scratch observations and material obligation rows. Payload hashes do not authenticate observations. Resource numeric readings remain in raw namespace capture facts; an empty typed resource list does not claim a complete quantitative metric inventory.
+
+## Production preparation still required
+
+Old `workload-bounded` runs showed real base mismatch/reference agreement but had no pre-execution u64 RC04 expectation/review graph. They cannot be retroactively given one. The example preparation entry creates the exact real expectation graph and review request only; it launches no producer, runs no comparison, and authors no review. A production front end still supplies the exact seven subjects, tool/host/lock/profile/standards closure, independently accepted case review, actual clocks and aggregate evidence before a fresh run can qualify for an RC04 candidate pass.
+
+The fixed public wrapper shares a process with candidate library code and cannot authenticate hostile same-process output. Finite black-box agreement, exact metadata consistency and local TH-DEV custody are not hostile containment, module admission or task acceptance. No scope broadening is claimed.
+
+## Integration
+
+Copy the four source files preserving subdirectories. The private harness imports `habitat_engine::`; integration inside that crate changes those imports to `crate::` and adds `pub mod u64_receipt;` under app. No dependency changes. The small developer controls are separate from independent qualification; exact source/outcome hashes are retained in the release evidence.
+
+## Released verification and remaining execution coverage
+
+Seven developer-authored preparation controls passed against the copied source subject: exact oracle/wrapper/recipe closure, altered oracle, changed wrapper, invalid cutoff ordering, expired preparation, mutation after snapshot capture, and closed recipe decoding. All-target pedantic Clippy and pinned rustfmt checks exited0. Initial module-path and pedantic failures are retained; no test result was relabeled. The actual example published a five-object expectation graph and review request without regenerating it afterward.
+
+The full `prepare → actual Run → observe → finalize` path has not executed in this private release. The parent owns fresh reviewed runtime integration and execution. In particular, the trusted front end must construct tool/host/profile/support records from the same actual configuration supplied to `Preparation`; closed metadata alone cannot establish that provenance. The bridge verifies frozen source-role contents and actual stage pins, and does not invent host or aggregate measurements.

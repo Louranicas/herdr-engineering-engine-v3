@@ -1,0 +1,43 @@
+{
+  "expectation": {
+    "artifact_id": "c220e7ce-0753-47ef-bdac-15710bc4981c",
+    "byte_length": 794,
+    "media_type": "application/json",
+    "schema_id": "hee3.receipt/1:ExpectationV1",
+    "sha256": "sha256:3a7faa5510790c20322ad5829091211eb8c04ab6016e16ec8391433dae3392b9"
+  },
+  "purpose": "independent pre-execution u64 case-design review, not task or module admission",
+  "recipe": {
+    "artifact_id": "9d6652fd-afd6-43b4-984b-c8b482d0b156",
+    "byte_length": 87,
+    "media_type": "application/json",
+    "schema_id": "hee3.raw/1",
+    "sha256": "sha256:8585e9e9d2e193e46545a6710a221dd9165285b055e7d1f1ec805674bcbcba1f"
+  },
+  "recipe_values": {
+    "candidate_cutoff_ms": 900000,
+    "total_wall_ms": 1200000,
+    "verification_cutoff_ms": 1190000
+  },
+  "review_required": {
+    "action": "case_design_review",
+    "disposition": "independent reviewer decides",
+    "provenance": "nonempty source-grounded raw object reachable from ReviewV1",
+    "subject_sha256": "sha256:3a7faa5510790c20322ad5829091211eb8c04ab6016e16ec8391433dae3392b9"
+  },
+  "scope": "One mandatory workload case; 335 vectors are finite black-box observations, not335 module cases. No producer or oracle evaluation ran in this preparation.",
+  "specification": {
+    "artifact_id": "d708b972-b32c-4842-bdbe-4d99f9785c07",
+    "byte_length": 65533,
+    "media_type": "application/octet-stream",
+    "schema_id": "hee3.raw/1",
+    "sha256": "sha256:9354a52b2539e562ec8c3b957dbe693d75411e29c88d19a446b7cc488862b427"
+  },
+  "wrapper": {
+    "artifact_id": "eb4088f4-a955-4ad7-a2ae-87fb2ccb0648",
+    "byte_length": 2488,
+    "media_type": "application/octet-stream",
+    "schema_id": "hee3.raw/1",
+    "sha256": "sha256:2fb599c68f57cb8b777f595f1217762531f9c6784c72765d15e83c553b4c5f59"
+  }
+}

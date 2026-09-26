@@ -1,0 +1,49 @@
+# WL-U64-PARSE-001/v1 protected evaluator and public wrapper
+
+Private cache source; pure check-owned evaluator, no process/Store/admission effects. `src/check/u64_oracle.rs` will be exposed as `check::u64_oracle`; it reuses `contracts::parse_u64_decimal` for wire decimal validation only, not to derive expected workload answers.
+
+```rust
+pub const VECTOR_COUNT: usize = 335;
+pub const ORACLE_SHA256: &str = "9354a52b2539e562ec8c3b957dbe693d75411e29c88d19a446b7cc488862b427";
+pub enum OracleError { Bound, Digest, Malformed }
+pub enum OutputError { Bound, Malformed, Incomplete, WrongOrder, ExtraRecords }
+pub enum ParseError { Empty, InvalidCharacter, LeadingZero, Overflow }
+pub enum Answer { Value(u64), Error(ParseError) }
+pub struct VectorMatch {
+    pub index: usize, pub id: String,
+    pub expected: Answer, pub actual: Answer, pub matched: bool,
+}
+pub struct Evaluation {
+    pub vectors: Vec<VectorMatch>, pub matched: usize, pub failed: usize,
+}
+pub struct FrozenOracle { /* private validated cases */ }
+impl FrozenOracle {
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, OracleError>;
+    pub fn case_count(&self) -> usize;
+    pub fn public_inputs(&self) -> Vec<u8>;
+    pub fn evaluate(&self, stdout: &[u8]) -> Result<Evaluation, OutputError>;
+}
+```
+
+`from_bytes` requires the exact protected frozen oracle bytes and fixed digest before JSON interpretation, then closed bounded records, exact oracle ID, case_count_is_not_module_credit=true,335 uniquely named vectors and the existing two basis strings. Expectations are decoded from these independently frozen JSON answers; input strings are never parsed to recompute expected answers. Bound failure precedes digest failure. The fixed hash is intentional workload identity, not a generic caller-selected oracle.
+
+Selected local wire bounds: oracle JSON<=128KiB;335 vectors; individual input<=1025 UTF8 bytes, ID<=64 ASCII identifier bytes; public input<=32768 bytes; output<=335*64 bytes and each record<=64 bytes including LF. These are this workload adapter's bounds, not the native control protocol's limits.
+
+Public input is ordered lower-case hex UTF8 bytes followed by LF per vector, with no IDs, basis, expected results or digest secret. Empty input is an empty line. `fixtures/public-wrapper.rs` uses only std and `strict_u64_workload::{parse_u64,ParseError}`; compile it with the separately built candidate library via a literal --extern argument. It reads only fixed `/frozen/inputs.hex`, strictly validates the whole bounded public input before calling the library, then writes exactly:
+
+- `<canonical zero-based index>\tok\t<canonical u64 decimal>\n`
+- `<canonical zero-based index>\terror\t<Empty|InvalidCharacter|LeadingZero|Overflow>\n`
+
+The wrapper contains no expected answers. App owns binding the exact wrapper/library/compiler/input bytes, namespace execution, raw stream completeness, status, deadline and cleanup. A hostile library shares the wrapper process and may forge output, terminate early or inspect public inputs. Even335 matched vectors prove only finite black-box output agreement under the caller's independently established custody; they never prove function execution, all-input correctness, author intent, held-out performance or engine-case/module credit.
+
+The evaluator requires complete final LF, exact ordered indices and exactly335 records. Missing final LF or fewer complete rows is Incomplete; reordered/duplicate/skipped index is WrongOrder; extra rows are ExtraRecords. Unknown variants, wrong column count, CR/BOM/non-ASCII, noncanonical/overflowing decimal, malformed tokens or blank records are Malformed. Valid canonical but incorrect answers are per-vector failures, not malformed transport. No partial aggregate is returned for a malformed/incomplete stream. The caller must also reject truncated/error streams even if their retained bytes happen to match the protocol.
+
+Literal contract controls are frozen in evidence/protocol-controls.json before implementation. They are authored development controls; the335 frozen workload vectors remain their original independently reviewed oracle data with attribution to TASK.md, manifest.json and oracle/build_cases.py.
+
+## Released development verification
+
+The exact evaluator passed22 author-owned unit controls, including frozen-table plumbing; these are not335 independent engine cases. The exact wrapper compiled against the frozen base library's unchanged public ABI and passed pinned direct Clippy. Eight decoder-only controls were appended in a private test copy and passed; the wrapper's fixed-file main and the candidate/reference parse functions were not executed here. Root owns actual namespace workload runs.
+
+A separate Python stdlib encoding of all frozen input strings matched the evaluator's emitted public file byte-for-byte:13385 bytes, SHA256 `a7a9ce15c6c50ee2732e8f7461c63acf0a707486182e345b3d30f1f08bc5d6c6`. This public projection is retained in `evidence/public-inputs.hex`. The independently frozen expected answers remain only in the protected oracle and check process.
+
+Retained first failures were a dangling module doc comment in the private scalar compilation excerpt and pedantic style diagnostics. The excerpt boundary and lint-only code/test formatting were repaired; no protocol expectation or frozen workload data changed. Literal protocol freeze remains unchanged; wrapper decoder controls are author-owned checks of public framing, not a claim of independent oracle authorship.

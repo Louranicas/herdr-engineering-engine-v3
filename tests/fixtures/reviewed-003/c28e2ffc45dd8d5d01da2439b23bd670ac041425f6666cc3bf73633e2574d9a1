@@ -1,0 +1,27 @@
+# U64 exact expectation case-design review
+
+Disposition: accepted for this pre-execution case design only. Subject: `sha256:3a7faa5510790c20322ad5829091211eb8c04ab6016e16ec8391433dae3392b9`. Request SHA256: `a663bfb4abfbb11e3c458abace7c0922e06d3c20b7b5d59f696e2a5742c96d5c`.
+
+## Authorship and independence
+
+Reviewer: `/root/t01_oracle_review`. Parent `/root` authored the original WL-U64-PARSE-001/v1 task, generator and frozen answers. `/root/t01_corpus_wording` authored the T06 evaluator, fixed public wrapper and receipt bridge/expectation helper. I did not author those sources or this u64 case design. I authored T01 scalar/task integration tests, reviewed an earlier u64 development harness, and authored reused T06 receipt preparation/assembly/capture helpers. This review shares project/model/helper lineage and is independent expected-answer and case-design review within that disclosed boundary. The effective runtime model is not attested by these inputs.
+
+## Findings from the exact source
+
+No material case-design defect was found. The original task requires ASCII decimal grammar and ordered rejection: empty, invalid character anywhere, leading zero, then overflow (`TASK.md:6–12`). The retained generator applies the grammar before arbitrary-precision arithmetic, and cross-checks 16 explicit boundary answers (`oracle/build_cases.py:14–56`).
+
+The independently executed `verify_source.py` checks all 335 frozen answers with a separately written decimal-language and length/lexicographic bound: it neither imports the generator nor calls the Rust parser/evaluator. Examples checked include max `18446744073709551615`, one-past max, leading-zero overflow, and invalid suffixes after overflow or a leading zero. The result is 192 values, 1 Empty, 3 Overflow, 4 LeadingZero and 135 InvalidCharacter answers, with no mismatch. The exact public UTF8-hex projection is 13,385 bytes, SHA256 `a7a9ce15c6c50ee2732e8f7461c63acf0a707486182e345b3d30f1f08bc5d6c6`. All five prepared objects and original task/generator/oracle manifest bindings were rehashed.
+
+The wrapper validates all bounded public input before calling the existing ABI and emits an ordered index/result protocol (`public-wrapper.rs:10–67`). It contains no expected answers or desired-verdict parameter. The protected evaluator loads the pinned original answers, validates canonical wire tokens, and compares complete ordered records; it does not derive expected answers by running the candidate parser (`u64_oracle.rs:107–250`). Missing, extra, reordered or malformed records cannot be interpreted as successful finite agreement under the documented protocol. These are source findings; I did not execute those production paths.
+
+The ExpectationV1 binds oracle `ORACLE-U64-001/v1`, original oracle bytes `9354a52b…`, wrapper bytes `2fb599c6…`, ordinary producer exit 0 without a signal, satisfied oracle, detector `u64-exact-output-agreement`, and the exact recipe. A valid mismatch remains FAIL; it is not reclassified as an expected producer fault pass. The recipe uses one original monotonic origin: candidate cutoff 900,000 ms, verification cutoff 1,190,000 ms, total wall 1,200,000 ms, leaving the final 10,000 ms for settlement. This approval covers those exact values, not every recipe accepted by a helper. The bridge must still receive genuine role, clock, tool and cleanup facts, and must bind the frozen result source before verification (`u64-receipt-bridge/API.md:67–90`).
+
+## Limits retained with the review
+
+- These 335 vectors constitute one finite, public synthetic development workload case. They provide no 335-case engine credit, held-out denominator, all-input correctness proof, allocation/no-normalization proof or full T12 suite completion.
+- The wrapper and candidate library share a process. A hostile library can forge output or terminate early. Exact output agreement cannot authenticate function execution, intent or hostile same-process behavior.
+- Source/graph validity does not establish actual producer status, complete logs, namespace isolation, frozen source custody, toolchain/host/resource identity, clock enforcement, aggregate cleanup or a runtime verdict. The new review does not retroactively approve historical runs.
+- I executed only the independent static answer/source verifier and the separately retained typed review-graph validator. No candidate, wrapper, production oracle, namespace fixture or provider was launched in this review. The graph validator verifies local structure and reference bytes, not producer authenticity.
+- No task acceptance, Store transition, protected collector qualification, hostile qualification or module admission follows from this review. Those controls remain the execution owner's obligations; an empty design-findings page does not settle them.
+
+Exact source snapshots and their original paths are retained in the provenance inventory. The new review graph includes that provenance and all reviewed bytes as reachable evidence; the five existing expectation objects remain unchanged.

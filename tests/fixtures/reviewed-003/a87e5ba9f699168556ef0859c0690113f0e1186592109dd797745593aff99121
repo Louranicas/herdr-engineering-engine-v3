@@ -1,0 +1,31 @@
+{
+  "schema": 1,
+  "workload_id": "WL-U64-PARSE-001/v1",
+  "oracle_id": "ORACLE-U64-001/v1",
+  "suite_id": "WL-RUST-SMALL-001/v1",
+  "split": "development",
+  "family": "strict-ascii-u64",
+  "data_class": "public_synthetic",
+  "changed_source_files": 1,
+  "changed_nonblank_lines_including_comments": 12,
+  "candidate_inputs": [
+    "TASK.md",
+    "base/Cargo.toml",
+    "base/src/lib.rs"
+  ],
+  "heldout_eligible": false,
+  "hostile_custody_qualified": false,
+  "full_suite_status": "pending T12 before training/tuning/comparison",
+  "files_sha256": {
+    "TASK.md": "7e7e5d422ff4b486180de35efa4241cdc5d282a2a8d8bff87c3aec21338ce339",
+    "base/Cargo.toml": "b0e12aac7ebf609e0be87029a4881d1b67c91780679b6495c0bf06b313db5da7",
+    "base/src/lib.rs": "6fd50c63a83a1a9cae3b88bcc11ebad723cb5b86c443148d112567cc002cb5df",
+    "reference/src/lib.rs": "83222548d636d138bb269b5c9a8c970c0b47c5420961875c8cea83103e39e163",
+    "oracle/build_cases.py": "43dba444d7abf4de3f2da1f5ff97e3879b7238e978477bda93481c81a81839b0",
+    "oracle/cases.json": "9354a52b2539e562ec8c3b957dbe693d75411e29c88d19a446b7cc488862b427",
+    "reference.patch": "12db53d34f3a388d19d1b971d2bd5dfeb67f8c0e1a459d25e1012954c7b22f8e"
+  },
+  "base_tree_sha256": "682eb004ec893a8011270202833f2ec0e656f468aecd4986c5b1b8f78e33a163",
+  "reference_tree_sha256": "1d3a2287e1f29b2ac49ff99690828cbfe8da45e9cfcb9195708020c37a057089",
+  "tree_hash_definition": "SHA256 of UTF-8 compact sorted-key JSON mapping relative library paths to exact file SHA256; reference inherits unchanged base Cargo.toml"
+}

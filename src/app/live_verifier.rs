@@ -164,21 +164,20 @@ mod tests {
     use crate::app::run_records::OutcomeName;
     use crate::app::runtime::declared_criteria;
     use crate::app::workload::COMPILER_DESTINATION;
-    use crate::contracts::receipt::{
-        self, Address as _, ExpectationV1, Id, Name, Ref, ReviewV1, Sha,
-    };
+    use crate::contracts::receipt::{self, Address, Id, Name, Ref, Sha, TypedRef};
     use crate::store::VerificationVerdict;
     use crate::worker::namespace::SHIM_DESTINATION;
     use std::time::{Duration, Instant};
 
-    /// One reviewed reference of the fixture: a v4 id, a digest of one repeated byte, its schema.
-    fn reference(id: &str, byte: u8, schema: &str) -> Result<Ref, receipt::Error> {
-        Ok(Ref {
+    /// One reviewed reference of the fixture: a v4 id, a digest spelled as one byte repeated (a
+    /// fixture spelling, not a hash; nothing in these tests reads a reviewed record), its schema.
+    fn reference<T: Address>(id: &str, byte: u8) -> Result<TypedRef<T>, receipt::Error> {
+        TypedRef::new(Ref {
             artifact_id: Id::new(id)?,
             sha256: Sha::new(format!("sha256:{}", format!("{byte:02x}").repeat(32)))?,
             byte_length: 1,
             media_type: Name::new("application/json")?,
-            schema_id: Name::new(schema)?,
+            schema_id: Name::new(T::SCHEMA_ID)?,
         })
     }
 
@@ -202,16 +201,8 @@ mod tests {
             busctl_sha256: format!("sha256:{}", "d".repeat(64)),
             systemd_run_sha256: format!("sha256:{}", "e".repeat(64)),
             reviewed: Reviewed {
-                expectation: reference(
-                    "28f70000-0000-4000-8000-00000000000e",
-                    0xf4,
-                    ExpectationV1::SCHEMA_ID,
-                )?,
-                review: reference(
-                    "28f70000-0000-4000-8000-00000000000f",
-                    0x05,
-                    ReviewV1::SCHEMA_ID,
-                )?,
+                expectation: reference("28f70000-0000-4000-8000-00000000000e", 0xf4)?,
+                review: reference("28f70000-0000-4000-8000-00000000000f", 0x05)?,
             },
         })
     }
