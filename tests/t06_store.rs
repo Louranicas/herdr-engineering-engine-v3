@@ -30,8 +30,8 @@
 
 use habitat_engine::contracts::{Generation, Sha256Digest, UuidV4};
 use habitat_engine::store::{
-    Allocation, Effect, Expected, Object, Principal, PublishedAcceptance, Settlement, Store,
-    Submission, TaskEvent, TaskHead, Verification, VerificationVerdict,
+    Allocation, Effect, Expected, Object, Principal, PublishedAcceptance, ResolveRefusal,
+    Settlement, Store, Submission, TaskEvent, TaskHead, Verification, VerificationVerdict,
 };
 use std::fs::{self, DirBuilder};
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
@@ -233,6 +233,10 @@ fn verified_inventory_exact_snapshot_capacity_accepts_and_backs_up_the_manifest(
     assert_eq!(backup, inspected);
 }
 
+/// The full-inventory condition at the acceptance door is DS17's one kind,
+/// `Disposition(Inventory)`, at accept and at prepare alike (B14b-1 closure 2): the registration
+/// door raises the same name, and the dispatcher stops on it by name rather than leaving the task
+/// in `verifying` as a request `Bound` would. The request bounds (object count, bytes) stay `Bound`.
 #[test]
 fn verified_inventory_capacity_counts_intervening_registrations_in_accept_and_prepare() {
     let (_area, mut store, evidence) = ready();
@@ -244,7 +248,9 @@ fn verified_inventory_capacity_counts_intervening_registrations_in_accept_and_pr
     assert_eq!(head(&store), before);
     assert!(matches!(
         store.accept(&published, 0, deadline()),
-        Err(habitat_engine::store::Error::Bound)
+        Err(habitat_engine::store::Error::Disposition(
+            ResolveRefusal::Inventory
+        ))
     ));
     assert_eq!(head(&store), before);
     no_delivery(&store);
@@ -257,7 +263,9 @@ fn verified_inventory_capacity_counts_intervening_registrations_in_accept_and_pr
     );
     assert!(matches!(
         inventory_proof(&store, &evidence, &objects),
-        Err(habitat_engine::store::Error::Bound)
+        Err(habitat_engine::store::Error::Disposition(
+            ResolveRefusal::Inventory
+        ))
     ));
     assert_eq!(head(&store), before);
     no_delivery(&store);
