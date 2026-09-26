@@ -36,7 +36,9 @@ impl Store {
     ///
     /// # Errors
     /// Refuses invisible/stale/already accepted or stopped tasks, corrupt evidence,
-    /// outstanding work/usage/cleanup, or an unreturned current verification.
+    /// outstanding work/usage/cleanup, or an unreturned current verification; `Invalid` for a
+    /// stop identity name the wire would refuse (before any write); `Conflict` for a stop
+    /// artifact id bound to another digest by any door (B09b).
     pub fn finish_unaccepted(
         &mut self,
         principal: &Principal,
@@ -55,7 +57,8 @@ impl Store {
     ///
     /// # Errors
     /// Refuses any existing attempt, stale/nonadmitted/closed task, unknown or
-    /// unsettled preparation, usage above reserved work, and ordinary Store failures.
+    /// unsettled preparation, usage above reserved work, and ordinary Store failures; the
+    /// identity refusals of [`Store::finish_unaccepted`].
     pub fn finish_preparation(
         &mut self,
         principal: &Principal,

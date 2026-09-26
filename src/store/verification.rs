@@ -132,7 +132,8 @@ impl Store {
     ///
     /// # Errors
     /// Refuses absent/nonpass/unsettled verification, changed subject or evidence,
-    /// cancellation, stale generations, and an evidence list omitting the receipt.
+    /// cancellation, stale generations, and an evidence list omitting the receipt; `Invalid` for
+    /// an object identity name the wire would refuse (B09b).
     pub fn prepare_verified_acceptance(
         &self,
         expected: &Expected<'_>,

@@ -4279,73 +4279,105 @@ fn a_manifest_id_bound_elsewhere_accepts_nothing() {
     ));
 }
 
-/// B09b pin (review of 213850e, G1): `refs` counts the acceptance's objects with the summary before
-/// any object is read, and refuses past the contract's 64 with both numbers rather than truncating;
-/// `summary` of the same task answers, being bounded by construction.
+/// B09b pin (reviews of 213850e G1 and 52782a6 gap 1): `refs` counts, before any object is read,
+/// every reference it would list — the manifest, each verification, each accepted object, the
+/// receipt once although two doors name it — and refuses past the contract's 64 with both numbers
+/// rather than truncating. Both sides of the boundary, each expectation counted from the list the
+/// view would show, never from the same arithmetic: 62 objects beside the receipt is exactly 64
+/// and answers whole; 63 is 65 and is refused. `summary` answers either way.
 #[test]
-fn refs_over_the_bound_refuse_with_both_numbers_never_truncate() {
-    use crate::contracts::control::EvidenceView;
-    let area = Area::new();
-    let mut store = area.open();
-    let active = verifying(&mut store);
-    let receipt = store.publish(b"receipt", uuid(STAGE), deadline()).unwrap();
-    let check = EvidenceIdentity {
-        artifact_id: uuid(RECORD_A),
-        media_type: "application/json",
-        schema_id: "hee3.u64-receipt/1",
-    };
-    store
-        .record_verification(&active, &observe(&receipt, check), uuid(OBS_1), deadline())
-        .unwrap();
-    // 63 objects beside the receipt: with the manifest and the verification, 66 references.
-    let mut objects = vec![Identified {
-        object: receipt.clone(),
-        identity: check,
-    }];
-    let ids: Vec<String> = (0..63)
-        .map(|index| format!("28f00000-0000-4000-8000-0000000{index:05x}"))
-        .collect();
-    let published: Vec<Object> = (0..63)
-        .map(|index| {
-            store
-                .publish(
-                    format!("object {index}").as_bytes(),
-                    uuid(&ids[index]),
-                    deadline(),
-                )
-                .unwrap()
-        })
-        .collect();
-    for (index, object) in published.iter().enumerate() {
-        objects.push(Identified {
-            object: object.clone(),
-            identity: EvidenceIdentity {
-                artifact_id: uuid(&ids[index]),
-                media_type: "text/plain",
-                schema_id: "hee3.object/1",
+fn refs_at_and_over_the_bound_count_what_they_would_list() {
+    use crate::contracts::control::{EvidenceRef, EvidenceView};
+    for (others, admitted) in [(62_usize, true), (63, false)] {
+        let area = Area::new();
+        let mut store = area.open();
+        let active = verifying(&mut store);
+        let receipt = store.publish(b"receipt", uuid(STAGE), deadline()).unwrap();
+        let check = EvidenceIdentity {
+            artifact_id: uuid(RECORD_A),
+            media_type: "application/json",
+            schema_id: "hee3.u64-receipt/1",
+        };
+        store
+            .record_verification(&active, &observe(&receipt, check), uuid(OBS_1), deadline())
+            .unwrap();
+        let mut objects = vec![Identified {
+            object: receipt.clone(),
+            identity: check,
+        }];
+        let ids: Vec<String> = (0..others)
+            .map(|index| format!("28f00000-0000-4000-8000-0000000{index:05x}"))
+            .collect();
+        let published: Vec<Object> = (0..others)
+            .map(|index| {
+                store
+                    .publish(
+                        format!("object {index}").as_bytes(),
+                        uuid(&ids[index]),
+                        deadline(),
+                    )
+                    .unwrap()
+            })
+            .collect();
+        for (index, object) in published.iter().enumerate() {
+            objects.push(Identified {
+                object: object.clone(),
+                identity: EvidenceIdentity {
+                    artifact_id: uuid(&ids[index]),
+                    media_type: "text/plain",
+                    schema_id: "hee3.object/1",
+                },
+            });
+        }
+        let prepared = store
+            .prepare_verified_acceptance(
+                &expected(4, 1),
+                uuid(ACCEPTED),
+                Sha256Digest::parse(CRITERIA).unwrap(),
+                &receipt,
+                &objects,
+                deadline(),
+            )
+            .unwrap();
+        store.accept(&prepared, 0, deadline()).unwrap();
+        // The list the view would show: manifest, the verification's receipt, then every other
+        // object as the manifest bound it (the receipt, an exact repeat, once).
+        let mut listed: Vec<EvidenceRef> = vec![
+            EvidenceRef {
+                artifact_id: ACCEPTED.to_owned(),
+                sha256: prepared.object().digest().to_owned(),
+                byte_length: prepared.object().size(),
+                media_type: MANIFEST_MEDIA_TYPE.to_owned(),
+                schema_id: MANIFEST_SCHEMA_ID.to_owned(),
             },
-        });
+            wire_ref(&check, &receipt),
+        ];
+        listed.extend(
+            objects[1..]
+                .iter()
+                .map(|each| wire_ref(&each.identity, &each.object)),
+        );
+        let (_, summary) = store
+            .task_evidence(&principal(), uuid(TASK), EvidenceView::Summary, deadline())
+            .unwrap();
+        assert_eq!(summary, listed[..2], "{others}: manifest and verification");
+        let refs = store.task_evidence(&principal(), uuid(TASK), EvidenceView::Refs, deadline());
+        if admitted {
+            assert_eq!(listed.len(), 64, "the boundary itself");
+            assert_eq!(refs.unwrap().1, listed, "{others}: whole, at the bound");
+        } else {
+            assert_eq!(listed.len(), 65);
+            assert!(
+                matches!(
+                    refs,
+                    Err(Error::EvidenceBound {
+                        found: 65,
+                        limit: MAX_VIEW_REFS
+                    })
+                ),
+                "{others}: {:?}",
+                refs.err()
+            );
+        }
     }
-    let prepared = store
-        .prepare_verified_acceptance(
-            &expected(4, 1),
-            uuid(ACCEPTED),
-            Sha256Digest::parse(CRITERIA).unwrap(),
-            &receipt,
-            &objects,
-            deadline(),
-        )
-        .unwrap();
-    store.accept(&prepared, 0, deadline()).unwrap();
-    let (_, summary) = store
-        .task_evidence(&principal(), uuid(TASK), EvidenceView::Summary, deadline())
-        .unwrap();
-    assert_eq!(summary.len(), 2, "manifest and verification");
-    assert!(matches!(
-        store.task_evidence(&principal(), uuid(TASK), EvidenceView::Refs, deadline()),
-        Err(Error::EvidenceBound {
-            found: 66,
-            limit: MAX_VIEW_REFS
-        })
-    ));
 }

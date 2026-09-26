@@ -1728,7 +1728,8 @@ impl Store {
     /// Prepare exact immutable manifest bytes with its event identity already allocated.
     /// The caller's proof is untrusted until the T06 verifier owner authenticates it.
     /// # Errors
-    /// Refuses missing objects, stale subjects, duplicate objects or excessive manifest size.
+    /// Refuses missing objects, stale subjects, duplicate objects or excessive manifest size;
+    /// `Invalid` for an object identity name the wire would refuse (B09b).
     pub fn prepare_acceptance(
         &self,
         expected: &Expected<'_>,
@@ -1824,7 +1825,9 @@ impl Store {
     /// Commit already durable proof reference, historical acceptance and delivery obligation together.
     /// This trusted-owner API does not decide whether a candidate satisfies its criteria.
     /// # Errors
-    /// Refuses cancellation, stale subjects, missing proof, unreconciled effects or insufficient verification reservation.
+    /// Refuses cancellation, stale subjects, missing proof, unreconciled effects or insufficient
+    /// verification reservation; `Conflict` for the manifest's or any object's artifact id bound to
+    /// another digest (B09b); `Corrupt` for a manifest whose identities do not pair its objects.
     pub fn accept(
         &mut self,
         published: &PublishedAcceptance,

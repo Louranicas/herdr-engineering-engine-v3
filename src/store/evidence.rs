@@ -123,9 +123,14 @@ fn read_evidence(
             [task],
             |row| read_number(row, 0),
         )?;
+        // The acceptance's objects, less those that are exactly a verification's reference (the
+        // receipt a verified acceptance always carries): the list collapses an exact repeat to one,
+        // so the count does too (review of 52782a6, gap 1: counting it twice made the bound 63).
         let accepted: u64 = db.query_row(
             "SELECT count(*) FROM acceptance_objects o JOIN acceptances c ON c.event_id=o.event_id \
-             WHERE c.task_id=?",
+             WHERE c.task_id=?1 AND NOT EXISTS(SELECT 1 FROM verifications v JOIN attempts a ON a.id=v.attempt_id \
+             WHERE a.task_id=?1 AND v.evidence_artifact_id=o.artifact_id AND v.evidence_digest=o.digest \
+             AND v.evidence_media_type=o.media_type AND v.evidence_schema_id=o.schema_id)",
             [task],
             |row| read_number(row, 0),
         )?;
@@ -203,8 +208,9 @@ fn manifest_reference(db: &Connection, task: &str) -> Result<Option<EvidenceRef>
         .transpose()
 }
 
-/// The acceptance's objects, each as the reference the manifest bound (B09b), in artifact-id
-/// order; bounded by the caller's count, read under `MAX_VIEW_REFS + 1`.
+/// The acceptance's objects, each as the reference the manifest bound (B09b), in the order the
+/// manifest bound them (their insertion order, as every other source lists in event order);
+/// bounded by the caller's count, read under `MAX_VIEW_REFS + 1`.
 fn acceptance_object_references(
     db: &Connection,
     task: &str,
@@ -213,7 +219,7 @@ fn acceptance_object_references(
     let mut statement = db.prepare(
         "SELECT o.artifact_id,o.digest,f.size,o.media_type,o.schema_id FROM acceptance_objects o \
          JOIN acceptances c ON c.event_id=o.event_id JOIN artifacts f ON f.digest=o.digest \
-         WHERE c.task_id=? AND o.artifact_id IS NOT NULL ORDER BY o.artifact_id LIMIT ?",
+         WHERE c.task_id=? AND o.artifact_id IS NOT NULL ORDER BY o.rowid LIMIT ?",
     )?;
     let rows = statement.query_map(params![task, number(MAX_VIEW_REFS + 1)?], reference_row)?;
     let mut references = Vec::new();
