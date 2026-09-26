@@ -338,7 +338,7 @@ mod schema;
 mod staging;
 mod verification;
 pub use staging::ArtifactStaging;
-pub use verification::{Verification, VerificationVerdict};
+pub use verification::{EvidenceIdentity, Verification, VerificationVerdict};
 
 pub use evidence::{MAX_VIEW_REFS, ObjectReader};
 pub use roster::{RequestSource, RosterAttempt, RosterSnapshot, RosterStart};

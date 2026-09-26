@@ -92,6 +92,16 @@ fn with(path: &[&str], value: Value) -> Value {
     spec
 }
 
+/// The identity a test names its verification evidence by (B09b): the verification event's own id,
+/// so two verifications of different evidence never share an artifact id.
+fn evidence_identity(artifact: UuidV4<'_>) -> habitat_engine::store::EvidenceIdentity<'_> {
+    habitat_engine::store::EvidenceIdentity {
+        artifact_id: artifact,
+        media_type: "application/json",
+        schema_id: "hee3.test-evidence/1",
+    }
+}
+
 #[test]
 fn a_spec_is_admitted_only_under_the_rc01_profile() -> Outcome {
     let admitted = submission(&body(spec())).map_err(|fault| format!("{fault:?}"))?;
@@ -1277,6 +1287,8 @@ pub(super) fn staged(
                 },
                 subject: criteria,
                 evidence: evidence.clone(),
+                identity: evidence_identity(UuidV4::parse(&nth(0x05b7, index))?),
+                satisfied_criteria: None,
                 used_ms: Some(20),
                 cleanup_settled: true,
             },

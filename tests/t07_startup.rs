@@ -575,6 +575,8 @@ impl Rig {
                     verdict,
                     subject: Sha256Digest::parse(DIGEST).unwrap(),
                     evidence,
+                    identity: evidence_identity(id(CHECK)),
+                    satisfied_criteria: None,
                     used_ms: Some(20),
                     cleanup_settled,
                 },
@@ -763,6 +765,16 @@ fn retained(entry: &Entry, rule: Rule, reason: &Unknown, custody: &ProcessCustod
 }
 
 // ---- enumeration, records and idempotency ---------------------------------------------------
+
+/// The identity a test names its verification evidence by (B09b): the verification event's own id,
+/// so two verifications of different evidence never share an artifact id.
+fn evidence_identity(artifact: UuidV4<'_>) -> habitat_engine::store::EvidenceIdentity<'_> {
+    habitat_engine::store::EvidenceIdentity {
+        artifact_id: artifact,
+        media_type: "application/json",
+        schema_id: "hee3.test-evidence/1",
+    }
+}
 
 /// `T07-AP-01` · an admitted ledger with no attempt: the pass opens both ways,
 /// reports the ledger writable and decides nothing.
@@ -3944,6 +3956,8 @@ fn fail_tasks(r: &mut Rig, n: u32) {
                     verdict: VerificationVerdict::Failed,
                     subject: Sha256Digest::parse(DIGEST).unwrap(),
                     evidence: evidence.clone(),
+                    identity: evidence_identity(id(&check)),
+                    satisfied_criteria: None,
                     used_ms: Some(20),
                     cleanup_settled: true,
                 },
@@ -4349,6 +4363,8 @@ fn accept_tasks(r: &mut Rig, n: u32, base: u16) {
                     verdict: VerificationVerdict::Passed,
                     subject: Sha256Digest::parse(DIGEST).unwrap(),
                     evidence: evidence.clone(),
+                    identity: evidence_identity(id(&role(7))),
+                    satisfied_criteria: None,
                     used_ms: Some(20),
                     cleanup_settled: true,
                 },

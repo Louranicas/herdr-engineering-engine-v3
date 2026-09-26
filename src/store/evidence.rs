@@ -18,7 +18,7 @@
 //!   content-addressed object directory (objects are never deleted, so the check is sound).
 
 use super::recovery::{TaskView, read_view};
-use super::{Error, Object, Principal, Result, Store, artifact, read_number, remaining};
+use super::{Error, Object, Principal, Result, Store, artifact, number, read_number, remaining};
 use crate::contracts::UuidV4;
 use crate::contracts::control::{EvidenceRef, EvidenceView};
 use rusqlite::{Connection, OptionalExtension, params};
@@ -93,9 +93,12 @@ fn read_evidence(
     view: EvidenceView,
     deadline: Instant,
 ) -> Result<Vec<EvidenceRef>> {
+    // A verification recorded before migration 6 carries no identity (B09b); an acceptance carries
+    // none until its door records it (B09b-3b). Either is refused, never guessed.
     let unrecorded: bool = db.query_row(
         "SELECT EXISTS(SELECT 1 FROM verifications v JOIN attempts a ON a.id=v.attempt_id \
-         WHERE a.task_id=?1) OR EXISTS(SELECT 1 FROM acceptances WHERE task_id=?1)",
+         WHERE a.task_id=?1 AND v.evidence_artifact_id IS NULL) \
+         OR EXISTS(SELECT 1 FROM acceptances WHERE task_id=?1)",
         [task],
         |row| row.get(0),
     )?;
@@ -103,6 +106,9 @@ fn read_evidence(
         return Err(Error::EvidenceIdentity);
     }
     let mut references: Vec<EvidenceRef> = stop_reference(db, task)?.into_iter().collect();
+    if view == EvidenceView::Refs {
+        references.extend(verification_references(db, task, deadline)?);
+    }
     if view == EvidenceView::Refs {
         let dispositions: u64 = db.query_row(
             "SELECT coalesce(sum(json_array_length(CAST(evidence AS TEXT))),0) \
@@ -135,6 +141,37 @@ fn read_evidence(
                 }
             }
         }
+    }
+    Ok(references)
+}
+
+/// Each verification's evidence, as the reference it was recorded with (B09b): the stored identity
+/// beside the object's digest and registered size, in event order, re-read by the wire's one
+/// reader so a stored value it would refuse is corruption.
+fn verification_references(
+    db: &Connection,
+    task: &str,
+    deadline: Instant,
+) -> Result<Vec<EvidenceRef>> {
+    let mut statement = db.prepare(
+        "SELECT v.evidence_artifact_id,v.evidence_digest,f.size,v.evidence_media_type,v.evidence_schema_id \
+         FROM verifications v JOIN attempts a ON a.id=v.attempt_id JOIN events e ON e.id=v.event_id \
+         JOIN artifacts f ON f.digest=v.evidence_digest \
+         WHERE a.task_id=? AND v.evidence_artifact_id IS NOT NULL ORDER BY e.sequence LIMIT ?",
+    )?;
+    let rows = statement.query_map(params![task, number(MAX_VIEW_REFS + 1)?], |row| {
+        Ok(serde_json::json!({
+            "artifact_id": row.get::<_, String>(0)?,
+            "sha256": row.get::<_, String>(1)?,
+            "byte_length": read_number(row, 2)?,
+            "media_type": row.get::<_, String>(3)?,
+            "schema_id": row.get::<_, String>(4)?,
+        }))
+    })?;
+    let mut references = Vec::new();
+    for row in rows {
+        remaining(deadline)?;
+        references.push(EvidenceRef::parse(&row?).ok_or(Error::Corrupt)?);
     }
     Ok(references)
 }

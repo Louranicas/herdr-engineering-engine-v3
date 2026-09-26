@@ -19,8 +19,8 @@ use crate::contracts::receipt::Name;
 use crate::contracts::roster::{MAX_HISTORY, Selection};
 use crate::contracts::{Generation, Sha256Digest, UuidV4};
 use crate::store::{
-    self, Binding, Effect, Expected, Object, Principal, RosterStart, Settlement, Stop, Store,
-    TaskHead, Verification, VerificationVerdict,
+    self, Binding, Effect, EvidenceIdentity, Expected, Object, Principal, RosterStart, Settlement,
+    Stop, Store, TaskHead, Verification, VerificationVerdict,
 };
 use crate::task::LoopRefusal;
 use crate::task::driver::{self, Acceptance, Checked as DriverChecked, StopReason, Work};
@@ -56,9 +56,20 @@ pub struct Check {
     pub verdict: VerificationVerdict,
     pub criteria: u64,
     pub evidence: Vec<u8>,
+    /// The schema `evidence` decodes under, named by the verifier that produced it (B09b): the
+    /// ledger records it beside the object so a view returns the reference as recorded.
+    pub schema_id: String,
     pub used_ms: Option<u64>,
     pub cleanup_settled: bool,
 }
+
+/// Every check's evidence is JSON; the media type is the runtime's, the schema the verifier's.
+const CHECK_MEDIA_TYPE: &str = "application/json";
+/// The schema of the runtime's own idle verification, recorded when a cancelled task's last
+/// attempt was never checked.
+const IDLE_VERIFICATION_SCHEMA: &str = "hee3.idle-verification/1";
+/// The schema of the runtime's own class check of a refused candidate (B14a-R2.4).
+const REFUSED_CANDIDATE_SCHEMA: &str = "hee3.refused-candidate/1";
 
 /// The check of an applied candidate. It receives the frozen snapshot, never a path to mutate.
 pub trait Verifier {
@@ -497,7 +508,11 @@ impl<C: CandidateSource, V: Verifier> StoreRuntime<'_, C, V> {
         subject: &str,
     ) -> Result<(Object, VerificationVerdict, bool), Error> {
         let begun = self.attempts.get(index).ok_or(Error::Identity)?;
-        let (staging, event) = (fresh(self.deadline)?, fresh(self.deadline)?);
+        let (staging, event, artifact) = (
+            fresh(self.deadline)?,
+            fresh(self.deadline)?,
+            fresh(self.deadline)?,
+        );
         let (generation, object, verdict, reconciled) =
             self.tasks.with_store(|store| -> Result<_, Error> {
                 let head = self.current(store)?;
@@ -520,6 +535,12 @@ impl<C: CandidateSource, V: Verifier> StoreRuntime<'_, C, V> {
                         verdict,
                         subject: Sha256Digest::parse(subject).map_err(|_| Error::Identity)?,
                         evidence: object.clone(),
+                        identity: EvidenceIdentity {
+                            artifact_id: uuid(&artifact)?,
+                            media_type: CHECK_MEDIA_TYPE,
+                            schema_id: &check.schema_id,
+                        },
+                        satisfied_criteria: Some(check.criteria),
                         used_ms,
                         cleanup_settled: check.cleanup_settled,
                     },
@@ -572,6 +593,7 @@ impl<C: CandidateSource, V: Verifier> StoreRuntime<'_, C, V> {
             fresh(self.deadline)?,
             fresh(self.deadline)?,
             fresh(self.deadline)?,
+            fresh(self.deadline)?,
         ];
         let reason = Name::new(name).map_err(|_| Error::Identity)?;
         let last = self.attempts.last();
@@ -602,6 +624,12 @@ impl<C: CandidateSource, V: Verifier> StoreRuntime<'_, C, V> {
                         verdict: VerificationVerdict::Cancelled,
                         subject: Sha256Digest::parse(subject).map_err(|_| Error::Identity)?,
                         evidence: object,
+                        identity: EvidenceIdentity {
+                            artifact_id: uuid(&ids[4])?,
+                            media_type: CHECK_MEDIA_TYPE,
+                            schema_id: IDLE_VERIFICATION_SCHEMA,
+                        },
+                        satisfied_criteria: None,
                         used_ms: Some(0),
                         cleanup_settled: true,
                     },
@@ -636,7 +664,7 @@ impl<C: CandidateSource, V: Verifier> StoreRuntime<'_, C, V> {
                 store.finish_unaccepted(self.dispatch.principal, stop, self.deadline)?
             })
         })??;
-        let [_, _, _, event] = ids;
+        let [_, _, _, event, _] = ids;
         self.written(&stopped.generation, event)?;
         Ok(true)
     }
@@ -803,6 +831,7 @@ impl<C: CandidateSource, V: Verifier> driver::Runtime for StoreRuntime<'_, C, V>
                 verdict: VerificationVerdict::Failed,
                 criteria: 0,
                 evidence,
+                schema_id: REFUSED_CANDIDATE_SCHEMA.to_owned(),
                 used_ms: Some(0),
                 cleanup_settled: true,
             };

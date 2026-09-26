@@ -3316,6 +3316,26 @@ fn unsettled() -> Settlement {
     settled(Effect::Pending, None, false, false)
 }
 
+/// One observation of the fixture attempt at task generation `at`, with `records`; returns the
+/// generation the settle wrote.
+fn observed(
+    store: &mut Store,
+    at: u64,
+    observation: Settlement,
+    records: &[RunRecord<'_>],
+    event: &str,
+) -> String {
+    store
+        .settle_attempt_with_records(
+            &expected(at, 1),
+            observation,
+            records,
+            uuid(event),
+            deadline(),
+        )
+        .unwrap()
+}
+
 /// DS2 pin, off the origin: three observations of one attempt — unknown, unknown, settled — each
 /// with its own record set. `committed_run` returns the third set whole, with its own event and
 /// sequence, and never a union: the first two sets stay in `attempt_records` and are not returned.
@@ -3323,27 +3343,15 @@ fn unsettled() -> Settlement {
 fn committed_run_is_the_settling_observations_set_and_never_a_union() {
     let area = Area::new();
     let mut store = area.open();
-    let active = running(&mut store);
+    running(&mut store);
     let objects: Vec<Object> = (0..6).map(|index| published(&store, index)).collect();
     let first = [record(RunRecordKind::RunClock, IDS[0], &objects[0])];
-    let generation = store
-        .settle_attempt_with_records(&active, unsettled(), &first, uuid(OBS_1), deadline())
-        .unwrap();
-    assert_eq!(generation, "3");
+    assert_eq!(observed(&mut store, 2, unsettled(), &first, OBS_1), "3");
     let second = [
         record(RunRecordKind::RunClock, IDS[1], &objects[1]),
         record(RunRecordKind::RunOutcome, IDS[2], &objects[2]),
     ];
-    let generation = store
-        .settle_attempt_with_records(
-            &expected(3, 1),
-            unsettled(),
-            &second,
-            uuid(OBS_2),
-            deadline(),
-        )
-        .unwrap();
-    assert_eq!(generation, "4");
+    assert_eq!(observed(&mut store, 3, unsettled(), &second, OBS_2), "4");
     // Read back, not inferred: an unsettled observation records no settling event (a plant that
     // set it on every observation survived the read through `committed_run`, which refuses
     // `Outstanding` before it looks).
@@ -3368,16 +3376,16 @@ fn committed_run_is_the_settling_observations_set_and_never_a_union() {
         record(RunRecordKind::RunOutcome, IDS[4], &objects[4]),
         record(RunRecordKind::Capture, IDS[5], &objects[5]),
     ];
-    let generation = store
-        .settle_attempt_with_records(
-            &expected(4, 1),
+    assert_eq!(
+        observed(
+            &mut store,
+            4,
             settled(Effect::None, Some(30), true, true),
             &third,
-            uuid(OBS_3),
-            deadline(),
-        )
-        .unwrap();
-    assert_eq!(generation, "5");
+            OBS_3
+        ),
+        "5"
+    );
     let run = store
         .committed_run(&principal(), uuid(ATTEMPT), deadline())
         .unwrap();
@@ -3590,4 +3598,290 @@ fn run_record_kinds_are_the_checks_vocabulary_with_one_schema_each() {
             .all(|schema| schema.starts_with("hee3.") && schema.ends_with("/1"))
     );
     assert_eq!(RECORD_MEDIA_TYPE, "application/json");
+    // Each kind's schema, pinned by literal (review of d60df83: a two-kind swap survived a check
+    // that compared the accessor with itself).
+    let pinned: Vec<(&str, &str)> = RunRecordKind::ALL
+        .iter()
+        .map(|kind| (kind.name(), kind.schema_id()))
+        .collect();
+    assert_eq!(
+        pinned,
+        [
+            ("run_clock", "hee3.run-clock/1"),
+            ("run_outcome", "hee3.run-outcome/1"),
+            ("run_cleanup", "hee3.run-cleanup/1"),
+            ("readbacks", "hee3.readbacks/1"),
+            ("capture", "hee3.capture/1"),
+        ]
+    );
+}
+
+/// B09b pin (review of d60df83, gap 2): two records in one observation naming one artifact id for
+/// two digests are refused `Conflict` at the write, not by the next call's validate clause; the same
+/// id for one digest under two kinds is admitted.
+#[test]
+fn a_collision_within_one_observation_is_refused_at_the_write() {
+    let area = Area::new();
+    let mut store = area.open();
+    let active = running(&mut store);
+    let objects: Vec<Object> = (0..2).map(|index| published(&store, index)).collect();
+    let colliding = [
+        record(RunRecordKind::RunClock, IDS[0], &objects[0]),
+        record(RunRecordKind::RunOutcome, IDS[0], &objects[1]),
+    ];
+    assert!(matches!(
+        store.settle_attempt_with_records(
+            &active,
+            unsettled(),
+            &colliding,
+            uuid(OBS_1),
+            deadline()
+        ),
+        Err(Error::Conflict)
+    ));
+    assert_eq!(count(&area, "attempt_records"), 0);
+    let same = [
+        record(RunRecordKind::RunClock, IDS[0], &objects[0]),
+        record(RunRecordKind::RunOutcome, IDS[0], &objects[0]),
+    ];
+    assert_eq!(observed(&mut store, 2, unsettled(), &same, OBS_1), "3");
+    assert_eq!(count(&area, "attempt_records"), 2);
+}
+
+// ------------------------------------------------ evidence identity on the verification door (B09b-3a)
+
+/// B09b pin (F124): a verification's reference comes back exactly as recorded — the whole
+/// `EvidenceRefV1` over two fixtures that differ in every member — and the criteria pattern is
+/// stored as sixteen lower-hex digits, `None` as NULL.
+#[test]
+fn a_verifications_reference_round_trips_whole_as_recorded() {
+    use crate::contracts::control::EvidenceView;
+    for (index, (artifact, media, schema, bytes, criteria, hex)) in [
+        (
+            RECORD_A,
+            "application/json",
+            "hee3.u64-receipt/1",
+            &b"first evidence"[..],
+            Some(0x0123_4567_89ab_cdef_u64),
+            Some("0123456789abcdef"),
+        ),
+        (
+            RECORD_B,
+            "text/plain",
+            "hee3.fixture-note/2",
+            &b"second, longer evidence"[..],
+            None,
+            None,
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let area = Area::new();
+        let mut store = area.open();
+        let active = verifying(&mut store);
+        let evidence = store.publish(bytes, uuid(STAGE), deadline()).unwrap();
+        store
+            .record_verification(
+                &active,
+                &Verification {
+                    verdict: VerificationVerdict::Passed,
+                    subject: Sha256Digest::parse(CRITERIA).unwrap(),
+                    evidence: evidence.clone(),
+                    identity: EvidenceIdentity {
+                        artifact_id: uuid(artifact),
+                        media_type: media,
+                        schema_id: schema,
+                    },
+                    satisfied_criteria: criteria,
+                    used_ms: Some(20),
+                    cleanup_settled: true,
+                },
+                uuid(ACCEPTED),
+                deadline(),
+            )
+            .unwrap();
+        let (_, references) = store
+            .task_evidence(&principal(), uuid(TASK), EvidenceView::Refs, deadline())
+            .unwrap();
+        assert_eq!(
+            references,
+            [crate::contracts::control::EvidenceRef {
+                artifact_id: artifact.to_owned(),
+                sha256: evidence.digest().to_owned(),
+                byte_length: evidence.size(),
+                media_type: media.to_owned(),
+                schema_id: schema.to_owned(),
+            }],
+            "fixture {index}"
+        );
+        let stored: Option<String> = area
+            .inspect()
+            .query_row(
+                "SELECT satisfied_criteria FROM verifications WHERE attempt_id=?",
+                [ATTEMPT],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(stored.as_deref(), hex, "fixture {index}");
+    }
+}
+
+/// A passed observation of `evidence` under `identity`.
+fn observe<'a>(evidence: &Object, identity: EvidenceIdentity<'a>) -> Verification<'a> {
+    Verification {
+        verdict: VerificationVerdict::Passed,
+        subject: Sha256Digest::parse(CRITERIA).unwrap(),
+        evidence: evidence.clone(),
+        identity,
+        satisfied_criteria: None,
+        used_ms: Some(20),
+        cleanup_settled: true,
+    }
+}
+
+/// B09b pin: a name the wire would refuse is `Invalid` before anything is written.
+#[test]
+fn a_verification_identity_the_wire_would_refuse_is_invalid_before_any_write() {
+    let area = Area::new();
+    let mut store = area.open();
+    let active = verifying(&mut store);
+    let evidence = store.publish(b"evidence", uuid(STAGE), deadline()).unwrap();
+    let long = "x".repeat(129);
+    for (case, media, schema) in [
+        ("empty media type", "", "hee3.x/1"),
+        ("129-byte schema", "application/json", long.as_str()),
+        ("non-ascii media type", "applicatiön/json", "hee3.x/1"),
+    ] {
+        assert!(
+            matches!(
+                store.record_verification(
+                    &active,
+                    &observe(
+                        &evidence,
+                        EvidenceIdentity {
+                            artifact_id: uuid(RECORD_A),
+                            media_type: media,
+                            schema_id: schema
+                        }
+                    ),
+                    uuid(ACCEPTED),
+                    deadline()
+                ),
+                Err(Error::Invalid)
+            ),
+            "{case}"
+        );
+    }
+    assert_eq!(
+        count(&area, "verifications"),
+        0,
+        "nothing written by a refused identity"
+    );
+}
+
+/// B09b pin: an artifact id bound to another digest by any door is `Conflict`; a reference that
+/// does not name its object is `Invalid` at `EvidenceIdentity::of`, and `of`/`reference` are
+/// inverses; a row recorded before migration 6 still refuses the view `EvidenceIdentity`.
+#[test]
+fn verification_identity_rebinding_and_reference_refusals() {
+    use crate::contracts::control::{EvidenceRef, EvidenceView};
+    let area = Area::new();
+    let mut store = area.open();
+    let active = verifying(&mut store);
+    let evidence = store.publish(b"evidence", uuid(STAGE), deadline()).unwrap();
+    let other = store
+        .publish(b"other bytes", uuid(OTHER), deadline())
+        .unwrap();
+    // RECORD_B already names `other`'s digest through a run record: the same id for `evidence` is
+    // a rebinding across doors.
+    let bound = [record(RunRecordKind::Capture, RECORD_B, &other)];
+    assert!(
+        matches!(
+            store.settle_attempt_with_records(
+                &active,
+                unsettled(),
+                &bound,
+                uuid(CANCELLED),
+                deadline()
+            ),
+            Err(Error::Outstanding)
+        ),
+        "a settled attempt admits no observation; bind through a fresh ledger row instead"
+    );
+    drop(store);
+    area.edit_closed(&format!(
+        "INSERT INTO artifacts(digest,size) VALUES('{digest}',{size}); \
+         INSERT INTO attempt_records(event_id,kind,attempt_id,digest,artifact_id) \
+         VALUES('{SETTLED}','capture','{ATTEMPT}','{digest}','{RECORD_B}');",
+        digest = other.digest(),
+        size = other.size()
+    ));
+    let mut store = area.reopen();
+    assert!(matches!(
+        store.record_verification(
+            &active,
+            &observe(
+                &evidence,
+                EvidenceIdentity {
+                    artifact_id: uuid(RECORD_B),
+                    media_type: "application/json",
+                    schema_id: "hee3.x/1"
+                }
+            ),
+            uuid(ACCEPTED),
+            deadline()
+        ),
+        Err(Error::Conflict)
+    ));
+    let reference = EvidenceRef {
+        artifact_id: RECORD_A.to_owned(),
+        sha256: other.digest().to_owned(),
+        byte_length: evidence.size(),
+        media_type: "application/json".to_owned(),
+        schema_id: "hee3.x/1".to_owned(),
+    };
+    assert!(
+        matches!(
+            EvidenceIdentity::of(&reference, &evidence),
+            Err(Error::Invalid)
+        ),
+        "digest differs"
+    );
+    let sized = EvidenceRef {
+        sha256: evidence.digest().to_owned(),
+        byte_length: evidence.size() + 1,
+        ..reference.clone()
+    };
+    assert!(
+        matches!(EvidenceIdentity::of(&sized, &evidence), Err(Error::Invalid)),
+        "size differs"
+    );
+    let exact = EvidenceRef {
+        sha256: evidence.digest().to_owned(),
+        byte_length: evidence.size(),
+        ..reference
+    };
+    let identity = EvidenceIdentity::of(&exact, &evidence).unwrap();
+    assert_eq!(
+        identity.reference(&evidence),
+        exact,
+        "of and reference are inverses"
+    );
+    store
+        .record_verification(
+            &active,
+            &observe(&evidence, identity),
+            uuid(ACCEPTED),
+            deadline(),
+        )
+        .unwrap();
+    drop(store);
+    // Recorded before migration 6: the identity columns read NULL and the view refuses.
+    area.edit_closed("UPDATE verifications SET evidence_artifact_id=NULL, evidence_media_type=NULL, evidence_schema_id=NULL;");
+    let mut store = area.reopen();
+    assert!(matches!(
+        store.task_evidence(&principal(), uuid(TASK), EvidenceView::Refs, deadline()),
+        Err(Error::EvidenceIdentity)
+    ));
 }

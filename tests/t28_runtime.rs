@@ -331,6 +331,7 @@ impl Verifier for Oracle<'_> {
             verdict: VerificationVerdict::Error,
             criteria: 0,
             evidence: b"unscripted".to_vec(),
+            schema_id: "hee3.unscripted/1".to_owned(),
             used_ms: Some(1),
             cleanup_settled: true,
         })
@@ -342,6 +343,7 @@ fn check(verdict: VerificationVerdict, criteria: u64, evidence: &[u8]) -> Check 
         verdict,
         criteria,
         evidence: evidence.to_vec(),
+        schema_id: "hee3.scripted-check/1".to_owned(),
         used_ms: Some(7),
         cleanup_settled: true,
     }
@@ -442,7 +444,8 @@ fn rows(rig: &Rig, sql: &str) -> Result<Vec<Vec<String>>, Box<dyn Error>> {
 fn verifications(rig: &Rig) -> Result<Vec<Vec<String>>, Box<dyn Error>> {
     rows(
         rig,
-        "SELECT v.verdict,v.subject_digest,v.used_ms FROM verifications v JOIN attempts a \
+        "SELECT v.verdict,v.subject_digest,v.used_ms,v.evidence_media_type,v.evidence_schema_id,\
+         v.satisfied_criteria FROM verifications v JOIN attempts a \
          ON a.id=v.attempt_id WHERE a.task_id=? ORDER BY CAST(a.generation AS INTEGER)",
     )
 }
@@ -505,8 +508,23 @@ fn a_failed_check_is_repaired_and_the_second_attempt_is_accepted() -> Outcome_ {
     assert_eq!(
         verifications(&rig)?,
         vec![
-            vec!["failed".to_owned(), handed[0].0.clone(), "7".to_owned()],
-            vec!["passed".to_owned(), handed[1].0.clone(), "7".to_owned()],
+            // B09b: each row carries the schema the verifier named and the criteria it satisfied.
+            vec![
+                "failed".to_owned(),
+                handed[0].0.clone(),
+                "7".to_owned(),
+                "application/json".to_owned(),
+                "hee3.scripted-check/1".to_owned(),
+                "0000000000000000".to_owned(),
+            ],
+            vec![
+                "passed".to_owned(),
+                handed[1].0.clone(),
+                "7".to_owned(),
+                "application/json".to_owned(),
+                "hee3.scripted-check/1".to_owned(),
+                "0000000000000001".to_owned(),
+            ],
         ]
     );
     assert_eq!(
@@ -583,12 +601,26 @@ fn a_refused_candidate_is_recorded_failed_without_a_verifier_call() -> Outcome_ 
         "the verifier saw only the second candidate"
     );
     let recorded = verifications(&rig)?;
+    // B09b: the runtime's own class check names its evidence by its own schema and records the
+    // criteria it satisfied (none); the verifier's check carries the schema the verifier named and
+    // its criteria pattern — read from the row, not from the double.
     assert_eq!(
         recorded[0],
         vec![
             "failed".to_owned(),
             REFUSED_SHA256.to_owned(),
-            "0".to_owned()
+            "0".to_owned(),
+            "application/json".to_owned(),
+            "hee3.refused-candidate/1".to_owned(),
+            "0000000000000000".to_owned(),
+        ]
+    );
+    assert_eq!(
+        recorded[1][3..],
+        [
+            "application/json".to_owned(),
+            "hee3.scripted-check/1".to_owned(),
+            "0000000000000001".to_owned(),
         ]
     );
     let previous = asked.borrow()[1].clone().ok_or("no previous")?;

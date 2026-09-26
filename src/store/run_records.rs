@@ -203,7 +203,8 @@ pub(super) fn identity_bound_elsewhere(
 /// transaction, after the attempt's row was updated; mark the settling event when `settled`.
 /// # Errors
 /// `Invalid` for a repeated kind (refused before any write); `Conflict` for an artifact id already
-/// bound to another digest; `register_evidence`'s `Corrupt` and inventory refusals.
+/// bound to another digest, by the ledger or by another record of this observation;
+/// `register_evidence`'s `Corrupt` and inventory refusals.
 pub(super) fn commit(
     tx: &Transaction<'_>,
     attempt: &str,
@@ -217,8 +218,16 @@ pub(super) fn commit(
     if kinds.len() != records.len() {
         return Err(Error::Invalid);
     }
-    for record in records {
-        if identity_bound_elsewhere(tx, record.artifact_id.as_str(), record.object.digest())? {
+    for (index, record) in records.iter().enumerate() {
+        // Bound elsewhere in the ledger, or by an earlier record of this same observation: the
+        // one rule, whichever door or slot holds the other binding (review of d60df83, gap 2).
+        let within = records[..index].iter().any(|earlier| {
+            earlier.artifact_id.as_str() == record.artifact_id.as_str()
+                && earlier.object.digest() != record.object.digest()
+        });
+        if within
+            || identity_bound_elsewhere(tx, record.artifact_id.as_str(), record.object.digest())?
+        {
             return Err(Error::Conflict);
         }
     }

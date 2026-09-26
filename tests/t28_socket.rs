@@ -98,6 +98,16 @@ fn write_grant(directory: &Path, name: &str, bytes: &[u8], mode: u32) -> Outcome
     Ok(())
 }
 
+/// The identity a test names its verification evidence by (B09b): the verification event's own id,
+/// so two verifications of different evidence never share an artifact id.
+fn evidence_identity(artifact: UuidV4<'_>) -> habitat_engine::store::EvidenceIdentity<'_> {
+    habitat_engine::store::EvidenceIdentity {
+        artifact_id: artifact,
+        media_type: "application/json",
+        schema_id: "hee3.test-evidence/1",
+    }
+}
+
 #[test]
 fn the_runtime_root_must_be_named_absolute_and_private() -> Outcome {
     let scratch = Scratch::new()?;
@@ -1208,6 +1218,8 @@ pub(super) fn fail_task(
                 verdict: VerificationVerdict::Failed,
                 subject: criteria,
                 evidence: evidence.clone(),
+                identity: evidence_identity(UuidV4::parse(&nth(0x28d7))?),
+                satisfied_criteria: None,
                 used_ms: Some(20),
                 cleanup_settled: true,
             },

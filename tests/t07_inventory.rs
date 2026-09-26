@@ -210,6 +210,12 @@ impl Rig {
                     verdict,
                     subject: Sha256Digest::parse(DIGEST).unwrap(),
                     evidence,
+                    identity: habitat_engine::store::EvidenceIdentity {
+                        artifact_id: id(CHECK),
+                        media_type: "application/json",
+                        schema_id: "hee3.test-evidence/1",
+                    },
+                    satisfied_criteria: None,
                     used_ms,
                     cleanup_settled,
                 },

@@ -159,7 +159,13 @@ fn register_unrelated_evidence(store: &mut Store) {
                 task_generation: generation("3"),
                 ..expected
             },
-            &observation(&evidence, VerificationVerdict::Failed, Some(0), true),
+            &observation(
+                &evidence,
+                VerificationVerdict::Failed,
+                Some(0),
+                true,
+                id(&ids[7]),
+            ),
             id(&ids[7]),
             deadline(),
         )
@@ -419,16 +425,25 @@ fn expected(task_generation: &str) -> Expected<'static> {
     }
 }
 
-fn observation(
+/// An observation whose evidence is named by `artifact` (B09b): the callers pass the verification
+/// event's own id, so two verifications of different evidence never share an artifact id.
+fn observation<'a>(
     evidence: &Object,
     verdict: VerificationVerdict,
     used_ms: Option<u64>,
     cleanup_settled: bool,
-) -> Verification<'static> {
+    artifact: UuidV4<'a>,
+) -> Verification<'a> {
     Verification {
         verdict,
         subject: Sha256Digest::parse(SUBJECT).unwrap(),
         evidence: evidence.clone(),
+        identity: habitat_engine::store::EvidenceIdentity {
+            artifact_id: artifact,
+            media_type: "application/json",
+            schema_id: "hee3.test-evidence/1",
+        },
+        satisfied_criteria: None,
         used_ms,
         cleanup_settled,
     }
@@ -508,7 +523,7 @@ fn record(store: &mut Store, evidence: &Object, verdict: VerificationVerdict) ->
     store
         .record_verification(
             &expected("3"),
-            &observation(evidence, verdict, Some(20), true),
+            &observation(evidence, verdict, Some(20), true, id(VERIFIED)),
             id(VERIFIED),
             deadline(),
         )
@@ -622,7 +637,13 @@ fn cancelled_verdict_without_intent_refuses_without_consuming_event_or_cost() {
         store
             .record_verification(
                 &expected("3"),
-                &observation(&evidence, VerificationVerdict::Cancelled, Some(20), true),
+                &observation(
+                    &evidence,
+                    VerificationVerdict::Cancelled,
+                    Some(20),
+                    true,
+                    id(VERIFIED)
+                ),
                 id(VERIFIED),
                 deadline()
             )
@@ -648,7 +669,13 @@ fn cancellation_before_pass_wins_and_still_records_checker_cost() {
         store
             .record_verification(
                 &expected("4"),
-                &observation(&evidence, VerificationVerdict::Passed, Some(20), true),
+                &observation(
+                    &evidence,
+                    VerificationVerdict::Passed,
+                    Some(20),
+                    true,
+                    id(VERIFIED)
+                ),
                 id(VERIFIED),
                 deadline()
             )
@@ -672,7 +699,13 @@ fn cancelled_checker_with_intent_does_not_invent_terminal_cleanup() {
     store
         .record_verification(
             &expected("4"),
-            &observation(&evidence, VerificationVerdict::Cancelled, Some(20), true),
+            &observation(
+                &evidence,
+                VerificationVerdict::Cancelled,
+                Some(20),
+                true,
+                id(VERIFIED),
+            ),
             id(VERIFIED),
             deadline(),
         )
@@ -820,7 +853,13 @@ fn unknown_checker_cost_retains_full_liability_across_reopen() {
     store
         .record_verification(
             &expected("3"),
-            &observation(&evidence, VerificationVerdict::Passed, None, true),
+            &observation(
+                &evidence,
+                VerificationVerdict::Passed,
+                None,
+                true,
+                id(VERIFIED),
+            ),
             id(VERIFIED),
             deadline(),
         )
@@ -852,7 +891,13 @@ fn known_measurement_with_unclean_checker_does_not_free_reserved_capacity() {
     store
         .record_verification(
             &expected("3"),
-            &observation(&evidence, VerificationVerdict::Passed, Some(20), false),
+            &observation(
+                &evidence,
+                VerificationVerdict::Passed,
+                Some(20),
+                false,
+                id(VERIFIED),
+            ),
             id(VERIFIED),
             deadline(),
         )
@@ -881,7 +926,13 @@ fn measured_zero_is_settled_and_distinct_from_unknown_cost() {
     store
         .record_verification(
             &expected("3"),
-            &observation(&evidence, VerificationVerdict::Passed, Some(0), true),
+            &observation(
+                &evidence,
+                VerificationVerdict::Passed,
+                Some(0),
+                true,
+                id(VERIFIED),
+            ),
             id(VERIFIED),
             deadline(),
         )
@@ -904,7 +955,13 @@ fn cost_above_reserve_refuses_but_exact_reserve_can_finish_without_extra_charge(
         store
             .record_verification(
                 &expected("3"),
-                &observation(&evidence, VerificationVerdict::Passed, Some(201), true),
+                &observation(
+                    &evidence,
+                    VerificationVerdict::Passed,
+                    Some(201),
+                    true,
+                    id(VERIFIED)
+                ),
                 id(VERIFIED),
                 deadline()
             )
@@ -914,7 +971,13 @@ fn cost_above_reserve_refuses_but_exact_reserve_can_finish_without_extra_charge(
     store
         .record_verification(
             &expected("3"),
-            &observation(&evidence, VerificationVerdict::Passed, Some(200), true),
+            &observation(
+                &evidence,
+                VerificationVerdict::Passed,
+                Some(200),
+                true,
+                id(VERIFIED),
+            ),
             id(VERIFIED),
             deadline(),
         )
@@ -936,7 +999,13 @@ fn running_worker_cannot_be_checked_and_refusal_does_not_poison_later_settlement
         store
             .record_verification(
                 &expected("2"),
-                &observation(&evidence, VerificationVerdict::Passed, Some(20), true),
+                &observation(
+                    &evidence,
+                    VerificationVerdict::Passed,
+                    Some(20),
+                    true,
+                    id(VERIFIED)
+                ),
                 id(VERIFIED),
                 deadline()
             )
@@ -977,7 +1046,13 @@ fn each_unsettled_worker_dimension_refuses_verification_until_real_settlement() 
             store
                 .record_verification(
                     &expected("3"),
-                    &observation(&evidence, VerificationVerdict::Passed, Some(20), true),
+                    &observation(
+                        &evidence,
+                        VerificationVerdict::Passed,
+                        Some(20),
+                        true,
+                        id(VERIFIED)
+                    ),
                     id(VERIFIED),
                     deadline()
                 )
@@ -988,7 +1063,13 @@ fn each_unsettled_worker_dimension_refuses_verification_until_real_settlement() 
         store
             .record_verification(
                 &expected("4"),
-                &observation(&evidence, VerificationVerdict::Passed, Some(20), true),
+                &observation(
+                    &evidence,
+                    VerificationVerdict::Passed,
+                    Some(20),
+                    true,
+                    id(VERIFIED),
+                ),
                 id(VERIFIED),
                 deadline(),
             )
@@ -1005,7 +1086,13 @@ fn stale_task_revision_cannot_record_against_a_current_attempt() {
         store
             .record_verification(
                 &expected("2"),
-                &observation(&evidence, VerificationVerdict::Passed, Some(20), true),
+                &observation(
+                    &evidence,
+                    VerificationVerdict::Passed,
+                    Some(20),
+                    true,
+                    id(VERIFIED)
+                ),
                 id(VERIFIED),
                 deadline()
             )
@@ -1029,7 +1116,13 @@ fn wrong_attempt_identity_or_generation_cannot_borrow_settled_worker_authority()
             store
                 .record_verification(
                     &wrong,
-                    &observation(&evidence, VerificationVerdict::Passed, Some(20), true),
+                    &observation(
+                        &evidence,
+                        VerificationVerdict::Passed,
+                        Some(20),
+                        true,
+                        id(VERIFIED)
+                    ),
                     id(VERIFIED),
                     deadline()
                 )
@@ -1053,7 +1146,7 @@ fn one_attempt_cannot_gain_a_second_checker_return_by_changing_event_or_verdict(
             store
                 .record_verification(
                     &expected("4"),
-                    &observation(&evidence, verdict, Some(20), true),
+                    &observation(&evidence, verdict, Some(20), true, id(event)),
                     id(event),
                     deadline()
                 )
@@ -1073,7 +1166,13 @@ fn a_terminal_verifier_error_cannot_be_replaced_by_a_later_pass() {
         store
             .record_verification(
                 &expected("4"),
-                &observation(&evidence, VerificationVerdict::Passed, Some(0), true),
+                &observation(
+                    &evidence,
+                    VerificationVerdict::Passed,
+                    Some(0),
+                    true,
+                    id(SECOND_VERIFY)
+                ),
                 id(SECOND_VERIFY),
                 deadline()
             )
@@ -1141,7 +1240,13 @@ fn repaired_attempt_requires_its_own_check_and_costs_accumulate_once() {
     store
         .record_verification(
             &current,
-            &observation(&evidence, VerificationVerdict::Passed, Some(10), true),
+            &observation(
+                &evidence,
+                VerificationVerdict::Passed,
+                Some(10),
+                true,
+                id(SECOND_VERIFY),
+            ),
             id(SECOND_VERIFY),
             deadline(),
         )
@@ -1174,7 +1279,13 @@ fn a_failed_check_that_exhausts_verification_reserve_cannot_start_repair() {
     store
         .record_verification(
             &expected("3"),
-            &observation(&evidence, VerificationVerdict::Failed, Some(200), true),
+            &observation(
+                &evidence,
+                VerificationVerdict::Failed,
+                Some(200),
+                true,
+                id(VERIFIED),
+            ),
             id(VERIFIED),
             deadline(),
         )
@@ -1273,7 +1384,13 @@ fn an_object_from_another_store_cannot_create_a_dangling_verification_reference(
         store
             .record_verification(
                 &expected("3"),
-                &observation(&foreign, VerificationVerdict::Passed, Some(20), true),
+                &observation(
+                    &foreign,
+                    VerificationVerdict::Passed,
+                    Some(20),
+                    true,
+                    id(VERIFIED)
+                ),
                 id(VERIFIED),
                 deadline()
             )
@@ -1302,7 +1419,13 @@ fn corrupt_evidence_is_refused_before_any_verification_state_or_cost_commit() {
         store
             .record_verification(
                 &expected("3"),
-                &observation(&evidence, VerificationVerdict::Passed, Some(20), true),
+                &observation(
+                    &evidence,
+                    VerificationVerdict::Passed,
+                    Some(20),
+                    true,
+                    id(VERIFIED)
+                ),
                 id(VERIFIED),
                 deadline()
             )
@@ -1332,7 +1455,13 @@ fn duplicate_event_conflict_rolls_back_verification_row_and_cost_across_reopen()
         store
             .record_verification(
                 &expected("3"),
-                &observation(&evidence, VerificationVerdict::Passed, Some(20), true),
+                &observation(
+                    &evidence,
+                    VerificationVerdict::Passed,
+                    Some(20),
+                    true,
+                    id(ADMITTED)
+                ),
                 id(ADMITTED),
                 deadline()
             )
@@ -1391,7 +1520,13 @@ fn expired_verification_deadline_cannot_write_or_consume_the_event() {
         store
             .record_verification(
                 &expected("3"),
-                &observation(&evidence, VerificationVerdict::Passed, Some(20), true),
+                &observation(
+                    &evidence,
+                    VerificationVerdict::Passed,
+                    Some(20),
+                    true,
+                    id(VERIFIED)
+                ),
                 id(VERIFIED),
                 Instant::now().checked_sub(Duration::from_secs(1)).unwrap()
             )

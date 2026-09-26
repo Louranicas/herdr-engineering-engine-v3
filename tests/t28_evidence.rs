@@ -376,16 +376,27 @@ fn more_than_64_references_route_to_the_summary() -> Outcome {
     ])
 }
 
-/// B09-E4 · a task holding a verification or an acceptance has evidence whose identity the ledger
-/// did not record (B09b, with B14, records it): its views are refused `unavailable`, `retry: never`,
-/// never guessed; `none` answers. Each clause alone: the failed task holds only a verification; the
-/// accepted task, its verification removed from the ledger file, only an acceptance (review G3). The
+/// B09-E4 · a task holding evidence whose identity the ledger did not record has its views refused
+/// `unavailable`, `retry: never`, never guessed; `none` answers. Since B09b the verification door
+/// records identity, so the failed task's verification is made a pre-migration-6 row (its identity
+/// columns NULL) in the ledger file; the accepted task, its verification removed, holds only an
+/// acceptance, whose identity no door records yet (B09b-3b) (review G3). Each clause alone. The
 /// principal door comes first: another operator's view of the same task is `not_found`, which says
 /// nothing of what the task holds (review G6).
 #[test]
 fn identity_the_ledger_did_not_record_is_refused_not_guessed() -> Outcome {
     let scratch = Scratch::new()?;
     let (tasks, ids, _) = ledger(&scratch, &[Stage::Failed, Stage::Accepted], &[])?;
+    let unidentified = tamper(
+        &scratch,
+        "UPDATE verifications SET evidence_artifact_id=NULL, evidence_media_type=NULL, \
+         evidence_schema_id=NULL WHERE attempt_id=?",
+        &nth(0x05b2, 1),
+    )?;
+    assert_eq!(
+        unidentified, 1,
+        "the failed task's verification predates migration 6"
+    );
     let removed = tamper(
         &scratch,
         "DELETE FROM verifications WHERE attempt_id=?",
@@ -904,5 +915,45 @@ fn the_get_owner_is_handed_the_view() -> Outcome {
             NOW + 5_000
         )]
     );
+    Ok(())
+}
+
+/// B09b · `refs` lists each verification's reference as the door recorded it — the artifact id,
+/// media type and schema id the verification named, with the object's digest and size — and only
+/// the task's own: two failed tasks, each answering with exactly its own verification (review of
+/// B09b-3a: a query without the task predicate would list both).
+#[test]
+fn refs_list_only_the_tasks_own_verification_as_recorded() -> Outcome {
+    let scratch = Scratch::new()?;
+    let (tasks, ids, _) = ledger(&scratch, &[Stage::Failed, Stage::Failed], &[])?;
+    for (index, task) in ids.iter().enumerate() {
+        let refs = get(&tasks, task, "refs", u8::try_from(index + 1)?)?;
+        let evidence = refs["body"]["evidence"]
+            .as_array()
+            .ok_or("evidence array")?
+            .clone();
+        assert_eq!(evidence.len(), 1, "{index}: {refs}");
+        let reference = &evidence[0];
+        assert_eq!(
+            (
+                &reference["artifact_id"],
+                &reference["media_type"],
+                &reference["schema_id"]
+            ),
+            (
+                &json!(nth(0x05b7, u16::try_from(index + 1)?)),
+                &json!("application/json"),
+                &json!("hee3.test-evidence/1")
+            ),
+            "{index}: {refs}"
+        );
+        assert!(
+            reference["sha256"]
+                .as_str()
+                .is_some_and(|d| d.starts_with("sha256:"))
+                && reference["byte_length"].as_u64().is_some_and(|n| n > 0),
+            "{index}: {refs}"
+        );
+    }
     Ok(())
 }

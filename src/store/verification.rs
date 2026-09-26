@@ -1,9 +1,11 @@
 //! Durable verification outcomes and conservative reservation settlement.
 
+use super::run_records::identity_bound_elsewhere;
 use super::{
     Error, Expected, Object, PublishedAcceptance, Result, Store, event, head, next, number,
     require_attempt, same_generation,
 };
+use crate::contracts::control::{EvidenceRef, MAX_EVIDENCE_NAME_BYTES};
 use crate::contracts::{Sha256Digest, UuidV4};
 use rusqlite::params;
 use std::time::Instant;
@@ -20,6 +22,67 @@ pub enum VerificationVerdict {
     Cancelled,
 }
 
+/// The identity a receipt names an evidence object by (B09b; `EvidenceRefV1`'s three members that
+/// the object itself does not carry). The ledger stores it beside the object's digest, so a view
+/// can return the reference it was recorded with — never one invented at read.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct EvidenceIdentity<'a> {
+    /// The artifact's identity as the receipt names it.
+    pub artifact_id: UuidV4<'a>,
+    /// Its media type (ASCII, 1..=128 bytes).
+    pub media_type: &'a str,
+    /// Its schema (ASCII, 1..=128 bytes).
+    pub schema_id: &'a str,
+}
+
+impl<'a> EvidenceIdentity<'a> {
+    /// The identity a wire reference carries for `object`: the one door where a reference and an
+    /// object meet, refusing a reference whose digest or size is not the object's (B09 E1).
+    /// # Errors
+    /// `Invalid` when `reference` does not name `object`, or its names are not well formed.
+    pub fn of(reference: &'a EvidenceRef, object: &Object) -> Result<Self> {
+        if reference.sha256 != object.digest || reference.byte_length != object.size {
+            return Err(Error::Invalid);
+        }
+        let identity = Self {
+            artifact_id: UuidV4::parse(&reference.artifact_id).map_err(|_| Error::Invalid)?,
+            media_type: &reference.media_type,
+            schema_id: &reference.schema_id,
+        };
+        identity.check()?;
+        Ok(identity)
+    }
+
+    /// The wire reference this identity and `object` make together.
+    #[must_use]
+    pub fn reference(&self, object: &Object) -> EvidenceRef {
+        EvidenceRef {
+            artifact_id: self.artifact_id.as_str().to_owned(),
+            sha256: object.digest.clone(),
+            byte_length: object.size,
+            media_type: self.media_type.to_owned(),
+            schema_id: self.schema_id.to_owned(),
+        }
+    }
+
+    /// The names are what the wire admits: ASCII, 1..=128 bytes each.
+    pub(super) fn check(&self) -> Result<()> {
+        let well_formed =
+            |name: &str| (1..=MAX_EVIDENCE_NAME_BYTES).contains(&name.len()) && name.is_ascii();
+        if well_formed(self.media_type) && well_formed(self.schema_id) {
+            Ok(())
+        } else {
+            Err(Error::Invalid)
+        }
+    }
+}
+
+/// The 64 criteria a check satisfied, stored as sixteen lower-hex digits (B17; a `u64` above
+/// `i64::MAX` cannot be an INTEGER column).
+pub(super) fn criteria_text(criteria: Option<u64>) -> Option<String> {
+    criteria.map(|bits| format!("{bits:016x}"))
+}
+
 /// Exact subject and immutable evidence for one completed verifier invocation.
 /// Unknown cost or cleanup retains the reservation and blocks new work.
 #[derive(Clone, Debug)]
@@ -27,6 +90,11 @@ pub struct Verification<'a> {
     pub verdict: VerificationVerdict,
     pub subject: Sha256Digest<'a>,
     pub evidence: Object,
+    /// The identity the receipt names `evidence` by (B09b).
+    pub identity: EvidenceIdentity<'a>,
+    /// The criteria the check satisfied, as the driver's bit pattern; `None` when the verdict
+    /// carries no criteria (B17 reads it back to measure loop progress).
+    pub satisfied_criteria: Option<u64>,
     pub used_ms: Option<u64>,
     pub cleanup_settled: bool,
 }
@@ -95,7 +163,8 @@ impl Store {
     ///
     /// # Errors
     /// Refuses stale or repeated observations, unsettled workers, unavailable evidence,
-    /// impossible cancellation and costs above the reserved bound.
+    /// impossible cancellation and costs above the reserved bound; `Invalid` for an identity
+    /// name the wire would refuse; `Conflict` for an artifact id already bound to another digest.
     pub fn record_verification(
         &mut self,
         expected: &Expected<'_>,
@@ -103,6 +172,7 @@ impl Store {
         event_id: UuidV4<'_>,
         deadline: Instant,
     ) -> Result<String> {
+        observation.identity.check()?;
         self.read_object(&observation.evidence, deadline)?;
         let body = serde_json::to_vec(&Observation {
             attempt: expected.attempt.as_str(),
@@ -156,13 +226,19 @@ impl Store {
             let size: u64 = tx.query_row("SELECT size FROM artifacts WHERE digest=?",
                 [&observation.evidence.digest], |row| super::read_number(row, 0))?;
             if size != observation.evidence.size { return Err(Error::Corrupt); }
+            if identity_bound_elsewhere(tx, observation.identity.artifact_id.as_str(), &observation.evidence.digest)? {
+                return Err(Error::Conflict);
+            }
             event(tx, event_id.as_str(), expected.task.as_str(), &generation, "verification_observed")?;
             tx.execute("UPDATE events SET body=? WHERE id=?", params![body, event_id.as_str()])?;
             tx.execute(
-                "INSERT INTO verifications(attempt_id,event_id,subject_digest,evidence_digest,verdict,used_ms,cleanup_settled) VALUES(?,?,?,?,?,?,?)",
+                "INSERT INTO verifications(attempt_id,event_id,subject_digest,evidence_digest,verdict,used_ms,cleanup_settled,\
+                 evidence_artifact_id,evidence_media_type,evidence_schema_id,satisfied_criteria) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
                 params![expected.attempt.as_str(), event_id.as_str(), observation.subject.as_str(),
                     observation.evidence.digest, verdict_name(observation.verdict),
-                    observation.used_ms.map(number).transpose()?, observation.cleanup_settled],
+                    observation.used_ms.map(number).transpose()?, observation.cleanup_settled,
+                    observation.identity.artifact_id.as_str(), observation.identity.media_type,
+                    observation.identity.schema_id, criteria_text(observation.satisfied_criteria)],
             )?;
             tx.execute(
                 "UPDATE tasks SET generation=?,state=?,spent_ms=spent_ms+?,reserved_verify_ms=reserved_verify_ms-? WHERE id=?",
