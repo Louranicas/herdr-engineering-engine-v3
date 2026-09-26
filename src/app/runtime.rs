@@ -255,8 +255,10 @@ pub struct Dispatch<'a> {
     /// owner's reservation less the teardown share (closure M1: a fixed share is a limit no owner set).
     pub capture_ms: Option<u64>,
     /// The engine's drain (B14b-1, D5): read between attempts, at `begin`, before any row — set, the
-    /// dispatch ends `Outcome::Drained` with the task resumable. It does not reach an in-flight
-    /// exchange in B14b-1 (stated gap: F15's in-exchange wake is B14b-2's).
+    /// dispatch ends `Outcome::Drained` with nothing written. Before the first attempt the task
+    /// stays `admitted` and is picked again; at attempt ≥ 2 it is `repair_pending`, which the
+    /// dispatcher's read never returns — stranded until recovery (B17), a stated gap. The drain
+    /// does not reach an in-flight exchange in B14b-1 (F15's in-exchange wake is B14b-2's).
     pub drain: &'a AtomicBool,
 }
 
@@ -354,8 +356,8 @@ impl BeginRefusal {
 pub enum Outcome {
     /// Stopped before any attempt, by name; no attempt row exists.
     Refused(Refusal),
-    /// The engine's drain was set between attempts (B14b-1, D5): no stop written, the task stays
-    /// resumable and is picked after restart.
+    /// The engine's drain was set between attempts (B14b-1, D5): no stop written. Before the first
+    /// attempt the task is still `admitted`; at attempt ≥ 2 it is `repair_pending`, the recovery's.
     Drained,
     Driven(driver::Outcome),
 }
@@ -599,6 +601,10 @@ struct StoreRuntime<'a, C, V> {
     /// second-writer check reads from.
     last_event: String,
     attempts: Vec<Begun>,
+    /// An attempt row has been COMMITTED by this dispatch (set the moment the attempt door returns,
+    /// before the in-memory `attempts` entry exists — re-check finding 5): the one input of the
+    /// "no row yet" rule, keyed on the commit, never on the vector.
+    row_committed: bool,
     previous: Option<Previous>,
 }
 
@@ -651,7 +657,8 @@ pub struct Admitted<'a> {
 /// [`Error::PreDispatch`] — before any attempt row, the task untouched, the dispatcher's to name.
 ///
 /// # Errors
-/// [`Error::PreDispatch`] for a store error before any write; [`Error::Poisoned`].
+/// [`Error::PreDispatch`] for any failure in this phase (a store, entropy or identity error, or a
+/// refusal's own stop failing) — no attempt row exists; [`Error::Poisoned`] for a poisoned owner.
 pub fn admit<'a>(
     tasks: &'a StoreTasks,
     profile: &'a Profile,
@@ -728,8 +735,28 @@ pub fn admit<'a>(
 fn pre<T>(result: Result<T, Error>) -> Result<T, Error> {
     result.map_err(|error| match error {
         Error::PreDispatch(inner) => Error::PreDispatch(inner),
+        Error::Poisoned => Error::Poisoned,
         other => Error::PreDispatch(Box::new(other)),
     })
+}
+
+/// The capture share of a dispatch (closure M1, re-check item 11): a caller-fixed share must leave
+/// work time beside the teardown; with none fixed, the captures run inside the owner's reservation
+/// less the teardown share — the owner's bound, never one set here — and a reservation that holds
+/// no time past the teardown is refused. Pure, so its boundary is pinned without a snapshot.
+pub(crate) fn capture_share(
+    reserved_work_ms: u64,
+    teardown_ms: u64,
+    fixed: Option<u64>,
+) -> Result<u64, Refusal> {
+    match fixed {
+        Some(capture_ms) if reserved_work_ms <= capture_ms.saturating_add(teardown_ms) => {
+            Err(Refusal::ReservationTooSmall)
+        }
+        Some(capture_ms) => Ok(capture_ms),
+        None if reserved_work_ms <= teardown_ms => Err(Refusal::ReservationTooSmall),
+        None => Ok(reserved_work_ms - teardown_ms),
+    }
 }
 
 /// Phase two: drive the admitted task through the driver over `source` and `verifier`.
@@ -769,16 +796,24 @@ pub fn drive<'a, C: CandidateSource, V: Verifier>(
         digests: prepared.digests,
         origin,
         deadline,
-        own: number(&head.generation)?,
+        own: pre(number(&head.generation))?,
         last_event: anchor,
         attempts: Vec::new(),
+        row_committed: false,
         previous: None,
     };
     let count = u8::try_from(U64_CRITERIA.len()).map_err(|_| Error::Identity)?;
     match driver::run(&mut runtime, count) {
         Ok(outcome) => Ok(Outcome::Driven(outcome)),
         Err(driver::Error::Runtime(Fault::Stop(reason))) => {
-            Ok(Outcome::Driven(if runtime.stop_task(reason)? {
+            // A stop before any row (a racing cancel at the first begin, a spent reservation) is
+            // written through the same path; its own failure is the dispatcher's (re-check 2).
+            let stopped = if runtime.row_committed {
+                runtime.stop_task(reason)?
+            } else {
+                pre(runtime.stop_task(reason))?
+            };
+            Ok(Outcome::Driven(if stopped {
                 driver::Outcome::Stopped(reason)
             } else {
                 driver::Outcome::NeedsSettlement(reason)
@@ -788,7 +823,7 @@ pub fn drive<'a, C: CandidateSource, V: Verifier>(
         // Any error while no attempt row exists (B14b-1, D3; closure H3): the attempt door's own
         // refusals stop the task by the store's name through the pre-dispatch path (a failure of
         // that stop is the dispatcher's too); everything else is `PreDispatch`.
-        Err(driver::Error::Runtime(Fault::Error(error))) if runtime.attempts.is_empty() => {
+        Err(driver::Error::Runtime(Fault::Error(error))) if !runtime.row_committed => {
             let kind = match &error {
                 Error::Store(store_error) => BeginRefusal::of(store_error),
                 _ => None,
@@ -837,19 +872,13 @@ fn prepare(
     if head.reserved_work_ms == 0 {
         return Err(Refusal::ReservationEmpty);
     }
-    // The capture and the teardown are both shares of the work reservation (B14a-R1.8, R2.5): a
-    // reservation that cannot hold both and leave work time is refused before any capture. With no
-    // caller-fixed capture share the captures run inside the reservation less the teardown (closure
-    // M1): the owner's bound, never one set here.
-    let capture_ms = dispatch
-        .capture_ms
-        .unwrap_or_else(|| head.reserved_work_ms.saturating_sub(dispatch.teardown_ms));
-    if head.reserved_work_ms <= capture_ms.saturating_add(dispatch.teardown_ms)
-        && dispatch.capture_ms.is_some()
-        || head.reserved_work_ms <= dispatch.teardown_ms
-    {
-        return Err(Refusal::ReservationTooSmall);
-    }
+    // The capture and the teardown are both shares of the work reservation (B14a-R1.8, R2.5): the
+    // one derivation, pure, pinned at its boundary (`capture_share`).
+    let capture_ms = capture_share(
+        head.reserved_work_ms,
+        dispatch.teardown_ms,
+        dispatch.capture_ms,
+    )?;
     // A check keeps its teardown share back from the verify reservation the same way (R14.2): one
     // that could never hold a check is refused here, before any capture.
     if head.reserved_verify_ms <= millis(CHECK_TEARDOWN) {
@@ -1695,6 +1724,8 @@ impl<C: CandidateSource, V: Verifier> driver::Runtime for StoreRuntime<'_, C, V>
             Ok(Ok((roster, work_until)))
         })??;
         let (roster, work_until) = begun.map_err(Fault::Stop)?;
+        // The row is committed from here on, whatever the checks below say (re-check finding 5).
+        self.row_committed = true;
         if roster.attempt.generation != ordinal.to_string() {
             return Err(Error::Identity.into());
         }
@@ -2624,8 +2655,8 @@ fn millis(duration: Duration) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        CHECK_MEDIA_TYPE, CHECK_TEARDOWN, Error, U64_CHECK_SCHEMA, check_window, cited,
-        declared_criteria, preparation_charge, teardown_deadline,
+        CHECK_MEDIA_TYPE, CHECK_TEARDOWN, Error, Refusal, U64_CHECK_SCHEMA, capture_share,
+        check_window, cited, declared_criteria, preparation_charge, teardown_deadline,
     };
     use crate::store::RunRecordKind;
     use std::time::{Duration, Instant};
@@ -3200,5 +3231,35 @@ mod tests {
             );
         }
         Ok(())
+    }
+
+    /// B14b-1 closure 2 (re-check item 11) · the capture share at its boundaries, both arms: a fixed
+    /// share must leave work time beside the teardown; with none fixed the share is the reservation
+    /// less the teardown, and a reservation at or under the teardown is refused by name.
+    #[test]
+    fn the_capture_share_is_the_owners_reservation_less_the_teardown_or_the_fixed_share() {
+        type Row = (u64, u64, Option<u64>, Result<u64, Refusal>);
+        let rows: [Row; 8] = [
+            (10_000, 1_000, None, Ok(9_000)),
+            (1_001, 1_000, None, Ok(1)),
+            (1_000, 1_000, None, Err(Refusal::ReservationTooSmall)),
+            (0, 1_000, None, Err(Refusal::ReservationTooSmall)),
+            (10_000, 1_000, Some(5_000), Ok(5_000)),
+            (6_001, 1_000, Some(5_000), Ok(5_000)),
+            (6_000, 1_000, Some(5_000), Err(Refusal::ReservationTooSmall)),
+            (
+                10_000,
+                1_000,
+                Some(u64::MAX),
+                Err(Refusal::ReservationTooSmall),
+            ),
+        ];
+        for (reserved, teardown, fixed, expected) in rows {
+            assert_eq!(
+                capture_share(reserved, teardown, fixed),
+                expected,
+                "reserved={reserved} teardown={teardown} fixed={fixed:?}"
+            );
+        }
     }
 }

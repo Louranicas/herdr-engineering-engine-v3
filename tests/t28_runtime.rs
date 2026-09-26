@@ -1146,8 +1146,11 @@ fn a_submit_wakes_the_waiting_dispatcher_and_it_picks_the_new_task() -> Outcome_
 
 /// B14b-1 (b), D5 (closure item 9) · a drain set BEFORE the first attempt begins: `dispatch` (which
 /// reads the same flag at `begin`) ends `Drained` with nothing written and the task still `admitted`,
-/// so a dispatcher run afterwards, the drain cleared, picks it again and drives it to acceptance —
-/// the one drain case the dispatcher itself resumes.
+/// so a dispatcher run afterwards, the drain cleared, picks it again and drives it to acceptance.
+/// STATED (re-check item 9): the first phase drives `dispatch` directly — under a set drain the
+/// dispatcher's own wait returns `None` before `admit`; the production route to this outcome is a
+/// drain landing between the read and `begin`, which no in-gate proof can time; and "the drain
+/// cleared" is a restart, which the second phase stands in for.
 #[test]
 fn a_task_drained_before_its_first_attempt_is_picked_again_after_the_drain() -> Outcome_ {
     let rig = rig(&Shape::default())?;
@@ -1202,6 +1205,30 @@ fn a_task_drained_before_its_first_attempt_is_picked_again_after_the_drain() -> 
     });
     assert_eq!(*opened.borrow(), vec![TASK.to_owned()]);
     assert_eq!(state(&rig)?, "accepted");
+    Ok(())
+}
+
+/// B14b-1 (b), D2 · the wait's stop takes precedence over its read: under a set stop, with a task
+/// dispatchable, `wait_dispatchable` returns `None` without reading it — pinned here so the rule has
+/// a proof that FAILS rather than hangs when the stop check is removed (closure 2, re-check 3).
+#[test]
+fn the_wait_returns_none_under_a_set_stop_before_reading() -> Outcome_ {
+    let rig = rig(&Shape::default())?;
+    assert_eq!(state(&rig)?, "admitted", "a task is dispatchable");
+    let stopped = || true;
+    let waited = rig
+        .tasks
+        .wait_dispatchable(&stopped)
+        .map_err(|_| "poisoned")?
+        .map_err(|e| format!("{e:?}"))?;
+    assert_eq!(waited, None, "the stop wins before the read");
+    let running = || false;
+    let picked = rig
+        .tasks
+        .wait_dispatchable(&running)
+        .map_err(|_| "poisoned")?
+        .map_err(|e| format!("{e:?}"))?;
+    assert_eq!(picked.map(|next| next.task), Some(TASK.to_owned()));
     Ok(())
 }
 

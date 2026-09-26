@@ -2069,7 +2069,9 @@ fn verified_inventory_capacity(
         let (digest, size) = row?;
         prospective.insert(digest, size);
         if prospective.len() > 4096 {
-            return Err(Error::Bound);
+            // DS17's one name (B14b-1 closure 2): the same full-inventory condition the
+            // registration door raises, never `Bound` (a request bound) at this door alone.
+            return Err(Error::Disposition(ResolveRefusal::Inventory));
         }
     }
     for object in objects.iter().chain(std::iter::once(manifest)) {
@@ -2080,7 +2082,9 @@ fn verified_inventory_capacity(
             return Err(Error::Corrupt);
         }
         if prospective.len() > 4096 {
-            return Err(Error::Bound);
+            // DS17's one name (B14b-1 closure 2): the same full-inventory condition the
+            // registration door raises, never `Bound` (a request bound) at this door alone.
+            return Err(Error::Disposition(ResolveRefusal::Inventory));
         }
     }
     Ok(())
