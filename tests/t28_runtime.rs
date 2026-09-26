@@ -16,8 +16,9 @@ use habitat_engine::app::class_profile::{self, Profile};
 use habitat_engine::app::dispatcher;
 use habitat_engine::app::live_verifier::LiveVerifier;
 use habitat_engine::app::runtime::{
-    Answer as SourceAnswer, CHECK_TEARDOWN, Candidate, CandidateSource, CheckPlan, CheckWindow,
-    Dispatch, Error as RuntimeError, Observed, Outcome, Previous, Refusal, Verifier, dispatch,
+    Admission, Answer as SourceAnswer, CHECK_TEARDOWN, Candidate, CandidateSource, CheckPlan,
+    CheckWindow, Dispatch, Error as RuntimeError, Observed, Outcome, Previous, Refusal, Verifier,
+    admit, dispatch, drive,
 };
 use habitat_engine::app::tasks::StoreTasks;
 use habitat_engine::app::workload::{self, Outcome as RunOutcome, Run};
@@ -35,6 +36,7 @@ use habitat_engine::contracts::{Sha256Digest, UuidV4};
 use habitat_engine::store::{
     Allocation, Principal, RequestSource, Store, Submission, VerificationVerdict,
 };
+use habitat_engine::task::TASK_LIMIT;
 use habitat_engine::task::control::Cancel;
 use habitat_engine::task::control::Spec;
 use habitat_engine::task::driver::{Outcome as Driven, StopReason};
@@ -60,8 +62,8 @@ const RECEIPT: &str = ReceiptV1::SCHEMA_ID;
 type Outcome_ = Result<(), Box<dyn Error>>;
 /// What the candidate source was handed, per request.
 /// One request the script double was handed (F101: a model that records what it was given): the
-/// previous verification, the attempt's identity, the invocation id the runtime minted, and the
-/// recipe and workspace digests.
+/// previous verification, the attempt's identity, the invocation id the runtime minted, the
+/// recipe and workspace digests, and the instant the attempt's work window is charged from.
 #[derive(Clone, Debug)]
 struct Seen {
     previous: Option<Previous>,
@@ -70,6 +72,7 @@ struct Seen {
     invocation: String,
     recipe: String,
     workspace: String,
+    charged_from: Instant,
 }
 type Asked = Arc<Mutex<Vec<Seen>>>;
 /// What the verifier was handed, per check: the snapshot's content digest, its editable bytes,
@@ -427,6 +430,7 @@ impl CandidateSource for Script<'_> {
                 invocation: ask.invocation.as_str().to_owned(),
                 recipe: ask.recipe.as_str().to_owned(),
                 workspace: ask.workspace.as_str().to_owned(),
+                charged_from: ask.charged_from,
             });
         if let Some(hook) = self.hook.as_mut() {
             hook();
@@ -1502,6 +1506,61 @@ fn assert_windows(
             "check {index}"
         );
     }
+}
+
+/// R21 N23 · each attempt is asked from its own charge start: the dispatch origin for attempt 1
+/// (the preparation is charged to it, B14a-R2.5), its own begin for attempt 2 — never the dispatch
+/// origin again, which would refuse a later native attempt `Deadline` at `origin + MAX_RUN` though
+/// its own run is shorter. The rig records the dispatch origin from the admitted state
+/// (`Admitted::window`), and the check double records when the first check was called; attempt 2
+/// begins after that check returns, so its charge start is later than that call.
+#[test]
+fn each_attempt_is_asked_from_its_own_charge_start() -> Outcome_ {
+    let rig = rig(&Shape::default())?;
+    let (mut source, asked) = script(vec![
+        Candidate::Replacement(FIRST.to_vec()),
+        Candidate::Replacement(SECOND.to_vec()),
+    ]);
+    let (mut verifier, handed) = oracle(vec![mismatched(7), matched(7)]);
+    let principal = owner();
+    let drain = AtomicBool::new(false);
+    let admission = admit(
+        &rig.tasks,
+        &rig.profile,
+        Dispatch {
+            principal: &principal,
+            task: id(TASK),
+            agent_record_id: &rig.agent,
+            selections: &rig.selections,
+            attempts: &rig.attempts,
+            forbidden: &[],
+            teardown_ms: rig.teardown_ms,
+            capture_ms: Some(5_000),
+            drain: &drain,
+        },
+    )
+    .map_err(|e| format!("{e:?}"))?;
+    let Admission::Ready(admitted) = admission else {
+        return Err("the task was refused at admission".into());
+    };
+    let (origin, deadline) = admitted.window();
+    assert_eq!(deadline.duration_since(origin), TASK_LIMIT);
+    let outcome =
+        drive(&rig.tasks, *admitted, &mut source, &mut verifier).map_err(|e| format!("{e:?}"))?;
+    assert_eq!(outcome, Outcome::Driven(Driven::Accepted));
+    let (asked, handed) = (taken(&asked), taken(&handed));
+    assert_eq!((asked.len(), handed.len()), (2, 2));
+    assert_eq!(
+        asked[0].charged_from, origin,
+        "attempt 1 is charged from the dispatch origin"
+    );
+    assert!(
+        asked[1].charged_from > handed[0].3,
+        "attempt 2 is charged from its own begin, after the first check was called: {:?} after it",
+        asked[1].charged_from.checked_duration_since(handed[0].3)
+    );
+    assert!(asked[1].charged_from > asked[0].charged_from);
+    Ok(())
 }
 
 /// B14a-1c · fail → `repair_pending` → verifying → accepted. Two attempts, each bound to the same

@@ -386,8 +386,10 @@ pub const ADAPTERS: [AdapterProfile; 2] = [
 
 /// The adapter's own bound on one run: a deadline more than this past its origin is refused at the
 /// door (`Error::Deadline`) before any exchange. Named so a caller passes its window through and
-/// meets the refusal by name rather than clamping to fit (B14a-4, A2); the task limit is 20 minutes,
-/// so a native attempt's work reservation must sit inside this (B14b's constraint).
+/// meets the refusal by name rather than clamping to fit (B14a-4, A2). The origin a native source
+/// passes is the attempt's own charge start (`runtime::Ask::charged_from`, R21 N23), never the
+/// dispatch's: the task limit is 20 minutes, so it is each attempt's own work window that must sit
+/// inside this, and one whose own reservation exceeds it meets `Deadline` by name.
 pub const MAX_RUN: Duration = Duration::from_mins(15);
 /// The qualified profile's id (the first table entry), as every fixture names it.
 pub const PROFILE: &str = ADAPTERS[0].id;

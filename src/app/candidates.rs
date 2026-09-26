@@ -260,8 +260,9 @@ pub struct Settle {
 }
 
 /// The native candidate source over one pinned model install and one adapter row. It holds nothing
-/// it could re-acquire from the runtime (A1): the attempt's identity, the digests, the origin, the
-/// window and the cancel flag arrive with every [`Ask`].
+/// it could re-acquire from the runtime (A1): the attempt's identity, the digests, the charge start,
+/// the window and the cancel flag arrive with every [`Ask`]; the charge start is the origin its
+/// native run is bounded from (`native::MAX_RUN`, R21 N23).
 pub struct NativeCandidates {
     profile: native::Profile,
     adapter: &'static AdapterProfile,
@@ -362,7 +363,7 @@ impl NativeCandidates {
                 match native::execute(
                     &request,
                     &self.profile,
-                    ask.origin,
+                    ask.charged_from,
                     ask.work_until,
                     ask.cancelled,
                 ) {

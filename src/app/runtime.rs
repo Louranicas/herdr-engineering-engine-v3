@@ -93,8 +93,8 @@ pub struct Previous {
 
 /// What a source is asked for one attempt (B14a-4, R18 A1): everything an adapter needs and the
 /// source could otherwise re-acquire — the attempt's binding, an invocation id the runtime minted,
-/// the recipe (the class profile's digest) and workspace (the baseline's) digests, the dispatch's
-/// origin, the attempt's work window, the runtime's cancel flag — and the previous verification.
+/// the recipe (the class profile's digest) and workspace (the baseline's) digests, the attempt's
+/// charge start and work window, the runtime's cancel flag — and the previous verification.
 pub struct Ask<'a> {
     pub task: UuidV4<'a>,
     pub attempt: UuidV4<'a>,
@@ -102,7 +102,11 @@ pub struct Ask<'a> {
     pub invocation: UuidV4<'a>,
     pub recipe: Sha256Digest<'a>,
     pub workspace: Sha256Digest<'a>,
-    pub origin: Instant,
+    /// The instant this attempt's work window is charged from (R21 N23): the dispatch origin for
+    /// the first attempt (the preparation is charged to it, B14a-R2.5), the attempt's own begin
+    /// for later ones — the runtime's one value, never re-acquired. A native run's own bound
+    /// (`native::MAX_RUN`) is measured from it.
+    pub charged_from: Instant,
     pub work_until: Instant,
     pub cancelled: &'a AtomicBool,
     pub previous: Option<&'a Previous>,
@@ -650,6 +654,15 @@ pub struct Admitted<'a> {
     shared: plan::Shared,
     origin: Instant,
     deadline: Instant,
+}
+
+impl Admitted<'_> {
+    /// The dispatch's window: its origin (attempt 1's charge start) and its deadline, the origin
+    /// plus `task::TASK_LIMIT` (R21 N1).
+    #[must_use]
+    pub fn window(&self) -> (Instant, Instant) {
+        (self.origin, self.deadline)
+    }
 }
 
 /// Phase one: read the head as the owner, run the free checks and the captures, publish the shared
@@ -1751,9 +1764,9 @@ impl<C: CandidateSource, V: Verifier> driver::Runtime for StoreRuntime<'_, C, V>
 
     fn execute(&mut self, attempt: &Self::Attempt) -> Result<Work, Self::Error> {
         let index = attempt.index;
-        let (id, work_until) = {
+        let (id, charged_from, work_until) = {
             let begun = self.begun(attempt)?;
-            (begun.id.clone(), begun.work_until)
+            (begun.id.clone(), begun.charged_from, begun.work_until)
         };
         let generation = self.begun(attempt)?.generation.clone();
         let [invocation]: [String; 1] = fresh_ids(self.deadline)?;
@@ -1764,7 +1777,7 @@ impl<C: CandidateSource, V: Verifier> driver::Runtime for StoreRuntime<'_, C, V>
             invocation: uuid(&invocation)?,
             recipe: Sha256Digest::parse(&self.profile.digest).map_err(|_| Error::Identity)?,
             workspace: Sha256Digest::parse(&self.digests[0]).map_err(|_| Error::Identity)?,
-            origin: self.origin,
+            charged_from,
             work_until,
             cancelled: &self.cancelled,
             previous: self.previous.as_ref(),

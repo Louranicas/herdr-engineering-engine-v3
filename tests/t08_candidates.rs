@@ -52,7 +52,7 @@ fn class_prompt() -> ClassPrompt {
 
 fn ask<'a>(
     previous: Option<&'a Previous>,
-    origin: Instant,
+    charged_from: Instant,
     work_until: Instant,
     cancelled: &'a AtomicBool,
 ) -> Ask<'a> {
@@ -63,7 +63,7 @@ fn ask<'a>(
         invocation: UuidV4::parse(INVOCATION_ID).unwrap(),
         recipe: Sha256Digest::parse(RECIPE).unwrap(),
         workspace: Sha256Digest::parse(WORKSPACE).unwrap(),
-        origin,
+        charged_from,
         work_until,
         cancelled,
         previous,
