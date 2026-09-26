@@ -15,6 +15,7 @@
 //! objects it made up is narrowed to one door and one production constructor per record type, not
 //! refused.
 
+use super::evidence::reference_row;
 use super::verification::{VerificationVerdict, parse_verdict};
 use super::{Error, Object, Result, number, read_number, register_evidence};
 use crate::contracts::control::EvidenceRef;
@@ -468,30 +469,26 @@ pub(super) fn committed_check(
         .ok_or(Error::NotFound)?;
     let row = db
         .query_row(
-            "SELECT v.event_id,e.sequence,e.kind,e.task_id,v.verdict,v.subject_digest, \
-                    v.evidence_artifact_id,v.evidence_digest,f.size,v.evidence_media_type,v.evidence_schema_id \
+            "SELECT v.evidence_artifact_id,v.evidence_digest,f.size,v.evidence_media_type,v.evidence_schema_id, \
+                    v.event_id,e.sequence,e.kind,e.task_id,v.verdict,v.subject_digest \
              FROM verifications v JOIN events e ON e.id=v.event_id JOIN artifacts f ON f.digest=v.evidence_digest \
              WHERE v.attempt_id=?",
             [attempt],
             |row| {
-                let identified: Option<String> = row.get(6)?;
+                // The receipt's reference, built by the one function every stored reference is
+                // read through (`reference_row`); NULL identity is a row from before migration 6.
+                let identified: Option<String> = row.get(0)?;
                 let evidence = match identified {
-                    Some(_) => Some(serde_json::json!({
-                        "artifact_id": row.get::<_, String>(6)?,
-                        "sha256": row.get::<_, String>(7)?,
-                        "byte_length": read_number(row, 8)?,
-                        "media_type": row.get::<_, String>(9)?,
-                        "schema_id": row.get::<_, String>(10)?,
-                    })),
+                    Some(_) => Some(reference_row(row)?),
                     None => None,
                 };
                 Ok(VerificationRow {
-                    event: row.get(0)?,
-                    sequence: read_number(row, 1)?,
-                    event_kind: row.get(2)?,
-                    event_task: row.get(3)?,
-                    verdict: row.get(4)?,
-                    subject: row.get(5)?,
+                    event: row.get(5)?,
+                    sequence: read_number(row, 6)?,
+                    event_kind: row.get(7)?,
+                    event_task: row.get(8)?,
+                    verdict: row.get(9)?,
+                    subject: row.get(10)?,
                     evidence,
                 })
             },

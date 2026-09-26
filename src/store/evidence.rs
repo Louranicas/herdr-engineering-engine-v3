@@ -175,7 +175,7 @@ fn read_evidence(
 }
 
 /// A stored identity row as the wire's one reader would parse it: a value it refuses is corruption.
-fn reference_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Value> {
+pub(super) fn reference_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Value> {
     Ok(serde_json::json!({
         "artifact_id": row.get::<_, String>(0)?,
         "sha256": row.get::<_, String>(1)?,
