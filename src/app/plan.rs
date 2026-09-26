@@ -922,8 +922,9 @@ mod tests {
     use crate::check::graph::{Graph, Objects as _};
     use crate::check::u64_oracle::FrozenOracle;
     use crate::contracts::receipt::{
-        BuildProfileV1, EffectPageV1, GrantPageV1, LanguageFlagsPageV1, LockPageV1, Ref,
-        StandardPageV1, SubjectFilePageV1, SubjectFileV1Origin, SubjectV1, ToolPageV1, decode,
+        BuildProfileV1, CleanupContractV1, EffectPageV1, GrantPageV1, LanguageFlagsPageV1,
+        LimitsV1, LockPageV1, ObligationPageV1, Ref, StandardPageV1, SubjectFilePageV1,
+        SubjectFileV1Origin, SubjectV1, ToolPageV1, decode,
     };
     use crate::store::ArtifactStaging;
     use crate::worker::namespace::ReadOnlyFile;
@@ -1881,19 +1882,68 @@ mod tests {
             },
         );
         assert!(matches!(refused, Err(Refusal::Patch(_))), "{refused:?}");
+        let before = sink.registered().len();
+        let refused = check(
+            sink,
+            &CheckInputs {
+                shared,
+                profile: &f.profile,
+                baseline: &f.baseline,
+                applied,
+                task: "28fa0000-0000-4000-8000-0000000000a0",
+                attempt: "28fa0000-0000-4000-8000-0000000000b4",
+                run: "28fa0000-0000-4000-8000-0000000000f4",
+                generation: "3",
+                parent_run: None,
+                obligation_ids: &obligation_ids,
+                wall_ms: 250_000,
+                deadline: Instant::now(),
+            },
+        );
+        assert!(matches!(refused, Err(Refusal::Deadline)), "{refused:?}");
+        assert_eq!(
+            sink.registered().len(),
+            before,
+            "a plan refused at its deadline published nothing"
+        );
         Ok(())
     }
 
-    /// One per-check plan asserted whole against its inputs.
+    /// One attempt's caller-varied fields (F129: two attempts differ in every one).
+    struct Attempt<'a> {
+        n: u8,
+        generation: &'a str,
+        parent: Option<&'a str>,
+        obligation_ids: &'a [String; 4],
+    }
+
+    /// One per-check plan asserted whole against its inputs: the identity, the invocation (the
+    /// limits and the cleanup contract decoded from the sink — the wall differs per attempt — and
+    /// the obligation page's four ids the caller's), and the subjects (the result's rows, the
+    /// patch's own lines — a `+` line only the reference holds and a `-` line only the base holds —
+    /// and every shared subject carried).
     fn assert_planned(
+        sink: &Evidence<'_>,
         planned: &super::Planned,
         shared: &super::Shared,
         f: &Fixture,
-        n: u8,
-        generation: &str,
-        parent: Option<&str>,
+        attempt: &Attempt<'_>,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let identity = &planned.prepared.identity;
+        assert_eq!(planned.prepared.schema_sha256.as_str(), schema_sha256());
+        assert_identity(&planned.prepared.identity, attempt);
+        assert_invocation(sink, &planned.prepared.invocation, shared, f, attempt);
+        assert_planned_subjects(sink, &planned.prepared.subjects, shared)?;
+        let case = &planned.prepared.cases[0];
+        assert_eq!(
+            case.reviewed_design.as_ref(),
+            Some(f.profile.declared.reviewed.review())
+        );
+        assert_eq!(case.fixture_sha256, shared.fixtures.as_ref().sha256);
+        Ok(())
+    }
+
+    fn assert_identity(identity: &crate::contracts::receipt::IdentityV1, attempt: &Attempt<'_>) {
+        let n = attempt.n;
         assert_eq!(
             (
                 identity.run_id.as_str(),
@@ -1907,7 +1957,7 @@ mod tests {
                 format!("28fa0000-0000-4000-8000-00000000001{n}").as_str(),
                 "28fa0000-0000-4000-8000-0000000000a0",
                 format!("28fa0000-0000-4000-8000-0000000000b{n}").as_str(),
-                generation,
+                attempt.generation,
                 "check",
                 "rust-library-change/1@",
             )
@@ -1918,9 +1968,9 @@ mod tests {
                 .value
                 .as_ref()
                 .map(crate::contracts::receipt::Id::as_str),
-            parent
+            attempt.parent
         );
-        if parent.is_none() {
+        if attempt.parent.is_none() {
             assert_eq!(
                 identity
                     .parent_run
@@ -1930,7 +1980,15 @@ mod tests {
                 Some("first_attempt")
             );
         }
-        let invocation = &planned.prepared.invocation;
+    }
+
+    fn assert_invocation(
+        sink: &Evidence<'_>,
+        invocation: &crate::contracts::receipt::InvocationV1,
+        shared: &super::Shared,
+        f: &Fixture,
+        attempt: &Attempt<'_>,
+    ) {
         assert_eq!(
             invocation
                 .argv
@@ -1947,25 +2005,71 @@ mod tests {
         );
         assert_eq!(invocation.grants, shared.grants);
         assert_eq!(invocation.allowed_effects, shared.effects);
-        let subjects = &planned.prepared.subjects;
+        assert_eq!(invocation.environment, shared.environment);
+        let wall = 250_000 + u64::from(attempt.n);
+        let limits: LimitsV1 = resolved(sink, &invocation.limits);
+        assert_eq!(
+            (limits.wall_ms.get(), limits.cleanup_deadline_ms.get()),
+            (wall, wall)
+        );
+        let contract: CleanupContractV1 = resolved(sink, &invocation.cleanup_contract);
+        assert_eq!(contract.deadline_ms.get(), wall);
+        let obligations: ObligationPageV1 = resolved(sink, &contract.obligations);
+        assert_eq!(
+            obligations
+                .rows
+                .as_slice()
+                .iter()
+                .map(|row| row.obligation_id.as_str().to_owned())
+                .collect::<Vec<_>>(),
+            attempt.obligation_ids.to_vec()
+        );
+    }
+
+    fn assert_planned_subjects(
+        sink: &Evidence<'_>,
+        subjects: &crate::contracts::receipt::SubjectsV1,
+        shared: &super::Shared,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         assert_eq!(subjects.seed_subject, shared.seed);
-        assert!(subjects.result_subject.value.is_some());
+        let result = subjects
+            .result_subject
+            .value
+            .as_ref()
+            .ok_or("result present")?;
+        assert_eq!(
+            subject_paths(sink, &resolved(sink, result)),
+            vec![
+                ("src".to_owned(), SubjectFileV1Origin::Authored),
+                ("src/lib.rs".to_owned(), SubjectFileV1Origin::Authored),
+            ]
+        );
         let patch = subjects
             .seed_to_result_patch
             .value
             .as_ref()
             .ok_or("patch present")?;
+        let mut bytes = Vec::new();
+        std::io::Read::read_to_end(
+            &mut sink.open(patch.as_ref()).map_err(|e| format!("{e:?}"))?,
+            &mut bytes,
+        )?;
+        let text = std::str::from_utf8(&bytes)?;
         assert!(
-            patch.as_ref().byte_length > 0,
-            "the reference differs from the base"
+            text.contains("\n+    if !input.bytes().all(|byte| byte.is_ascii_digit()) {\n")
+                && text.contains("\n-/// Parse decimal text.\n"),
+            "the patch is base -> reference:\n{text}"
         );
         assert_eq!(subjects.collector, shared.collector);
-        let case = &planned.prepared.cases[0];
-        assert_eq!(
-            case.reviewed_design.as_ref(),
-            Some(f.profile.declared.reviewed.review())
-        );
-        assert_eq!(case.fixture_sha256, shared.fixtures.as_ref().sha256);
+        assert_eq!(subjects.fixtures, shared.fixtures);
+        assert_eq!(subjects.oracle, shared.oracle);
+        assert_eq!(subjects.harness, shared.harness);
+        assert_eq!(subjects.launcher, shared.launcher);
+        assert_eq!(subjects.locks, shared.locks);
+        assert_eq!(subjects.toolchain, shared.toolchain);
+        assert_eq!(subjects.target_features_build_profile, shared.build);
+        assert_eq!(subjects.standards, shared.standards);
+        assert_eq!(subjects.isolation_profile, shared.isolation);
         Ok(())
     }
 
@@ -2036,7 +2140,18 @@ mod tests {
                 "result subject 3, patch, specification, limits, obligations, contract"
             );
             assert_eq!(sink.registered().len(), before + 8);
-            assert_planned(&planned, &shared, &f, n, generation, parent)?;
+            assert_planned(
+                &sink,
+                &planned,
+                &shared,
+                &f,
+                &Attempt {
+                    n,
+                    generation,
+                    parent,
+                    obligation_ids: &obligation_ids,
+                },
+            )?;
             runs.push(planned.prepared.identity.run_id.as_str().to_owned());
         }
         assert_ne!(runs[0], runs[1]);

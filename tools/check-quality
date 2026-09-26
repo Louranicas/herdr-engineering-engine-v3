@@ -223,7 +223,7 @@ T06_UNIT_COUNTS = {
     "app::repair::tests::": 7, "worker::namespace::": 8,
     "check::patch::tests::": 6, "app::class_profile::tests::": 18,
     "worker::resources::limit_tests::": 3, "worker::workspace::manifest_tests::": 2,
-    "app::runtime::tests::": 5, "app::run_records::tests::": 8,
+    "app::runtime::tests::": 6, "app::run_records::tests::": 8,
     "app::live_verifier::tests::": 2, "app::plan::tests::": 4, "app::u64_receipt::tests::": 9, "worker::host::tests::": 1,
 }
 

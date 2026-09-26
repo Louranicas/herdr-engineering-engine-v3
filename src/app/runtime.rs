@@ -2099,7 +2099,8 @@ fn cited<'a>(
     })
 }
 
-/// The identity a receipt is accepted under: its graph resolved from the ledger's objects, every
+/// The identity a receipt is accepted under: its graph resolved from the ledger's objects, its
+/// `run_id` the artifact id it is committed under (R17 round 2, decision 3), every
 /// `run_record:<kind>` artifact row equal to the committed record of that kind and every committed
 /// record cited, the clock present — the receipt form of [`cited`].
 fn cited_receipt<'a>(
@@ -2123,6 +2124,9 @@ fn cited_receipt<'a>(
     .map_err(|_| Error::Identity)?;
     let receipt: ReceiptV1 = decode(graph.get(&root).map_err(|_| Error::Identity)?.bytes())
         .map_err(|_| Error::Identity)?;
+    if receipt.identity.run_id.as_str() != evidence.artifact_id {
+        return Err(Error::Identity);
+    }
     let mut cited: Vec<(RunRecordKind, String, String, u64)> = Vec::new();
     for row in graph
         .rows(receipt.artifacts.inventory.as_ref())
@@ -2368,6 +2372,234 @@ mod tests {
             cited(U64_CHECK_SCHEMA, ID, &sound, |_| None),
             Err(Error::Identity)
         ));
+        Ok(())
+    }
+
+    /// The committed run records as the ledger holds them: `(kind, artifact id, object)`.
+    type Committed = Vec<(RunRecordKind, String, crate::store::Object)>;
+
+    /// The committed set as `cited_receipt` reads it: `(artifact id, digest, size)` by kind.
+    fn lookup<'a>(
+        records: &'a [(RunRecordKind, String, crate::store::Object)],
+    ) -> impl Fn(RunRecordKind) -> Option<(&'a str, &'a str, u64)> + 'a {
+        move |kind| {
+            records
+                .iter()
+                .find(|(held, ..)| *held == kind)
+                .map(|(_, id, object)| (id.as_str(), object.digest(), object.size()))
+        }
+    }
+
+    /// A receipt composed into the ledger through the runtime's own sink over the fixture plan and
+    /// `cited` of the built records, its root committed under `root_id`; returns the root object.
+    fn composed_into(
+        store: &crate::store::Store,
+        deadline: Instant,
+        built: &crate::app::u64_receipt::fixtures::BuiltRecords,
+        cited: &[(RunRecordKind, String, crate::store::Object)],
+        root_id: &str,
+    ) -> Result<crate::store::Object, Box<dyn std::error::Error>> {
+        use super::Sink;
+        use crate::app::u64_receipt::fixtures::{fixture_objects, fixture_prepared, host_fixture};
+        use crate::app::u64_receipt::{Composing, Readbacks, compose};
+        use crate::check::collector::Sink as _;
+        let (clock, outcome, cleanup, _) = built;
+        let prepared = fixture_prepared()?;
+        let host = host_fixture();
+        let obligation_ids = ["28fb0000-0000-4000-8000-000000000031".to_owned()];
+        let mut sink = Sink::new(store, deadline);
+        for (reference, bytes) in fixture_objects()? {
+            sink.publish(&reference, &bytes)
+                .map_err(|e| format!("{e:?}"))?;
+        }
+        let composed = compose(
+            &mut sink,
+            &Composing {
+                prepared: &prepared,
+                clock,
+                outcome,
+                cleanup,
+                records: cited,
+                captures: &[],
+                evaluation: None,
+                obligation_ids: &obligation_ids,
+                root_id: Some(root_id),
+                host: &host,
+                readbacks: Readbacks {
+                    seed: Some(true),
+                    result: Some(true),
+                    fixtures: Some(true),
+                    oracle: Some(true),
+                    harness: Some(true),
+                    launcher: Some(true),
+                    toolchain: Some(true),
+                    profile: Some(true),
+                },
+            },
+        )
+        .map_err(|e| format!("{e:?}"))?;
+        let root = composed.root.as_ref();
+        assert_eq!(root.artifact_id.as_str(), root_id);
+        Ok(crate::store::Object::of(
+            root.sha256.as_str(),
+            u64::from(root.byte_length),
+        ))
+    }
+
+    /// The commitment varied one field at a time from `records`: the clock's id, digest and size
+    /// (taken from or moved off the cleanup's), a cited kind not committed, and no clock at all.
+    fn varied_commitments(records: &Committed) -> [(&'static str, Committed); 5] {
+        use crate::store::Object;
+        let index = |kind: RunRecordKind| {
+            records
+                .iter()
+                .position(|(held, ..)| *held == kind)
+                .unwrap_or_else(|| unreachable!("{kind:?} committed"))
+        };
+        let (clock_at, cleanup_at) = (
+            index(RunRecordKind::RunClock),
+            index(RunRecordKind::RunCleanup),
+        );
+        let varied = |edit: &dyn Fn(&mut Committed)| {
+            let mut varied = records.clone();
+            edit(&mut varied);
+            varied
+        };
+        [
+            (
+                "id swapped",
+                varied(&|v| v[clock_at].1 = records[cleanup_at].1.clone()),
+            ),
+            (
+                "digest swapped",
+                varied(&|v| {
+                    v[clock_at].2 =
+                        Object::of(records[cleanup_at].2.digest(), records[clock_at].2.size());
+                }),
+            ),
+            (
+                "size off by one",
+                varied(&|v| {
+                    v[clock_at].2 =
+                        Object::of(records[clock_at].2.digest(), records[clock_at].2.size() + 1);
+                }),
+            ),
+            (
+                "a cited kind not committed",
+                varied(&|v| v.retain(|(kind, ..)| *kind != RunRecordKind::Readbacks)),
+            ),
+            (
+                "no clock",
+                varied(&|v| v.retain(|(kind, ..)| *kind != RunRecordKind::RunClock)),
+            ),
+        ]
+    }
+
+    /// R17 round 2, 2c-iii · the accept walk over a receipt: composed into the ledger through the
+    /// runtime's own sink and read back as the graph the ledger holds, the receipt yields its
+    /// identity — its root under the verification's artifact id, which is its `run_id` (decision
+    /// 3). It is refused `Identity` when the commitment differs from what it cites (an id, a
+    /// digest, a size, a cited kind not committed, a committed kind not cited, no clock), when the
+    /// evidence names another artifact id, when the evidence's object is not a receipt, and when
+    /// the root is not in the ledger at all.
+    #[test]
+    fn a_receipt_is_accepted_only_as_the_graph_the_ledger_committed()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use super::{CheckWindow, Evidence, cited_receipt};
+        use crate::app::u64_receipt::fixtures::built_records;
+        use crate::contracts::UuidV4;
+        use crate::contracts::receipt::{Address as _, ReceiptV1};
+        use crate::store::{Object, Store};
+        use std::os::unix::fs::DirBuilderExt;
+
+        // The fixture plan's `run_id`: the root is committed under it (decision 3).
+        const ROOT: &str = "73000000-0000-4000-8000-000000000002";
+        const OTHER: &str = "73000000-0000-4000-8000-0000000000ee";
+        let area =
+            std::env::temp_dir().join(format!("hee3-runtime-receipt-{}", std::process::id()));
+        std::fs::DirBuilder::new().mode(0o700).create(&area)?;
+        let deadline = Instant::now() + Duration::from_secs(60);
+        let store = Store::open(
+            &area,
+            UuidV4::parse("28fb0000-0000-4000-8000-000000000001")?,
+            UuidV4::parse("28fb0000-0000-4000-8000-000000000002")?,
+            true,
+            deadline,
+        )
+        .map_err(|e| format!("{e:?}"))?;
+        let begun = Instant::now();
+        let window = CheckWindow {
+            begun,
+            begun_unix_ms: 1_758_900_000_000,
+            until: begun + Duration::from_secs(290),
+            teardown_until: begun + Duration::from_secs(300),
+        };
+        let built = built_records(
+            &|bytes, id| store.publish(bytes, id, deadline),
+            &window,
+            begun + Duration::from_millis(41),
+        )?;
+        let records: Committed = built.3.clone();
+        // One receipt over all four records; a second over three — a committed kind it does not
+        // cite.
+        let whole = composed_into(&store, deadline, &built, &records, ROOT)?;
+        let partial = composed_into(&store, deadline, &built, &records[..3], ROOT)?;
+        assert_ne!(whole, partial, "three records cited is another receipt");
+        let evidence = |artifact_id: &str, object: &Object| Evidence {
+            object: object.clone(),
+            subject: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+                .to_owned(),
+            artifact_id: artifact_id.to_owned(),
+            schema_id: ReceiptV1::SCHEMA_ID.to_owned(),
+        };
+        let sound = evidence(ROOT, &whole);
+        let identity = cited_receipt(&store, deadline, &sound, lookup(&records))
+            .map_err(|e| format!("{e:?}"))?;
+        assert_eq!(
+            (
+                identity.artifact_id.as_str(),
+                identity.media_type,
+                identity.schema_id
+            ),
+            (ROOT, CHECK_MEDIA_TYPE, ReceiptV1::SCHEMA_ID)
+        );
+        for (label, commitment) in &varied_commitments(&records) {
+            assert!(
+                matches!(
+                    cited_receipt(&store, deadline, &sound, lookup(commitment)),
+                    Err(Error::Identity)
+                ),
+                "{label}"
+            );
+        }
+        // The evidence itself: a committed kind the receipt does not cite, another artifact id
+        // over the same bytes, a committed object that is not a receipt, and a root the ledger
+        // does not hold.
+        let clock = records
+            .iter()
+            .find(|(kind, ..)| *kind == RunRecordKind::RunClock)
+            .map(|(_, _, object)| object.clone())
+            .ok_or("a clock")?;
+        let absent = Object::of(
+            "sha256:00000000000000000000000000000000000000000000000000000000000000ab",
+            17,
+        );
+        for (label, wrong) in [
+            ("a committed kind not cited", evidence(ROOT, &partial)),
+            ("another artifact id", evidence(OTHER, &whole)),
+            ("not a receipt", evidence(ROOT, &clock)),
+            ("not in the ledger", evidence(ROOT, &absent)),
+        ] {
+            assert!(
+                matches!(
+                    cited_receipt(&store, deadline, &wrong, lookup(&records)),
+                    Err(Error::Identity)
+                ),
+                "{label}"
+            );
+        }
+        drop(store);
+        std::fs::remove_dir_all(&area)?;
         Ok(())
     }
 }

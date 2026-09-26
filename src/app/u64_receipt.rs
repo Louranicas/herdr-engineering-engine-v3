@@ -322,8 +322,196 @@ impl Objects for LedgerObjects<'_> {
     }
 }
 
+/// Test fixtures shared with the runtime's own tests (2c-iii): the world's prepared plan, the four
+/// records built by their constructors, and this host's facts.
+#[cfg(test)]
+pub(crate) mod fixtures {
+    use super::{Prepared, host};
+    use crate::app::runtime::CheckWindow;
+    use crate::check::consistency;
+    use crate::contracts::UuidV4;
+    use crate::contracts::receipt::{List, Name, Sha, TypedRef};
+    use crate::store::RunRecordKind;
+
+    /// A published object's door: a staging's or the ledger's `publish`.
+    pub(crate) type Publish<'a> =
+        &'a dyn Fn(&[u8], UuidV4<'_>) -> Result<crate::store::Object, crate::store::Error>;
+    /// The objects a fixture cites, as `(reference, bytes)`.
+    pub(crate) type FixtureObjects = Vec<(crate::contracts::receipt::Ref, Vec<u8>)>;
+
+    /// The objects the world's prepared plan cites (`tests/fixtures/receipt-import/nonpass.json`),
+    /// as `(reference, bytes)`, for a sink to publish before composing over the plan.
+    pub(crate) fn fixture_objects() -> Result<FixtureObjects, Box<dyn std::error::Error>> {
+        #[derive(serde::Deserialize)]
+        struct FixtureObject {
+            reference: crate::contracts::receipt::Ref,
+            bytes: String,
+        }
+        #[derive(serde::Deserialize)]
+        struct Fixture {
+            objects: Vec<FixtureObject>,
+        }
+        let fixture: Fixture = serde_json::from_str(include_str!(
+            "../../tests/fixtures/receipt-import/nonpass.json"
+        ))?;
+        Ok(fixture
+            .objects
+            .into_iter()
+            .map(|row| (row.reference, row.bytes.into_bytes()))
+            .collect())
+    }
+
+    /// The world's prepared plan (`tests/fixtures/receipt-import/preparation.json`), as the
+    /// receipt-import lane reads it.
+    pub(crate) fn fixture_prepared() -> Result<Prepared, Box<dyn std::error::Error>> {
+        use crate::contracts::receipt::{IdentityV1, InvocationV1, SubjectsV1};
+        #[derive(serde::Deserialize)]
+        struct PlannedCase {
+            case_id: Name,
+            primary_module_id: Name,
+            criterion_ids: List<Name>,
+            fixture_sha256: Sha,
+            oracle_id: Name,
+            expected: TypedRef<crate::contracts::receipt::ExpectationV1>,
+            mandatory: bool,
+            selected: bool,
+            excluded: bool,
+        }
+        #[derive(serde::Deserialize)]
+        struct Preparation {
+            schema_sha256: Sha,
+            identity: IdentityV1,
+            subjects: SubjectsV1,
+            invocation: InvocationV1,
+            cases: Vec<PlannedCase>,
+        }
+        let preparation: Preparation = serde_json::from_str(include_str!(
+            "../../tests/fixtures/receipt-import/preparation.json"
+        ))?;
+        Ok(Prepared {
+            schema_sha256: preparation.schema_sha256,
+            identity: preparation.identity,
+            subjects: preparation.subjects,
+            invocation: preparation.invocation,
+            cases: preparation
+                .cases
+                .into_iter()
+                .map(|case| consistency::CasePlan {
+                    case_id: case.case_id,
+                    primary_module_id: case.primary_module_id,
+                    criterion_ids: case.criterion_ids,
+                    fixture_sha256: case.fixture_sha256,
+                    oracle_id: case.oracle_id,
+                    expected: case.expected,
+                    mandatory: case.mandatory,
+                    selected: case.selected,
+                    excluded: case.excluded,
+                    reviewed_design: None,
+                })
+                .collect(),
+            editable: consistency::Editable {
+                path: crate::contracts::receipt::RelPath::new("src/lib.rs")?,
+                bounds: crate::check::patch::CandidateBounds {
+                    bytes: 65_536,
+                    changed_lines: 200,
+                },
+            },
+        })
+    }
+
+    /// The four records, built by their constructors over a run that never launched, each
+    /// published through `publish` (a staging's door or the ledger's) under a fresh id:
+    /// `(clock, outcome, cleanup, (kind, artifact id, object))`.
+    pub(crate) fn built_records(
+        publish: Publish<'_>,
+        window: &CheckWindow,
+        observed: std::time::Instant,
+    ) -> Result<BuiltRecords, Box<dyn std::error::Error>> {
+        use crate::app::run_records::{
+            Intents, ObligationRecord, Readbacks as ReadbacksRecord, RunCleanup, RunClock,
+            RunOutcome, RunRecord as _, RuntimeClock, Settlement,
+        };
+        use crate::app::workload::{Outcome as RunOutcomeKind, Run};
+        let clock = RunClock::observe(
+            &RuntimeClock {
+                origin: window.begun,
+                origin_unix_ms: window.begun_unix_ms,
+                work_until: window.until,
+                deadline: window.teardown_until,
+            },
+            Intents::default(),
+            None,
+            observed,
+        )
+        .map_err(|e| format!("{e:?}"))?;
+        let run = Run::unlaunched(RunOutcomeKind::SetupFailed);
+        let outcome = RunOutcome::of(&run, &[]).map_err(|e| format!("{e:?}"))?;
+        let obligations = [
+            ObligationRecord {
+                id: "process".to_owned(),
+                state: Settlement::Settled,
+            },
+            ObligationRecord {
+                id: "scratch".to_owned(),
+                state: Settlement::Settled,
+            },
+            ObligationRecord {
+                id: "retained_paths".to_owned(),
+                state: Settlement::Settled,
+            },
+            ObligationRecord {
+                id: "resources".to_owned(),
+                state: Settlement::Unknown,
+            },
+        ];
+        let cleanup = RunCleanup::of(Settlement::Settled, &obligations, &[]);
+        let attempt = "28f60000-0000-4000-8000-000000000001";
+        let readbacks = ReadbacksRecord::of(UuidV4::parse(attempt)?, true, true, &[]);
+        let mut records = Vec::new();
+        for (index, (kind, bytes)) in [
+            (RunRecordKind::RunClock, clock.to_bytes()),
+            (RunRecordKind::RunOutcome, outcome.to_bytes()),
+            (RunRecordKind::RunCleanup, cleanup.to_bytes()),
+            (RunRecordKind::Readbacks, readbacks.to_bytes()),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let bytes = bytes.map_err(|e| format!("{e:?}"))?;
+            let id = format!("28f60000-0000-4000-8000-0000000000{index:02x}");
+            let staging_id = format!("28f60000-0000-4000-8000-0000000000{:02x}", index + 16);
+            let object =
+                publish(&bytes, UuidV4::parse(&staging_id)?).map_err(|e| format!("{e:?}"))?;
+            records.push((kind, id, object));
+        }
+        Ok((clock, outcome, cleanup, records))
+    }
+
+    pub(crate) type BuiltRecords = (
+        crate::app::run_records::RunClock,
+        crate::app::run_records::RunOutcome,
+        crate::app::run_records::RunCleanup,
+        Vec<(RunRecordKind, String, crate::store::Object)>,
+    );
+
+    /// This host's facts (2026-09-26), as `worker::host::facts` would read them.
+    pub(crate) fn host_fixture() -> host::Facts {
+        host::Facts {
+            os: "fedora".to_owned(),
+            release: "44".to_owned(),
+            architecture: "x86_64".to_owned(),
+            kernel: "7.2.5-200.fc44.x86_64".to_owned(),
+            boot_id: "270eb2e7-bf61-4a5c-9618-2c7e71817fb4".to_owned(),
+            logical_cpus: 16,
+            memory_bytes: 100_926_410_752,
+            raw: b"os-release\nversion\n".to_vec(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use super::fixtures::{built_records, fixture_objects, fixture_prepared, host_fixture};
     use super::{
         Composing, OBLIGATIONS, RUNTIME_OWNER, Readbacks, Refusal, STRICT_EMPTY_DIAGNOSTICS,
         ZERO_EXTERNAL_COST, cited_kind, cleanup_contract, compose, diagnostics_of,
@@ -333,14 +521,12 @@ mod tests {
     use crate::app::evidence::Evidence;
     use crate::app::runtime::{CheckWindow, declared_criteria};
     use crate::check::collector;
-    use crate::check::consistency::{self, Prepared};
     use crate::check::decision::{DiagnosticState, Identity, IdentityState};
     use crate::contracts::receipt::{
-        Id, List, Name, ObligationPageV1, ObligationV1State, ObservationsV1Cleanup, Payload,
-        ReceiptV1, Ref, Sha, Text, TypedRef, VerdictV1State,
+        Id, Name, ObligationPageV1, ObligationV1State, ObservationsV1Cleanup, Payload, ReceiptV1,
+        Ref, Sha, Text, TypedRef, VerdictV1State,
     };
     use crate::store::{RunRecordKind, VerificationVerdict};
-    use crate::worker::host;
 
     /// R16.1 · every kind's role round-trips, and a role that is not a run record's cites nothing.
     #[test]
@@ -689,155 +875,6 @@ mod tests {
         );
     }
 
-    /// The world's prepared plan (`tests/fixtures/receipt-import/preparation.json`), as the
-    /// receipt-import lane reads it.
-    fn fixture_prepared() -> Result<Prepared, Box<dyn std::error::Error>> {
-        use crate::contracts::receipt::{IdentityV1, InvocationV1, SubjectsV1};
-        #[derive(serde::Deserialize)]
-        struct PlannedCase {
-            case_id: Name,
-            primary_module_id: Name,
-            criterion_ids: List<Name>,
-            fixture_sha256: Sha,
-            oracle_id: Name,
-            expected: TypedRef<crate::contracts::receipt::ExpectationV1>,
-            mandatory: bool,
-            selected: bool,
-            excluded: bool,
-        }
-        #[derive(serde::Deserialize)]
-        struct Preparation {
-            schema_sha256: Sha,
-            identity: IdentityV1,
-            subjects: SubjectsV1,
-            invocation: InvocationV1,
-            cases: Vec<PlannedCase>,
-        }
-        let preparation: Preparation = serde_json::from_str(include_str!(
-            "../../tests/fixtures/receipt-import/preparation.json"
-        ))?;
-        Ok(Prepared {
-            schema_sha256: preparation.schema_sha256,
-            identity: preparation.identity,
-            subjects: preparation.subjects,
-            invocation: preparation.invocation,
-            cases: preparation
-                .cases
-                .into_iter()
-                .map(|case| consistency::CasePlan {
-                    case_id: case.case_id,
-                    primary_module_id: case.primary_module_id,
-                    criterion_ids: case.criterion_ids,
-                    fixture_sha256: case.fixture_sha256,
-                    oracle_id: case.oracle_id,
-                    expected: case.expected,
-                    mandatory: case.mandatory,
-                    selected: case.selected,
-                    excluded: case.excluded,
-                    reviewed_design: None,
-                })
-                .collect(),
-            editable: consistency::Editable {
-                path: crate::contracts::receipt::RelPath::new("src/lib.rs")?,
-                bounds: crate::check::patch::CandidateBounds {
-                    bytes: 65_536,
-                    changed_lines: 200,
-                },
-            },
-        })
-    }
-
-    /// The four records, built by their constructors over a run that never launched, each
-    /// published into the staging under a fresh id: `(clock, cleanup, (kind, artifact id, object))`.
-    fn built_records(
-        staging: &crate::store::ArtifactStaging,
-        deadline: std::time::Instant,
-        window: &CheckWindow,
-        observed: std::time::Instant,
-    ) -> Result<BuiltRecords, Box<dyn std::error::Error>> {
-        use crate::app::run_records::{
-            Intents, ObligationRecord, Readbacks as ReadbacksRecord, RunCleanup, RunClock,
-            RunOutcome, RunRecord as _, RuntimeClock, Settlement,
-        };
-        use crate::app::workload::{Outcome as RunOutcomeKind, Run};
-        use crate::contracts::UuidV4;
-        let clock = RunClock::observe(
-            &RuntimeClock {
-                origin: window.begun,
-                origin_unix_ms: window.begun_unix_ms,
-                work_until: window.until,
-                deadline: window.teardown_until,
-            },
-            Intents::default(),
-            None,
-            observed,
-        )
-        .map_err(|e| format!("{e:?}"))?;
-        let run = Run::unlaunched(RunOutcomeKind::SetupFailed);
-        let outcome = RunOutcome::of(&run, &[]).map_err(|e| format!("{e:?}"))?;
-        let obligations = [
-            ObligationRecord {
-                id: "process".to_owned(),
-                state: Settlement::Settled,
-            },
-            ObligationRecord {
-                id: "scratch".to_owned(),
-                state: Settlement::Settled,
-            },
-            ObligationRecord {
-                id: "retained_paths".to_owned(),
-                state: Settlement::Settled,
-            },
-            ObligationRecord {
-                id: "resources".to_owned(),
-                state: Settlement::Unknown,
-            },
-        ];
-        let cleanup = RunCleanup::of(Settlement::Settled, &obligations, &[]);
-        let attempt = "28f60000-0000-4000-8000-000000000001";
-        let readbacks = ReadbacksRecord::of(UuidV4::parse(attempt)?, true, true, &[]);
-        let mut records = Vec::new();
-        for (index, (kind, bytes)) in [
-            (RunRecordKind::RunClock, clock.to_bytes()),
-            (RunRecordKind::RunOutcome, outcome.to_bytes()),
-            (RunRecordKind::RunCleanup, cleanup.to_bytes()),
-            (RunRecordKind::Readbacks, readbacks.to_bytes()),
-        ]
-        .into_iter()
-        .enumerate()
-        {
-            let bytes = bytes.map_err(|e| format!("{e:?}"))?;
-            let id = format!("28f60000-0000-4000-8000-0000000000{index:02x}");
-            let staging_id = format!("28f60000-0000-4000-8000-0000000000{:02x}", index + 16);
-            let object = staging
-                .publish(&bytes, UuidV4::parse(&staging_id)?, deadline)
-                .map_err(|e| format!("{e:?}"))?;
-            records.push((kind, id, object));
-        }
-        Ok((clock, outcome, cleanup, records))
-    }
-
-    type BuiltRecords = (
-        crate::app::run_records::RunClock,
-        crate::app::run_records::RunOutcome,
-        crate::app::run_records::RunCleanup,
-        Vec<(RunRecordKind, String, crate::store::Object)>,
-    );
-
-    /// This host's facts (2026-09-26), as `worker::host::facts` would read them.
-    fn host_fixture() -> host::Facts {
-        host::Facts {
-            os: "fedora".to_owned(),
-            release: "44".to_owned(),
-            architecture: "x86_64".to_owned(),
-            kernel: "7.2.5-200.fc44.x86_64".to_owned(),
-            boot_id: "270eb2e7-bf61-4a5c-9618-2c7e71817fb4".to_owned(),
-            logical_cpus: 16,
-            memory_bytes: 100_926_410_752,
-            raw: b"os-release\nversion\n".to_vec(),
-        }
-    }
-
     /// The three refusals by name: too few obligation ids (with both numbers), vector counts
     /// without a match, and a plan with no case.
     /// One refused compose: nothing is registered or published by it — the sink's footprint is
@@ -1065,26 +1102,14 @@ mod tests {
         use std::os::unix::fs::DirBuilderExt;
         use std::time::{Duration, Instant};
 
-        #[derive(serde::Deserialize)]
-        struct FixtureObject {
-            reference: Ref,
-            bytes: String,
-        }
-        #[derive(serde::Deserialize)]
-        struct Fixture {
-            objects: Vec<FixtureObject>,
-        }
         let prepared = fixture_prepared()?;
-        let fixture: Fixture = serde_json::from_str(include_str!(
-            "../../tests/fixtures/receipt-import/nonpass.json"
-        ))?;
         let area = std::env::temp_dir().join(format!("hee3-u64-receipt-{}", std::process::id()));
         std::fs::DirBuilder::new().mode(0o700).create(&area)?;
         let deadline = Instant::now() + Duration::from_secs(60);
         let staging = ArtifactStaging::open(&area, true, deadline).map_err(|e| format!("{e:?}"))?;
         let mut sink = Evidence::staged(&staging, deadline);
-        for row in &fixture.objects {
-            sink.publish(&row.reference, row.bytes.as_bytes())
+        for (reference, bytes) in fixture_objects()? {
+            sink.publish(&reference, &bytes)
                 .map_err(|e| format!("{e:?}"))?;
         }
         // The records, built by their constructors over a run that never launched.
@@ -1096,8 +1121,11 @@ mod tests {
             teardown_until: begun + Duration::from_secs(300),
         };
         let observed = begun + Duration::from_millis(41);
-        let (clock, outcome, cleanup, records) =
-            built_records(&staging, deadline, &window, observed)?;
+        let (clock, outcome, cleanup, records) = built_records(
+            &|bytes, id| staging.publish(bytes, id, deadline),
+            &window,
+            observed,
+        )?;
         let host_facts = host_fixture();
         let obligation_ids = ["28f60000-0000-4000-8000-000000000031".to_owned()];
         let composing = Composing {
