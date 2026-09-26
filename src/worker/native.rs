@@ -393,7 +393,8 @@ pub const ADAPTERS: [AdapterProfile; 2] = [
 pub const MAX_RUN: Duration = Duration::from_mins(15);
 /// The qualified profile's id (the first table entry), as every fixture names it.
 pub const PROFILE: &str = ADAPTERS[0].id;
-/// The full-file profile (the second table entry): the native candidate source's.
+/// The full-file profile (the second table entry): the fixtures' default. The row a native source
+/// runs under is the one it is constructed with (R21 N10); this constant chooses nothing.
 pub const FULL_FILE: &AdapterProfile = &ADAPTERS[1];
 pub const PROVIDER: &str = "ollama-local";
 
@@ -402,6 +403,10 @@ pub const PROVIDER: &str = "ollama-local";
 pub fn adapter(id: &str) -> Option<&'static AdapterProfile> {
     ADAPTERS.iter().find(|profile| profile.id == id)
 }
+/// The daemon's listener. Stated gap (R21 N20): nothing ties the process listening here to the
+/// pinned daemon pid — `daemon` checks the pid's incarnation and executable, the exchanges reach
+/// whatever listens at this address, and `runtime_instance` is derived from the pid. The value's
+/// world source is the user unit's `Environment=OLLAMA_HOST=127.0.0.1:11434`.
 const ENDPOINT: &str = "http://127.0.0.1:11434/api/";
 const FRAME_LIMIT: usize = 65_536;
 const MODEL_LIMIT: u64 = 4 * 1024 * 1024 * 1024;
@@ -574,7 +579,7 @@ struct CatalogueModel {
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Loaded {
+struct Resident {
     models: Vec<LoadedModel>,
 }
 #[derive(Deserialize)]
@@ -812,16 +817,25 @@ fn clean(report: &ProcessReport) -> bool {
         && !report.stderr.truncated
         && report.stderr.bytes.is_empty()
 }
+/// One exchange with the daemon, by kind: a readback carries no body and cannot move the provider
+/// observation; a generation carries the request body and the provider slot it marks `Unknown`
+/// once it is past the door (R21 N5: the slots, never a whole `Run`, so a load has no contract).
+enum Operation<'p> {
+    Read(&'static str),
+    Generate {
+        provider: &'p mut ProviderState,
+        input: Vec<u8>,
+    },
+}
 fn exchange(
-    run: &mut Run<'_>,
+    exchanges: &mut Vec<Exchange>,
     profile: &Profile,
-    operation: &'static str,
-    input: Vec<u8>,
+    operation: Operation<'_>,
     deadline: Instant,
     cancelled: &AtomicBool,
 ) -> Result<Vec<u8>, Error> {
     tick(deadline, cancelled)?;
-    let generation = operation == "generate";
+    let generation = matches!(operation, Operation::Generate { .. });
     let seconds = if generation { 180 } else { 5 };
     let until = deadline.min(Instant::now() + Duration::from_secs(seconds));
     let mut arguments = vec![
@@ -840,16 +854,20 @@ fn exchange(
         "--proto".into(),
         "=http".into(),
     ];
-    if generation {
-        arguments.extend([
-            "--header".into(),
-            "Content-Type: application/json".into(),
-            "--data-binary".into(),
-            "@-".into(),
-        ]);
-        run.provider = ProviderState::Unknown;
-    }
-    arguments.push(format!("{ENDPOINT}{operation}").into());
+    let (name, input) = match operation {
+        Operation::Read(name) => (name, Vec::new()),
+        Operation::Generate { provider, input } => {
+            arguments.extend([
+                "--header".into(),
+                "Content-Type: application/json".into(),
+                "--data-binary".into(),
+                "@-".into(),
+            ]);
+            *provider = ProviderState::Unknown;
+            ("generate", input)
+        }
+    };
+    arguments.push(format!("{ENDPOINT}{name}").into());
     let spec = ProcessSpec {
         executable: profile.client.path.clone(),
         arguments,
@@ -864,43 +882,43 @@ fn exchange(
         .ok()
         .filter(|r| clean(r))
         .map(|r| r.stdout.bytes.clone());
-    run.exchanges.push(Exchange { operation, result });
+    exchanges.push(Exchange {
+        operation: name,
+        result,
+    });
     raw.ok_or(Error::Process)
 }
-fn identity(
-    run: &mut Run<'_>,
+/// The catalogue half of the identity readback (R21 N4): the packaged version, and exactly one
+/// `/api/tags` row named for the profile's model among at most 64, carrying the manifest's digest
+/// and the local llama details. Returns the catalogue's raw bytes, as read.
+fn catalogue(
+    exchanges: &mut Vec<Exchange>,
     profile: &Profile,
-    adapter: &AdapterProfile,
     deadline: Instant,
     cancelled: &AtomicBool,
-) -> Result<Identity, Error> {
+) -> Result<Vec<u8>, Error> {
     let version: Version = parse(&exchange(
-        run,
+        exchanges,
         profile,
-        "version",
-        vec![],
+        Operation::Read("version"),
         deadline,
         cancelled,
     )?)?;
     if version.version != "0.0.0" {
         return Err(Error::Identity);
     }
-    let tags: Catalogue = parse(&exchange(
-        run,
+    let raw = exchange(
+        exchanges,
         profile,
-        "tags",
-        vec![],
+        Operation::Read("tags"),
         deadline,
         cancelled,
-    )?)?;
+    )?;
+    let tags: Catalogue = parse(&raw)?;
     if tags.models.len() > 64 {
         return Err(Error::Identity);
     }
-    let digest = profile
-        .manifest
-        .sha256
-        .strip_prefix("sha256:")
-        .ok_or(Error::Identity)?;
+    let digest = manifest_digest(profile)?;
     let matching: Vec<_> = tags
         .models
         .iter()
@@ -920,8 +938,34 @@ fn identity(
     {
         return Err(Error::Identity);
     }
-    let raw = exchange(run, profile, "ps", vec![], deadline, cancelled)?;
-    let loaded: Loaded = parse(&raw)?;
+    Ok(raw)
+}
+fn manifest_digest(profile: &Profile) -> Result<&str, Error> {
+    profile
+        .manifest
+        .sha256
+        .strip_prefix("sha256:")
+        .ok_or(Error::Identity)
+}
+/// The resident half of the identity readback (R21 N4): exactly one `/api/ps` row carrying the
+/// manifest's digest, resident at the adapter's context. An idle daemon (`{"models":[]}`) is
+/// `Identity` here, so a load runs this only after its generate.
+fn resident(
+    exchanges: &mut Vec<Exchange>,
+    profile: &Profile,
+    adapter: &AdapterProfile,
+    deadline: Instant,
+    cancelled: &AtomicBool,
+) -> Result<Identity, Error> {
+    let digest = manifest_digest(profile)?;
+    let raw = exchange(
+        exchanges,
+        profile,
+        Operation::Read("ps"),
+        deadline,
+        cancelled,
+    )?;
+    let loaded: Resident = parse(&raw)?;
     if loaded.models.len() > 64 {
         return Err(Error::Identity);
     }
@@ -963,6 +1007,17 @@ fn identity(
         provider_revision: Some(profile.manifest.sha256.clone()),
         raw,
     })
+}
+/// The whole identity readback, as every run makes it: the catalogue, then the resident model.
+fn identity(
+    exchanges: &mut Vec<Exchange>,
+    profile: &Profile,
+    adapter: &AdapterProfile,
+    deadline: Instant,
+    cancelled: &AtomicBool,
+) -> Result<Identity, Error> {
+    catalogue(exchanges, profile, deadline, cancelled)?;
+    resident(exchanges, profile, adapter, deadline, cancelled)
 }
 fn elapsed(origin: Instant) -> Result<u64, Error> {
     u64::try_from(origin.elapsed().as_millis()).map_err(|_| Error::Deadline)
@@ -1063,7 +1118,7 @@ fn execute_inner(
     deadline: Instant,
     cancelled: &AtomicBool,
 ) -> Result<(), Error> {
-    let before = identity(run, profile, adapter, deadline, cancelled)?;
+    let before = identity(&mut run.exchanges, profile, adapter, deadline, cancelled)?;
     daemon(profile, deadline, cancelled)?;
     let input = serde_json::to_vec(
         &json!({"model":profile.model,"prompt":request.prompt,"stream":false,
@@ -1071,7 +1126,16 @@ fn execute_inner(
         "options":{"num_ctx":adapter.num_ctx,"num_predict":adapter.num_predict}}),
     )
     .map_err(|_| Error::Json)?;
-    let raw = exchange(run, profile, "generate", input, deadline, cancelled)?;
+    let raw = exchange(
+        &mut run.exchanges,
+        profile,
+        Operation::Generate {
+            provider: &mut run.provider,
+            input,
+        },
+        deadline,
+        cancelled,
+    )?;
     let value: Generated = parse(&raw)?;
     if value.model != profile.model
         || value.created_at.is_empty()
@@ -1092,7 +1156,7 @@ fn execute_inner(
     };
     // Duration fields retain their actual optional values in raw, never replace
     // the owner clock or become an invented total/currency conversion.
-    let after = identity(run, profile, adapter, deadline, cancelled)?;
+    let after = identity(&mut run.exchanges, profile, adapter, deadline, cancelled)?;
     if before.selection != after.selection
         || before.runtime_instance != after.runtime_instance
         || before.provider_model != after.provider_model
