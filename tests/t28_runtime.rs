@@ -377,8 +377,8 @@ struct Script<'h> {
 }
 
 impl CandidateSource for Script<'_> {
-    fn next(&mut self, previous: Option<&Previous>) -> Candidate {
-        self.seen.borrow_mut().push(previous.cloned());
+    fn next(&mut self, ask: &habitat_engine::app::runtime::Ask<'_>) -> Candidate {
+        self.seen.borrow_mut().push(ask.previous.cloned());
         if let Some(hook) = self.hook.as_mut() {
             hook();
         }

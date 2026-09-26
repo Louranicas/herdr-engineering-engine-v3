@@ -218,7 +218,9 @@ impl Rig {
         };
         let details = json!({"parent_model":"","format":"gguf","family":"llama","families":["llama"],"parameter_size":"3.2B","quantization_level":"Q4_K_M"});
         let d = profile.manifest.sha256.strip_prefix("sha256:").unwrap();
-        let scenario = json!({"model":MODEL,"prompt":PROMPT,"version":{"version":"0.0.0"},
+        let scenario = json!({"model":MODEL,"prompt":PROMPT,
+            "expect":{"raw":true,"options":{"num_ctx":512,"num_predict":64}},
+            "version":{"version":"0.0.0"},
             "tags":{"models":[{"name":MODEL,"model":MODEL,"modified_at":"2026-09-21T00:00:00Z","size":2_339_219_456_u64,"digest":d,"details":details}]},
             "ps":{"models":[{"name":LOADED,"model":LOADED,"size":2_339_219_456_u64,"size_vram":2_339_219_456_u64,"expires_at":"2026-09-21T00:01:00Z","context_length":512,"digest":d,"details":details}]},
             "generated":{"model":MODEL,"created_at":"2026-09-21T00:00:01Z","response":"seven","done":true,"done_reason":"stop","total_duration":142_397_958,"load_duration":74_557_306,"prompt_eval_count":INPUT_TOKENS,"prompt_eval_duration":57_750_770,"eval_count":OUTPUT_TOKENS,"eval_duration":8_671_221}});

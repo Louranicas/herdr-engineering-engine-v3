@@ -51,6 +51,30 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 pub enum Candidate {
     Replacement(Vec<u8>),
     Exhausted,
+    /// The source's text is not a candidate by the class grammar (B14a-4, R18 A5): recorded as a
+    /// refused candidate under the refusal's name through the one existing path, never an edit;
+    /// `text` is what was refused, so the record's `candidate_sha256` names it.
+    Refused {
+        refusal: super::candidates::Refusal,
+        text: Vec<u8>,
+    },
+    /// The provider could not be asked, or answered without a final candidate (R18 A3): the task
+    /// stops — no further generate after a lost response — with the failure named in the stop body;
+    /// `cleanup_settled` is every exchange's custody, `retained` the children the source now holds.
+    Provider {
+        error: crate::worker::native::Error,
+        state: crate::worker::native::ProviderState,
+        cleanup_settled: bool,
+        retained: usize,
+    },
+}
+
+/// A provider failure the last attempt ended in, for the stop body (R18 A3).
+#[derive(Clone, Copy, Debug)]
+struct ProviderFailure {
+    error: crate::worker::native::Error,
+    state: crate::worker::native::ProviderState,
+    retained: usize,
 }
 
 /// What the previous verification observed, handed to the next candidate request (F6).
@@ -59,11 +83,31 @@ pub struct Previous {
     pub verdict: VerificationVerdict,
     pub criteria: u64,
     pub evidence: Vec<u8>,
+    /// The schema the evidence was recorded under, so a source can read the runtime's own records
+    /// (`hee3.refused-candidate/1`) and leave a receipt unread (B14a-4, A14).
+    pub schema_id: String,
+}
+
+/// What a source is asked for one attempt (B14a-4, R18 A1): everything an adapter needs and the
+/// source could otherwise re-acquire — the attempt's binding, an invocation id the runtime minted,
+/// the recipe (the class profile's digest) and workspace (the baseline's) digests, the dispatch's
+/// origin, the attempt's work window, the runtime's cancel flag — and the previous verification.
+pub struct Ask<'a> {
+    pub task: UuidV4<'a>,
+    pub attempt: UuidV4<'a>,
+    pub generation: Generation,
+    pub invocation: UuidV4<'a>,
+    pub recipe: Sha256Digest<'a>,
+    pub workspace: Sha256Digest<'a>,
+    pub origin: Instant,
+    pub work_until: Instant,
+    pub cancelled: &'a AtomicBool,
+    pub previous: Option<&'a Previous>,
 }
 
 /// Where candidates come from. `next` is asked once per attempt, inside `execute`.
 pub trait CandidateSource {
-    fn next(&mut self, previous: Option<&Previous>) -> Candidate;
+    fn next(&mut self, ask: &Ask<'_>) -> Candidate;
 }
 
 /// One independent check of an applied candidate: its verdict, the criterion bits it satisfied,
@@ -87,7 +131,7 @@ const CHECK_MEDIA_TYPE: &str = "application/json";
 /// attempt was never checked.
 const IDLE_VERIFICATION_SCHEMA: &str = "hee3.idle-verification/1";
 /// The schema of the runtime's own class check of a refused candidate (B14a-R2.4).
-const REFUSED_CANDIDATE_SCHEMA: &str = "hee3.refused-candidate/1";
+pub(crate) const REFUSED_CANDIDATE_SCHEMA: &str = "hee3.refused-candidate/1";
 /// The schema of the runtime's own record of a check it did not run: the verify reservation held
 /// no time past the check's teardown share (B14a-3b, R14.1).
 const CHECK_WINDOW_EMPTY_SCHEMA: &str = "hee3.check-window-empty/1";
@@ -326,6 +370,8 @@ struct Begun {
     applied: Option<Snapshot>,
     /// A candidate the class refused, and the refusal's name.
     refused: Option<(Vec<u8>, &'static str)>,
+    /// The provider failure this attempt ended in, when it did (R18 A3).
+    provider: Option<ProviderFailure>,
     /// The work settled with a known cost and settled cleanup.
     settled: bool,
     verified: bool,
@@ -1185,6 +1231,7 @@ impl<C: CandidateSource, V: Verifier> StoreRuntime<'_, C, V> {
             verdict: committed.verdict,
             criteria: committed.criteria,
             evidence: committed.evidence.clone(),
+            schema_id: committed.schema_id.clone(),
         });
         Ok(committed)
     }
@@ -1217,6 +1264,24 @@ impl<C: CandidateSource, V: Verifier> StoreRuntime<'_, C, V> {
         }
     }
 
+    /// The stop's body: kind, reason, the attempt count — and, when the last attempt ended in a
+    /// provider failure, an OPTIONAL additive `worker` field naming it (R18 A3, decision R18.3: an
+    /// additive optional field does not revise `hee3.task-stop/1`; readers tolerate its absence).
+    fn stop_body(&self, name: &str) -> Result<Vec<u8>, Error> {
+        let mut body = serde_json::json!({
+            "kind": TASK_STOP_SCHEMA, "reason": name, "attempts": self.attempts.len(),
+        });
+        if let Some(failure) = self.attempts.last().and_then(|begun| begun.provider) {
+            body["worker"] = serde_json::json!({
+                "provider": crate::worker::native::PROVIDER,
+                "error": failure.error.name(),
+                "state": failure.state.name(),
+                "retained": failure.retained,
+            });
+        }
+        serde_json::to_vec(&body).map_err(|_| Error::Identity)
+    }
+
     /// Stop the task, deciding and writing in one hold (review M2). (b) An attempt whose work or
     /// check did not settle stops nothing: its obligations and reservations stay (R1.4). (a) A
     /// cancellation with no check of the last attempt records the check as not started, at no
@@ -1230,10 +1295,7 @@ impl<C: CandidateSource, V: Verifier> StoreRuntime<'_, C, V> {
             return Ok(false);
         }
         let name = stop_name(reason);
-        let stop_bytes = serde_json::to_vec(&serde_json::json!({
-            "kind": TASK_STOP_SCHEMA, "reason": name, "attempts": self.attempts.len(),
-        }))
-        .map_err(|_| Error::Identity)?;
+        let stop_bytes = self.stop_body(name)?;
         let idle_bytes = serde_json::to_vec(&serde_json::json!({
             "kind": "verification_not_started", "durable_cancellation": true,
         }))
@@ -1405,6 +1467,7 @@ impl<C: CandidateSource, V: Verifier> driver::Runtime for StoreRuntime<'_, C, V>
             check_settled: true,
             planned: None,
             receipt_run: None,
+            provider: None,
         });
         Ok(Attempt {
             index: self.attempts.len() - 1,
@@ -1417,7 +1480,21 @@ impl<C: CandidateSource, V: Verifier> driver::Runtime for StoreRuntime<'_, C, V>
             let begun = self.begun(attempt)?;
             (begun.id.clone(), begun.work_until)
         };
-        match self.source.next(self.previous.as_ref()) {
+        let generation = self.begun(attempt)?.generation.clone();
+        let [invocation]: [String; 1] = fresh_ids(self.deadline)?;
+        let ask = Ask {
+            task: self.dispatch.task,
+            attempt: uuid(&id)?,
+            generation: parse_generation(&generation)?,
+            invocation: uuid(&invocation)?,
+            recipe: Sha256Digest::parse(&self.profile.digest).map_err(|_| Error::Identity)?,
+            workspace: Sha256Digest::parse(&self.digests[0]).map_err(|_| Error::Identity)?,
+            origin: self.origin,
+            work_until,
+            cancelled: &self.cancelled,
+            previous: self.previous.as_ref(),
+        };
+        match self.source.next(&ask) {
             // Exhaustion after begin is truthful (B14a-R2.3): the attempt is not ready to verify.
             Candidate::Exhausted => {
                 self.settle(index, true, false)?;
@@ -1458,6 +1535,42 @@ impl<C: CandidateSource, V: Verifier> driver::Runtime for StoreRuntime<'_, C, V>
                 self.settle(index, cleanup_settled, true)?;
                 Ok(if self.begun(attempt)?.settled {
                     Work::ReadyForCheck
+                } else {
+                    Work::Unsettled
+                })
+            }
+            // The source's text refused by the class grammar (B14a-4, A5): nothing was
+            // materialised, so the cleanup is settled; the check records it as a refused candidate
+            // under the refusal's name, through the one path a repair refusal takes.
+            Candidate::Refused { refusal, text } => {
+                if let Some(begun) = self.attempts.get_mut(index) {
+                    begun.refused = Some((text, refusal.name()));
+                }
+                self.settle(index, true, true)?;
+                Ok(if self.begun(attempt)?.settled {
+                    Work::ReadyForCheck
+                } else {
+                    Work::Unsettled
+                })
+            }
+            // The provider failed (A3): the attempt is not ready to verify and nothing is asked
+            // again — a lost response is a readback, never a redispatch; the stop names it.
+            Candidate::Provider {
+                error,
+                state,
+                cleanup_settled,
+                retained,
+            } => {
+                if let Some(begun) = self.attempts.get_mut(index) {
+                    begun.provider = Some(ProviderFailure {
+                        error,
+                        state,
+                        retained,
+                    });
+                }
+                self.settle(index, cleanup_settled, false)?;
+                Ok(if self.begun(attempt)?.settled {
+                    Work::Failed
                 } else {
                     Work::Unsettled
                 })

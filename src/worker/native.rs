@@ -351,8 +351,55 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-pub const PROFILE: &str = "ollama-fc44-12ff8654/1";
+/// One adapter profile: the id a request names and the token caps every door reads — the request's
+/// `options`, the post-hoc usage check and the identity readback's `context_length` (B14a-4, R18
+/// decision 1: the caps are one value read three times, never three literals).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AdapterProfile {
+    pub id: &'static str,
+    pub num_ctx: u32,
+    pub num_predict: u32,
+    /// Whether the server applies the pinned model's chat template (`raw: false`). Measured
+    /// 2026-09-26 (DS13 frame runs): in raw mode the instruct model gets no template and runs to
+    /// the cap with many fences every time; templated, it stops within 330 tokens with the file
+    /// bare. The qualified `/1` profile stays raw, as every one of its fixtures pins.
+    pub templated: bool,
+}
+
+/// The adapter profiles this build knows: the qualified 512/64 raw profile every t08 fixture pins,
+/// and its full-file revision `/2` whose caps carry a whole `src/lib.rs` under the model's template
+/// (DS13 and its addendum, 2026-09-26). `12ff8654` is the packaged daemon executable's SHA prefix.
+pub const ADAPTERS: [AdapterProfile; 2] = [
+    AdapterProfile {
+        id: "ollama-fc44-12ff8654/1",
+        num_ctx: 512,
+        num_predict: 64,
+        templated: false,
+    },
+    AdapterProfile {
+        id: "ollama-fc44-12ff8654/2",
+        num_ctx: 4096,
+        num_predict: 1024,
+        templated: true,
+    },
+];
+
+/// The adapter's own bound on one run: a deadline more than this past its origin is refused at the
+/// door (`Error::Deadline`) before any exchange. Named so a caller passes its window through and
+/// meets the refusal by name rather than clamping to fit (B14a-4, A2); the task limit is 20 minutes,
+/// so a native attempt's work reservation must sit inside this (B14b's constraint).
+pub const MAX_RUN: Duration = Duration::from_mins(15);
+/// The qualified profile's id (the first table entry), as every fixture names it.
+pub const PROFILE: &str = ADAPTERS[0].id;
+/// The full-file profile (the second table entry): the native candidate source's.
+pub const FULL_FILE: &AdapterProfile = &ADAPTERS[1];
 pub const PROVIDER: &str = "ollama-local";
+
+/// The adapter profile a request names, or none.
+#[must_use]
+pub fn adapter(id: &str) -> Option<&'static AdapterProfile> {
+    ADAPTERS.iter().find(|profile| profile.id == id)
+}
 const ENDPOINT: &str = "http://127.0.0.1:11434/api/";
 const FRAME_LIMIT: usize = 65_536;
 const MODEL_LIMIT: u64 = 4 * 1024 * 1024 * 1024;
@@ -395,12 +442,43 @@ pub enum Error {
     Process,
     Contract(ContractError),
 }
+impl Error {
+    /// The adapter's refusal by name, as a stop body records it.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Profile => "profile",
+            Self::Subject => "subject",
+            Self::Deadline => "deadline",
+            Self::Cancelled => "cancelled",
+            Self::Json => "json",
+            Self::Identity => "identity",
+            Self::Usage => "usage",
+            Self::Response => "response",
+            Self::Process => "process",
+            Self::Contract(_) => "contract",
+        }
+    }
+}
+
 /// This is provider observation, distinct from the HTTP client's process custody.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ProviderState {
     NotDispatched,
     ObservedComplete,
     Unknown,
+}
+
+impl ProviderState {
+    /// The observation by name, as a stop body records it.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::NotDispatched => "not_dispatched",
+            Self::ObservedComplete => "observed_complete",
+            Self::Unknown => "unknown",
+        }
+    }
 }
 #[derive(Debug)]
 pub struct Exchange {
@@ -794,6 +872,7 @@ fn exchange(
 fn identity(
     run: &mut Run<'_>,
     profile: &Profile,
+    adapter: &AdapterProfile,
     deadline: Instant,
     cancelled: &AtomicBool,
 ) -> Result<Identity, Error> {
@@ -864,7 +943,7 @@ fn identity(
         || actual.size == 0
         || actual.size > 8 * 1024 * 1024 * 1024
         || actual.size_vram > actual.size
-        || actual.context_length != 512
+        || actual.context_length != u64::from(adapter.num_ctx)
         || actual.expires_at.is_empty()
         || actual.expires_at.len() > 64
     {
@@ -876,7 +955,7 @@ fn identity(
             model: profile.model.clone(),
             effort: None,
         },
-        adapter_profile: PROFILE.into(),
+        adapter_profile: adapter.id.into(),
         runtime_instance: format!(
             "{}:{}:{}",
             profile.daemon.boot_id, profile.daemon.pid, profile.daemon.start_ticks
@@ -925,14 +1004,16 @@ pub fn execute<'a>(
     cancelled: &AtomicBool,
 ) -> Result<Run<'a>, Error> {
     let now = Instant::now();
-    if origin > now || deadline <= now || deadline > origin + Duration::from_mins(15) {
+    if origin > now || deadline <= now || deadline > origin + MAX_RUN {
         return Err(Error::Deadline);
     }
     tick(deadline, cancelled)?;
+    let Some(adapter) = adapter(&request.adapter_profile) else {
+        return Err(Error::Profile);
+    };
     if request.selection.provider != PROVIDER
         || request.selection.model != profile.model
         || request.selection.effort.is_some()
-        || request.adapter_profile != PROFILE
         || profile.model.is_empty()
         || profile.model.len() > 256
         || !profile
@@ -956,7 +1037,9 @@ pub fn execute<'a>(
         provider: ProviderState::NotDispatched,
         error: None,
     };
-    let result = execute_inner(&mut run, request, profile, origin, deadline, cancelled);
+    let result = execute_inner(
+        &mut run, request, profile, adapter, origin, deadline, cancelled,
+    );
     if let Err(error) = result {
         if cancelled.load(Ordering::Acquire) || Instant::now() >= deadline {
             let reason = if cancelled.load(Ordering::Acquire) {
@@ -977,15 +1060,17 @@ fn execute_inner(
     run: &mut Run<'_>,
     request: &Request<'_>,
     profile: &Profile,
+    adapter: &AdapterProfile,
     origin: Instant,
     deadline: Instant,
     cancelled: &AtomicBool,
 ) -> Result<(), Error> {
-    let before = identity(run, profile, deadline, cancelled)?;
+    let before = identity(run, profile, adapter, deadline, cancelled)?;
     daemon(profile, deadline, cancelled)?;
     let input = serde_json::to_vec(
-        &json!({"model":profile.model,"prompt":request.prompt,"stream":false,"raw":true,
-        "truncate":false,"shift":false,"keep_alive":60,"options":{"num_ctx":512,"num_predict":64}}),
+        &json!({"model":profile.model,"prompt":request.prompt,"stream":false,
+        "raw":!adapter.templated,"truncate":false,"shift":false,"keep_alive":60,
+        "options":{"num_ctx":adapter.num_ctx,"num_predict":adapter.num_predict}}),
     )
     .map_err(|_| Error::Json)?;
     let raw = exchange(run, profile, "generate", input, deadline, cancelled)?;
@@ -997,7 +1082,9 @@ fn execute_inner(
     {
         return Err(Error::Response);
     }
-    if value.prompt_eval_count > 512 || value.eval_count > 64 {
+    if value.prompt_eval_count > u64::from(adapter.num_ctx)
+        || value.eval_count > u64::from(adapter.num_predict)
+    {
         return Err(Error::Usage);
     }
     let (finish, terminal) = match value.done_reason.as_str() {
@@ -1007,7 +1094,7 @@ fn execute_inner(
     };
     // Duration fields retain their actual optional values in raw, never replace
     // the owner clock or become an invented total/currency conversion.
-    let after = identity(run, profile, deadline, cancelled)?;
+    let after = identity(run, profile, adapter, deadline, cancelled)?;
     if before.selection != after.selection
         || before.runtime_instance != after.runtime_instance
         || before.provider_model != after.provider_model

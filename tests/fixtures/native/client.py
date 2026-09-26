@@ -17,7 +17,8 @@ if operation=='generate':
     raw=sys.stdin.buffer.read(300000)
     (root/'captured-request.json').write_bytes(raw)
     request=json.loads(raw)
-    assert request=={'model':s['model'],'prompt':'Return exactly seven.','stream':False,'raw':True,'truncate':False,'shift':False,'keep_alive':60,'options':{'num_ctx':512,'num_predict':64}}
+    expect=s['expect']
+    assert request=={'model':s['model'],'prompt':'Return exactly seven.','stream':False,'raw':expect['raw'],'truncate':False,'shift':False,'keep_alive':60,'options':expect['options']}
     (root/'generation-started').write_text('actual fake process reached generation')
     if 'descendant' in s:
         # A forked child inherits the writable stdout/stderr pipes and the client's group.

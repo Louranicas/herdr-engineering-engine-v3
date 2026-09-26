@@ -1,8 +1,9 @@
 #!/usr/bin/python3
 """Offline finite HTTP-client stand-in for the T08 contract battery. Never opens a network connection.
 
-scenario.json (cwd) carries model, prompt, version, tags, ps, optional post_ps, generated and an
-optional `fault` object applied to the generate operation only:
+scenario.json (cwd) carries model, prompt, expect (the request's `raw` and `options`, written by the
+test as literals — never read from the adapter's table), version, tags, ps, optional post_ps,
+generated and an optional `fault` object applied to the generate operation only:
   {"kind":"http_error","stdout":..,"stderr":..,"exit":N}  curl --fail-with-body shape: body on
                                                           stdout, one diagnostic line on stderr, exit N
   {"kind":"pause","seconds":N}                            sleep before answering
@@ -32,9 +33,10 @@ if operation == 'generate':
     raw = sys.stdin.buffer.read(300000)
     (root / 'captured-request.json').write_bytes(raw)
     request = json.loads(raw)
-    assert request == {'model': s['model'], 'prompt': s['prompt'], 'stream': False, 'raw': True,
+    expect = s['expect']
+    assert request == {'model': s['model'], 'prompt': s['prompt'], 'stream': False, 'raw': expect['raw'],
                        'truncate': False, 'shift': False, 'keep_alive': 60,
-                       'options': {'num_ctx': 512, 'num_predict': 64}}
+                       'options': expect['options']}
     (root / 'generation-started').write_text('fake client reached generation')
     fault = s.get('fault') or {}
     kind = fault.get('kind')

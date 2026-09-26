@@ -163,7 +163,7 @@ impl Rig {
         };
         let details = json!({"parent_model":"","format":"gguf","family":"llama","families":["llama"],"parameter_size":"3.2B","quantization_level":"Q4_K_M"});
         let d = profile.manifest.sha256.strip_prefix("sha256:").unwrap();
-        let scenario = json!({"model":MODEL,"version":{"version":"0.0.0"},"tags":{"models":[{"name":MODEL,"model":MODEL,"modified_at":"2026-09-21T00:00:00Z","size":100,"digest":d,"details":details}]},"ps":{"models":[{"name":"llama3.2:3b","model":"llama3.2:3b","size":100,"size_vram":0,"expires_at":"2026-09-21T00:01:00Z","context_length":512,"digest":d,"details":details}]},"generated":{"model":MODEL,"created_at":"2026-09-21T00:00:01Z","response":"seven","done":true,"done_reason":"stop","total_duration":20,"load_duration":3,"prompt_eval_count":7,"prompt_eval_duration":4,"eval_count":1,"eval_duration":5}});
+        let scenario = json!({"model":MODEL,"expect":{"raw":true,"options":{"num_ctx":512,"num_predict":64}},"version":{"version":"0.0.0"},"tags":{"models":[{"name":MODEL,"model":MODEL,"modified_at":"2026-09-21T00:00:00Z","size":100,"digest":d,"details":details}]},"ps":{"models":[{"name":"llama3.2:3b","model":"llama3.2:3b","size":100,"size_vram":0,"expires_at":"2026-09-21T00:01:00Z","context_length":512,"digest":d,"details":details}]},"generated":{"model":MODEL,"created_at":"2026-09-21T00:00:01Z","response":"seven","done":true,"done_reason":"stop","total_duration":20,"load_duration":3,"prompt_eval_count":7,"prompt_eval_duration":4,"eval_count":1,"eval_duration":5}});
         Self {
             root,
             profile,

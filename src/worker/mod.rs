@@ -650,6 +650,10 @@ pub struct Contract<'a> {
     terminal: Option<Terminal>,
     cancellation: Cancellation,
 }
+/// The one prompt bound: a request's prompt past it is refused by the contract, and the native
+/// candidate source refuses a rendering past it before any request exists (B14a-4, A8).
+pub const MAX_PROMPT_BYTES: usize = 262_144;
+
 impl<'a> Contract<'a> {
     /// # Errors
     /// Refuses invalid identifiers, empty/oversized prompts or missing final-output semantics.
@@ -657,7 +661,7 @@ impl<'a> Contract<'a> {
         if !request.selection.valid()
             || !bounded_name(&request.adapter_profile)
             || request.prompt.is_empty()
-            || request.prompt.len() > 262_144
+            || request.prompt.len() > MAX_PROMPT_BYTES
             || !request.required.has(Feature::FinalOutput)
         {
             return Err(ContractError::InvalidRequest);
