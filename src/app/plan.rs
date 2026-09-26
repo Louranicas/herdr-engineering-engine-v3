@@ -1773,29 +1773,15 @@ mod tests {
         );
         assert_compiler_digest(&refused);
         assert!(!plan_root.exists());
-        // Leaves a child behind in its process group: MEASURED — `process::run` settles the group
-        // itself before it returns (no `pending` child, no interruption), so the probe is a clean
-        // observation and the plan's own settle loop is not what stops a stray child. The loop is
-        // reached only when the process module hands a pending child back; no stand-in reaches it.
-        let leaving = stand_in(
-            &f,
-            "compiler-leaving",
-            "#!/bin/sh\nsleep 30 &\nprintf 'rustc 0.0.0\\nrelease: 1.99.0\\n'\nexit 0\n",
-        )?;
-        let leaving_root = f.root.join("leaving.plan");
-        let settled = shared(
-            &mut sink,
-            &Inputs {
-                tools: &leaving,
-                plan_root: &leaving_root,
-                ..base
-            },
-        );
-        assert!(
-            matches!(&settled, Ok(shared) if shared.compiler_version == "1.99.0"),
-            "{settled:?}"
-        );
-        assert!(!leaving_root.exists());
+        // A probe that leaves a background child (`sleep 30 &` in a stand-in) is NOT a proof here,
+        // MEASURED 2026-09-26: the plan accepted the probe (the report carried no pending child and
+        // no interruption), and the orphan — in the leader's group, reparented to whatever subreaper
+        // owns the test process, live or as a zombie after the group kill — was counted by the repo
+        // gate's harness as a leaked descendant (`gate-runs/20260926T090043895328Z`), failing a
+        // step whose every test passed. The pin over the compiler's bytes is the guard against a
+        // probe that forks; the settle loop is reached only when the process module hands a pending
+        // child back, and no stand-in reaches it. Recorded in DESIGN.md (B14a-4 item); no test here
+        // may leave a process.
         // A symlink to the real compiler, pinned with the real digest: never followed.
         let link = f.root.join("compiler-link");
         std::os::unix::fs::symlink(&f.tools.compiler.host, &link)?;
