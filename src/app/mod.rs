@@ -19,6 +19,7 @@ pub mod control_socket;
 pub mod coordinator;
 pub mod custody;
 pub mod grants;
+pub mod live_verifier;
 pub mod routing;
 pub mod run_records;
 pub mod runtime;

@@ -1063,7 +1063,7 @@ fn teardown_deadline(work_until: Instant, teardown_ms: u64, task_deadline: Insta
 }
 
 /// Every criterion bit the class declares.
-fn declared_criteria() -> u64 {
+pub(crate) fn declared_criteria() -> u64 {
     match U64_CRITERIA.len() {
         64.. => u64::MAX,
         count => (1_u64 << count) - 1,
