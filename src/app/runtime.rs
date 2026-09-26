@@ -251,8 +251,9 @@ pub struct Dispatch<'a> {
     pub forbidden: &'a [FileIdentity],
     /// Kept back from each work deadline for teardown.
     pub teardown_ms: u64,
-    /// The capture's own share: a reservation below it is refused before any capture.
-    pub capture_ms: u64,
+    /// The capture's own share, when a caller fixes one (the rigs); `None` derives it from the
+    /// owner's reservation less the teardown share (closure M1: a fixed share is a limit no owner set).
+    pub capture_ms: Option<u64>,
     /// The engine's drain (B14b-1, D5): read between attempts, at `begin`, before any row — set, the
     /// dispatch ends `Outcome::Drained` with the task resumable. It does not reach an in-flight
     /// exchange in B14b-1 (stated gap: F15's in-exchange wake is B14b-2's).
@@ -362,9 +363,10 @@ pub enum Outcome {
 #[derive(Debug)]
 pub enum Error {
     Store(store::Error),
-    /// A store error before any attempt row existed (B14b-1, R20 round 2 A2): the task is
-    /// untouched and the dispatcher names the stop; never the recovery's, never re-picked.
-    PreDispatch(store::Error),
+    /// Any error before an attempt row existed (B14b-1, R20 round 2 A2, closure H3): a store, entropy
+    /// or identity failure in `admit`, in a refusal's own stop, or at the attempt door — the task is
+    /// untouched and the DISPATCHER names its stop; never the recovery's, never re-picked.
+    PreDispatch(Box<Error>),
     /// The ledger's owner panicked while holding it.
     Poisoned,
     /// Another writer touched the task other than by one cancellation or an instance observation
@@ -657,17 +659,19 @@ pub fn admit<'a>(
 ) -> Result<Admission<'a>, Error> {
     let origin = Instant::now();
     let deadline = origin + crate::task::TASK_LIMIT;
-    let (head, anchor) = tasks
-        .with_store(|store| -> Result<_, store::Error> {
+    // Every failure in this phase is `PreDispatch` (closure H3): no attempt row exists yet.
+    let (head, anchor) = pre(tasks
+        .with_store(|store| -> Result<_, Error> {
             let head = store.get(dispatch.principal, dispatch.task, deadline)?;
             let anchor = store.last_event(dispatch.principal, dispatch.task, deadline)?;
             Ok((head, anchor))
-        })?
-        .map_err(Error::PreDispatch)?;
+        })
+        .map_err(Error::from)
+        .and_then(|inner| inner))?;
     let prepared = match prepare(&head, profile, &dispatch, origin, deadline) {
         Ok(prepared) => prepared,
         Err(refusal) => {
-            refuse(tasks, &dispatch, refusal, origin, deadline)?;
+            pre(refuse(tasks, &dispatch, refusal, origin, deadline))?;
             return Ok(Admission::Refused(refusal));
         }
     };
@@ -681,26 +685,28 @@ pub fn admit<'a>(
     let plan_root = dispatch
         .attempts
         .join(format!("{}.plan", dispatch.task.as_str()));
-    let shared = tasks.with_store(|store| {
-        let mut sink = Sink::new(store, deadline);
-        plan::shared(
-            &mut sink,
-            &plan::Inputs {
-                tools: &tools,
-                profile,
-                baseline: &prepared.baseline,
-                protected: &prepared.protected,
-                plan_root: &plan_root,
-                deadline,
-                cancelled: &cancelled,
-            },
-        )
-    })?;
+    let shared = pre(tasks
+        .with_store(|store| {
+            let mut sink = Sink::new(store, deadline);
+            plan::shared(
+                &mut sink,
+                &plan::Inputs {
+                    tools: &tools,
+                    profile,
+                    baseline: &prepared.baseline,
+                    protected: &prepared.protected,
+                    plan_root: &plan_root,
+                    deadline,
+                    cancelled: &cancelled,
+                },
+            )
+        })
+        .map_err(Error::from))?;
     let shared = match shared {
         Ok(shared) => shared,
         Err(refusal) => {
             let stop = Refusal::Plan(refusal.name());
-            refuse(tasks, &dispatch, stop, origin, deadline)?;
+            pre(refuse(tasks, &dispatch, stop, origin, deadline))?;
             return Ok(Admission::Refused(stop));
         }
     };
@@ -715,6 +721,15 @@ pub fn admit<'a>(
         origin,
         deadline,
     })))
+}
+
+/// A result of the first phase, or of anything else that runs while no attempt row exists: its
+/// error is the dispatcher's, typed so it can never be read as the recovery's (closure H3).
+fn pre<T>(result: Result<T, Error>) -> Result<T, Error> {
+    result.map_err(|error| match error {
+        Error::PreDispatch(inner) => Error::PreDispatch(inner),
+        other => Error::PreDispatch(Box::new(other)),
+    })
 }
 
 /// Phase two: drive the admitted task through the driver over `source` and `verifier`.
@@ -770,19 +785,21 @@ pub fn drive<'a, C: CandidateSource, V: Verifier>(
             }))
         }
         Err(driver::Error::Runtime(Fault::Drained)) => Ok(Outcome::Drained),
-        // A store error before any attempt row (B14b-1, D3): the attempt door's own refusals stop
-        // the task by the store's name through the pre-dispatch path; any other is the
-        // dispatcher's, typed so it can never be read as the recovery's.
-        Err(driver::Error::Runtime(Fault::Error(Error::Store(error))))
-            if runtime.attempts.is_empty() =>
-        {
-            match BeginRefusal::of(&error) {
+        // Any error while no attempt row exists (B14b-1, D3; closure H3): the attempt door's own
+        // refusals stop the task by the store's name through the pre-dispatch path (a failure of
+        // that stop is the dispatcher's too); everything else is `PreDispatch`.
+        Err(driver::Error::Runtime(Fault::Error(error))) if runtime.attempts.is_empty() => {
+            let kind = match &error {
+                Error::Store(store_error) => BeginRefusal::of(store_error),
+                _ => None,
+            };
+            match kind {
                 Some(kind) => {
                     let stop = Refusal::BeginRefused(kind);
-                    refuse(tasks, &runtime.dispatch, stop, origin, deadline)?;
+                    pre(refuse(tasks, &runtime.dispatch, stop, origin, deadline))?;
                     Ok(Outcome::Refused(stop))
                 }
-                None => Err(Error::PreDispatch(error)),
+                None => Err(Error::PreDispatch(Box::new(error))),
             }
         }
         Err(driver::Error::Runtime(Fault::Error(error))) => Err(error),
@@ -821,8 +838,16 @@ fn prepare(
         return Err(Refusal::ReservationEmpty);
     }
     // The capture and the teardown are both shares of the work reservation (B14a-R1.8, R2.5): a
-    // reservation that cannot hold both and leave work time is refused before any capture.
-    if head.reserved_work_ms <= dispatch.capture_ms.saturating_add(dispatch.teardown_ms) {
+    // reservation that cannot hold both and leave work time is refused before any capture. With no
+    // caller-fixed capture share the captures run inside the reservation less the teardown (closure
+    // M1): the owner's bound, never one set here.
+    let capture_ms = dispatch
+        .capture_ms
+        .unwrap_or_else(|| head.reserved_work_ms.saturating_sub(dispatch.teardown_ms));
+    if head.reserved_work_ms <= capture_ms.saturating_add(dispatch.teardown_ms)
+        && dispatch.capture_ms.is_some()
+        || head.reserved_work_ms <= dispatch.teardown_ms
+    {
         return Err(Refusal::ReservationTooSmall);
     }
     // A check keeps its teardown share back from the verify reservation the same way (R14.2): one
@@ -835,7 +860,7 @@ fn prepare(
         .as_deref()
         .and_then(|id| profile.declared.workspaces.iter().find(|row| row.id == id))
         .ok_or(Refusal::WorkspaceNotDeclared)?;
-    let capture_deadline = deadline.min(origin + Duration::from_millis(dispatch.capture_ms));
+    let capture_deadline = deadline.min(origin + Duration::from_millis(capture_ms));
     let baseline = Snapshot::capture(
         &profile.directory.join(&workspace.baseline),
         dispatch.forbidden,

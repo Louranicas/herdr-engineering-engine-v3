@@ -12,18 +12,16 @@
 //! once, stops picking and leaves the task `admitted` — P2c-R1.5's "stop it `dispatch_unavailable`"
 //! revisited: the task is the owner's and the missing configuration the operator's.
 
-use super::class_profile::Profile;
 use super::runtime::{
     Admission, CandidateSource, Dispatch, Error as RuntimeError, Outcome, Verifier, admit, drive,
 };
 use super::tasks::StoreTasks;
 use crate::contracts::UuidV4;
 use crate::contracts::roster::Selection;
-use crate::store::{Dispatchable, Error as StoreError};
+use crate::store::{Dispatchable, Error as StoreError, ResolveRefusal};
 use crate::task::driver;
 use std::path::Path;
 use std::sync::atomic::AtomicBool;
-use std::time::Instant;
 
 /// Where the dispatcher's candidate source and verifier come from, per dispatch (B14b-1 D7).
 pub trait Provider {
@@ -36,11 +34,13 @@ pub trait Provider {
     fn open(&mut self, next: &Dispatchable) -> Result<(Self::Source, Self::Verifier), Unavailable>;
 }
 
-/// Why no provider could be opened: a named dispatcher state, never a task's failure.
+/// Why the dispatcher cannot dispatch: a named dispatcher state, never a task's failure.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Unavailable {
     /// No native provider is configured (B14b-2).
     NoNativeProvider,
+    /// The task owner has no class profile (not installed, or refused at read).
+    NoClassProfile,
 }
 
 impl Unavailable {
@@ -48,6 +48,7 @@ impl Unavailable {
     pub const fn name(self) -> &'static str {
         match self {
             Self::NoNativeProvider => "unavailable: no native provider (B14b-2)",
+            Self::NoClassProfile => "unavailable: no class profile",
         }
     }
 }
@@ -101,7 +102,9 @@ pub enum Step {
 pub fn classify(result: &Result<Outcome, RuntimeError>) -> Step {
     match result {
         Ok(Outcome::Refused(refusal)) => Step::TaskDone(refusal.name()),
-        Ok(Outcome::Drained) => Step::TaskLeft("drained: resumable"),
+        // Drained at attempt 1 the task is still `admitted` and picked again; at attempt ≥ 2 it is
+        // `repair_pending`, which the read never returns — left for recovery (B17; closure item 9).
+        Ok(Outcome::Drained) => Step::TaskLeft("drained: left for recovery"),
         Ok(Outcome::Driven(driver::Outcome::Accepted)) => Step::TaskDone("accepted"),
         Ok(Outcome::Driven(driver::Outcome::Stopped(_))) => Step::TaskDone("stopped"),
         Ok(Outcome::Driven(driver::Outcome::NeedsSettlement(_))) => {
@@ -109,7 +112,7 @@ pub fn classify(result: &Result<Outcome, RuntimeError>) -> Step {
         }
         Err(RuntimeError::Poisoned) => Step::DispatcherStops("the ledger's owner panicked"),
         Err(RuntimeError::PreDispatch(_)) => {
-            Step::DispatcherStops("the ledger refused before any attempt")
+            Step::DispatcherStops("an error before any attempt row: the dispatcher's")
         }
         Err(RuntimeError::ConcurrentWriter) => Step::TaskLeft("concurrent writer"),
         Err(RuntimeError::Identity) => Step::TaskLeft("identity"),
@@ -120,13 +123,18 @@ pub fn classify(result: &Result<Outcome, RuntimeError>) -> Step {
 }
 
 /// A store error out of `dispatch` after an attempt row may exist: the task is the recovery's, unless
-/// the ledger itself can no longer be written (the dispatcher stops) or is full (DS17, named).
+/// the ledger itself can no longer be written (the dispatcher stops), its storage is full, or the
+/// object inventory is full (DS17: `Disposition(Inventory)`, raised at the first registration past
+/// the bound — closure H2; `Full` is `SQLITE_FULL`, its own name).
 fn store_step(error: &StoreError) -> Step {
     match error {
         StoreError::UncertainCommit => {
             Step::DispatcherStops("uncertain commit: the ledger is poisoned")
         }
-        StoreError::Full => Step::DispatcherStops("store object inventory full (DS17)"),
+        StoreError::Full => Step::DispatcherStops("the ledger's storage is full (SQLITE_FULL)"),
+        StoreError::Disposition(ResolveRefusal::Inventory) => {
+            Step::DispatcherStops("store object inventory full (DS17)")
+        }
         StoreError::NotWritable | StoreError::RecoveryRequired | StoreError::InspectionOnly => {
             Step::DispatcherStops("the ledger is not writable")
         }
@@ -181,21 +189,20 @@ pub enum Exit {
     Poisoned,
 }
 
-/// The shares every dispatch is handed (M8: derived, never a new limit): the teardown share is the
-/// cleanup grace the check already keeps back, and the two snapshot captures run under the same
-/// grace. STATED for the review (R20 round 2 D9): no production source of these shares existed.
+/// The teardown share every dispatch is handed (M8: derived, never a new limit): the cleanup grace
+/// the check already keeps back. The capture share is the owner's reservation less this, derived in
+/// `prepare` (closure M1) — nothing here fixes it.
 #[must_use]
-pub fn shares() -> (u64, u64) {
-    let grace = u64::try_from(super::runtime::CHECK_TEARDOWN.as_millis()).unwrap_or(u64::MAX);
-    (grace, grace)
+pub fn teardown_share() -> u64 {
+    u64::try_from(super::runtime::CHECK_TEARDOWN.as_millis()).unwrap_or(u64::MAX)
 }
 
 /// One dispatcher over one task owner: what every dispatch is handed, held together so the loop
 /// takes one value (the eight loose arguments the first cut had were the lint's point).
 pub struct Dispatcher<'a, P> {
-    /// The task owner the socket serves: the one ledger and the one class profile (A11).
+    /// The task owner the socket serves: the one ledger and the one class profile (A11 — the
+    /// profile is read from it inside `run`, never a second value).
     pub tasks: &'a StoreTasks,
-    pub profile: &'a Profile,
     /// The attempts root under the state root (`coordinator::attempts_root`).
     pub attempts: &'a Path,
     pub provider: &'a mut P,
@@ -205,8 +212,6 @@ pub struct Dispatcher<'a, P> {
     pub selections: &'a [Selection],
     /// The engine's drain (`Drain::flag`): ends the wait, and is read by the runtime between attempts.
     pub drain: &'a AtomicBool,
-    /// The dispatcher's own deadline for reads that need one.
-    pub deadline: Instant,
 }
 
 impl<P: Provider> Dispatcher<'_, P> {
@@ -219,18 +224,26 @@ impl<P: Provider> Dispatcher<'_, P> {
 fn run<P: Provider>(dispatcher: Dispatcher<'_, P>, report: &(dyn Fn(&str) + Sync)) -> Exit {
     let Dispatcher {
         tasks,
-        profile,
         attempts,
         provider,
         agent_record_id,
         selections,
         drain,
-        deadline,
     } = dispatcher;
-    let (teardown_ms, capture_ms) = shares();
+    let Ok(profile) = tasks.class_profile() else {
+        report(&format!(
+            "dispatcher: {}",
+            Unavailable::NoClassProfile.name()
+        ));
+        return Exit::Unavailable(Unavailable::NoClassProfile);
+    };
+    let teardown_ms = teardown_share();
     let stopped = || drain.load(std::sync::atomic::Ordering::SeqCst);
+    // The task the last step handled: a read that returns it again is a defect in the rules above
+    // (a handled task is stopped, accepted, or has an attempt row), stopped by name, never looped.
+    let mut handled: Option<String> = None;
     loop {
-        let next = match tasks.wait_dispatchable(&stopped, deadline) {
+        let next = match tasks.wait_dispatchable(&stopped) {
             Err(super::tasks::Poisoned) => return Exit::Poisoned,
             Ok(Err(error)) => {
                 report(&format!("dispatcher: the read refused ({error:?})"));
@@ -239,6 +252,13 @@ fn run<P: Provider>(dispatcher: Dispatcher<'_, P>, report: &(dyn Fn(&str) + Sync
             Ok(Ok(None)) => return Exit::Drained,
             Ok(Ok(Some(next))) => next,
         };
+        if handled.as_deref() == Some(next.task.as_str()) {
+            report(&format!(
+                "dispatcher: the read returned the task just handled ({}): stopping",
+                next.task
+            ));
+            return Exit::Stopped("the read returned the task just handled");
+        }
         let Ok(task) = UuidV4::parse(&next.task) else {
             report(&format!(
                 "dispatcher: a stored task id is not a UuidV4 ({})",
@@ -259,7 +279,7 @@ fn run<P: Provider>(dispatcher: Dispatcher<'_, P>, report: &(dyn Fn(&str) + Sync
                 attempts,
                 forbidden: &[],
                 teardown_ms,
-                capture_ms,
+                capture_ms: None,
                 drain,
             },
         );
@@ -275,8 +295,16 @@ fn run<P: Provider>(dispatcher: Dispatcher<'_, P>, report: &(dyn Fn(&str) + Sync
             },
         };
         let step = classify(&result);
-        report(&format!("dispatcher: task {} -> {step:?}", next.task));
-        tasks.notify_dispatchable();
+        report(&format!(
+            "dispatcher: task {} -> {step:?}{}",
+            next.task,
+            result
+                .as_ref()
+                .err()
+                .map(|error| format!(" ({error:?})"))
+                .unwrap_or_default()
+        ));
+        handled = Some(next.task.clone());
         if let Step::DispatcherStops(why) = step {
             return Exit::Stopped(why);
         }
@@ -285,9 +313,9 @@ fn run<P: Provider>(dispatcher: Dispatcher<'_, P>, report: &(dyn Fn(&str) + Sync
 
 #[cfg(test)]
 mod tests {
-    use super::{Step, Unavailable, classify, shares};
+    use super::{Step, Unavailable, classify, teardown_share};
     use crate::app::runtime::{Error as RuntimeError, Outcome, Refusal};
-    use crate::store::Error as StoreError;
+    use crate::store::{Error as StoreError, ResolveRefusal};
     use crate::task::LoopRefusal;
     use crate::task::driver::{self, StopReason};
 
@@ -301,7 +329,10 @@ mod tests {
                 Ok(Outcome::Refused(Refusal::CancelledBeforeDispatch)),
                 Step::TaskDone("cancelled_before_dispatch"),
             ),
-            (Ok(Outcome::Drained), Step::TaskLeft("drained: resumable")),
+            (
+                Ok(Outcome::Drained),
+                Step::TaskLeft("drained: left for recovery"),
+            ),
             (
                 Ok(Outcome::Driven(driver::Outcome::Accepted)),
                 Step::TaskDone("accepted"),
@@ -323,8 +354,14 @@ mod tests {
                 Step::DispatcherStops("the ledger's owner panicked"),
             ),
             (
-                Err(RuntimeError::PreDispatch(StoreError::NotFound)),
-                Step::DispatcherStops("the ledger refused before any attempt"),
+                Err(RuntimeError::PreDispatch(Box::new(RuntimeError::Store(
+                    StoreError::NotFound,
+                )))),
+                Step::DispatcherStops("an error before any attempt row: the dispatcher's"),
+            ),
+            (
+                Err(RuntimeError::PreDispatch(Box::new(RuntimeError::Entropy))),
+                Step::DispatcherStops("an error before any attempt row: the dispatcher's"),
             ),
             (
                 Err(RuntimeError::ConcurrentWriter),
@@ -342,7 +379,19 @@ mod tests {
             ),
             (
                 Err(RuntimeError::Store(StoreError::Full)),
+                Step::DispatcherStops("the ledger's storage is full (SQLITE_FULL)"),
+            ),
+            (
+                Err(RuntimeError::Store(StoreError::Disposition(
+                    ResolveRefusal::Inventory,
+                ))),
                 Step::DispatcherStops("store object inventory full (DS17)"),
+            ),
+            (
+                Err(RuntimeError::Store(StoreError::Disposition(
+                    ResolveRefusal::Resolved,
+                ))),
+                Step::TaskLeft("store refusal after begin"),
             ),
             (
                 Err(RuntimeError::Store(StoreError::NotWritable)),
@@ -364,12 +413,14 @@ mod tests {
             Unavailable::NoNativeProvider.name(),
             "unavailable: no native provider (B14b-2)"
         );
-        // The shares are one derived value, never two literals.
-        let (teardown, capture) = shares();
-        assert_eq!(teardown, capture);
+        // The teardown share is the check's grace, derived; the capture share is not fixed here.
         assert_eq!(
-            u128::from(teardown),
+            u128::from(teardown_share()),
             crate::app::runtime::CHECK_TEARDOWN.as_millis()
+        );
+        assert_eq!(
+            Unavailable::NoClassProfile.name(),
+            "unavailable: no class profile"
         );
     }
 }

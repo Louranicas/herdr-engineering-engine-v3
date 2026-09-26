@@ -114,13 +114,15 @@ impl StoreTasks {
     pub fn wait_dispatchable(
         &self,
         stopped: &dyn Fn() -> bool,
-        deadline: Instant,
     ) -> Result<Result<Option<crate::store::Dispatchable>, StoreError>, Poisoned> {
         let mut store = self.store.lock().map_err(|_| Poisoned)?;
         loop {
             if stopped() {
                 return Ok(Ok(None));
             }
+            // The read's own bound, taken PER READ (closure H1): the task limit the ledger already
+            // owns, never an instant fixed once at serve start.
+            let deadline = Instant::now() + crate::task::TASK_LIMIT;
             match store.next_dispatchable(deadline) {
                 Ok(Some(next)) => return Ok(Ok(Some(next))),
                 Ok(None) => {}
@@ -130,9 +132,17 @@ impl StoreTasks {
         }
     }
 
-    /// Wake the dispatcher: called after a commit that can make a task dispatchable (submit,
-    /// cancel), after a dispatch completes, and by the drain.
-    pub fn notify_dispatchable(&self) {
+    /// Wake the dispatcher from a writer that HOLDS the store guard (submit, cancel): the waiter
+    /// reads and waits under that same guard, so the notify cannot fall in its read→wait window.
+    fn notify_dispatchable(&self) {
+        self.dispatchable.notify_all();
+    }
+
+    /// Wake the dispatcher from outside the guard (the drain, a proof's watcher): the guard is
+    /// taken and released first, so a waiter between its read and its wait is not skipped
+    /// (closure H5). A poisoned guard still wakes: the waiter then reads the poison itself.
+    pub fn wake(&self) {
+        drop(self.store.lock());
         self.dispatchable.notify_all();
     }
 

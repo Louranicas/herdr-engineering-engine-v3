@@ -4516,6 +4516,21 @@ fn next_dispatchable_returns_a_task_cancelled_before_any_attempt_flagged() {
         (TASK, true, &owner)
     );
     assert_eq!(head_of(&store).state, "cancellation_requested");
+    // A task cancelled AFTER an attempt began is `cancellation_requested` WITH an attempt row: the
+    // runtime's or the recovery's, never the dispatcher's (closure item 7).
+    let area = Area::new();
+    let mut store = area.open();
+    let active = running(&mut store);
+    store
+        .cancel(
+            uuid(TASK),
+            active.task_generation,
+            uuid(CANCELLED),
+            deadline(),
+        )
+        .unwrap();
+    assert_eq!(head_of(&store).state, "cancellation_requested");
+    assert_eq!(store.next_dispatchable(deadline()).unwrap(), None);
 }
 
 // ------------------------------------------------ the worker's settle through the commitment (B14a-5)

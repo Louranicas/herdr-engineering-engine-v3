@@ -198,6 +198,12 @@ impl Drain {
         &self.begun
     }
 
+    /// Mark the drain begun without waking the accept loop: for the paths on which that loop has
+    /// already returned (B14b-1 closure H4), so a dispatcher still waiting is released.
+    pub fn mark(&self) {
+        self.begun.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
     /// Begin draining, and wake the accept loop by connecting to `socket` once: the loop checks
     /// the drain after every accept, so the connection that wakes it is closed unread.
     ///

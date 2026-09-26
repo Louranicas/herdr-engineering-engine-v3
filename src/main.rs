@@ -439,37 +439,39 @@ fn serve_until_signalled(
                 if let Err(error) = drain.begin(prepared.socket()) {
                     eprintln!("habitat-engine: drain wake-up failed ({error})");
                 }
-                // The drain reaches the dispatcher's wait through the owner of both (B14b-1, D2).
+                // The drain reaches the dispatcher's wait through the owner of both (B14b-1, D2),
+                // under the store's guard so no wait window can swallow it (closure H5).
                 if let Some(tasks) = tasks {
-                    tasks.notify_dispatchable();
+                    tasks.wake();
                 }
             }
         });
-        // The dispatcher runs only over a writable ledger with a class profile (the one submit
-        // screens against); otherwise its absence is said once, like the other unavailable doors.
-        match tasks.map(|tasks| (tasks, tasks.class_profile())) {
-            Some((tasks, Ok(profile))) => {
+        // The dispatcher runs over the task owner (the one class profile is read inside it);
+        // without one, its absence is said once, like the other unavailable doors.
+        match tasks {
+            Some(tasks) => {
                 scope.spawn(move || {
                     let exit = dispatcher::Dispatcher {
                         tasks,
-                        profile,
                         attempts,
                         provider: &mut dispatcher::NoProvider,
                         agent_record_id: "",
                         selections: &[],
                         drain: drain.flag(),
-                        deadline: std::time::Instant::now() + habitat_engine::task::TASK_LIMIT,
                     }
                     .run(&report);
                     eprintln!("habitat-engine: dispatcher stopped: {exit:?}");
                 });
             }
-            Some((_, Err(why))) => {
-                eprintln!("habitat-engine: dispatch unavailable: {}", why.constraint());
-            }
             None => eprintln!("habitat-engine: dispatch unavailable: no task owner"),
         }
         let served = control_socket::run(listener, shared, &now_unix_ms, &report);
+        // Whatever ended the accept loop, the dispatcher is released before the scope joins it
+        // (closure H4): the drain marked, the wait woken under the guard.
+        drain.mark();
+        if let Some(tasks) = tasks {
+            tasks.wake();
+        }
         handle.close();
         served
     })

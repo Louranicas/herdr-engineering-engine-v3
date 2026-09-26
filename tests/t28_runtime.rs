@@ -379,8 +379,10 @@ fn rig(shape: &Shape<'_>) -> Result<Rig, Box<dyn Error>> {
     let profile = installed(&scratch.0, shape)?;
     let attempts = scratch.0.join("attempts");
     private(&attempts)?;
+    // The dispatcher reads the class profile from the task owner (R20 round 2 A11): install it there.
+    let tasks = StoreTasks::new(store, EPOCH.to_owned()).with_class_profile(Ok(profile.clone()));
     Ok(Rig {
-        tasks: StoreTasks::new(store, EPOCH.to_owned()),
+        tasks,
         scratch,
         profile,
         attempts,
@@ -563,7 +565,7 @@ fn run<C: CandidateSource, V: Verifier>(
             attempts: &rig.attempts,
             forbidden: &[],
             teardown_ms: rig.teardown_ms,
-            capture_ms,
+            capture_ms: Some(capture_ms),
             drain: &drain,
         },
         &mut source,
@@ -728,12 +730,26 @@ impl<'h> dispatcher::Provider for ScriptedProvider<'h> {
     }
 }
 
+/// The budget every dispatcher proof runs under (F102, closure H6): past it the watchdog raises the
+/// stop and wakes the wait, and the proof FAILS on `timed_out` instead of hanging.
+const DISPATCHER_BUDGET: Duration = Duration::from_secs(20);
+
 /// Run the dispatcher over the rig until it exits, with `stop` as both the engine's drain and the
-/// between-attempts drain flag; every step it reports is collected.
+/// between-attempts drain flag; every step it reports is collected. A watchdog thread ends a run
+/// that outlives `DISPATCHER_BUDGET` and the helper fails the proof by name.
 fn run_dispatcher<P: dispatcher::Provider>(
     rig: &Rig,
     provider: &mut P,
     stop: &AtomicBool,
+) -> (dispatcher::Exit, Vec<String>) {
+    run_dispatcher_with(rig, provider, stop, &rig.selections)
+}
+
+fn run_dispatcher_with<P: dispatcher::Provider>(
+    rig: &Rig,
+    provider: &mut P,
+    stop: &AtomicBool,
+    selections: &[Selection],
 ) -> (dispatcher::Exit, Vec<String>) {
     let reported = std::sync::Mutex::new(Vec::new());
     let report = |line: &str| {
@@ -741,21 +757,41 @@ fn run_dispatcher<P: dispatcher::Provider>(
             lines.push(line.to_owned());
         }
     };
-    let exit = dispatcher::Dispatcher {
-        tasks: &rig.tasks,
-        profile: &rig.profile,
-        attempts: &rig.attempts,
-        provider,
-        agent_record_id: &rig.agent,
-        selections: &rig.selections,
-        drain: stop,
-        deadline: Instant::now() + Duration::from_secs(60),
-    }
-    .run(&report);
+    let done = AtomicBool::new(false);
+    let timed_out = AtomicBool::new(false);
+    let exit = std::thread::scope(|scope| {
+        scope.spawn(|| {
+            let started = Instant::now();
+            while !done.load(Ordering::SeqCst) {
+                if started.elapsed() >= DISPATCHER_BUDGET {
+                    timed_out.store(true, Ordering::SeqCst);
+                    stop.store(true, Ordering::SeqCst);
+                    rig.tasks.wake();
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        });
+        let exit = dispatcher::Dispatcher {
+            tasks: &rig.tasks,
+            attempts: &rig.attempts,
+            provider,
+            agent_record_id: &rig.agent,
+            selections,
+            drain: stop,
+        }
+        .run(&report);
+        done.store(true, Ordering::SeqCst);
+        exit
+    });
     let lines = reported
         .lock()
         .map(|lines| lines.clone())
         .unwrap_or_default();
+    assert!(
+        !timed_out.load(Ordering::SeqCst),
+        "the dispatcher did not end within {DISPATCHER_BUDGET:?}: {lines:?}"
+    );
     (exit, lines)
 }
 
@@ -813,25 +849,12 @@ fn a_task_cancelled_before_dispatch_is_stopped_by_name_and_never_picked_again() 
         stop: &stop,
         stop_after: usize::MAX,
     };
-    // The stop is raised by the dispatch itself: after the cancelled task is stopped the read
-    // returns None and the wait would block, so the provider's stop must come from elsewhere —
-    // here, a thread that sets it once the task is no longer dispatchable.
+    // After the cancelled task is stopped the read returns None and the wait would block: a watcher
+    // raises the stop once the ledger says `cancelled` (the budget is the helper's).
     let flag = &stop;
-    let ledger_tasks = &rig.tasks;
     let rig_ref = &rig;
     std::thread::scope(|scope| {
-        scope.spawn(move || {
-            let started = Instant::now();
-            while state(rig_ref).is_ok_and(|s| s != "cancelled") {
-                assert!(
-                    started.elapsed() < Duration::from_secs(20),
-                    "the stop never landed"
-                );
-                std::thread::sleep(Duration::from_millis(20));
-            }
-            flag.store(true, Ordering::SeqCst);
-            ledger_tasks.notify_dispatchable();
-        });
+        scope.spawn(move || stop_when(rig_ref, TASK, "cancelled", flag));
         let (exit, lines) = run_dispatcher(&rig, &mut provider, &stop);
         assert_eq!(exit, dispatcher::Exit::Drained, "{lines:?}");
     });
@@ -871,10 +894,11 @@ fn no_provider_is_a_named_dispatcher_state_and_leaves_the_task_admitted() -> Out
     Ok(())
 }
 
-/// B14b-1 (b), D5 · the drain observed between attempts: the verifier's hook raises it during the
-/// first check (a mismatch), so the next `begin` sees it — the dispatch ends `Drained` with no stop
-/// written, the first attempt settled and the task `repair_pending` (the recovery's, B17; the read
-/// never returns it), and the dispatcher exits `Drained` at its next wait.
+/// B14b-1 (b), D5 (corrected, closure item 9) · the drain observed between attempts at attempt 2:
+/// the verifier's hook raises it during the first check (a mismatch), so the next `begin` sees it —
+/// the dispatch ends `Drained` with no stop written, the first attempt settled and the task
+/// `repair_pending`, which the read never returns: STRANDED until recovery (B17), a stated gap; the
+/// dispatcher exits `Drained` at its next wait.
 #[test]
 fn a_drain_between_attempts_leaves_the_task_resumable_with_no_stop_written() -> Outcome_ {
     let rig = rig(&Shape::default())?;
@@ -900,7 +924,7 @@ fn a_drain_between_attempts_leaves_the_task_resumable_with_no_stop_written() -> 
     assert!(
         lines
             .iter()
-            .any(|line| line.contains("TaskLeft(\"drained: resumable\")")),
+            .any(|line| line.contains("TaskLeft(\"drained: left for recovery\")")),
         "{lines:?}"
     );
     assert_eq!(state(&rig)?, "repair_pending");
@@ -929,7 +953,7 @@ fn stop_when(rig: &Rig, task: &str, wanted: &str, stop: &AtomicBool) {
         std::thread::sleep(Duration::from_millis(20));
     }
     stop.store(true, Ordering::SeqCst);
-    rig.tasks.notify_dispatchable();
+    rig.tasks.wake();
 }
 
 /// The state of any task in the rig's ledger.
@@ -1040,32 +1064,12 @@ fn a_stale_selection_stops_the_task_by_the_store_s_name_and_never_re_picks_it() 
         stop: &stop,
         stop_after: usize::MAX,
     };
-    let reported = std::sync::Mutex::new(Vec::new());
-    let report = |line: &str| {
-        if let Ok(mut lines) = reported.lock() {
-            lines.push(line.to_owned());
-        }
-    };
     let rig_ref = &rig;
     let flag = &stop;
-    let exit = std::thread::scope(|scope| {
+    let (exit, lines) = std::thread::scope(|scope| {
         scope.spawn(move || stop_when(rig_ref, TASK, "failed", flag));
-        dispatcher::Dispatcher {
-            tasks: &rig.tasks,
-            profile: &rig.profile,
-            attempts: &rig.attempts,
-            provider: &mut provider,
-            agent_record_id: &rig.agent,
-            selections: &stale,
-            drain: &stop,
-            deadline: Instant::now() + Duration::from_secs(60),
-        }
-        .run(&report)
+        run_dispatcher_with(&rig, &mut provider, &stop, &stale)
     });
-    let lines = reported
-        .lock()
-        .map(|lines| lines.clone())
-        .unwrap_or_default();
     assert_eq!(exit, dispatcher::Exit::Drained, "{lines:?}");
     assert_eq!(
         *opened.borrow(),
@@ -1137,6 +1141,67 @@ fn a_submit_wakes_the_waiting_dispatcher_and_it_picks_the_new_task() -> Outcome_
         opened.borrow().as_slice(),
         [submitted.ok_or("the second task")?]
     );
+    Ok(())
+}
+
+/// B14b-1 (b), D5 (closure item 9) · a drain set BEFORE the first attempt begins: `dispatch` (which
+/// reads the same flag at `begin`) ends `Drained` with nothing written and the task still `admitted`,
+/// so a dispatcher run afterwards, the drain cleared, picks it again and drives it to acceptance —
+/// the one drain case the dispatcher itself resumes.
+#[test]
+fn a_task_drained_before_its_first_attempt_is_picked_again_after_the_drain() -> Outcome_ {
+    let rig = rig(&Shape::default())?;
+    let stop = AtomicBool::new(true);
+    let (mut source, _) = script(vec![Candidate::Replacement(SECOND.to_vec())]);
+    let (mut verifier, _) = oracle(vec![matched(7)]);
+    let outcome = dispatch(
+        &rig.tasks,
+        &rig.profile,
+        Dispatch {
+            principal: &owner(),
+            task: id(TASK),
+            agent_record_id: &rig.agent,
+            selections: &rig.selections,
+            attempts: &rig.attempts,
+            forbidden: &[],
+            teardown_ms: rig.teardown_ms,
+            capture_ms: Some(5_000),
+            drain: &stop,
+        },
+        &mut source,
+        &mut verifier,
+    )
+    .map_err(|e| format!("{e:?}"))?;
+    assert_eq!(outcome, Outcome::Drained);
+    assert_eq!(
+        state(&rig)?,
+        "admitted",
+        "nothing written: the task stays dispatchable"
+    );
+    assert_eq!(
+        rows(&rig, "SELECT count(*) FROM attempts WHERE task_id=?")?,
+        vec![vec!["0".to_owned()]]
+    );
+    // The drain cleared: the dispatcher picks the same task and accepts it.
+    stop.store(false, Ordering::SeqCst);
+    let (source, _) = script(vec![Candidate::Replacement(SECOND.to_vec())]);
+    let (verifier, _) = oracle(vec![matched(7)]);
+    let opened = Rc::new(RefCell::new(Vec::new()));
+    let mut provider = ScriptedProvider {
+        pairs: VecDeque::from(vec![(source, verifier)]),
+        opened: Rc::clone(&opened),
+        stop: &stop,
+        stop_after: usize::MAX,
+    };
+    let flag = &stop;
+    let rig_ref = &rig;
+    std::thread::scope(|scope| {
+        scope.spawn(move || stop_when(rig_ref, TASK, "accepted", flag));
+        let (exit, lines) = run_dispatcher(&rig, &mut provider, &stop);
+        assert_eq!(exit, dispatcher::Exit::Drained, "{lines:?}");
+    });
+    assert_eq!(*opened.borrow(), vec![TASK.to_owned()]);
+    assert_eq!(state(&rig)?, "accepted");
     Ok(())
 }
 
