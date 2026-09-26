@@ -148,6 +148,17 @@ pub struct Object {
 }
 
 impl Object {
+    /// A read-side identity from a digest and size the caller holds (a receipt's `Ref`, a ledger
+    /// row): `read_object` verifies both against the bytes, so nothing is forged by naming it —
+    /// only reads take it, and only inside the crate.
+    #[must_use]
+    pub(crate) fn of(digest: &str, size: u64) -> Self {
+        Self {
+            digest: digest.to_owned(),
+            size,
+        }
+    }
+
     #[must_use]
     pub fn digest(&self) -> &str {
         &self.digest
