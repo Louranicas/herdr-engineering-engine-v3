@@ -834,7 +834,7 @@ pub fn drive<'a, C: CandidateSource, V: Verifier>(
                     pre(refuse(tasks, &runtime.dispatch, stop, origin, deadline))?;
                     Ok(Outcome::Refused(stop))
                 }
-                None => Err(Error::PreDispatch(Box::new(error))),
+                None => pre(Err(error)),
             }
         }
         Err(driver::Error::Runtime(Fault::Error(error))) => Err(error),

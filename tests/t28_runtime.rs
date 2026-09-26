@@ -735,8 +735,11 @@ impl<'h> dispatcher::Provider for ScriptedProvider<'h> {
 const DISPATCHER_BUDGET: Duration = Duration::from_secs(20);
 
 /// Run the dispatcher over the rig until it exits, with `stop` as both the engine's drain and the
-/// between-attempts drain flag; every step it reports is collected. A watchdog thread ends a run
-/// that outlives `DISPATCHER_BUDGET` and the helper fails the proof by name.
+/// between-attempts drain flag; every step it reports is collected. A watchdog thread sets the stop
+/// and wakes the tasks when a run outlives `DISPATCHER_BUDGET`, and the helper then fails the proof
+/// by name — for a dispatcher that honours its stop. One that ignores it runs on the test thread
+/// and hangs to the gate's ceiling (stated in R20 closure 2; a `Send` double to run it off-thread is
+/// B14b-2's).
 fn run_dispatcher<P: dispatcher::Provider>(
     rig: &Rig,
     provider: &mut P,
@@ -900,7 +903,7 @@ fn no_provider_is_a_named_dispatcher_state_and_leaves_the_task_admitted() -> Out
 /// `repair_pending`, which the read never returns: STRANDED until recovery (B17), a stated gap; the
 /// dispatcher exits `Drained` at its next wait.
 #[test]
-fn a_drain_between_attempts_leaves_the_task_resumable_with_no_stop_written() -> Outcome_ {
+fn a_drain_between_attempts_strands_the_task_in_repair_pending_with_no_stop_written() -> Outcome_ {
     let rig = rig(&Shape::default())?;
     let stop = AtomicBool::new(false);
     let (source, _) = script(vec![

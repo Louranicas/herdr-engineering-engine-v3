@@ -2068,7 +2068,7 @@ fn verified_inventory_capacity(
         remaining(deadline)?;
         let (digest, size) = row?;
         prospective.insert(digest, size);
-        if prospective.len() > 4096 {
+        if prospective.len() > backup::OBJECT_INVENTORY_BOUND {
             // DS17's one name (B14b-1 closure 2): the same full-inventory condition the
             // registration door raises, never `Bound` (a request bound) at this door alone.
             return Err(Error::Disposition(ResolveRefusal::Inventory));
@@ -2081,7 +2081,7 @@ fn verified_inventory_capacity(
         {
             return Err(Error::Corrupt);
         }
-        if prospective.len() > 4096 {
+        if prospective.len() > backup::OBJECT_INVENTORY_BOUND {
             // DS17's one name (B14b-1 closure 2): the same full-inventory condition the
             // registration door raises, never `Bound` (a request bound) at this door alone.
             return Err(Error::Disposition(ResolveRefusal::Inventory));

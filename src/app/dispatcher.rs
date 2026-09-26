@@ -124,8 +124,9 @@ pub fn classify(result: &Result<Outcome, RuntimeError>) -> Step {
 
 /// A store error out of `dispatch` after an attempt row may exist: the task is the recovery's, unless
 /// the ledger itself can no longer be written (the dispatcher stops), its storage is full, or the
-/// object inventory is full (DS17: `Disposition(Inventory)`, raised at the first registration past
-/// the bound — closure H2; `Full` is `SQLITE_FULL`, its own name).
+/// object inventory is full (DS17: `Disposition(Inventory)`, raised by the registration door at the
+/// first registration past the bound and by the acceptance door when the accepted objects would
+/// cross it — closure H2 and closure 2; `Full` is `SQLITE_FULL`, its own name).
 fn store_step(error: &StoreError) -> Step {
     match error {
         StoreError::UncertainCommit => {
