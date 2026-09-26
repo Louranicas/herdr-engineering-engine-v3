@@ -137,6 +137,34 @@ pub struct CleanupPoll {
     pub group: GroupState,
 }
 
+/// One turn of a settle loop, decided from a cleanup poll (F95: the policy apart from the I/O).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SettleStep {
+    /// The leader is terminal and its group empty.
+    Settled,
+    /// Wait ownership is lost (a lost child can never settle — `lose_wait`) or the deadline is reached.
+    Refused,
+    /// Neither yet: poll again after [`SETTLE_PAUSE`].
+    Wait,
+}
+
+/// The one home of the settled predicate (R21 N18): every settle loop — the plan's probe, a
+/// source's retained children — decides its turn here.
+#[must_use]
+pub fn settle_step(poll: &CleanupPoll, now: Instant, deadline: Instant) -> SettleStep {
+    if poll.leader_terminal && poll.group == GroupState::Empty {
+        SettleStep::Settled
+    } else if poll.ownership == WaitOwnership::Lost || now >= deadline {
+        SettleStep::Refused
+    } else {
+        SettleStep::Wait
+    }
+}
+
+/// The pause between polls while a child is settled: `poll_cleanup` returns at once, so a loop
+/// paces itself by this under the caller's deadline (pacing, never a limit).
+pub const SETTLE_PAUSE: Duration = Duration::from_millis(10);
+
 #[derive(Debug)]
 pub struct ProcessReport {
     /// Caller-comparable monotonic origin sampled before spawn.
@@ -865,18 +893,42 @@ pub fn exited_during_census(raw_os_error: Option<i32>) -> bool {
 }
 
 fn stat_is_live(bytes: &[u8], group: Pid) -> Result<bool, ScanError> {
-    // Process comm may be arbitrary non-UTF8 bytes and contain ') '. Split at the
-    // final delimiter, then parse only the kernel-authored ASCII suffix.
-    let offset = bytes
-        .windows(2)
-        .rposition(|pair| pair == b") ")
-        .ok_or(ScanError::Io)?;
-    let suffix = std::str::from_utf8(&bytes[offset + 2..]).map_err(|_| ScanError::Io)?;
+    let stat = parse_stat(bytes).ok_or(ScanError::Io)?;
+    Ok(stat.pgrp == group.as_raw_nonzero().get() && !matches!(stat.state, 'Z' | 'X'))
+}
+
+/// The fields of one `/proc/<pid>/stat` line this crate reads (proc(5)): field 3 the state, 4 the
+/// parent pid, 5 the process group, 22 the start time in clock ticks since boot.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Stat {
+    pub state: char,
+    pub ppid: u32,
+    pub pgrp: i32,
+    pub start_ticks: u64,
+}
+
+/// The one stat parser (R21 N7): the group census, the startup reader and the daemon check all
+/// read a stat line here. `comm` (field 2) may be arbitrary non-UTF-8 bytes holding spaces and
+/// `") "`, so the line is split at its FINAL `") "` and only the kernel-authored suffix is parsed:
+/// it must be UTF-8, the state one character, and the parent pid, group and start ticks numbers.
+#[must_use]
+pub fn parse_stat(bytes: &[u8]) -> Option<Stat> {
+    let offset = bytes.windows(2).rposition(|pair| pair == b") ")?;
+    let suffix = std::str::from_utf8(bytes.get(offset + 2..)?).ok()?;
     let mut fields = suffix.split_ascii_whitespace();
-    let state = fields.next().ok_or(ScanError::Io)?;
-    let pgrp = fields
-        .nth(1)
-        .and_then(|s| s.parse::<i32>().ok())
-        .ok_or(ScanError::Io)?;
-    Ok(pgrp == group.as_raw_nonzero().get() && !matches!(state, "Z" | "X"))
+    let mut state = fields.next()?.chars();
+    let (first, second) = (state.next()?, state.next());
+    if second.is_some() {
+        return None;
+    }
+    let ppid = fields.next()?.parse().ok()?;
+    let pgrp = fields.next()?.parse().ok()?;
+    // Fields 6..=21 lie between the group and the start ticks.
+    let start_ticks = fields.nth(16)?.parse().ok()?;
+    Some(Stat {
+        state: first,
+        ppid,
+        pgrp,
+        start_ticks,
+    })
 }

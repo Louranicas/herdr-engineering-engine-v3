@@ -226,19 +226,11 @@ fn read_stat(pid: u32) -> io::Result<String> {
     Ok(text)
 }
 
-/// proc(5): field 2 `comm` may hold spaces and parentheses, so fields are
-/// counted after the last `)`: field 3 is the state, field 22 the start ticks.
+/// proc(5) field 3 (the state) and field 22 (the start ticks), read by the process module's one
+/// stat parser (R21 N7), which counts fields after the final `") "` of `comm`.
 #[must_use]
 pub fn parse_stat(stat: &str) -> Option<(char, u64)> {
-    let close = stat.rfind(')')?;
-    let mut fields = stat.get(close + 1..)?.split_whitespace();
-    let mut state = fields.next()?.chars();
-    let (first, second) = (state.next()?, state.next());
-    if second.is_some() {
-        return None;
-    }
-    let start_ticks = fields.nth(18)?.parse().ok()?;
-    Some((first, start_ticks))
+    crate::worker::process::parse_stat(stat.as_bytes()).map(|stat| (stat.state, stat.start_ticks))
 }
 
 // ---- the seam ------------------------------------------------------------------------------

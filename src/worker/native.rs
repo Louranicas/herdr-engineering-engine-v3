@@ -699,13 +699,9 @@ fn daemon(profile: &Profile, deadline: Instant, cancelled: &AtomicBool) -> Resul
     let path = PathBuf::from(format!("/proc/{}/stat", expected.pid));
     let before = small(&path)?;
     let parse_start = |bytes: &[u8]| -> Result<u64, Error> {
-        let value = std::str::from_utf8(bytes).map_err(|_| Error::Identity)?;
-        let (_, tail) = value.rsplit_once(')').ok_or(Error::Identity)?;
-        tail.split_whitespace()
-            .nth(19)
-            .ok_or(Error::Identity)?
-            .parse()
-            .map_err(|_| Error::Identity)
+        process::parse_stat(bytes)
+            .map(|stat| stat.start_ticks)
+            .ok_or(Error::Identity)
     };
     if expected.pid == 0
         || expected.start_ticks == 0

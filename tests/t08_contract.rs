@@ -817,3 +817,53 @@ fn t08c24_a_process_gone_mid_census_is_not_a_census_failure() {
         "an error with no errno is not an exit"
     );
 }
+
+/// T08C-25 · R21 N7 · the one stat parser (`worker::process::parse_stat`, which the group census,
+/// the startup reader and the daemon check all delegate to) reads the state, parent pid, process
+/// group and start ticks from the kernel-authored suffix after the LAST `") "`, past a `comm` that
+/// holds `") "`, a state letter, numbers and a byte that is not UTF-8.
+///
+/// Independent source: two lines this host's `/proc/<pid>/stat` printed (2026-09-27), each read by
+/// `ps -o ppid=,pgid=,state=` and by `awk '{print $3,$4,$5,$22}'` on the unmodified line:
+/// a bash shell, `S 2005868 1203446 30599532`, and a forked child not yet reaped,
+/// `Z 1203737 1203737 30600622`. The shell's comm `(bash)` is replaced by a hostile one here; a
+/// parser splitting at the first `)` would read state `Z`, ppid 9, pgrp 8 from it.
+#[test]
+fn the_stat_parser_reads_state_ppid_pgrp_and_start_ticks_past_a_hostile_comm() {
+    use habitat_engine::worker::process::{Stat, parse_stat};
+    let hostile: &[u8] = b"1203446 (a) Z 9 8 \xff) S 2005868 1203446 1203446 0 -1 4194560 301 94 0 0 0 0 0 0 20 0 1 0 30599532 238080000 1000 18446744073709551615 94798584889344 94798585975321 140736897238352 0 0 0 65536 4 65536 1 0 0 17 5 0 0 0 0 0 94798586366000 94798586415352 94798657507328 140736897244040 140736897244825 140736897244825 140736897249262 0\n";
+    let zombie: &[u8] = b"1203738 (python3) Z 1203737 1203737 1203735 0 -1 4227148 147 0 0 0 0 0 0 0 20 0 1 0 30600622 0 0 18446744073709551615 0 0 0 0 0 0 0 16781312 2 1 0 0 17 15 0 0 0 0 0 0 0 0 0 0 0 0 0\n";
+    assert_eq!(
+        parse_stat(hostile),
+        Some(Stat {
+            state: 'S',
+            ppid: 2_005_868,
+            pgrp: 1_203_446,
+            start_ticks: 30_599_532,
+        })
+    );
+    assert_eq!(
+        parse_stat(zombie),
+        Some(Stat {
+            state: 'Z',
+            ppid: 1_203_737,
+            pgrp: 1_203_737,
+            start_ticks: 30_600_622,
+        })
+    );
+    // Refusals: no comm delimiter; a state that is not one character; a line cut before field 22;
+    // a suffix that is not UTF-8.
+    assert_eq!(parse_stat(b"no parenthesis"), None);
+    assert_eq!(
+        parse_stat(b"1 (x) SS 0 1 1 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 7 0"),
+        None
+    );
+    assert_eq!(
+        parse_stat(b"1 (x) S 0 1 1 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0"),
+        None
+    );
+    assert_eq!(
+        parse_stat(b"1 (x) S 0 1 1 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 7 \xff"),
+        None
+    );
+}

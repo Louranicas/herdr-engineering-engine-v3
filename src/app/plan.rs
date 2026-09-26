@@ -40,7 +40,9 @@ use crate::contracts::receipt::{
 use crate::store::Object;
 use crate::worker::namespace::{self, NamespaceError, pinned_bytes};
 use crate::worker::namespace_shim::ENVIRONMENT;
-use crate::worker::process::{self, GroupState, Interruption, ProcessSpec, WaitOwnership};
+use crate::worker::process::{
+    self, Interruption, ProcessSpec, SETTLE_PAUSE, SettleStep, settle_step,
+};
 use crate::worker::workspace::{self, Snapshot};
 use std::ffi::OsString;
 use std::fs;
@@ -59,8 +61,6 @@ pub const SCHEMA_STANDARD: (&str, &str) = ("hee3-receipt-schema", "1");
 pub const MAX_TOOL_BYTES: usize = 64 * 1024 * 1024;
 /// The most stdout a `<compiler> -Vv` may print before it is refused as not a version report.
 pub const MAX_VERSION_BYTES: usize = 4096;
-/// The pause between polls while a probe's child is settled: pacing under the caller's deadline.
-const SETTLE_PAUSE: std::time::Duration = std::time::Duration::from_millis(10);
 /// The build profile's fixed facts: the target the compiler pin is for and the profile name.
 pub const BUILD_TARGET: &str = "x86_64-unknown-linux-gnu";
 pub const BUILD_PROFILE: &str = "frozen";
@@ -963,26 +963,6 @@ fn snapshot_file<'a>(snapshot: &'a Snapshot, file: &'static str) -> Result<&'a [
             _ => None,
         })
         .ok_or(Refusal::Editable(file))
-}
-
-/// One turn of the settle loop, decided from a cleanup poll (F95: the policy apart from the I/O):
-/// settled when the leader is terminal and its group empty; refused when wait ownership is lost
-/// (a lost child can never settle — `process::lose_wait`) or the deadline is reached; else wait.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum SettleStep {
-    Settled,
-    Refused,
-    Wait,
-}
-
-fn settle_step(poll: &process::CleanupPoll, now: Instant, deadline: Instant) -> SettleStep {
-    if poll.leader_terminal && poll.group == GroupState::Empty {
-        SettleStep::Settled
-    } else if poll.ownership == WaitOwnership::Lost || now >= deadline {
-        SettleStep::Refused
-    } else {
-        SettleStep::Wait
-    }
 }
 
 /// The digest the receipt's `schema_sha256` names: the schema bytes this binary carries.

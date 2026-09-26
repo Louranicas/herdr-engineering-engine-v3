@@ -275,7 +275,7 @@ T07_STARTUP_INPUTS = ("src/app/startup.rs", "src/store/reconciliation.rs", "test
 # by t28 as well; it is pinned here once, beside the battery whose fake it was
 # measured against. control-v1/ and README.stub.md under tests/fixtures/native
 # are read by no registered Rust target and stay unpinned.
-T08_CONTRACT_TARGET_COUNTS = {"t08_contract": 29}
+T08_CONTRACT_TARGET_COUNTS = {"t08_contract": 30}
 T08_CONTRACT_INPUTS = (
     "src/worker/native.rs", "src/worker/mod.rs", "tests/t08_contract.rs", "tests/t08_candidates.rs",
     "tests/fixtures/native/ds13-frame-prompt.txt",
