@@ -54776,8 +54776,8 @@
       "bytes": 6019
     },
     "tools/check-quality": {
-      "sha256": "61cc98a01cb4f79f7dd79fc5ef1810cd64bee6753ac3880d4f537e172d2b0ac9",
-      "bytes": 84355
+      "sha256": "e447f673d5c959914cc42263f2eb4f33056e556683f0e672238654e21adb707f",
+      "bytes": 90694
     },
     "tools/development_process.py": {
       "sha256": "e76e3a794193e5df7ee96fabf700113d718527745a0f9a9dba1e04fd5c7baaf3",
@@ -54788,8 +54788,8 @@
       "bytes": 10433
     },
     "tests/t25_quality.py": {
-      "sha256": "13d04cef271a31156460d2c3b7b238c79d6cc5098d91817a77af1ec70b5c8c04",
-      "bytes": 145697
+      "sha256": "3b69bf1bb920704f5a3b1290340a369d8a68912f37532920bc0d017a7a3e3f74",
+      "bytes": 158091
     },
     "julia/Manifest.toml": {
       "sha256": "097d5028df4e1667a970a8297d41eedb908e0319a0b4154c7ec12548140a9f79",
@@ -55980,32 +55980,32 @@
       "bytes": 7666
     },
     "src/worker/aggregate.rs": {
-      "sha256": "5f6eeb76c0f254760615aecf84dbf14ed5fa7f2e7976678b4404b4c516af8fac",
-      "bytes": 22566
+      "sha256": "c340f260bf1d2001b47d64ee49a46f2b85ffdda2520aee724ea695daf3fd2dff",
+      "bytes": 22418
     },
     "src/worker/aggregate_io.rs": {
       "sha256": "6f0897eeaf1c5a3297f27b25bad109a415d04040d84597495c756a8703e09ba2",
       "bytes": 6469
     },
     "src/worker/namespace.rs": {
-      "sha256": "a9cdfe933422065815dc2155eef0d95794581c57c712c41a221f2a894f0c1bfd",
-      "bytes": 75336
+      "sha256": "400e68c7caca45afda0c6950f1385e19c999b5c49085f2944b9e4f2a39fbecd1",
+      "bytes": 75334
     },
     "src/worker/namespace_shim.rs": {
       "sha256": "e396ec1a5ac34fcc914f94942f3ea48ee84105b23698fbfb15f244ae3b292b7f",
       "bytes": 11132
     },
     "src/worker/process.rs": {
-      "sha256": "e8ccba62feb6888bf8d2ba0a87aa6c52f7bc2672ea60a593ce400a3416287205",
-      "bytes": 29947
+      "sha256": "a5bf43a7dba6fbfe8a8fb91766846df6eebd5f6db9f7887d719d8671f226e542",
+      "bytes": 29928
     },
     "src/worker/resources.rs": {
-      "sha256": "a59fcd8fa80b43ca44fc45a8cc9102e96f5b0fb95b9f9cde7a0fde6bc09ea351",
-      "bytes": 14339
+      "sha256": "a0bfdd7dc0162dc1bb0c66d0b9748b434076eff84a54bf345fac2682194924e2",
+      "bytes": 20835
     },
     "src/worker/workspace.rs": {
-      "sha256": "f49985b9810d3601dda478b25c7dd08ad4b9f8e9563e0b6546f1b58633813b91",
-      "bytes": 29794
+      "sha256": "d0d7740ca5720d61300f6eea12be27d0da89ae5b7732bc5fd6c68c5d634e4a6a",
+      "bytes": 33942
     },
     "tests/fixtures/receipt-import/nonpass.json": {
       "sha256": "496d768d300ec5e962a807bc85c6a2a3a78bbe7525b9b133dd4913cd0622b73d",
@@ -56156,8 +56156,8 @@
       "bytes": 57829
     },
     "tests/t11_context.rs": {
-      "sha256": "ce5f1d5cc1d49aa51ee93d7aa5da0da8bdb5bd75f8489bfa2e253646203a850a",
-      "bytes": 60415
+      "sha256": "568fd940a1cbe279a0588dd5aa4632314b59474adf7f3b49a10b2bb35306b969",
+      "bytes": 62070
     },
     "tests/t22_cohort.rs": {
       "sha256": "ba6669c0f5e7a2dd5dac0800e4cbf8ead286be47eeefd6a0d8441410e781b9d0",
@@ -56168,8 +56168,8 @@
       "bytes": 51837
     },
     "tests/t16_herdr.rs": {
-      "sha256": "a64eaffd50e1ed79c2c6c8a39d259237cca70a98cf17ab31e4619051a109d132",
-      "bytes": 51590
+      "sha256": "8b2737ee1cf5fabe137fcb5571f5146a396ac6412eaabb17e2379bf70f2e4247",
+      "bytes": 56046
     },
     "tests/fixtures/route/fixture.json": {
       "sha256": "99d288932e9bd0c95f419730751531ec20387fd044b94e12c984a22a234de4d2",

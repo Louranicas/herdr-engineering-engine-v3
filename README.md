@@ -197,6 +197,8 @@ HEE3-ANCHORS-END
 
 **Current resume point:** [Restart note](file:///var/home/Louranicas/handoffs/HEE3_RESTART_20260926_EARLY.md) → [Module completion review — per-module definition of done, schematics and route](file:///var/home/Louranicas/handoffs/HEE3_MODULE_COMPLETION_REVIEW_20260923.md) · [Architecture atlas — what complete means (L1 implemented · L2 composed · L3 admitted) and measured schematics](file:///var/home/Louranicas/handoffs/HEE3_ARCHITECTURE_ATLAS_20260923.md) — each links back to this README.
 
+**How the codebase is completed:** [Master plan — every module to finished, the 20 cross-module flows proven, waves A–D](file:///var/home/Louranicas/handoffs/HEE3_MASTER_PLAN_20260926.md) · [New way of working — flow contract, compiled skeleton, tiered verification](file:///var/home/Louranicas/handoffs/HEE3_NEW_WAY_OF_WORKING_20260926.md) — each links back to this README.
+
 **Known unknowns:** [What cannot yet be verified, each with its reason](file:///var/home/Louranicas/.claude/known-unknowns.md) — read it before trusting a green result; it links back to this README.
 
 **Before each coding task:** [Progressive module context workflow](docs/module-context.md) provides 22 focused context cards and the $hee-module-scout skill. Scout contracts, callers, evidence and tool availability; retain omissions and re-scout changed boundaries.
