@@ -840,74 +840,144 @@ mod tests {
 
     /// The three refusals by name: too few obligation ids (with both numbers), vector counts
     /// without a match, and a plan with no case.
-    fn assert_refused(sink: &mut Evidence<'_>, composing: &Composing<'_>) {
-        // Too few obligation ids for the unsettled obligations, and vector counts without a
-        // match: each refused by name, with its numbers, before anything is published.
+    /// One refused compose: nothing is registered or published by it — the sink's footprint is
+    /// read before and after, so a refusal moved below the registration shows here.
+    fn refused(sink: &mut Evidence<'_>, composing: &Composing<'_>) -> Refusal {
+        let footprint =
+            |sink: &Evidence<'_>| (sink.registered().len(), sink.pending_publications().len());
+        let before = footprint(sink);
+        let Err(refusal) = compose(sink, composing) else {
+            panic!("a refusal was expected")
+        };
+        assert_eq!(
+            footprint(sink),
+            before,
+            "a refused compose changed the sink"
+        );
+        refusal
+    }
+
+    /// Too few obligation ids for the unsettled obligations, and too many — with both numbers,
+    /// the second pair off the origin (two unsettled, three ids); and a plan with no case.
+    fn assert_refused_ids(sink: &mut Evidence<'_>, composing: &Composing<'_>) {
+        use crate::app::run_records::{ObligationRecord, RunCleanup, Settlement};
         assert!(matches!(
-            compose(
+            refused(
                 sink,
                 &Composing {
                     obligation_ids: &[],
                     ..*composing
                 }
             ),
-            Err(Refusal::ObligationIds {
+            Refusal::ObligationIds {
                 unsettled: 1,
                 ids: 0
-            })
+            }
         ));
+        let two_unsettled = RunCleanup::of(
+            Settlement::Pending,
+            &[
+                ObligationRecord {
+                    id: "scratch".to_owned(),
+                    state: Settlement::Pending,
+                },
+                ObligationRecord {
+                    id: "resources".to_owned(),
+                    state: Settlement::Unknown,
+                },
+            ],
+            &[],
+        );
+        let three_ids: Vec<String> = (41..44)
+            .map(|n| format!("28f60000-0000-4000-8000-0000000000{n}"))
+            .collect();
         assert!(matches!(
-            compose(
+            refused(
+                sink,
+                &Composing {
+                    cleanup: &two_unsettled,
+                    obligation_ids: &three_ids,
+                    ..*composing
+                }
+            ),
+            Refusal::ObligationIds {
+                unsettled: 2,
+                ids: 3
+            }
+        ));
+        let mut planless = composing.prepared.clone();
+        planless.cases.clear();
+        assert!(matches!(
+            refused(
+                sink,
+                &Composing {
+                    prepared: &planless,
+                    ..*composing
+                }
+            ),
+            Refusal::Publisher {
+                stage: "plan",
+                error: collector::Error::CasePlan
+            }
+        ));
+    }
+
+    /// Vector counts without an evaluation outcome, and each evaluation outcome without counts —
+    /// the refusal names the outcome and which side was present.
+    fn assert_refused_evaluation(sink: &mut Evidence<'_>, composing: &Composing<'_>) {
+        use crate::app::run_records::{OutcomeName, RunOutcome};
+        use crate::app::workload::{Outcome, Run};
+        use crate::check::u64_oracle::Evaluation;
+        let named = |refusal: Refusal| match refusal {
+            Refusal::Evaluation { outcome, counted } => Some((outcome, counted)),
+            _ => None,
+        };
+        assert_eq!(
+            named(refused(
                 sink,
                 &Composing {
                     evaluation: Some((1, 0)),
                     ..*composing
                 }
+            )),
+            Some((OutcomeName::SetupFailed, true))
+        );
+        for (build, expected) in [
+            (
+                Outcome::Matched as fn(Evaluation) -> Outcome,
+                OutcomeName::Matched,
             ),
-            Err(Refusal::Evaluation)
-        ));
-        // ... and the converse: a matched outcome with no vector counts.
-        let matched = crate::app::run_records::RunOutcome::of(
-            &crate::app::workload::Run::unlaunched(crate::app::workload::Outcome::Matched(
-                crate::check::u64_oracle::Evaluation {
+            (
+                Outcome::Mismatch as fn(Evaluation) -> Outcome,
+                OutcomeName::Mismatch,
+            ),
+        ] {
+            let evaluated = RunOutcome::of(
+                &Run::unlaunched(build(Evaluation {
                     vectors: Vec::new(),
                     matched: 1,
                     failed: 0,
-                },
-            )),
-            &[],
-        )
-        .expect("an unlaunched run pairs zero steps with zero captures");
-        assert!(matches!(
-            compose(
-                sink,
-                &Composing {
-                    outcome: &matched,
-                    evaluation: None,
-                    ..*composing
-                }
-            ),
-            Err(Refusal::Evaluation)
-        ));
-        // A plan with no case is refused by name.
-        let mut planless = composing.prepared.clone();
-        planless.cases.clear();
-        let refused = Composing {
-            prepared: &planless,
-            ..*composing
-        };
-        assert!(matches!(
-            compose(sink, &refused),
-            Err(Refusal::Publisher {
-                stage: "plan",
-                error: collector::Error::CasePlan
-            })
-        ));
+                })),
+                &[],
+            )
+            .expect("an unlaunched run pairs zero steps with zero captures");
+            assert_eq!(
+                named(refused(
+                    sink,
+                    &Composing {
+                        outcome: &evaluated,
+                        evaluation: None,
+                        ..*composing
+                    }
+                )),
+                Some((expected, false))
+            );
+        }
     }
 
     /// The receipt decodes, its verdict is the decision's, it cites the four records as
     /// `run_record:<kind>` rows equal to what was published, and its unsettled-obligations page
-    /// carries exactly the aggregate (unknown) citing the cleanup record; returns the decoded root.
+    /// carries exactly the `resources` obligation (unknown) citing the cleanup record; returns the decoded root.
     fn assert_records_cited(
         sink: &Evidence<'_>,
         composed: &super::Composed,
@@ -946,7 +1016,7 @@ mod tests {
             .collect();
         published.sort_by_key(|row| row.0);
         assert_eq!(cited, published);
-        // The unsettled obligations page carries exactly the aggregate (unknown), citing the
+        // The unsettled obligations page carries exactly `resources` (unknown), citing the
         // cleanup record it came from.
         let unresolved = graph
             .rows(root.observations.unresolved_obligations.as_ref())
@@ -983,7 +1053,7 @@ mod tests {
     /// prepared plan (`tests/fixtures/receipt-import/preparation.json`, its objects staged as the
     /// receipt-import lane does) publishes through a staged sink, passes the class's own
     /// `validate` inside `finalize`, carries `decide`'s verdict — `Invalid`, naming exactly the
-    /// gaps R16-G3 records (the three unsourced identities, the unknown aggregate) beside the
+    /// gaps R16-G3 records (the three unsourced identities, the unknown `resources` obligation) beside the
     /// run's own reasons — and cites the four run records as `run_record:<kind>` artifact rows
     /// equal to what was published. A refused compose (no case in the plan) is named.
     #[test]
@@ -1073,7 +1143,8 @@ mod tests {
         assert_eq!(root.observations.end_unix_ms.get(), 1_758_900_000_041);
         assert_eq!(root.observations.cutoff_unix_ms.get(), 1_758_900_290_000);
         assert_eq!(root.observations.cleanup, ObservationsV1Cleanup::Settled);
-        assert_refused(&mut sink, &composing);
+        assert_refused_ids(&mut sink, &composing);
+        assert_refused_evaluation(&mut sink, &composing);
         std::fs::remove_dir_all(&area)?;
         Ok(())
     }
@@ -1127,8 +1198,9 @@ pub enum Refusal {
     /// The caller minted a different number of obligation ids than the cleanup record left
     /// unsettled: with fewer, a row would be dropped in the flattering direction (re-check N1).
     ObligationIds { unsettled: usize, ids: usize },
-    /// The oracle's vector counts are present without a match or mismatch, or absent with one.
-    Evaluation,
+    /// The oracle's vector counts are present (`counted`) without a match or mismatch outcome, or
+    /// absent with one — the outcome named.
+    Evaluation { outcome: OutcomeName, counted: bool },
 }
 
 /// Name the stage a publisher refusal came from.
@@ -1162,22 +1234,23 @@ pub fn compose(sink: &mut Evidence<'_>, composing: &Composing<'_>) -> Result<Com
         .captures
         .get(STEPS.len() - 1)
         .and_then(Option::as_ref);
-    admit(composing)?;
+    let unresolved = admit(composing)?;
     register_records(sink, composing.records)?;
-    let facts = sink
-        .payload(&composing.host.raw, "application/octet-stream")
-        .map_err(|error| Refusal::Publisher {
-            stage: "host facts",
-            error: collector::Error::Sink(error),
-        })?;
+    let facts = host_payload(sink, composing.host)?;
     let mut publisher = Publisher::new(sink);
     let producer = match execute {
         Some(captured) => captured.producer.clone(),
         None => not_started_producer()?,
     };
     let timing = composing.clock.timing();
-    let observations =
-        observations_of(&mut publisher, composing, facts, producer.clone(), &timing)?;
+    let observations = observations_of(
+        &mut publisher,
+        composing,
+        facts,
+        producer.clone(),
+        &timing,
+        &unresolved,
+    )?;
     // An unselected plan case is unmeasured whatever the run did (RC04's case rule); the class's
     // one case is selected, so this arm is the fixture lane's.
     let (case_outcome, oracle_result, oracle_fact) = if plan.selected {
@@ -1360,6 +1433,15 @@ fn outcome_name(outcome: OutcomeName) -> String {
         .unwrap_or_default()
 }
 
+/// The host's raw readings published as the payload the host record cites.
+fn host_payload(sink: &mut Evidence<'_>, host: &host::Facts) -> Result<Payload, Refusal> {
+    sink.payload(&host.raw, "application/octet-stream")
+        .map_err(|error| Refusal::Publisher {
+            stage: "host facts",
+            error: collector::Error::Sink(error),
+        })
+}
+
 /// The receipt's observations: the host, the clock's instants as unix and monotonic-relative
 /// values, an empty resources page (the runtime measures no consumption yet — R16-G1), the
 /// producer, the cancellation and cleanup the records observed, and the unsettled obligations.
@@ -1369,18 +1451,14 @@ fn observations_of(
     facts: Payload,
     producer: ProducerV1,
     timing: &decision::Timing,
+    unresolved: &[ObligationV1],
 ) -> Result<ObservationsV1, Refusal> {
     let host = publisher
         .record(&host_record(composing.host, facts)?)
         .map_err(at("host"))?;
     let resources = publisher.resource_pages(&[]).map_err(at("resources"))?;
-    let unresolved = unresolved_rows(
-        composing.cleanup,
-        composing.records,
-        composing.obligation_ids,
-    )?;
     let unresolved_obligations = publisher
-        .obligation_pages(&unresolved)
+        .obligation_pages(unresolved)
         .map_err(at("obligations"))?;
     Ok(ObservationsV1 {
         host,
@@ -1569,45 +1647,44 @@ fn record_rows(
         .collect()
 }
 
-/// The two counts the caller must agree with the records on, refused by name before anything
-/// is registered: one obligation id per unsettled obligation (re-check N1), and vector counts
-/// exactly when the outcome was an evaluation.
-fn admit(composing: &Composing<'_>) -> Result<(), Refusal> {
-    let unsettled = unsettled_count(composing.cleanup);
-    if unsettled != composing.obligation_ids.len() {
-        return Err(Refusal::ObligationIds {
-            unsettled,
-            ids: composing.obligation_ids.len(),
-        });
+/// What the caller must agree with the records on, refused by name before anything is
+/// registered: one obligation id per unsettled obligation (re-check N1) — the rows themselves are
+/// built here, so the count and the rows are one rule — and vector counts exactly when the
+/// outcome was an evaluation.
+fn admit(composing: &Composing<'_>) -> Result<Vec<ObligationV1>, Refusal> {
+    let unresolved = unresolved_rows(
+        composing.cleanup,
+        composing.records,
+        composing.obligation_ids,
+    )?;
+    let outcome = composing.outcome.outcome();
+    let evaluated = matches!(outcome, OutcomeName::Matched | OutcomeName::Mismatch);
+    let counted = composing.evaluation.is_some();
+    if evaluated != counted {
+        return Err(Refusal::Evaluation { outcome, counted });
     }
-    let evaluated = matches!(
-        composing.outcome.outcome(),
-        OutcomeName::Matched | OutcomeName::Mismatch
-    );
-    if evaluated == composing.evaluation.is_some() {
-        Ok(())
-    } else {
-        Err(Refusal::Evaluation)
-    }
+    Ok(unresolved)
 }
 
-/// How many obligations the cleanup record left unsettled: the row count `unresolved_rows`
-/// produces, and the number of ids the caller must mint.
-fn unsettled_count(cleanup: &RunCleanup) -> usize {
-    cleanup
-        .obligations()
-        .iter()
-        .filter(|obligation| obligation.state != RecordSettlement::Settled)
-        .count()
-}
-
-/// The obligations the cleanup record left unsettled, as receipt rows citing the record itself.
-/// `ids` has one entry per unsettled obligation; `compose` refuses otherwise.
+/// The obligations the cleanup record left unsettled, as receipt rows citing the record itself,
+/// one per id — refused with both numbers when `ids` and the unsettled set differ in length, so
+/// no row is dropped or invented.
 fn unresolved_rows(
     cleanup: &RunCleanup,
     records: &[(RunRecordKind, String, Object)],
     ids: &[String],
-) -> Result<Vec<ObligationV1>, crate::contracts::receipt::Error> {
+) -> Result<Vec<ObligationV1>, Refusal> {
+    let unsettled: Vec<_> = cleanup
+        .obligations()
+        .iter()
+        .filter(|obligation| obligation.state != RecordSettlement::Settled)
+        .collect();
+    if unsettled.len() != ids.len() {
+        return Err(Refusal::ObligationIds {
+            unsettled: unsettled.len(),
+            ids: ids.len(),
+        });
+    }
     let cited = records
         .iter()
         .find(|(kind, _, _)| *kind == RunRecordKind::RunCleanup)
@@ -1622,10 +1699,8 @@ fn unresolved_rows(
             })
         })
         .transpose()?;
-    cleanup
-        .obligations()
-        .iter()
-        .filter(|obligation| obligation.state != RecordSettlement::Settled)
+    unsettled
+        .into_iter()
         .zip(ids)
         .map(|(obligation, id)| {
             Ok(ObligationV1 {

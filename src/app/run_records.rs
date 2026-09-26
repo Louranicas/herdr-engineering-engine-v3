@@ -940,7 +940,7 @@ mod tests {
     -> Result<(), Refusal> {
         let obligations = [
             ObligationRecord {
-                id: "resources".to_owned(),
+                id: "process".to_owned(),
                 state: Settlement::Settled,
             },
             ObligationRecord {
