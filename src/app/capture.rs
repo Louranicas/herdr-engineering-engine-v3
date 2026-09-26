@@ -14,7 +14,7 @@ use std::collections::BTreeMap;
 use std::os::unix::ffi::OsStrExt;
 use std::path::PathBuf;
 
-const MAX_RAW_BYTES: usize = 16 * 1024 * 1024;
+pub(crate) const MAX_RAW_BYTES: usize = 16 * 1024 * 1024;
 const MAX_FACT_BYTES: usize = 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

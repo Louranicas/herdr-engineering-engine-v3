@@ -7,11 +7,17 @@
 //! cannot pass), the strict-empty diagnostics rule, the eleven identities with the sources the class
 //! fixes, and the ledger as an [`Objects`] owner so an accepted receipt can be walked.
 
+use super::capture::MAX_RAW_BYTES;
 use super::runtime::declared_criteria;
 use crate::check::decision::{DiagnosticState, Identity, IdentityFact, IdentityState};
 use crate::check::graph::{self, Objects};
-use crate::contracts::receipt::{Name, Ref, VerdictV1State};
+use crate::contracts::receipt::{
+    EnvironmentV1, LimitsV1, Maybe, Name, Ref, Text, U64, VerdictV1State,
+};
 use crate::store::{Object, RunRecordKind, Store, VerificationVerdict};
+use crate::worker::namespace::{MAX_CHANNEL, SCRATCH_BYTES};
+use crate::worker::namespace_shim::ENVIRONMENT;
+use crate::worker::resources::{ATTEMPT_LIMITS, TERM_GRACE};
 use std::io::{Cursor, Read};
 use std::time::Instant;
 
@@ -121,6 +127,66 @@ pub fn identities(readbacks: Readbacks) -> [IdentityFact; 11] {
     })
 }
 
+/// The invocation's environment rows: the shim's own table (`namespace_shim::ENVIRONMENT`), one
+/// row each, present values — the receipt and the namespace read one constant (R16 round 2, 9).
+///
+/// # Errors
+/// Never in practice: every name and value is within the receipt's bounds.
+pub fn environment_rows() -> Result<Vec<EnvironmentV1>, crate::contracts::receipt::Error> {
+    ENVIRONMENT
+        .into_iter()
+        .map(|(name, value)| {
+            Ok(EnvironmentV1 {
+                name: Name::new(name)?,
+                value: Maybe::present(Text::new(value)?),
+                secret_handle: Maybe::unavailable(Text::new("no_secret")?),
+            })
+        })
+        .collect()
+}
+
+/// Why the receipt's currency is unavailable: the class allows no external effect, so its cost
+/// is zero and has no unit.
+pub const ZERO_EXTERNAL_COST: &str = "zero_external_cost";
+
+/// The invocation's limits, each from the door that enforces it (R16 round 2, decision 9): the
+/// scope's cgroup limits (`ATTEMPT_LIMITS`), the channel and scratch bounds the namespace refuses
+/// past, the capture's per-stream bound as the largest artifact, the stop grace, and the check's
+/// own window (`wall_ms`) and cleanup deadline (`cleanup_deadline_ms`, equal to the whole check
+/// deadline as the 003 lane recorded the task's). `external_requests` is zero because the namespace
+/// runs `--unshare-all`; `compiler_jobs` and the thread counts are the environment's hints, not
+/// enforced limits (R11 HIGH-2, recorded).
+///
+/// # Errors
+/// `Scalar` when a value has no decimal rendering the receipt admits (never for these constants).
+pub fn limits(
+    wall_ms: u64,
+    cleanup_deadline_ms: u64,
+) -> Result<LimitsV1, crate::contracts::receipt::Error> {
+    let decimal = |value: u64| U64::new(value.to_string());
+    let count =
+        |value: u64| u32::try_from(value).map_err(|_| crate::contracts::receipt::Error::Scalar);
+    Ok(LimitsV1 {
+        wall_ms: decimal(wall_ms)?,
+        memory_bytes: decimal(ATTEMPT_LIMITS.memory_bytes)?,
+        memory_swap_bytes: decimal(ATTEMPT_LIMITS.swap_bytes)?,
+        scratch_bytes: decimal(SCRATCH_BYTES)?,
+        stdout_bytes: decimal(MAX_CHANNEL as u64)?,
+        stderr_bytes: decimal(MAX_CHANNEL as u64)?,
+        artifact_bytes: decimal(MAX_RAW_BYTES as u64)?,
+        external_requests: decimal(0)?,
+        external_cost_microunits: decimal(0)?,
+        term_grace_ms: decimal(u64::try_from(TERM_GRACE.as_millis()).unwrap_or(u64::MAX))?,
+        cleanup_deadline_ms: decimal(cleanup_deadline_ms)?,
+        cpu_quota_percent: count(ATTEMPT_LIMITS.cpu_percent)?,
+        tasks_max: count(ATTEMPT_LIMITS.tasks)?,
+        compiler_jobs: 2,
+        julia_threads: 1,
+        blas_threads: 1,
+        currency: Maybe::unavailable(Text::new(ZERO_EXTERNAL_COST)?),
+    })
+}
+
 /// The ledger as an [`Objects`] owner (R16 round 2, decision 6): a reference resolves to the object
 /// the content-addressed store holds under its digest and size — `read_object` verifies both against
 /// the bytes, so a reference that lies is `Io` and a reference to nothing is `Missing`. Registration
@@ -155,11 +221,12 @@ impl Objects for LedgerObjects<'_> {
 #[cfg(test)]
 mod tests {
     use super::{
-        Readbacks, STRICT_EMPTY_DIAGNOSTICS, cited_kind, diagnostics_of, identities, record_role,
-        verdict_of,
+        Readbacks, STRICT_EMPTY_DIAGNOSTICS, ZERO_EXTERNAL_COST, cited_kind, diagnostics_of,
+        environment_rows, identities, limits, record_role, verdict_of,
     };
     use crate::app::runtime::declared_criteria;
     use crate::check::decision::{DiagnosticState, Identity, IdentityState};
+    use crate::contracts::receipt::Text;
     use crate::contracts::receipt::VerdictV1State;
     use crate::store::{RunRecordKind, VerificationVerdict};
 
@@ -181,6 +248,87 @@ mod tests {
         assert_eq!(
             STRICT_EMPTY_DIAGNOSTICS,
             "strict_empty_diagnostics_observed"
+        );
+        Ok(())
+    }
+
+    /// R16.9 · the environment rows equal the 003 lane's page (`648c5b89…`, 14 rows, read from the
+    /// retained CAS — an independent source) name for name, value for value, in order.
+    #[test]
+    fn the_environment_rows_are_the_003_page() -> Result<(), Box<dyn std::error::Error>> {
+        let rows = environment_rows()?;
+        let found: Vec<(&str, Option<&str>)> = rows
+            .iter()
+            .map(|row| {
+                (
+                    row.name.as_str(),
+                    row.value.value.as_ref().map(Text::as_str),
+                )
+            })
+            .collect();
+        let known = [
+            ("PATH", "/toolchain/bin"),
+            ("HOME", "/work/home"),
+            ("TMPDIR", "/tmp"),
+            ("LANG", "C.UTF-8"),
+            ("LC_ALL", "C.UTF-8"),
+            ("TZ", "UTC"),
+            ("CARGO_HOME", "/toolchain/cargo-home"),
+            ("CARGO_TARGET_DIR", "/work/target"),
+            ("CARGO_BUILD_JOBS", "2"),
+            (
+                "JULIA_DEPOT_PATH",
+                "/work/julia-depot:/toolchain/julia-depot",
+            ),
+            ("JULIA_NUM_THREADS", "1"),
+            ("OPENBLAS_NUM_THREADS", "1"),
+            ("OMP_NUM_THREADS", "1"),
+            ("RUST_BACKTRACE", "0"),
+        ];
+        assert_eq!(found.len(), 14);
+        for (index, (name, value)) in known.into_iter().enumerate() {
+            assert_eq!(found[index], (name, Some(value)), "row {index}");
+        }
+        Ok(())
+    }
+
+    /// R16.9 · the limits equal the 003 lane's object (`0b36c56a…`, read from the retained CAS)
+    /// field for field where the enforcer is the same, and differ exactly where recorded: the
+    /// wall and cleanup deadline are the check's (handed in), and `artifact_bytes` is the capture's
+    /// enforced per-stream bound (16 MiB) rather than 003's unenforced 64 MiB.
+    #[test]
+    fn the_limits_are_the_003_object_where_the_enforcer_is_the_same()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let limits = limits(290_000, 300_000)?;
+        let known = [
+            (limits.wall_ms.get(), 290_000),
+            (limits.memory_bytes.get(), 8_589_934_592),
+            (limits.memory_swap_bytes.get(), 0),
+            (limits.scratch_bytes.get(), 4_294_967_296),
+            (limits.stdout_bytes.get(), 8_388_608),
+            (limits.stderr_bytes.get(), 8_388_608),
+            (limits.artifact_bytes.get(), 16_777_216),
+            (limits.external_requests.get(), 0),
+            (limits.external_cost_microunits.get(), 0),
+            (limits.term_grace_ms.get(), 5_000),
+            (limits.cleanup_deadline_ms.get(), 300_000),
+            (u64::from(limits.cpu_quota_percent), 200),
+            (u64::from(limits.tasks_max), 128),
+            (u64::from(limits.compiler_jobs), 2),
+            (u64::from(limits.julia_threads), 1),
+            (u64::from(limits.blas_threads), 1),
+        ];
+        for (index, (found, expected)) in known.into_iter().enumerate() {
+            assert_eq!(found, expected, "field {index}");
+        }
+        assert_eq!(limits.currency.value, None);
+        assert_eq!(
+            limits
+                .currency
+                .unavailable_reason
+                .as_ref()
+                .map(Text::as_str),
+            Some(ZERO_EXTERNAL_COST)
         );
         Ok(())
     }

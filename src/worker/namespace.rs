@@ -37,7 +37,10 @@ pub const SHIM_DESTINATION: &str = "/shim/namespace-shim";
 pub const MAX_MOUNTS: usize = 512;
 const MAX_PUBLIC: usize = MAX_MOUNTS + 2;
 const MAX_PROTECTED: usize = 32;
-const MAX_CHANNEL: usize = 8 * 1024 * 1024;
+/// The most bytes one candidate stream may carry (stdout or stderr); the receipt's limit too.
+pub(crate) const MAX_CHANNEL: usize = 8 * 1024 * 1024;
+/// The scratch tmpfs capacity the namespace requires, exactly; the receipt's limit too.
+pub(crate) const SCRATCH_BYTES: u64 = 4_294_967_296;
 const MAX_STATUS: usize = 16 * 1024;
 const MAX_SOURCE_BYTES: u64 = 1024 * 1024 * 1024;
 const READY: &[u8] = b"HEE3_NAMESPACE_READY_V1 pid=2\n";
@@ -1244,7 +1247,7 @@ impl NamespaceObserver {
         if metadata.uid() != rustix::process::geteuid().as_raw()
             || metadata.mode() & 0o7777 != 0o700
             || filesystem.f_type != 0x0102_1994
-            || capacity_bytes != 4_294_967_296
+            || capacity_bytes != SCRATCH_BYTES
         {
             return Err(NamespaceError::Scratch);
         }

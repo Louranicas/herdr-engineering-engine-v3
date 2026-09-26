@@ -28,6 +28,28 @@ pub const RELEASE_FIFO: &str = "/channels/release";
 pub const STATUS_FIFO: &str = "/channels/status";
 pub const RELEASE_BYTE: u8 = 1;
 pub const PROTECTED_RELEASE_BYTE: u8 = 2;
+/// The candidate's whole environment, fixed by the shim (R16 round 2, decision 9): the one table
+/// the shim applies and the receipt's `EnvironmentPageV1` is composed from, so the two cannot
+/// disagree. Order is the receipt's row order (the 003 lane's page, `648c5b89…`, 14 rows).
+pub const ENVIRONMENT: [(&str, &str); 14] = [
+    ("PATH", "/toolchain/bin"),
+    ("HOME", "/work/home"),
+    ("TMPDIR", "/tmp"),
+    ("LANG", "C.UTF-8"),
+    ("LC_ALL", "C.UTF-8"),
+    ("TZ", "UTC"),
+    ("CARGO_HOME", "/toolchain/cargo-home"),
+    ("CARGO_TARGET_DIR", "/work/target"),
+    ("CARGO_BUILD_JOBS", "2"),
+    (
+        "JULIA_DEPOT_PATH",
+        "/work/julia-depot:/toolchain/julia-depot",
+    ),
+    ("JULIA_NUM_THREADS", "1"),
+    ("OPENBLAS_NUM_THREADS", "1"),
+    ("OMP_NUM_THREADS", "1"),
+    ("RUST_BACKTRACE", "0"),
+];
 const READY_PREFIX: &str = "HEE3_NAMESPACE_READY_V1 pid=";
 // Source readback can cover a declared finite toolchain closure before release.
 // This startup gate is separate from the outer process cleanup reserve.
@@ -206,23 +228,7 @@ fn command(input: &NamespaceExec<'_>, stdout: File, stderr: File) -> Command {
         .args(input.arguments)
         .current_dir(input.working_directory)
         .env_clear()
-        .env("PATH", "/toolchain/bin")
-        .env("HOME", "/work/home")
-        .env("TMPDIR", "/tmp")
-        .env("LANG", "C.UTF-8")
-        .env("LC_ALL", "C.UTF-8")
-        .env("TZ", "UTC")
-        .env("CARGO_HOME", "/toolchain/cargo-home")
-        .env("CARGO_TARGET_DIR", "/work/target")
-        .env("CARGO_BUILD_JOBS", "2")
-        .env(
-            "JULIA_DEPOT_PATH",
-            "/work/julia-depot:/toolchain/julia-depot",
-        )
-        .env("JULIA_NUM_THREADS", "1")
-        .env("OPENBLAS_NUM_THREADS", "1")
-        .env("OMP_NUM_THREADS", "1")
-        .env("RUST_BACKTRACE", "0")
+        .envs(ENVIRONMENT)
         .stdin(Stdio::null())
         .stdout(Stdio::from(stdout))
         .stderr(Stdio::from(stderr));
