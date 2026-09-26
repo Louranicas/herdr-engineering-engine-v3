@@ -54806,8 +54806,8 @@
       "bytes": 6019
     },
     "tools/check-quality": {
-      "sha256": "9e8730702487ee3751bdbe479c91014e5d4051f438850d20c127b85d4d4aa603",
-      "bytes": 91750
+      "sha256": "db7880af26c6f4e01a690f2bc4d9913cde13e67370b50cca6b19db1f8cbbab58",
+      "bytes": 91988
     },
     "tools/development_process.py": {
       "sha256": "e76e3a794193e5df7ee96fabf700113d718527745a0f9a9dba1e04fd5c7baaf3",
@@ -55550,16 +55550,16 @@
       "bytes": 8748
     },
     "src/store/schema.rs": {
-      "sha256": "5617c451abdaac182ad913b8d839c9392560e485ca98175aef5cab842d8b3985",
-      "bytes": 25416
+      "sha256": "80c2b7664057ec86f1b4922e49504a8213fe497a4fcab690420d0b24a17466e7",
+      "bytes": 25715
     },
     "src/store/backup.rs": {
       "sha256": "76fdeb5de58a67c7660a3ed2eea1273c250478cbc5133627c45a5b5bd37b4812",
       "bytes": 14607
     },
     "tests/t04_store.rs": {
-      "sha256": "e4e3a39df4a2e4dd75b33331a353387e0cd1d1c380adc9671226242cd14815eb",
-      "bytes": 150730
+      "sha256": "d664a9e99a26f4b393644fad3951a181a9c7106ee51e37d08b9a8c4b246885b4",
+      "bytes": 166346
     },
     "docs/store-contract.md": {
       "sha256": "b65ffe744d2abf93c3b0c40345787940213806ade52e9ef010e17f3012a81396",
@@ -55570,7 +55570,7 @@
       "bytes": 10139
     },
     "tools/check-store-mutations": {
-      "sha256": "1abee68d266c0b176665497bcf48117f36e9192f955193c94fd5045261354963",
+      "sha256": "11f0beed91df1ab9ff0a5db8fd4b7584c9952b4c37d36fba4fba1584906c0fc2",
       "bytes": 19809
     },
     "tools/sqlite-inputs/sqlite-amalgamation-3530400.zip": {
@@ -55926,8 +55926,8 @@
       "bytes": 9926
     },
     "src/app/mod.rs": {
-      "sha256": "51521cd0313a62e3f18cfbfad8b0e807a88b864f8f4d357456d212e9628532b4",
-      "bytes": 391
+      "sha256": "0e1e8d497447f101b11db3172088961db2aacb08e6799419da653d3c476226f5",
+      "bytes": 412
     },
     "src/app/receipt_import.rs": {
       "sha256": "393bd6b147ebe968ffe29532665c1e542972d9f1ea9708699cc6ef962ba0735d",
@@ -56002,12 +56002,12 @@
       "bytes": 2783
     },
     "src/store/terminal.rs": {
-      "sha256": "6d163d01c6b65646a6ce9662129ec0d2695553a1e41c98e88319a96b51f902f1",
-      "bytes": 10250
+      "sha256": "43fd97802fa08caa13f94918f604de0fb782dea1fa54721eb33351800a93af8b",
+      "bytes": 10484
     },
     "src/store/verification.rs": {
-      "sha256": "59574a717d17613ec457e9961a8f4e2f299d140e282d6794e370b4dcd33303b7",
-      "bytes": 13175
+      "sha256": "87b48aab5e4a1e9ec3a9e52e8943fe732470cb54890e0b202463c5d94e6ddeb0",
+      "bytes": 15017
     },
     "src/task/driver.rs": {
       "sha256": "8a45f9cd3bbf6628d767888cce5b422cfaa113f1bd9545edd98562e17cd92eb6",
