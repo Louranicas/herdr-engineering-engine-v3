@@ -386,4 +386,4 @@ pub mod rc01;
 
 /// The authenticated principal a request acts as.
 pub mod principal;
-pub use principal::{Principal, PrincipalError};
+pub use principal::{OPERATOR_ROLE, Principal, PrincipalError};

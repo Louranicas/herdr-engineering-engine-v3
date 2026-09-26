@@ -202,6 +202,9 @@ fn a_live_engine_refuses_the_bind_and_a_stale_socket_is_cleared() -> Outcome {
 fn only_the_operator_is_admitted_and_as_the_operator_role() -> Outcome {
     let admitted = control_socket::admit_peer(1000, 1000)?;
     assert!(admitted.is(1000, OPERATOR_ROLE));
+    // The resolved value, not only the name (F122): IPC01's role, the spelling the store's
+    // operator-only rule and every grant file carry.
+    assert!(admitted.is(1000, "operator"));
     assert!(!admitted.is(1001, OPERATOR_ROLE));
     assert_eq!(
         control_socket::admit_peer(1001, 1000).err(),

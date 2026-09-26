@@ -52,8 +52,8 @@ pub const RUNTIME_DIRECTORY: &str = "habitat-engine";
 pub const SOCKET_NAME: &str = "control.sock";
 /// The single-instance lock's name in that directory.
 pub const LOCK_NAME: &str = "control.lock";
-/// The configured local role the operator is served under.
-pub const OPERATOR_ROLE: &str = "operator";
+/// The configured local role the operator is served under: the contracts' one spelling (R21 N12).
+pub use crate::contracts::OPERATOR_ROLE;
 /// How long a connection may sit without sending a byte.
 pub const IDLE_TIMEOUT: Duration = Duration::from_secs(60);
 /// How long one reply may take to leave.

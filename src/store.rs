@@ -2350,7 +2350,7 @@ fn waiting(state: &str) -> bool {
 /// The one "operator only" rule: roster mutations and `task.resolve` (B08) admit only the operator
 /// role, whatever else the grant allows.
 pub(crate) fn operator(principal: &Principal) -> Result<()> {
-    if principal.role() == "operator" {
+    if principal.role() == crate::contracts::OPERATOR_ROLE {
         Ok(())
     } else {
         Err(Error::Forbidden)

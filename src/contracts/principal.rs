@@ -52,3 +52,8 @@ impl Principal {
         format!("{}:{}", self.uid, self.role)
     }
 }
+
+/// The one configured local role the operator is served under (IPC01): the socket admits its peer
+/// as this role, and the store's "operator only" rule admits exactly this role (R21 N12). One
+/// spelling, below both doors.
+pub const OPERATOR_ROLE: &str = "operator";
