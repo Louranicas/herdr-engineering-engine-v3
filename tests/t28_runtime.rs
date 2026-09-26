@@ -16,9 +16,9 @@ use habitat_engine::app::class_profile::{self, Profile};
 use habitat_engine::app::dispatcher;
 use habitat_engine::app::live_verifier::LiveVerifier;
 use habitat_engine::app::runtime::{
-    Admission, Answer as SourceAnswer, CHECK_TEARDOWN, Candidate, CandidateSource, CheckPlan,
-    CheckWindow, Custody, Dispatch, Error as RuntimeError, Observed, Outcome, Previous, Readiness,
-    Refusal, Verifier, admit, dispatch, drive,
+    Admission, Admitted, Answer as SourceAnswer, CHECK_TEARDOWN, Candidate, CandidateSource,
+    CheckPlan, CheckWindow, Custody, Dispatch, Error as RuntimeError, Observed, Outcome, Previous,
+    Readiness, Refusal, Verifier, admit, dispatch, drive,
 };
 use habitat_engine::app::tasks::StoreTasks;
 use habitat_engine::app::workload::{self, Outcome as RunOutcome, Run};
@@ -28,10 +28,7 @@ use habitat_engine::contracts::control::{
     CancelReason, Precondition, ResourceKind, criteria_digest,
 };
 use habitat_engine::contracts::receipt::{Address as _, ReceiptV1};
-use habitat_engine::contracts::roster::{
-    Availability, Kind, Locality, ObservationInput, ObservationSource, RosterDefinitionV1,
-    Selection, Update,
-};
+use habitat_engine::contracts::roster::{Kind, Locality, RosterDefinitionV1, Selection, Update};
 use habitat_engine::contracts::{Sha256Digest, UuidV4};
 use habitat_engine::store::{
     Allocation, Principal, RequestSource, Store, Submission, VerificationVerdict,
@@ -212,7 +209,9 @@ fn file(path: &Path, bytes: &[u8]) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-/// The roster record the attempt runs under, enabled and proven through the roster's doors.
+/// The roster record the attempt runs under, installed through the roster's door. No observation is
+/// written here: the runtime observes the record before each attempt, from the source's readiness
+/// (R21 N4), so a proof that reaches `begin` does so on the runtime's own observation.
 fn roster(
     store: &mut Store,
     principal: &Principal,
@@ -245,27 +244,6 @@ fn roster(
         .map_err(|error| format!("{error:?}"))?
         .remove(0)
         .head;
-    store
-        .roster_observe_worker(
-            principal,
-            &ObservationInput {
-                record_id: head.record_id.clone(),
-                record_version: head.record_version.clone(),
-                owner_id: head.definition.owner_id.clone(),
-                endpoint_ref: head.definition.endpoint_ref.clone(),
-                instance_id: None,
-                instance_generation: None,
-                source: ObservationSource::Worker,
-                observed_unix_ms: None,
-                availability: Availability::Available,
-                actual_identity: Some("fixture/worker".to_owned()),
-                immutable_revision: None,
-                capabilities: vec!["text".to_owned()],
-                evidence_ref: ROSTER_KEY.to_owned(),
-            },
-            deadline(),
-        )
-        .map_err(|error| format!("{error:?}"))?;
     let selections = vec![Selection {
         record_id: head.record_id.clone(),
         expected_revision: head.record_version,
@@ -421,9 +399,12 @@ struct Script<'h> {
     readiness: Result<Readiness, habitat_engine::worker::native::Error>,
     custody: Custody,
     /// Every `ready` and `settle_retained` call: which, the deadline and the cancellation it was
-    /// handed (F101). No runtime path asks a source to be ready yet; S10's proofs read this.
-    readied: Vec<(&'static str, Instant, bool)>,
+    /// handed (F101). The runtime asks `ready` before each attempt's begin (R21 N4).
+    readied: Readied,
 }
+
+/// What a source's `ready`/`settle_retained` were handed, per call: which, the deadline, the flag.
+type Readied = Arc<Mutex<Vec<(&'static str, Instant, bool)>>>;
 
 impl CandidateSource for Script<'_> {
     fn next(&mut self, ask: &habitat_engine::app::runtime::Ask<'_>) -> SourceAnswer {
@@ -454,16 +435,21 @@ impl CandidateSource for Script<'_> {
         deadline: Instant,
         cancelled: &AtomicBool,
     ) -> Result<Readiness, habitat_engine::worker::native::Error> {
-        self.readied
-            .push(("ready", deadline, cancelled.load(Ordering::Acquire)));
+        record(
+            &self.readied,
+            ("ready", deadline, cancelled.load(Ordering::Acquire)),
+        );
         self.readiness.clone()
     }
     fn settle_retained(&mut self, deadline: Instant, cancelled: &AtomicBool) -> Custody {
-        self.readied.push((
-            "settle_retained",
-            deadline,
-            cancelled.load(Ordering::Acquire),
-        ));
+        record(
+            &self.readied,
+            (
+                "settle_retained",
+                deadline,
+                cancelled.load(Ordering::Acquire),
+            ),
+        );
         self.custody
     }
 }
@@ -581,7 +567,7 @@ fn script<'h>(answers: Vec<Candidate>) -> (Script<'h>, Asked) {
                 evidence: b"fixture catalogue".to_vec(),
             }),
             custody: Custody::default(),
-            readied: Vec::new(),
+            readied: Arc::new(Mutex::new(Vec::new())),
         },
         seen,
     )
@@ -758,14 +744,27 @@ fn a_settle_naming_another_attempt_is_refused_before_any_write() -> Outcome_ {
 // ------------------------------------------------ the dispatcher (B14b-1, R20 round 2)
 
 /// A provider double for the dispatcher (F101: a model, not a script): it records every task it was
-/// asked to open, serves a scripted source/verifier pair per open in order, and raises the stop flag
-/// once it has served `stop_after` pairs — the dispatcher then ends its wait `Drained`. It owns all
-/// it holds (`Send + 'static`), so the dispatcher runs on a thread of its own (R21 N21).
+/// asked to open and what it was handed of the admitted state, serves a scripted source/verifier
+/// pair per open in order, and raises the stop flag once it has served `stop_after` pairs — the
+/// dispatcher then ends its wait `Drained`. It owns all it holds (`Send + 'static`), so the
+/// dispatcher runs on a thread of its own (R21 N21).
 struct ScriptedProvider {
     pairs: VecDeque<(Script<'static>, Oracle<'static>)>,
     opened: Arc<Mutex<Vec<String>>>,
+    admitted: Arc<Mutex<Vec<Opened>>>,
     stop: Arc<AtomicBool>,
     stop_after: usize,
+}
+
+/// What one `open` was handed of the admitted state (R21 N1, F101): the dispatch window, the
+/// baseline's content digest, the class profile's digest, and whether the drain it was handed is
+/// the dispatcher's own flag (the one this double raises).
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct Opened {
+    window: (Instant, Instant),
+    baseline: Option<String>,
+    profile: String,
+    drain_is_the_dispatcher_s: bool,
 }
 
 impl dispatcher::Provider for ScriptedProvider {
@@ -774,7 +773,17 @@ impl dispatcher::Provider for ScriptedProvider {
     fn open(
         &mut self,
         next: &habitat_engine::store::Dispatchable,
+        admitted: &habitat_engine::app::runtime::Admitted<'_>,
     ) -> Result<(Script<'static>, Oracle<'static>), dispatcher::Unavailable> {
+        record(
+            &self.admitted,
+            Opened {
+                window: admitted.window(),
+                baseline: admitted.baseline().content_digest(),
+                profile: admitted.profile().digest.clone(),
+                drain_is_the_dispatcher_s: std::ptr::eq(admitted.drain(), Arc::as_ptr(&self.stop)),
+            },
+        );
         if record(&self.opened, next.task.clone()) >= self.stop_after {
             self.stop.store(true, Ordering::SeqCst);
         }
@@ -794,6 +803,7 @@ fn provider_of(
         ScriptedProvider {
             pairs: pairs.into(),
             opened: Arc::clone(&opened),
+            admitted: Arc::new(Mutex::new(Vec::new())),
             stop: Arc::clone(stop),
             stop_after: usize::MAX,
         },
@@ -904,6 +914,7 @@ impl dispatcher::Provider for Sleeper {
     fn open(
         &mut self,
         next: &habitat_engine::store::Dispatchable,
+        _admitted: &habitat_engine::app::runtime::Admitted<'_>,
     ) -> Result<(Script<'static>, Oracle<'static>), dispatcher::Unavailable> {
         std::thread::sleep(self.nap);
         let _ = self.woke.send(next.task.clone());
@@ -960,11 +971,15 @@ fn a_dispatcher_that_ignores_its_stop_fails_the_proof_by_name() -> Outcome_ {
 }
 
 /// B14b-1 (b) · the dispatcher picks the admitted task, drives it to ACCEPTED through the scripted
-/// pair, notifies, and ends `Drained` when the drain is set; the provider was opened once, for that task.
+/// pair, notifies, and ends `Drained` when the drain is set; the provider was opened once, for that
+/// task. R21 N1 · `open` was handed the admitted state: a window `TASK_LIMIT` wide, the baseline the
+/// rig installed (its digest read here by a capture of its own), the rig's class profile and the
+/// dispatcher's own drain; and the source was asked ready under that window's deadline (N4).
 #[test]
 fn the_dispatcher_picks_the_admitted_task_and_drives_it_to_acceptance() -> Outcome_ {
     let rig = Arc::new(rig(&Shape::default())?);
     let (source, _) = script(vec![Candidate::Replacement(SECOND.to_vec())]);
+    let readied = Arc::clone(&source.readied);
     let (mut verifier, _) = oracle(vec![matched(7)]);
     let stop = Arc::new(AtomicBool::new(false));
     // The drain is raised during the one check: acceptance does not read it, the next wait does —
@@ -975,6 +990,7 @@ fn the_dispatcher_picks_the_admitted_task_and_drives_it_to_acceptance() -> Outco
         flag.store(true, Ordering::SeqCst);
     }));
     let (provider, opened) = provider_of(vec![(source, verifier)], &stop);
+    let handed = Arc::clone(&provider.admitted);
     let (exit, lines) = run_dispatcher(&rig, provider, &stop)?;
     assert_eq!(exit, dispatcher::Exit::Drained, "{lines:?}");
     assert_eq!(taken(&opened), vec![TASK.to_owned()]);
@@ -985,6 +1001,23 @@ fn the_dispatcher_picks_the_admitted_task_and_drives_it_to_acceptance() -> Outco
             .any(|line| line.contains("TaskDone(\"accepted\")")),
         "{lines:?}"
     );
+    let handed = taken(&handed);
+    assert_eq!(handed.len(), 1);
+    let (origin, until) = handed[0].window;
+    assert_eq!(until.duration_since(origin), TASK_LIMIT);
+    let baseline = Snapshot::capture(&rig.profile.directory.join("base"), &[], deadline())
+        .map_err(|e| format!("{e:?}"))?
+        .content_digest();
+    assert_eq!(
+        handed[0],
+        Opened {
+            window: (origin, until),
+            baseline,
+            profile: PROFILE_DIGEST.to_owned(),
+            drain_is_the_dispatcher_s: true,
+        }
+    );
+    assert_eq!(taken(&readied), vec![("ready", until, false)]);
     Ok(())
 }
 
@@ -1592,6 +1625,195 @@ fn each_attempt_is_asked_from_its_own_charge_start() -> Outcome_ {
         asked[1].charged_from.checked_duration_since(handed[0].3)
     );
     assert!(asked[1].charged_from > asked[0].charged_from);
+    Ok(())
+}
+
+/// The rig's task admitted as the owner under `drain`, or the refusal named.
+fn admitted<'a>(
+    rig: &'a Rig,
+    principal: &'a Principal,
+    drain: &'a AtomicBool,
+) -> Result<Box<Admitted<'a>>, Box<dyn Error>> {
+    let admission = admit(
+        &rig.tasks,
+        &rig.profile,
+        Dispatch {
+            principal,
+            task: id(TASK),
+            agent_record_id: &rig.agent,
+            selections: &rig.selections,
+            attempts: &rig.attempts,
+            forbidden: &[],
+            teardown_ms: rig.teardown_ms,
+            capture_ms: Some(5_000),
+            drain,
+        },
+    )
+    .map_err(|e| format!("{e:?}"))?;
+    match admission {
+        Admission::Ready(admitted) => Ok(admitted),
+        Admission::Refused(refusal) => Err(format!("refused at admission: {refusal:?}").into()),
+    }
+}
+
+/// The count one `SELECT count(*) …` query returns over the whole ledger.
+fn count(rig: &Rig, sql: &str) -> Result<i64, Box<dyn Error>> {
+    Ok(ledger(rig)?.query_row(sql, [], |row| row.get(0))?)
+}
+
+/// R21 N4, proof (b) · a source not ready before attempt 1 ends the dispatch `NotReady` by the
+/// refusal's name with nothing written: the task stays `admitted`, no attempt row and no roster
+/// observation exist, no candidate was asked and no check run; the source was asked ready once,
+/// under the dispatch's own deadline and an unraised cancellation.
+#[test]
+fn a_provider_not_ready_at_attempt_one_leaves_the_task_admitted_and_writes_nothing() -> Outcome_ {
+    let rig = rig(&Shape::default())?;
+    let (mut source, asked) = script(vec![Candidate::Replacement(SECOND.to_vec())]);
+    source.readiness = Err(habitat_engine::worker::native::Error::Identity);
+    let readied = Arc::clone(&source.readied);
+    let (mut verifier, handed) = oracle(vec![matched(7)]);
+    let principal = owner();
+    let drain = AtomicBool::new(false);
+    let admitted = admitted(&rig, &principal, &drain)?;
+    let (_, until) = admitted.window();
+    let outcome =
+        drive(&rig.tasks, *admitted, &mut source, &mut verifier).map_err(|e| format!("{e:?}"))?;
+    assert_eq!(
+        outcome,
+        Outcome::NotReady(habitat_engine::worker::native::Error::Identity)
+    );
+    assert_eq!(state(&rig)?, "admitted");
+    assert_eq!(count(&rig, "SELECT count(*) FROM attempts")?, 0);
+    assert_eq!(count(&rig, "SELECT count(*) FROM roster_observations")?, 0);
+    assert!(taken(&asked).is_empty(), "no candidate was asked");
+    assert!(taken(&handed).is_empty(), "no check ran");
+    assert_eq!(taken(&readied), vec![("ready", until, false)]);
+    Ok(())
+}
+
+/// One roster observation row: its id, its event sequence and its body.
+type ObservationRow = (String, i64, Vec<u8>);
+
+/// Every roster observation in the ledger, in sequence order.
+fn observations(rig: &Rig) -> Result<Vec<ObservationRow>, Box<dyn Error>> {
+    let db = ledger(rig)?;
+    let mut statement =
+        db.prepare("SELECT id,sequence,body FROM roster_observations ORDER BY sequence")?;
+    let found = statement
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(found)
+}
+
+/// The sequences of the rig task's `attempt_started` events, in order.
+fn attempt_starts(rig: &Rig) -> Result<Vec<i64>, Box<dyn Error>> {
+    let db = ledger(rig)?;
+    let mut statement = db.prepare(
+        "SELECT sequence FROM events WHERE task_id=? AND kind='attempt_started' ORDER BY sequence",
+    )?;
+    let found = statement
+        .query_map([TASK], |row| row.get(0))?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(found)
+}
+
+/// The bytes a scripted readiness claims were read from its provider: a catalogue, as `/api/tags`
+/// renders one — published by the runtime as the observation's evidence.
+const READY_EVIDENCE: &[u8] = b"{\"models\":[{\"name\":\"hee3-t28-ready:qualification\"}]}\n";
+
+/// R21 N4 · each attempt is preceded by its own provider-response observation, written by the runtime
+/// from the source's readiness in the hold of that attempt's begin: two attempts (a mismatch, then a
+/// match), two observations — each confirmed `provider_response`, its input the readiness whole bound
+/// to the roster head (record, revision, owner, endpoint), its evidence ref the fresh id the
+/// readiness's bytes were published under — each written after the previous attempt began and
+/// before its own attempt began, and each attempt's roster pin carries the observation that
+/// preceded it. The source was asked ready twice, under the dispatch deadline.
+#[test]
+fn each_attempt_is_preceded_by_its_own_provider_response_observation() -> Outcome_ {
+    let rig = rig(&Shape::default())?;
+    let (mut source, asked) = script(vec![
+        Candidate::Replacement(FIRST.to_vec()),
+        Candidate::Replacement(SECOND.to_vec()),
+    ]);
+    source.readiness = Ok(Readiness {
+        actual_identity: "5a0c7d1e-boot:4242:31337".to_owned(),
+        immutable_revision: Some(
+            "sha256:9e1f0000000000000000000000000000000000000000000000000000000000a7".to_owned(),
+        ),
+        capabilities: vec!["text".to_owned()],
+        evidence: READY_EVIDENCE.to_vec(),
+    });
+    let readied = Arc::clone(&source.readied);
+    let (mut verifier, _) = oracle(vec![mismatched(7), matched(7)]);
+    let principal = owner();
+    let drain = AtomicBool::new(false);
+    let admitted = admitted(&rig, &principal, &drain)?;
+    let (_, until) = admitted.window();
+    let outcome =
+        drive(&rig.tasks, *admitted, &mut source, &mut verifier).map_err(|e| format!("{e:?}"))?;
+    assert_eq!(outcome, Outcome::Driven(Driven::Accepted));
+    assert_eq!(taken(&asked).len(), 2);
+    assert_eq!(taken(&readied), vec![("ready", until, false); 2]);
+    let (observed, started) = (observations(&rig)?, attempt_starts(&rig)?);
+    assert_eq!((observed.len(), started.len()), (2, 2));
+    assert!(
+        observed[0].1 < started[0] && started[0] < observed[1].1 && observed[1].1 < started[1],
+        "observations {:?} interleave the begins {started:?}",
+        observed.iter().map(|o| o.1).collect::<Vec<_>>()
+    );
+    let mut evidence_refs = Vec::new();
+    for (id, _, body) in &observed {
+        let body: serde_json::Value = serde_json::from_slice(body)?;
+        assert_eq!(body["id"], id.as_str());
+        assert_eq!(body["confirmed_source"], "provider_response");
+        let evidence_ref = body["input"]["evidence_ref"]
+            .as_str()
+            .ok_or("an evidence ref")?
+            .to_owned();
+        assert!(UuidV4::parse(&evidence_ref).is_ok(), "{evidence_ref}");
+        assert_eq!(
+            body["input"],
+            serde_json::json!({
+                "record_id": rig.agent,
+                "record_version": "1",
+                "owner_id": "fixture-worker",
+                "endpoint_ref": ROSTER_KEY,
+                "instance_id": null,
+                "instance_generation": null,
+                "source": "provider_response",
+                "observed_unix_ms": null,
+                "availability": "available",
+                "actual_identity": "5a0c7d1e-boot:4242:31337",
+                "immutable_revision":
+                    "sha256:9e1f0000000000000000000000000000000000000000000000000000000000a7",
+                "capabilities": ["text"],
+                "evidence_ref": evidence_ref,
+            })
+        );
+        evidence_refs.push(evidence_ref);
+    }
+    assert_ne!(evidence_refs[0], evidence_refs[1], "a fresh id per attempt");
+    // The readiness's bytes were published: the object their digest names holds them.
+    assert_eq!(
+        object_bytes(&rig, &t08_rig::digest(READY_EVIDENCE))?,
+        READY_EVIDENCE
+    );
+    let attempts = rows(
+        &rig,
+        "SELECT id FROM attempts WHERE task_id=? ORDER BY CAST(generation AS INTEGER)",
+    )?;
+    assert_eq!(
+        rows(
+            &rig,
+            "SELECT p.attempt_id,json_extract(p.body,'$.record.observation.id') FROM roster_pins p \
+             JOIN attempts a ON a.id=p.attempt_id WHERE a.task_id=? \
+             ORDER BY CAST(a.generation AS INTEGER)",
+        )?,
+        vec![
+            vec![attempts[0][0].clone(), observed[0].0.clone()],
+            vec![attempts[1][0].clone(), observed[1].0.clone()],
+        ]
+    );
     Ok(())
 }
 
@@ -2943,11 +3165,14 @@ fn a_refused_native_answer_is_recorded_as_a_refused_candidate_whole() -> Outcome
     Ok(())
 }
 
-/// R18 (d), A3, A9 · a provider failure stops the task `worker_failed` after ONE ask — the resident
-/// model at the qualified 512 context under the `/2` profile is `identity` at the readback before any
-/// generate — and the stop body's `worker` field names it whole; no verification was recorded.
+/// R21 N4, proof (b), over the fake · the resident model at the qualified 512 context, against the
+/// `/2` row's 4096, is refused by the readiness readback before any attempt (R18 A9's `identity`,
+/// now met before `begin`): the source loads the model once — the load's own generate, its prompt
+/// empty — and the readback after it still reads 512, so the dispatch ends `NotReady(Identity)`. The
+/// task stays `admitted` with no attempt row, no roster observation, no stop and no check; the fake's
+/// call log is the readback, then the load.
 #[test]
-fn a_provider_failure_stops_the_task_with_the_worker_named() -> Outcome_ {
+fn a_native_model_resident_at_another_context_is_loaded_once_and_not_ready() -> Outcome_ {
     let rig = rig(&Shape::default())?;
     let stand_in = DaemonStandIn::spawn();
     let source = native_source(&rig, &stand_in, &[(REFERENCE_LIB, "stop")], 512)?;
@@ -2956,52 +3181,31 @@ fn a_provider_failure_stops_the_task_with_the_worker_named() -> Outcome_ {
     let outcome = run(&rig, &principal, source, verifier, 5_000).map_err(|e| format!("{e:?}"))?;
     assert_eq!(
         outcome,
-        Outcome::Driven(Driven::Stopped(StopReason::WorkerFailed))
+        Outcome::NotReady(habitat_engine::worker::native::Error::Identity)
     );
-    assert_eq!(state(&rig)?, "failed");
+    assert_eq!(state(&rig)?, "admitted");
     assert!(taken(&handed).is_empty());
+    assert_eq!(count(&rig, "SELECT count(*) FROM attempts")?, 0);
+    assert_eq!(count(&rig, "SELECT count(*) FROM roster_observations")?, 0);
+    assert_eq!(count(&rig, "SELECT count(*) FROM task_stops")?, 0);
     assert_eq!(
-        rows(&rig, "SELECT reason FROM task_stops WHERE task_id=?")?,
-        vec![vec!["worker_failed".to_owned()]]
+        fs::read_to_string(rig.scratch.0.join("native/calls.log"))?,
+        "version\ntags\nps\nversion\ntags\ngenerate\nps\n"
     );
-    let body = stop_body(&rig)?;
-    assert_eq!(body["reason"], "worker_failed");
-    assert_eq!(body["attempts"], 1);
+    let captured: serde_json::Value = serde_json::from_slice(&fs::read(
+        rig.scratch.0.join("native/captured-request.json"),
+    )?)?;
     assert_eq!(
-        body["worker"],
-        serde_json::json!({
-            "provider": "ollama-local",
-            "error": "identity",
-            "state": "not_dispatched",
-            "retained": 0,
-        })
-    );
-    // B14a-5 (R19.6c) · the failed attempt's settle names the provider failure; nothing was read
-    // from the model, so no token, finish or digest is recorded.
-    let attempt_ids = rows(&rig, "SELECT id FROM attempts WHERE task_id=?")?;
-    let settles = worker_settles(&rig)?;
-    assert_eq!(settles.len(), 1);
-    let (record, _) = without_wall(settles[0].record.clone())?;
-    assert_eq!(
-        record,
-        serde_json::json!({
-            "attempt": attempt_ids[0][0],
-            "adapter_profile": "ollama-fc44-12ff8654/2",
-            "input_tokens": null,
-            "output_tokens": null,
-            "finish": null,
-            "identity_sha256": null,
-            "raw_sha256": null,
-            "outcome": {"provider": {"name": "identity"}},
-            "replacement_bytes": null,
-        })
+        captured["prompt"], "",
+        "the load's generate, not a candidate's"
     );
     Ok(())
 }
 
 /// R18 (d), A2 · a work reservation past the adapter's own cap: the source passes the window through,
-/// the adapter refuses `deadline` at its door before any exchange, and the task stops `worker_failed`
-/// with the refusal named — the cap is met by name, never clamped to fit.
+/// the adapter refuses `deadline` at its door before the attempt's exchange (the readiness readback
+/// before `begin` is the only exchange that ran, R21 N4), and the task stops `worker_failed` with the
+/// refusal named in the stop body and the worker settle — the cap is met by name, never clamped.
 #[test]
 fn a_work_reservation_past_the_adapter_cap_is_refused_by_name() -> Outcome_ {
     // The rig's submission limit is 1,200,000 ms: 950 s of work and 200 s of verify fit inside it,
@@ -3021,11 +3225,42 @@ fn a_work_reservation_past_the_adapter_cap_is_refused_by_name() -> Outcome_ {
         Outcome::Driven(Driven::Stopped(StopReason::WorkerFailed))
     );
     let body = stop_body(&rig)?;
-    assert_eq!(body["worker"]["error"], "deadline");
-    assert_eq!(body["worker"]["state"], "not_dispatched");
-    assert!(
-        !rig.scratch.0.join("native/calls.log").exists(),
-        "no exchange ran"
+    assert_eq!(body["reason"], "worker_failed");
+    assert_eq!(body["attempts"], 1);
+    assert_eq!(
+        body["worker"],
+        serde_json::json!({
+            "provider": "ollama-local",
+            "error": "deadline",
+            "state": "not_dispatched",
+            "retained": 0,
+        })
+    );
+    // The readiness readback ran before the attempt (R21 N4) and found the model resident; the
+    // attempt's own exchange never ran.
+    assert_eq!(
+        fs::read_to_string(rig.scratch.0.join("native/calls.log"))?,
+        "version\ntags\nps\n"
+    );
+    // B14a-5 (R19.6c) · the failed attempt's settle names the provider failure; nothing was read
+    // from the model, so no token, finish or digest is recorded.
+    let attempt_ids = rows(&rig, "SELECT id FROM attempts WHERE task_id=?")?;
+    let settles = worker_settles(&rig)?;
+    assert_eq!(settles.len(), 1);
+    let (record, _) = without_wall(settles[0].record.clone())?;
+    assert_eq!(
+        record,
+        serde_json::json!({
+            "attempt": attempt_ids[0][0],
+            "adapter_profile": "ollama-fc44-12ff8654/2",
+            "input_tokens": null,
+            "output_tokens": null,
+            "finish": null,
+            "identity_sha256": null,
+            "raw_sha256": null,
+            "outcome": {"provider": {"name": "deadline"}},
+            "replacement_bytes": null,
+        })
     );
     Ok(())
 }

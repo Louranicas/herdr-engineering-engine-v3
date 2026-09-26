@@ -6,14 +6,17 @@
 //! loop the round-1 review named is unrepresentable here, because the classification is an
 //! exhaustive `match` with no catch-all arm and the read never returns a task that has an attempt row.
 //!
-//! What this half does not do (B14b-2): configure the native provider, roster and residency; record
-//! the attempt's workspace root in the ledger; wake an in-flight exchange on drain. With no provider
-//! installed the dispatcher enters the named state `unavailable: no native provider`, reports it
-//! once, stops picking and leaves the task `admitted` — P2c-R1.5's "stop it `dispatch_unavailable`"
-//! revisited: the task is the owner's and the missing configuration the operator's.
+//! What this half does not do (B14b-2): configure the native provider and install its roster record;
+//! record the attempt's workspace root in the ledger. The drain does not reach an in-flight exchange
+//! or check — one waits for it under the attempt's own deadline (R21 D8, reversing R20 round 2 D5:
+//! the wake is B19/B21's, the engine unit's stop timeout APP-22's). With no provider installed the
+//! dispatcher enters the named state `unavailable: no native provider`, reports it once, stops
+//! picking and leaves the task `admitted` — P2c-R1.5's "stop it `dispatch_unavailable`" revisited:
+//! the task is the owner's and the missing configuration the operator's.
 
 use super::runtime::{
-    Admission, CandidateSource, Dispatch, Error as RuntimeError, Outcome, Verifier, admit, drive,
+    Admission, Admitted, CandidateSource, Dispatch, Error as RuntimeError, Outcome, Verifier,
+    admit, drive,
 };
 use super::tasks::StoreTasks;
 use crate::contracts::UuidV4;
@@ -28,11 +31,17 @@ use std::time::Instant;
 pub trait Provider {
     type Source: CandidateSource;
     type Verifier: Verifier;
-    /// Open the pair for one dispatch, or say by name why none is available.
+    /// Open the pair for one dispatch, or say by name why none is available. `admitted` is the
+    /// dispatch's own admitted state (R21 N1): its window, baseline, drain and class profile — the
+    /// provider computes no window of its own.
     ///
     /// # Errors
     /// [`Unavailable`], the dispatcher's named state.
-    fn open(&mut self, next: &Dispatchable) -> Result<(Self::Source, Self::Verifier), Unavailable>;
+    fn open(
+        &mut self,
+        next: &Dispatchable,
+        admitted: &Admitted<'_>,
+    ) -> Result<(Self::Source, Self::Verifier), Unavailable>;
 }
 
 /// Why the dispatcher cannot dispatch: a named dispatcher state, never a task's failure.
@@ -95,7 +104,11 @@ impl Verifier for Never {
 impl Provider for NoProvider {
     type Source = Never;
     type Verifier = Never;
-    fn open(&mut self, _next: &Dispatchable) -> Result<(Never, Never), Unavailable> {
+    fn open(
+        &mut self,
+        _next: &Dispatchable,
+        _admitted: &Admitted<'_>,
+    ) -> Result<(Never, Never), Unavailable> {
         Err(Unavailable::NoNativeProvider)
     }
 }
@@ -120,6 +133,10 @@ pub fn classify(result: &Result<Outcome, RuntimeError>) -> Step {
         // Drained at attempt 1 the task is still `admitted` and picked again; at attempt ≥ 2 it is
         // `repair_pending`, which the read never returns — left for recovery (B17; closure item 9).
         Ok(Outcome::Drained) => Step::TaskLeft("drained: left for recovery"),
+        // The source refused to be made ready (R21 N4): nothing written for the attempt. At attempt
+        // 1 the task stays `admitted` and a next read would return it at once, so the dispatcher
+        // stops by name (the `open` refusal's rule, N2); at attempt ≥ 2 the task is the recovery's.
+        Ok(Outcome::NotReady(_)) => Step::DispatcherStops("provider not ready"),
         Ok(Outcome::Driven(driver::Outcome::Accepted)) => Step::TaskDone("accepted"),
         Ok(Outcome::Driven(driver::Outcome::Stopped(_))) => Step::TaskDone("stopped"),
         Ok(Outcome::Driven(driver::Outcome::NeedsSettlement(_))) => {
@@ -302,7 +319,7 @@ fn run<P: Provider>(dispatcher: Dispatcher<'_, P>, report: &(dyn Fn(&str) + Sync
         let result = match admitted {
             Err(error) => Err(error),
             Ok(Admission::Refused(refusal)) => Ok(Outcome::Refused(refusal)),
-            Ok(Admission::Ready(ready)) => match provider.open(&next) {
+            Ok(Admission::Ready(ready)) => match provider.open(&next, &ready) {
                 Err(why) => {
                     report(&format!("dispatcher: {}", why.name()));
                     return Exit::Unavailable(why);
@@ -335,12 +352,9 @@ mod tests {
     use crate::task::LoopRefusal;
     use crate::task::driver::{self, StopReason};
 
-    /// R20 round 2 D3 · every result lands in exactly one of three steps, by a table: a refusal and
-    /// every driven outcome; each runtime error; the store kinds that stop the dispatcher against
-    /// the kinds that leave the task to recovery. A new variant is a compile error in `classify`.
-    #[test]
-    fn every_dispatch_result_is_classified_into_one_of_three_steps() {
-        let cases: Vec<(Result<Outcome, RuntimeError>, Step)> = vec![
+    /// Every result the classification is pinned over, with its step.
+    fn cases() -> Vec<(Result<Outcome, RuntimeError>, Step)> {
+        vec![
             (
                 Ok(Outcome::Refused(Refusal::CancelledBeforeDispatch)),
                 Step::TaskDone("cancelled_before_dispatch"),
@@ -348,6 +362,10 @@ mod tests {
             (
                 Ok(Outcome::Drained),
                 Step::TaskLeft("drained: left for recovery"),
+            ),
+            (
+                Ok(Outcome::NotReady(crate::worker::native::Error::Identity)),
+                Step::DispatcherStops("provider not ready"),
             ),
             (
                 Ok(Outcome::Driven(driver::Outcome::Accepted)),
@@ -421,7 +439,15 @@ mod tests {
                 Err(RuntimeError::Store(StoreError::Corrupt)),
                 Step::TaskLeft("store refusal after begin"),
             ),
-        ];
+        ]
+    }
+
+    /// R20 round 2 D3 · every result lands in exactly one of three steps, by a table: a refusal and
+    /// every driven outcome; each runtime error; the store kinds that stop the dispatcher against
+    /// the kinds that leave the task to recovery. A new variant is a compile error in `classify`.
+    #[test]
+    fn every_dispatch_result_is_classified_into_one_of_three_steps() {
+        let cases = cases();
         for (result, expected) in &cases {
             assert_eq!(classify(result), *expected, "{result:?}");
         }

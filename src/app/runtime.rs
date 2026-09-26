@@ -28,7 +28,9 @@ use crate::check::decision::CLEANUP_GRACE_MS;
 use crate::contracts::control::criteria_digest;
 use crate::contracts::receipt::Name;
 use crate::contracts::receipt::{Address as _, ReceiptV1, Ref};
-use crate::contracts::roster::{MAX_HISTORY, Selection};
+use crate::contracts::roster::{
+    Availability, MAX_HISTORY, ObservationInput, ObservationSource, Selection,
+};
 use crate::contracts::{Generation, Sha256Digest, UuidV4};
 use crate::store::{
     self, Binding, Effect, EvidenceIdentity, Expected, Identified, Object, Principal, RosterStart,
@@ -294,7 +296,9 @@ pub struct Dispatch<'a> {
     /// dispatch ends `Outcome::Drained` with nothing written. Before the first attempt the task
     /// stays `admitted` and is picked again; at attempt ≥ 2 it is `repair_pending`, which the
     /// dispatcher's read never returns — stranded until recovery (B17), a stated gap. The drain
-    /// does not reach an in-flight exchange in B14b-1 (F15's in-exchange wake is B14b-2's).
+    /// does not reach an in-flight exchange or check: one waits for it under the attempt's own
+    /// deadline (R21 D8, reversing R20 round 2 D5 — the wake is B19/B21's, as for the durable
+    /// cancel below, and the engine unit's stop timeout APP-22's).
     pub drain: &'a AtomicBool,
 }
 
@@ -395,6 +399,10 @@ pub enum Outcome {
     /// The engine's drain was set between attempts (B14b-1, D5): no stop written. Before the first
     /// attempt the task is still `admitted`; at attempt ≥ 2 it is `repair_pending`, the recovery's.
     Drained,
+    /// The source was not ready before an attempt's begin (R21 N4): its refusal, by name, and nothing
+    /// written for that attempt. Before the first attempt the task is still `admitted`; at attempt
+    /// ≥ 2 it is `repair_pending`, the recovery's (B17) — the drain's stated gap, not a new one.
+    NotReady(crate::worker::native::Error),
     Driven(driver::Outcome),
 }
 
@@ -439,6 +447,9 @@ enum Fault {
     Stop(StopReason),
     /// The drain observed at `begin` (B14b-1): the driver unwinds, nothing is written.
     Drained,
+    /// The source's refusal to be made ready at `begin` (R21 N4): the driver unwinds, nothing is
+    /// written for the attempt.
+    NotReady(crate::worker::native::Error),
 }
 
 impl From<Error> for Fault {
@@ -695,6 +706,25 @@ impl Admitted<'_> {
     pub fn window(&self) -> (Instant, Instant) {
         (self.origin, self.deadline)
     }
+
+    /// The baseline snapshot the admission captured and compared to the declared digest (R21 N1):
+    /// the provider's one source of the workspace's files, never a second capture.
+    #[must_use]
+    pub fn baseline(&self) -> &Snapshot {
+        &self.prepared.baseline
+    }
+
+    /// The engine's drain the dispatch runs under (R21 N1): a provider's own waits read it.
+    #[must_use]
+    pub fn drain(&self) -> &AtomicBool {
+        self.dispatch.drain
+    }
+
+    /// The class profile the dispatch read (R21 N1, A11): the provider's only route to it.
+    #[must_use]
+    pub fn profile(&self) -> &Profile {
+        self.profile
+    }
 }
 
 /// Phase one: read the head as the owner, run the free checks and the captures, publish the shared
@@ -865,6 +895,7 @@ pub fn drive<'a, C: CandidateSource, V: Verifier>(
             }))
         }
         Err(driver::Error::Runtime(Fault::Drained)) => Ok(Outcome::Drained),
+        Err(driver::Error::Runtime(Fault::NotReady(error))) => Ok(Outcome::NotReady(error)),
         // Any error while no attempt row exists (B14b-1, D3; closure H3): the attempt door's own
         // refusals stop the task by the store's name through the pre-dispatch path (a failure of
         // that stop is the dispatcher's too); everything else is `PreDispatch`.
@@ -1074,6 +1105,39 @@ impl<C: CandidateSource, V: Verifier> StoreRuntime<'_, C, V> {
 
     fn begun(&self, attempt: &Attempt) -> Result<&Begun, Error> {
         self.attempts.get(attempt.index).ok_or(Error::Identity)
+    }
+
+    /// The provider-response observation one begin reads (R21 N4), in the caller's hold: `ready`
+    /// bound to the agent record's head as read here (one door, map Q1), no instance, its bytes
+    /// published under `staging`, which is the evidence ref. Freshness is checked per begin against
+    /// the store's clock, so every attempt is preceded by its own.
+    fn observe(&self, store: &mut Store, ready: Readiness, staging: &str) -> Result<(), Error> {
+        store.publish(&ready.evidence, uuid(staging)?, self.deadline)?;
+        let record = store.roster_get(
+            self.dispatch.principal,
+            uuid(self.dispatch.agent_record_id)?,
+            self.deadline,
+        )?;
+        store.roster_observe_provider_response(
+            self.dispatch.principal,
+            &ObservationInput {
+                record_id: record.head.record_id,
+                record_version: record.head.record_version,
+                owner_id: record.head.definition.owner_id,
+                endpoint_ref: record.head.definition.endpoint_ref,
+                instance_id: None,
+                instance_generation: None,
+                source: ObservationSource::ProviderResponse,
+                observed_unix_ms: None,
+                availability: Availability::Available,
+                actual_identity: Some(ready.actual_identity),
+                immutable_revision: ready.immutable_revision,
+                capabilities: ready.capabilities,
+                evidence_ref: staging.to_owned(),
+            },
+            self.deadline,
+        )?;
+        Ok(())
     }
 
     /// One settle of the current attempt, in one hold with its head read. `used_ms` is `None`
@@ -1731,6 +1795,15 @@ impl<C: CandidateSource, V: Verifier> driver::Runtime for StoreRuntime<'_, C, V>
         } else {
             Instant::now()
         };
+        // The source made ready before the attempt, outside any hold (R21 N4): the provider's own
+        // readback, and a load when its model is not resident, under the dispatch deadline and
+        // charged to the attempt it precedes (A15). A refusal writes nothing and ends the dispatch.
+        let ready = self
+            .source
+            .ready(self.deadline, &self.cancelled)
+            .map_err(Fault::NotReady)?;
+        // The id the readiness's bytes are published under, and the observation's evidence ref.
+        let staging = fresh(self.deadline)?;
         let begun = self.tasks.with_store(|store| -> Result<_, Error> {
             let head = self.current(store)?;
             // A cancellation committed after the driver's last read is a stop, not an error.
@@ -1750,6 +1823,8 @@ impl<C: CandidateSource, V: Verifier> driver::Runtime for StoreRuntime<'_, C, V>
                 return Ok(Err(StopReason::Policy(LoopRefusal::Deadline)));
             }
             let workspace = head.workspace_id.as_deref().ok_or(Error::Identity)?;
+            // The observation the begin's `permits` reads, immediately before it in this hold.
+            self.observe(store, ready, &staging)?;
             let roster = store.begin_bound_attempt(
                 RosterStart {
                     principal: self.dispatch.principal,
