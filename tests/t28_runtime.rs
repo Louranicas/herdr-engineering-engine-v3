@@ -12,8 +12,7 @@ use habitat_engine::app::class_profile::{self, Profile};
 use habitat_engine::app::live_verifier::LiveVerifier;
 use habitat_engine::app::runtime::{
     CHECK_TEARDOWN, Candidate, CandidateSource, CheckPlan, CheckWindow, Dispatch,
-    Error as RuntimeError, Observed, Outcome, Previous, Refusal, U64_CHECK_SCHEMA, Verifier,
-    dispatch,
+    Error as RuntimeError, Observed, Outcome, Previous, Refusal, Verifier, dispatch,
 };
 use habitat_engine::app::tasks::StoreTasks;
 use habitat_engine::app::workload::{self, Outcome as RunOutcome, Run};
@@ -22,6 +21,7 @@ use habitat_engine::check::u64_oracle::Evaluation;
 use habitat_engine::contracts::control::{
     CancelReason, Precondition, ResourceKind, criteria_digest,
 };
+use habitat_engine::contracts::receipt::{Address as _, ReceiptV1};
 use habitat_engine::contracts::roster::{
     Availability, Kind, Locality, ObservationInput, ObservationSource, RosterDefinitionV1,
     Selection, Update,
@@ -44,6 +44,11 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use super::tasks::{EPOCH, GENERATION, Scratch};
+
+/// The schema every in-gate check records its evidence under since 2c-iii: the receipt itself
+/// (R17 round 2, decision 3 — the evidence artifact id is the receipt's `run_id`). The runtime's
+/// own `hee3.u64-check/1` remains only for a compose the composer refused.
+const RECEIPT: &str = ReceiptV1::SCHEMA_ID;
 
 type Outcome_ = Result<(), Box<dyn Error>>;
 /// What the candidate source was handed, per request.
@@ -103,6 +108,8 @@ struct Shape<'a> {
     removed: Option<&'static str>,
     teardown_ms: u64,
     verify_ms: u64,
+    /// The compiler pin the profile declares, when not the toolchain rustc's own digest.
+    compiler_sha256: Option<&'a str>,
 }
 
 impl Default for Shape<'_> {
@@ -116,6 +123,7 @@ impl Default for Shape<'_> {
             removed: None,
             teardown_ms: 1_000,
             verify_ms: 300_000,
+            compiler_sha256: None,
         }
     }
 }
@@ -135,6 +143,9 @@ fn rustc() -> Result<PathBuf, Box<dyn Error>> {
         .arg("--print")
         .arg("sysroot")
         .output()?;
+    if !sysroot.status.success() {
+        return Err(format!("rustc --print sysroot: {}", sysroot.status).into());
+    }
     let path = PathBuf::from(String::from_utf8(sysroot.stdout)?.trim()).join("bin/rustc");
     if !path.is_file() {
         return Err(format!("no toolchain rustc at {}", path.display()).into());
@@ -273,7 +284,10 @@ fn installed(root: &Path, shape: &Shape<'_>) -> Result<Profile, Box<dyn Error>> 
     // The pins the shared plan reads under (R17 round 2): the toolchain's own rustc, a stand-in
     // shim whose bytes are its pin, and the declared grant and effect files beside the profile.
     let compiler = rustc()?;
-    let compiler_digest = format!("sha256:{}", hex_digest(&fs::read(&compiler)?));
+    let compiler_digest = match shape.compiler_sha256 {
+        Some(pinned) => pinned.to_owned(),
+        None => format!("sha256:{}", hex_digest(&fs::read(&compiler)?)),
+    };
     let shim_bytes = b"#!/bin/sh\nexit 0\n";
     let shim = class.join("stand-in-shim");
     file(&shim, shim_bytes)?;
@@ -517,23 +531,22 @@ fn run<C: CandidateSource, V: Verifier>(
 }
 
 /// The previous check as the candidate source was handed it: its verdict, no criteria, and the
-/// runtime's own evidence (`u64_check`) naming `outcome` and citing four records.
+/// receipt itself as evidence — its one case counted under `counted` (`failed` for a mismatch),
+/// its artifact inventory the four run records.
 fn assert_previous(
     previous: Option<&Option<Previous>>,
     verdict: VerificationVerdict,
-    outcome: &str,
+    counted: &str,
 ) -> Result<(), Box<dyn Error>> {
     let previous = previous
         .and_then(Option::as_ref)
         .ok_or("a previous check")?;
     assert_eq!((previous.verdict, previous.criteria), (verdict, 0));
     let evidence: serde_json::Value = serde_json::from_slice(&previous.evidence)?;
-    assert_eq!(evidence["kind"], "u64_check");
-    assert_eq!(evidence["outcome"], outcome);
-    assert_eq!(
-        evidence["records"].as_object().map(serde_json::Map::len),
-        Some(4)
-    );
+    assert_eq!(evidence["protocol"], "hee3.receipt");
+    assert_eq!(evidence["cases"]["discovered"], 1);
+    assert_eq!(evidence["cases"][counted], 1, "{counted}");
+    assert_eq!(evidence["artifacts"]["count"], 4);
     Ok(())
 }
 
@@ -733,7 +746,7 @@ fn a_failed_check_is_repaired_and_the_second_attempt_is_accepted() -> Outcome_ {
                 handed[0].0.clone(),
                 "7".to_owned(),
                 "application/json".to_owned(),
-                U64_CHECK_SCHEMA.to_owned(),
+                RECEIPT.to_owned(),
                 "0000000000000000".to_owned(),
             ],
             vec![
@@ -741,7 +754,7 @@ fn a_failed_check_is_repaired_and_the_second_attempt_is_accepted() -> Outcome_ {
                 handed[1].0.clone(),
                 "7".to_owned(),
                 "application/json".to_owned(),
-                U64_CHECK_SCHEMA.to_owned(),
+                RECEIPT.to_owned(),
                 "0000000000000001".to_owned(),
             ],
         ]
@@ -750,7 +763,7 @@ fn a_failed_check_is_repaired_and_the_second_attempt_is_accepted() -> Outcome_ {
     // own record of the mismatched run, citing the four records it committed.
     let asked = asked.borrow();
     assert_eq!(asked[0], None);
-    assert_previous(asked.get(1), VerificationVerdict::Failed, "mismatch")?;
+    assert_previous(asked.get(1), VerificationVerdict::Failed, "failed")?;
     let declared = &rig.profile.declared.workspaces[0];
     let bound = vec![
         declared.baseline_digest.clone(),
@@ -832,7 +845,7 @@ fn a_refused_candidate_is_recorded_failed_without_a_verifier_call() -> Outcome_ 
         recorded[1][3..],
         [
             "application/json".to_owned(),
-            U64_CHECK_SCHEMA.to_owned(),
+            RECEIPT.to_owned(),
             "0000000000000001".to_owned(),
         ]
     );
@@ -846,11 +859,7 @@ fn a_refused_candidate_is_recorded_failed_without_a_verifier_call() -> Outcome_ 
     )?;
     assert_eq!(
         bound,
-        vec![vec![
-            "1".to_owned(),
-            U64_CHECK_SCHEMA.to_owned(),
-            "1".to_owned()
-        ]]
+        vec![vec!["1".to_owned(), RECEIPT.to_owned(), "1".to_owned()]]
     );
     let previous = asked.borrow()[1].clone().ok_or("no previous")?;
     assert_eq!(
@@ -868,8 +877,18 @@ fn a_refused_candidate_is_recorded_failed_without_a_verifier_call() -> Outcome_ 
 }
 
 /// Every pre-dispatch refusal, each reached by one shape or capture share (R2.5 order).
-fn refusal_cases<'a>(other_criteria: &'a str, wrong: &'a str) -> [(Shape<'a>, u64, Refusal); 11] {
+fn refusal_cases<'a>(other_criteria: &'a str, wrong: &'a str) -> [(Shape<'a>, u64, Refusal); 12] {
     [
+        // R17 round 2, N2 · the shared plan refuses before dispatch: the compiler's bytes are not
+        // the pin the profile declares, named as the stop `plan_pin_compiler`.
+        (
+            Shape {
+                compiler_sha256: Some(wrong),
+                ..Shape::default()
+            },
+            5_000,
+            Refusal::Plan("plan_pin_compiler"),
+        ),
         (
             Shape {
                 work_ms: 0,
@@ -1277,7 +1296,7 @@ fn an_empty_check_window_is_recorded_as_a_timeout_at_no_cost() -> Outcome_ {
             handed[0].0.clone(),
             "290000".to_owned(),
             "application/json".to_owned(),
-            U64_CHECK_SCHEMA.to_owned(),
+            RECEIPT.to_owned(),
             "0000000000000000".to_owned(),
         ]
     );
@@ -1408,11 +1427,44 @@ fn a_verifier_s_cancelled_is_a_cancellation_only_when_the_task_was_cancelled() -
 /// the attempt they belong to, both subjects read back, no outputs (the model's run retains none);
 /// matched with no steps; the three cleanup predicates settled and the aggregate — which the runtime
 /// does not own — unknown (R15 round 2, MEDIUM-10).
-fn assert_run_records_decoded(
+/// One cited run record as a receipt's artifact row names it: `(kind, artifact id, digest, bytes)`.
+type CitedRecord = (String, String, String, String);
+
+/// The `run_record:<kind>` rows of a receipt's artifact inventory, read back object by object
+/// through the rig's store, in kind order.
+fn receipt_run_records(
     rig: &Rig,
-    records: &[Vec<String>],
-    evidence: &serde_json::Value,
-) -> Result<(), Box<dyn Error>> {
+    root: &serde_json::Value,
+) -> Result<Vec<CitedRecord>, Box<dyn Error>> {
+    let inventory = object_json(
+        rig,
+        root["artifacts"]["inventory"]["sha256"]
+            .as_str()
+            .ok_or("an inventory reference")?,
+    )?;
+    assert_eq!(
+        inventory["next"]["unavailable_reason"], "end_of_inventory",
+        "one page"
+    );
+    let mut cited: Vec<CitedRecord> = inventory["rows"]
+        .as_array()
+        .ok_or("inventory rows")?
+        .iter()
+        .filter_map(|row| {
+            let kind = row["role"].as_str()?.strip_prefix("run_record:")?;
+            Some((
+                kind.to_owned(),
+                row["object"]["artifact_id"].as_str()?.to_owned(),
+                row["object"]["sha256"].as_str()?.to_owned(),
+                row["object"]["byte_length"].as_u64()?.to_string(),
+            ))
+        })
+        .collect();
+    cited.sort();
+    Ok(cited)
+}
+
+fn assert_run_records_decoded(rig: &Rig, records: &[Vec<String>]) -> Result<(), Box<dyn Error>> {
     let object = |kind: &str| -> Result<serde_json::Value, Box<dyn Error>> {
         let row = records.iter().find(|row| row[0] == kind).ok_or(kind)?;
         object_json(rig, &row[2])
@@ -1430,7 +1482,6 @@ fn assert_run_records_decoded(
     let outcome = object("run_outcome")?;
     assert_eq!(outcome["outcome"], "matched");
     assert_eq!(outcome["steps"], serde_json::json!([]));
-    assert_eq!(evidence["capture_failed_at"], serde_json::Value::Null);
     let cleanup = object("run_cleanup")?;
     assert_eq!(cleanup["aggregate"], "settled");
     assert_eq!(
@@ -1446,7 +1497,8 @@ fn assert_run_records_decoded(
 }
 
 /// R15 · a passed check commits its four records with the verification and `accept` reads them
-/// back: the evidence (`hee3.u64-check/1`) cites exactly the committed set — kind, artifact id,
+/// back through the receipt's graph (R17 2c-iii, `cited_receipt`): the evidence — the receipt
+/// itself — cites exactly the committed set — kind, artifact id,
 /// digest and size — and the clock record read back from its object carries the window and the
 /// observation the model handed the runtime (cutoff 300,000 − T, observed 7 ms, decisive 6 ms,
 /// no timeout intent), so nothing about the run was re-typed on the way to the ledger.
@@ -1478,39 +1530,48 @@ fn a_passed_check_commits_four_records_that_accept_reads_back() -> Outcome_ {
         vec![
             "7".to_owned(),
             "application/json".to_owned(),
-            U64_CHECK_SCHEMA.to_owned(),
+            RECEIPT.to_owned(),
             "0000000000000001".to_owned(),
         ]
     );
-    // The evidence cites exactly the committed set.
-    let evidence_digest = rows(
+    // The evidence is the receipt (R17 2c-iii): its root is committed under the verification's
+    // artifact id, which is its `run_id`; its artifact inventory cites exactly the committed set as
+    // `run_record:<kind>` rows; the ledger's `passed` is the outcome-derived verdict (R16-G3) while
+    // the receipt's own decision is INVALID — the double never runs a producer, and the decision
+    // says so by name.
+    let evidence = rows(
         &rig,
-        "SELECT v.evidence_digest FROM verifications v JOIN attempts a ON a.id=v.attempt_id \
-         WHERE a.task_id=?",
+        "SELECT v.evidence_digest, v.evidence_artifact_id FROM verifications v \
+         JOIN attempts a ON a.id=v.attempt_id WHERE a.task_id=?",
     )?;
-    let evidence = object_json(&rig, &evidence_digest[0][0])?;
-    assert_eq!(evidence["kind"], "u64_check");
-    assert_eq!(evidence["outcome"], "matched");
-    assert_eq!(evidence["captured"], true);
-    let cited = evidence["records"].as_object().ok_or("a records map")?;
-    assert_eq!(cited.len(), 4);
-    for row in &records {
-        let entry = &cited[&row[0]];
-        assert_eq!(
-            (
-                entry["artifact_id"].as_str(),
-                entry["sha256"].as_str(),
-                entry["byte_length"].as_u64()
-            ),
-            (
-                Some(row[1].as_str()),
-                Some(row[2].as_str()),
-                row[3].parse().ok()
-            ),
-            "{}",
-            row[0]
-        );
-    }
+    let root = object_json(&rig, &evidence[0][0])?;
+    assert_eq!(root["protocol"], "hee3.receipt");
+    assert_eq!(root["identity"]["run_id"], evidence[0][1].as_str());
+    assert_eq!(root["verdict"]["state"], "INVALID");
+    let reasons = root["verdict"]["reasons"]
+        .as_array()
+        .ok_or("reasons")?
+        .iter()
+        .filter_map(serde_json::Value::as_str)
+        .collect::<Vec<_>>();
+    assert!(
+        reasons.contains(&"ProducerNotStarted") && reasons.contains(&"EvidenceIncomplete"),
+        "{reasons:?}"
+    );
+    let cited = receipt_run_records(&rig, &root)?;
+    assert_eq!(
+        cited,
+        records
+            .iter()
+            .map(|row| (
+                row[0].clone(),
+                row[1].clone(),
+                row[2].clone(),
+                row[3].clone()
+            ))
+            .collect::<Vec<_>>(),
+        "the receipt's run_record rows are the committed set, in kind order"
+    );
     // The clock record, read back from its committed object.
     let clock_row = records
         .iter()
@@ -1526,7 +1587,7 @@ fn a_passed_check_commits_four_records_that_accept_reads_back() -> Outcome_ {
     assert_eq!(clock["decisive_ms"], 6);
     assert_eq!(clock["timeout_intent_ms"], serde_json::Value::Null);
     assert!(window.until > window.begun);
-    assert_run_records_decoded(&rig, &records, &evidence)?;
+    assert_run_records_decoded(&rig, &records)?;
     Ok(())
 }
 
@@ -1556,7 +1617,7 @@ fn a_run_that_never_launched_is_recorded_with_four_records() -> Outcome_ {
         vec![
             (300_000 - teardown_ms).to_string(),
             "application/json".to_owned(),
-            U64_CHECK_SCHEMA.to_owned(),
+            RECEIPT.to_owned(),
             "0000000000000000".to_owned(),
         ]
     );
@@ -1603,7 +1664,7 @@ fn the_live_verifier_records_a_refused_launch_with_four_records() -> Outcome_ {
     let found = verifications(&rig)?;
     assert_eq!(found.len(), 1);
     assert_eq!(found[0][0], "error");
-    assert_eq!(found[0][4], U64_CHECK_SCHEMA);
+    assert_eq!(found[0][4], RECEIPT);
     let records = committed_records(&rig)?;
     assert_eq!(records.len(), 4, "{records:?}");
     let outcome_row = records

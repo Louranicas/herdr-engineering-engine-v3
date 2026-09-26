@@ -111,10 +111,11 @@ pub struct Shared {
     /// into each check's sink (decision 7). The runtime's prepare sink is fresh, so this is the
     /// shared set; over a sink that already held objects it holds those too.
     pub objects: Vec<(Ref, Object)>,
-    /// How many registry entries this publication added — receipt-graph nodes with fresh ids. The
+    /// How many registry entries this publication added — receipt-graph nodes with fresh ids:
+    /// 54 on a fresh sink, 32 on a sink already holding the closure (the proof's constants). The
     /// store's inventory counts DISTINCT DIGESTS, which the CAS dedupes across dispatches (the
-    /// schema, the compiler, the closure), so N4's `S_new` is measured from the store side by
-    /// 2c-iii's proof; this is the graph-side count.
+    /// schema, the compiler, the closure), so the store-side `S_new` of N4 is at most this and is
+    /// read from the ledger by the Tier-3 host run (R17 proof (b)); the per-check plan adds 8.
     pub added: usize,
 }
 
@@ -138,7 +139,7 @@ pub enum Refusal {
     PlanTeardown,
     /// A pinned tool's bytes are not the pin's, or could not be read under the bound.
     Pin {
-        which: &'static str,
+        which: PinWhich,
         error: NamespaceError,
     },
     /// `oracle.json` or the public wrapper is not in the protected tree, or the oracle refused.
@@ -166,16 +167,40 @@ pub enum Refusal {
         error: workspace::Error,
     },
     /// `<compiler> -Vv` did not run to a settled exit with a `release:` line within the bound;
-    /// `why` names the site (`run`, `child`, `exit`, `stream`, `utf8`, `release`).
+    /// `why` names the site.
     CompilerVersion {
-        why: &'static str,
+        why: VersionWhy,
     },
     /// A value had no rendering the receipt admits; the site names which.
     Encoding(&'static str),
-    /// The seed-to-result patch could not be derived (the editable file missing or past its bound).
+    /// The seed-to-result patch could not be derived (past its bound, or not a change to the
+    /// editable alone).
     Patch(patch::Error),
+    /// A snapshot holds no file at the class's editable path (the file named).
+    Editable(&'static str),
     /// `prepare_u64` refused the plan (ids not distinct, an empty argv).
     Plan(consistency::Error),
+}
+
+/// Which pinned tool a `Pin` refusal is about.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PinWhich {
+    Compiler,
+    Shim,
+    Bwrap,
+}
+
+/// Where the compiler probe (`<compiler> -Vv`) refused: the launch, a child left behind, the
+/// stream (interrupted, truncated or not at EOF), the exit code, the bytes not UTF-8, no
+/// `release:` line.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum VersionWhy {
+    Run,
+    Child,
+    Stream,
+    Exit,
+    Utf8,
+    Release,
 }
 
 impl Refusal {
@@ -194,7 +219,18 @@ impl Refusal {
                 error: NamespaceError::Deadline,
                 ..
             } => "plan_deadline",
-            Self::Pin { .. } => "plan_pin",
+            Self::Pin {
+                which: PinWhich::Compiler,
+                ..
+            } => "plan_pin_compiler",
+            Self::Pin {
+                which: PinWhich::Shim,
+                ..
+            } => "plan_pin_shim",
+            Self::Pin {
+                which: PinWhich::Bwrap,
+                ..
+            } => "plan_pin_bwrap",
             Self::Protected(_) => "plan_protected",
             Self::Oracle(_) => "plan_oracle",
             Self::Closure(_) => "plan_closure",
@@ -202,7 +238,25 @@ impl Refusal {
             Self::Publish { .. } => "plan_publish",
             Self::Subject { .. } => "plan_subject",
             Self::Capture { .. } => "plan_capture",
-            Self::CompilerVersion { .. } => "plan_compiler_version",
+            Self::CompilerVersion {
+                why: VersionWhy::Run,
+            } => "plan_compiler_version_run",
+            Self::CompilerVersion {
+                why: VersionWhy::Child,
+            } => "plan_compiler_version_child",
+            Self::CompilerVersion {
+                why: VersionWhy::Stream,
+            } => "plan_compiler_version_stream",
+            Self::CompilerVersion {
+                why: VersionWhy::Exit,
+            } => "plan_compiler_version_exit",
+            Self::CompilerVersion {
+                why: VersionWhy::Utf8,
+            } => "plan_compiler_version_utf8",
+            Self::CompilerVersion {
+                why: VersionWhy::Release,
+            } => "plan_compiler_version_release",
+            Self::Editable(_) => "plan_editable",
             Self::Encoding(_) => "plan_encoding",
             Self::Patch(_) => "plan_patch",
             Self::Plan(_) => "plan_prepare",
@@ -305,18 +359,26 @@ struct Pinned {
 }
 
 fn pinned(inputs: &Inputs<'_>) -> Result<Pinned, Refusal> {
-    let read = |which: &'static str, path: &Path, pin: &[u8; 32]| {
+    let read = |which: PinWhich, path: &Path, pin: &[u8; 32]| {
         pinned_bytes(path, pin, MAX_TOOL_BYTES, inputs.deadline)
             .map_err(|error| Refusal::Pin { which, error })
     };
     Ok(Pinned {
         compiler: read(
-            "compiler",
+            PinWhich::Compiler,
             &inputs.tools.compiler.host,
             &inputs.tools.compiler.sha256,
         )?,
-        shim: read("shim", &inputs.tools.shim.host, &inputs.tools.shim.sha256)?,
-        bwrap: read("bwrap", &inputs.tools.bwrap, &namespace::BWRAP_SHA256)?,
+        shim: read(
+            PinWhich::Shim,
+            &inputs.tools.shim.host,
+            &inputs.tools.shim.sha256,
+        )?,
+        bwrap: read(
+            PinWhich::Bwrap,
+            &inputs.tools.bwrap,
+            &namespace::BWRAP_SHA256,
+        )?,
     })
 }
 
@@ -668,23 +730,22 @@ fn compiler_version(inputs: &Inputs<'_>) -> Result<(String, Vec<u8>), Refusal> {
         input: Vec::new(),
         stream_limit: MAX_VERSION_BYTES,
     };
-    let refuse = |why: &'static str| Refusal::CompilerVersion { why };
-    let mut report =
-        process::run(&spec, inputs.deadline, inputs.cancelled).map_err(|_| refuse("run"))?;
+    let refuse = |why: VersionWhy| Refusal::CompilerVersion { why };
+    let mut report = process::run(&spec, inputs.deadline, inputs.cancelled)
+        .map_err(|_| refuse(VersionWhy::Run))?;
     // A child or group still live after the report is settled by polling until the deadline (N6):
     // a probe that leaves a process behind is not an observation this dispatch may build on.
     if let Some(pending) = report.pending.as_mut() {
         loop {
             let poll = pending.poll_cleanup(inputs.deadline);
-            if poll.leader_terminal && poll.group == GroupState::Empty {
-                break;
+            match settle_step(&poll, Instant::now(), inputs.deadline) {
+                SettleStep::Settled => break,
+                SettleStep::Refused => return Err(refuse(VersionWhy::Child)),
+                // `poll_cleanup` returns at once; a pause between polls keeps this from burning a
+                // core for the whole deadline (pacing under the passed-through deadline, not a
+                // limit).
+                SettleStep::Wait => std::thread::sleep(SETTLE_PAUSE),
             }
-            if poll.ownership == WaitOwnership::Lost || Instant::now() >= inputs.deadline {
-                return Err(refuse("child"));
-            }
-            // `poll_cleanup` returns at once; a pause between polls keeps this from burning a core
-            // for the whole deadline (pacing under the passed-through deadline, not a limit).
-            std::thread::sleep(SETTLE_PAUSE);
         }
     }
     // The stream's own interruptions first, then the bytes, then the exit: an over-limit report is
@@ -692,37 +753,37 @@ fn compiler_version(inputs: &Inputs<'_>) -> Result<(String, Vec<u8>), Refusal> {
     match report.interruption {
         Some(Interruption::Cancelled) => return Err(Refusal::Cancelled),
         Some(Interruption::Timeout) => return Err(Refusal::Deadline),
-        Some(Interruption::OutputLimit) => return Err(refuse("stream")),
-        Some(_) => return Err(refuse("child")),
+        Some(Interruption::OutputLimit) => return Err(refuse(VersionWhy::Stream)),
+        Some(_) => return Err(refuse(VersionWhy::Child)),
         None => {}
     }
     if report.stdout.truncated || !report.stdout.eof {
-        return Err(refuse("stream"));
+        return Err(refuse(VersionWhy::Stream));
     }
     if report.exit_code != Some(0) {
-        return Err(refuse("exit"));
+        return Err(refuse(VersionWhy::Exit));
     }
     // The bytes verified before the probe are shown to be the bytes still at the path after it
     // (F5 named: the window between the read and the exec is not closed, it is measured).
     if namespace::sha256(&inputs.tools.compiler.host, inputs.deadline).map_err(|error| {
         Refusal::Pin {
-            which: "compiler",
+            which: PinWhich::Compiler,
             error,
         }
     })? != inputs.tools.compiler.sha256
     {
         return Err(Refusal::Pin {
-            which: "compiler",
+            which: PinWhich::Compiler,
             error: NamespaceError::Digest,
         });
     }
-    let output = std::str::from_utf8(&report.stdout.bytes).map_err(|_| refuse("utf8"))?;
+    let output = std::str::from_utf8(&report.stdout.bytes).map_err(|_| refuse(VersionWhy::Utf8))?;
     let release = output
         .lines()
         .find_map(|line| line.strip_prefix("release: "))
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .ok_or(refuse("release"))?;
+        .ok_or(refuse(VersionWhy::Release))?;
     Ok((release.to_owned(), report.stdout.bytes.clone()))
 }
 
@@ -742,7 +803,7 @@ pub fn isolation_profile() -> Result<Vec<u8>, Refusal> {
         "environment": environment.iter().map(|(k, v)| serde_json::json!({"name": k, "value": v})).collect::<Vec<_>>(),
         "launcher": BWRAP,
     });
-    serde_json::to_vec(&value).map_err(|_| Refusal::Encoding("readback specification"))
+    serde_json::to_vec(&value).map_err(|_| Refusal::Encoding("isolation profile"))
 }
 
 /// The readback specification the cleanup contract cites: the four obligations the runtime owns
@@ -759,7 +820,7 @@ pub fn readback_specification() -> Result<Vec<u8>, Refusal> {
                  descriptors released, every retained path removed within the teardown share, and \
                  the resource aggregate read back; each obligation settled separately, never inferred",
     });
-    serde_json::to_vec(&value).map_err(|_| Refusal::Encoding("isolation profile"))
+    serde_json::to_vec(&value).map_err(|_| Refusal::Encoding("readback specification"))
 }
 
 /// What the per-check plan needs (R17 round 2, shape C): the shared part, the profile, the seed
@@ -894,14 +955,34 @@ pub fn check(sink: &mut Evidence<'_>, inputs: &CheckInputs<'_>) -> Result<Planne
 }
 
 /// A file of a snapshot by path, or the patch refusal naming the editable as missing.
-fn snapshot_file<'a>(snapshot: &'a Snapshot, file: &str) -> Result<&'a [u8], Refusal> {
+fn snapshot_file<'a>(snapshot: &'a Snapshot, file: &'static str) -> Result<&'a [u8], Refusal> {
     snapshot
         .entries()
         .find_map(|entry| match &entry.content {
             workspace::Content::File { bytes, .. } if entry.path == file => Some(bytes.as_slice()),
             _ => None,
         })
-        .ok_or(Refusal::Patch(patch::Error::Bound))
+        .ok_or(Refusal::Editable(U64_EDITABLE))
+}
+
+/// One turn of the settle loop, decided from a cleanup poll (F95: the policy apart from the I/O):
+/// settled when the leader is terminal and its group empty; refused when wait ownership is lost
+/// (a lost child can never settle — `process::lose_wait`) or the deadline is reached; else wait.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SettleStep {
+    Settled,
+    Refused,
+    Wait,
+}
+
+fn settle_step(poll: &process::CleanupPoll, now: Instant, deadline: Instant) -> SettleStep {
+    if poll.leader_terminal && poll.group == GroupState::Empty {
+        SettleStep::Settled
+    } else if poll.ownership == WaitOwnership::Lost || now >= deadline {
+        SettleStep::Refused
+    } else {
+        SettleStep::Wait
+    }
 }
 
 /// The digest the receipt's `schema_sha256` names: the schema bytes this binary carries.
@@ -913,12 +994,13 @@ pub fn schema_sha256() -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        COLLECTOR_UNREAD, CheckInputs, Inputs, Refusal, SCHEMA, SCHEMA_STANDARD, check,
-        isolation_profile, schema_sha256, shared,
+        COLLECTOR_UNREAD, CheckInputs, Inputs, PinWhich, Refusal, SCHEMA, SCHEMA_STANDARD,
+        SettleStep, VersionWhy, check, isolation_profile, schema_sha256, settle_step, shared,
     };
     use crate::app::class_profile::{Profile, compose};
     use crate::app::evidence::Evidence;
     use crate::app::workload::{COMPILER_DESTINATION, Tools};
+    use crate::check::consistency;
     use crate::check::graph::{Graph, Objects as _};
     use crate::check::u64_oracle::FrozenOracle;
     use crate::contracts::receipt::{
@@ -1065,6 +1147,9 @@ mod tests {
         );
         write(&class.join("authority.json"), AUTHORITY);
         write(&class.join("isolation.json"), SPECIFICATION);
+        // The profile is installed as the operator installs it, so its digest is the READ one — the
+        // value the runtime re-reads at teardown, never an empty placeholder.
+        write(&class.join("profile.toml"), text.as_bytes());
         let declared = compose(text.as_bytes()).map_err(|e| format!("{e:?}"))?;
         let tools = Tools {
             bwrap: PathBuf::from(super::BWRAP),
@@ -1081,11 +1166,14 @@ mod tests {
             runtime_files: Vec::new(),
             namespace_directories: Vec::new(),
         };
+        let digest = super::super::class_profile::read(&class)
+            .map_err(|e| format!("{e:?}"))?
+            .digest;
         Ok(Fixture {
             profile: Profile {
                 declared,
                 directory: class,
-                digest: String::new(),
+                digest,
             },
             tools,
             baseline: Snapshot::capture(&base, &[], deadline()).map_err(|e| format!("{e:?}"))?,
@@ -1441,7 +1529,7 @@ mod tests {
                 }
             ),
             Err(Refusal::Pin {
-                which: "compiler",
+                which: PinWhich::Compiler,
                 ..
             })
         ));
@@ -1463,7 +1551,10 @@ mod tests {
                     ..base
                 }
             ),
-            Err(Refusal::Pin { which: "shim", .. })
+            Err(Refusal::Pin {
+                which: PinWhich::Shim,
+                ..
+            })
         ));
         assert!(!plan_root.exists());
         let unprotected = Snapshot::capture(&tree(&f.root, "empty", &[]), &[], deadline())
@@ -1581,13 +1672,13 @@ mod tests {
         // A compiler whose bytes ARE its pin but which exits non-zero, and one whose version report
         // has no release: each refused at its own site.
         for (script, why) in [
-            (&b"#!/bin/sh\nexit 3\n"[..], "exit"),
+            (&b"#!/bin/sh\nexit 3\n"[..], VersionWhy::Exit),
             (
                 &b"#!/bin/sh\nprintf 'rustc 0.0.0\\nrelease:  \\n'\n"[..],
-                "release",
+                VersionWhy::Release,
             ),
         ] {
-            let stand_in = f.root.join(format!("compiler-{why}"));
+            let stand_in = f.root.join(format!("compiler-{why:?}"));
             write(&stand_in, script);
             fs::set_permissions(&stand_in, fs::Permissions::from_mode(0o700))?;
             let tools = Tools {
@@ -1610,7 +1701,7 @@ mod tests {
             );
             assert!(
                 matches!(refused, Err(Refusal::CompilerVersion { why: site }) if site == why),
-                "{why}: {refused:?}"
+                "{why:?}: {refused:?}"
             );
             assert!(!plan_root.exists());
         }
@@ -1687,10 +1778,14 @@ mod tests {
         let s_new = PAYLOADS + PAGES + SUBJECT_OBJECTS + CLOSURE_NODES;
         assert_eq!(added, vec![s_new, s_new - CLOSURE_NODES], "{added:?}");
         assert_eq!(sink.registered().len(), 2 * s_new - CLOSURE_NODES);
+        // N4, graph side: a fresh store's 4096-object inventory admits
+        // (4096 − S_new − baseline) / 8 checks after the first dispatch; the store-side count is
+        // at most this (the CAS dedupes) and is read by the Tier-3 host run.
         println!(
             "S_new={s_new} registry entries per dispatch (graph side); per_dispatch_after_first={}; \
-             store-side distinct digests are measured by 2c-iii's proof (N4)",
-            s_new - CLOSURE_NODES
+             checks_until_bound_graph_side={}",
+            s_new - CLOSURE_NODES,
+            (4096 - s_new) / 8
         );
         assert_refused(&f, &staging, &cancelled)?;
         fs::remove_dir_all(&f.root)?;
@@ -1722,7 +1817,7 @@ mod tests {
             matches!(
                 refused,
                 Err(Refusal::Pin {
-                    which: "compiler",
+                    which: PinWhich::Compiler,
                     error: crate::worker::namespace::NamespaceError::Digest
                 })
             ),
@@ -1804,7 +1899,9 @@ mod tests {
                 .status()?
                 .success()
         );
-        let mut piped = stand_in(&f, "compiler-unused-2", "#!/bin/sh\nexit 0\n")?;
+        // Pinned at the empty input's digest: opened non-blocking with no writer, a FIFO reads
+        // zero bytes and would HASH TO ITS PIN, so only the regular-file check can refuse it.
+        let mut piped = stand_in(&f, "compiler-unused-2", "")?;
         piped.compiler.host = fifo;
         let refused = shared(
             &mut sink,
@@ -1847,7 +1944,10 @@ mod tests {
                 deadline: deadline(),
             },
         );
-        assert!(matches!(refused, Err(Refusal::Plan(_))), "{refused:?}");
+        assert!(
+            matches!(refused, Err(Refusal::Plan(consistency::Error::Binding))),
+            "{refused:?}"
+        );
         let bare = Snapshot::capture(&tree(&f.root, "bare", &[]), &[], deadline())
             .map_err(|e| format!("{e:?}"))?;
         let refused = check(
@@ -1867,7 +1967,10 @@ mod tests {
                 deadline: deadline(),
             },
         );
-        assert!(matches!(refused, Err(Refusal::Patch(_))), "{refused:?}");
+        assert!(
+            matches!(refused, Err(Refusal::Editable(super::U64_EDITABLE))),
+            "{refused:?}"
+        );
         let before = sink.registered().len();
         let refused = check(
             sink,
@@ -1901,6 +2004,7 @@ mod tests {
         generation: &'a str,
         parent: Option<&'a str>,
         obligation_ids: &'a [String; 4],
+        profile_digest: &'a str,
     }
 
     /// One per-check plan asserted whole against its inputs: the identity, the invocation (the
@@ -1945,8 +2049,13 @@ mod tests {
                 format!("28fa0000-0000-4000-8000-0000000000b{n}").as_str(),
                 attempt.generation,
                 "check",
-                "rust-library-change/1@",
+                format!("rust-library-change/1@{}", attempt.profile_digest).as_str(),
             )
+        );
+        assert!(
+            attempt.profile_digest.starts_with("sha256:") && attempt.profile_digest.len() == 71,
+            "the fixture's profile digest is the read one, never empty: {}",
+            attempt.profile_digest
         );
         assert_eq!(
             identity
@@ -1963,7 +2072,11 @@ mod tests {
                     .unavailable_reason
                     .as_ref()
                     .map(crate::contracts::receipt::Text::as_str),
-                Some("first_attempt")
+                Some(if attempt.generation == "1" {
+                    "first_attempt"
+                } else {
+                    "separate_attempt_same_task"
+                })
             );
         }
     }
@@ -2097,9 +2210,12 @@ mod tests {
             std::array::from_fn(|i| format!("28fa0000-0000-4000-8000-0000000000{n}{i}"))
         };
         let mut runs = Vec::new();
+        // Three attempts: a first, a second with the first's run as parent, and a third whose
+        // previous attempt recorded no receipt (`separate_attempt_same_task`).
         for (generation, n, parent) in [
             ("1", 1_u8, None),
             ("2", 2_u8, Some("28fa0000-0000-4000-8000-000000000011")),
+            ("3", 3_u8, None),
         ] {
             let obligation_ids = ids(n + 2);
             let before = sink.registered().len();
@@ -2136,11 +2252,15 @@ mod tests {
                     generation,
                     parent,
                     obligation_ids: &obligation_ids,
+                    profile_digest: &f.profile.digest,
                 },
             )?;
             runs.push(planned.prepared.identity.run_id.as_str().to_owned());
         }
-        assert_ne!(runs[0], runs[1]);
+        assert_eq!(
+            runs.iter().collect::<std::collections::BTreeSet<_>>().len(),
+            3
+        );
         assert_check_refused(&mut sink, &shared, &f, &applied)?;
         fs::remove_dir_all(&f.root)?;
         Ok(())
@@ -2169,5 +2289,72 @@ mod tests {
             Some(super::ENVIRONMENT.len())
         );
         Ok(())
+    }
+
+    /// The settle loop's one decision, apart from its I/O (F95): terminal leader and empty group
+    /// settle; lost wait ownership refuses whatever the deadline; a live group refuses at the
+    /// deadline and waits before it — the deadline itself is the refusing instant.
+    #[test]
+    fn a_settle_step_settles_refuses_or_waits_by_the_poll_alone() {
+        use crate::worker::process::{CleanupPoll, GroupState, WaitOwnership};
+        let poll = |ownership, leader_terminal, group| CleanupPoll {
+            ownership,
+            leader_terminal,
+            exit_code: None,
+            signal: None,
+            group,
+        };
+        let now = Instant::now();
+        let later = now + Duration::from_millis(50);
+        assert_eq!(
+            settle_step(
+                &poll(WaitOwnership::Waitable, true, GroupState::Empty),
+                now,
+                later
+            ),
+            SettleStep::Settled
+        );
+        assert_eq!(
+            settle_step(
+                &poll(WaitOwnership::Lost, true, GroupState::Empty),
+                now,
+                later
+            ),
+            SettleStep::Settled,
+            "an empty group under a terminal leader is settled whatever the ownership"
+        );
+        assert_eq!(
+            settle_step(
+                &poll(WaitOwnership::Lost, true, GroupState::Live),
+                now,
+                later
+            ),
+            SettleStep::Refused
+        );
+        assert_eq!(
+            settle_step(
+                &poll(WaitOwnership::Waitable, false, GroupState::Empty),
+                later,
+                later
+            ),
+            SettleStep::Refused,
+            "the deadline itself refuses"
+        );
+        assert_eq!(
+            settle_step(
+                &poll(WaitOwnership::Waitable, true, GroupState::Live),
+                now,
+                later
+            ),
+            SettleStep::Wait
+        );
+        assert_eq!(
+            settle_step(
+                &poll(WaitOwnership::Waitable, false, GroupState::Unknown),
+                now,
+                later
+            ),
+            SettleStep::Wait
+        );
     }
 }

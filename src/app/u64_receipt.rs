@@ -1246,8 +1246,26 @@ impl From<crate::contracts::receipt::Error> for Refusal {
     }
 }
 
+/// The case's raw evidence: the producer's two streams when it ran, and the reviewed design the
+/// plan names — `validate` credits a case only when its evidence cites the review it was run under
+/// (`consistency::reviewed_case`), and refuses the receipt `CasePlan` when the plan names a review
+/// the case does not cite. Found 2026-09-26 by the independent review of 2c-iii: every runtime
+/// check had composed into that refusal.
+fn raw_evidence_of(execute: Option<&Captured>, plan: &consistency::CasePlan) -> Vec<Ref> {
+    let mut raw_evidence = execute.map_or_else(Vec::new, |captured| {
+        vec![
+            captured.payloads.candidate_stdout.as_ref().clone(),
+            captured.payloads.candidate_stderr.as_ref().clone(),
+        ]
+    });
+    if let Some(reviewed) = &plan.reviewed_design {
+        raw_evidence.push(reviewed.as_ref().clone());
+    }
+    raw_evidence
+}
+
 /// The step labels the workload runs, in order; the last is the producer's.
-const STEPS: [&str; 3] = ["compile-library", "link-driver", "execute-driver"];
+pub(crate) const STEPS: [&str; 3] = ["compile-library", "link-driver", "execute-driver"];
 
 /// Compose and publish the receipt for one check through `sink` (R16 round 2). Every field has
 /// one source; the decision is `decide`'s over the evidence the receipt has, and `validate` runs
@@ -1294,12 +1312,7 @@ pub fn compose(sink: &mut Evidence<'_>, composing: &Composing<'_>) -> Result<Com
             OracleFact::Unavailable,
         )
     };
-    let raw_evidence = execute.map_or_else(Vec::new, |captured| {
-        vec![
-            captured.payloads.candidate_stdout.as_ref().clone(),
-            captured.payloads.candidate_stderr.as_ref().clone(),
-        ]
-    });
+    let raw_evidence = raw_evidence_of(execute, plan);
     let oracle = publisher
         .record(&OracleResultV1 {
             oracle_id: plan.oracle_id.clone(),

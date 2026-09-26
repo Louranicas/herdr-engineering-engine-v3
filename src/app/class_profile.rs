@@ -2286,7 +2286,8 @@ specification = {{ file = "isolation.json", sha256 = "{SPEC}" }}
     }
 
     /// B14a-2c-ii-c · `[grant]` and `[effect]` are required, each field the receipt row's own
-    /// scalar, each file declared with its digest; every refusal named at its key path.
+    /// scalar, each file declared with its digest (the refusals at their key paths are
+    /// `a_grant_or_effect_field_is_refused_at_its_path`'s).
     #[test]
     fn the_grant_and_effect_tables_are_declared_by_digest() -> Result<(), Box<dyn std::error::Error>>
     {

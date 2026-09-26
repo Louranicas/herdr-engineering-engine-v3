@@ -209,8 +209,9 @@ pub enum Refusal {
     BaselineMismatch,
     ProtectedCapture,
     ProtectedMismatch,
-    /// The shared plan could not be published before dispatch (R17 round 2, N2): the kind named,
-    /// the detail in the dispatcher's log.
+    /// The shared plan could not be published before dispatch (R17 round 2, N2): the refusal's
+    /// name is the stop's reason (`plan_pin_compiler`, `plan_closure`, …); its detail and the ids
+    /// of any objects it left in the CAS are not recorded by the stop (N13, open for B14a-4).
     Plan(&'static str),
 }
 
@@ -369,6 +370,7 @@ struct Observation<'a> {
 
 /// What a check's teardown settled and read back, with the two records derived from it.
 struct Settled {
+    seed_verified: bool,
     subjects_verified: bool,
     protected_unchanged: bool,
     cleanup: Cleanup,
@@ -388,7 +390,33 @@ struct Fallback<'a> {
 }
 
 /// A composed receipt with every object its sink holds, or the composer's refusal.
-type Composition = Result<(u64_receipt::Composed, Vec<(Ref, Object)>), u64_receipt::Refusal>;
+type Composition = Result<(u64_receipt::Composed, Vec<(Ref, Object)>), ComposeRefusal>;
+
+/// Why the runtime could not compose a receipt: the host's facts unreadable, no fresh ids for the
+/// obligation rows, or the composer's own refusal — each named in the 3c evidence.
+#[derive(Debug)]
+enum ComposeRefusal {
+    HostFacts,
+    FreshIds,
+    Compose(u64_receipt::Refusal),
+}
+
+impl From<u64_receipt::Refusal> for ComposeRefusal {
+    fn from(refusal: u64_receipt::Refusal) -> Self {
+        Self::Compose(refusal)
+    }
+}
+
+impl ComposeRefusal {
+    /// The refusal as the 3c evidence names it.
+    fn describe(&self) -> String {
+        match self {
+            Self::HostFacts => "host_facts".to_owned(),
+            Self::FreshIds => "fresh_ids".to_owned(),
+            Self::Compose(refusal) => format!("{refusal:?}"),
+        }
+    }
+}
 
 /// What one receipt is composed from, beside the plan: the check's records and run.
 #[derive(Clone, Copy)]
@@ -400,6 +428,7 @@ struct ComposeInputs<'a> {
     captures: &'a [Option<capture::Captured>],
     run: &'a Run,
     root_id: &'a str,
+    seed_verified: bool,
     subjects_verified: bool,
     protected_unchanged: bool,
 }
@@ -865,6 +894,7 @@ impl<C: CandidateSource, V: Verifier> StoreRuntime<'_, C, V> {
                     failed_at,
                 } = capture;
                 let Settled {
+                    seed_verified,
                     subjects_verified,
                     protected_unchanged,
                     cleanup,
@@ -908,6 +938,7 @@ impl<C: CandidateSource, V: Verifier> StoreRuntime<'_, C, V> {
                     captures: &captures,
                     run: &run,
                     root_id: &ids[2],
+                    seed_verified,
                     subjects_verified,
                     protected_unchanged,
                 });
@@ -952,6 +983,7 @@ impl<C: CandidateSource, V: Verifier> StoreRuntime<'_, C, V> {
         window: CheckWindow,
         observed: Instant,
     ) -> Result<Settled, Error> {
+        let seed_verified = self.baseline.readback_source(teardown).is_ok();
         let subjects_verified = applied.readback_source(teardown).is_ok();
         let protected_unchanged = self.protected.readback_source(teardown).is_ok();
         let removed = fs::remove_dir_all(job_root).is_ok() || !job_root.exists();
@@ -959,6 +991,7 @@ impl<C: CandidateSource, V: Verifier> StoreRuntime<'_, C, V> {
         let (cleanup, cleanup_record) = cleanup_of(run, retained_removed);
         let clock = clock_of(window, observed, run.decisive)?;
         Ok(Settled {
+            seed_verified,
             subjects_verified,
             protected_unchanged,
             cleanup,
@@ -976,7 +1009,7 @@ impl<C: CandidateSource, V: Verifier> StoreRuntime<'_, C, V> {
         ids: &[String; 3],
         obligation_ids: &[String; 4],
         window: CheckWindow,
-    ) -> Result<Result<plan::Planned, plan::Refusal>, Error> {
+    ) -> Result<Result<plan::Planned, (plan::Refusal, Vec<String>)>, Error> {
         let begun = self.attempts.get(index).ok_or(Error::Identity)?;
         let parent_run = index
             .checked_sub(1)
@@ -999,11 +1032,17 @@ impl<C: CandidateSource, V: Verifier> StoreRuntime<'_, C, V> {
             parent_run: parent_run.as_deref(),
             obligation_ids,
             wall_ms,
-            deadline: window.teardown_until.min(self.deadline),
+            // Within the cutoff (decision 8): the plan's time is the check's, and the teardown
+            // share is the run's.
+            deadline: window.until.min(self.deadline),
         };
         Ok(self.tasks.with_store(|store| {
             let mut sink = Sink::new(store, self.deadline);
-            plan::check(&mut sink, &inputs)
+            plan::check(&mut sink, &inputs).map_err(|refusal| {
+                // The objects a refused plan left in the CAS, by id (N13): uncited, not backed
+                // up, listed so a reclaim door can find them.
+                (refusal, sink.registered().keys().cloned().collect())
+            })
         })?)
     }
 
@@ -1041,10 +1080,7 @@ impl<C: CandidateSource, V: Verifier> StoreRuntime<'_, C, V> {
                     error: collector::Error::Sink(error),
                 })?;
         }
-        let facts = host::facts().map_err(|_| u64_receipt::Refusal::Publisher {
-            stage: "host facts",
-            error: collector::Error::Bound,
-        })?;
+        let facts = host::facts().map_err(|_| ComposeRefusal::HostFacts)?;
         let unsettled = inputs
             .cleanup
             .obligations()
@@ -1052,12 +1088,10 @@ impl<C: CandidateSource, V: Verifier> StoreRuntime<'_, C, V> {
             .filter(|obligation| obligation.state != RecordSettlement::Settled)
             .count();
         let obligation_ids: [String; 4] =
-            fresh_ids(self.deadline).map_err(|_| u64_receipt::Refusal::Publisher {
-                stage: "obligation ids",
-                error: collector::Error::Bound,
-            })?;
+            fresh_ids(self.deadline).map_err(|_| ComposeRefusal::FreshIds)?;
         let readbacks = self.readbacks_of(
             inputs.run,
+            inputs.seed_verified,
             inputs.subjects_verified,
             inputs.protected_unchanged,
         );
@@ -1093,13 +1127,15 @@ impl<C: CandidateSource, V: Verifier> StoreRuntime<'_, C, V> {
     fn readbacks_of(
         &self,
         run: &Run,
+        seed_verified: bool,
         subjects_verified: bool,
         protected_unchanged: bool,
     ) -> u64_receipt::Readbacks {
-        let launched = run
-            .steps
-            .iter()
-            .all(|step| matches!(step, Step::Completed { .. }));
+        let launched = every_stage_launched(
+            run.steps
+                .iter()
+                .map(|step| matches!(step, Step::Completed { .. })),
+        );
         let pins = launched.then(|| {
             [
                 (&self.tools.compiler.host, self.tools.compiler.sha256),
@@ -1116,7 +1152,7 @@ impl<C: CandidateSource, V: Verifier> StoreRuntime<'_, C, V> {
             .ok()
             .map(|read| read.digest == self.profile.digest);
         u64_receipt::Readbacks {
-            seed: Some(self.baseline.readback_source(self.deadline).is_ok()),
+            seed: Some(seed_verified),
             result: Some(subjects_verified),
             fixtures: Some(protected_unchanged),
             oracle: Some(protected_unchanged),
@@ -1447,9 +1483,18 @@ impl<C: CandidateSource, V: Verifier> driver::Runtime for StoreRuntime<'_, C, V>
             let subject = applied.content_digest().ok_or(Error::Identity)?;
             // The window comes from the reservation the ledger holds now, read in a hold of its
             // own so a second writer is caught before a check is spent (R14.3, R14.4).
-            let reserved_verify_ms = self.tasks.with_store(|store| -> Result<u64, Error> {
-                Ok(self.current(store)?.reserved_verify_ms)
-            })??;
+            let admitted = self
+                .tasks
+                .with_store(|store| -> Result<Option<u64>, Error> {
+                    let head = self.current(store)?;
+                    Ok(admitted_window(head.cancellation, head.reserved_verify_ms))
+                })??;
+            // A cancellation committed since the driver's last read (decision 8, N7): no plan is
+            // published and no check runs; nothing is recorded here — the driver's next
+            // cancellation read stops the task, and `stop_task` records the check as not started.
+            let Some(reserved_verify_ms) = admitted else {
+                return Ok(DriverChecked::Failed { criteria: 0 });
+            };
             if let Some(window) = check_window(
                 Instant::now(),
                 unix_ms_now()?,
@@ -1469,22 +1514,11 @@ impl<C: CandidateSource, V: Verifier> driver::Runtime for StoreRuntime<'_, C, V>
                 let planned = self.plan_check(index, &applied, &ids, &obligation_ids, window)?;
                 let planned = match planned {
                     Ok(planned) => planned,
-                    Err(refusal) => {
+                    Err((refusal, orphans)) => {
                         // A refused plan is a check that never ran (N2): recorded under its own
-                        // schema, `Error`, at the cost the plan spent.
-                        let check = Check {
-                            verdict: VerificationVerdict::Error,
-                            criteria: 0,
-                            evidence: serde_json::to_vec(&serde_json::json!({
-                                "kind": "plan_refused",
-                                "refusal": refusal.name(),
-                                "detail": format!("{refusal:?}"),
-                            }))
-                            .map_err(|_| Error::Identity)?,
-                            schema_id: PLAN_REFUSED_SCHEMA.to_owned(),
-                            used_ms: Some(millis(window.begun.elapsed())),
-                            cleanup_settled: true,
-                        };
+                        // schema, `Error`, at the cost the plan spent, naming its orphans.
+                        let check =
+                            plan_refused_check(&refusal, &orphans, millis(window.begun.elapsed()))?;
                         let recorded = self.record(index, &check, &subject)?;
                         return Ok(Self::checked(recorded, subject));
                     }
@@ -1555,7 +1589,6 @@ impl<C: CandidateSource, V: Verifier> driver::Runtime for StoreRuntime<'_, C, V>
                 // named it (B09b) — and only once the run records it cites are read back against
                 // the ledger's commitment (DS2 §2.6, R15.7): the identified object comes from that
                 // comparison, so acceptance cannot proceed without it.
-                let bytes = store.read_object(&evidence.object, self.deadline)?;
                 let committed = store.committed_check(
                     self.dispatch.principal,
                     uuid(&begun.id)?,
@@ -1576,6 +1609,7 @@ impl<C: CandidateSource, V: Verifier> driver::Runtime for StoreRuntime<'_, C, V>
                 let identity = if evidence.schema_id == ReceiptV1::SCHEMA_ID {
                     cited_receipt(store, self.deadline, &evidence, lookup)?
                 } else {
+                    let bytes = store.read_object(&evidence.object, self.deadline)?;
                     cited(&evidence.schema_id, &evidence.artifact_id, &bytes, lookup)?
                 };
                 let identified = Identified {
@@ -1827,8 +1861,6 @@ fn cleanup_of(run: &Run, retained_removed: bool) -> (Cleanup, RunCleanup) {
     (cleanup, record)
 }
 
-/// Publish the encoded records present, each under its fresh artifact id (`ids[0..4]`) through
-/// its fresh staging id (`ids[4..8]`), in kind order.
 /// The published records as the ledger commits them beside the verification.
 fn store_records(
     published: &[(RunRecordKind, String, Object)],
@@ -1871,6 +1903,8 @@ fn publish_four(
     )
 }
 
+/// Publish the encoded records present, each under its fresh artifact id (`ids[0..4]`) through
+/// its fresh staging id (`ids[4..8]`), in kind order.
 fn publish_records(
     store: &Store,
     deadline: Instant,
@@ -1939,8 +1973,6 @@ fn clock_of(
     .map_err(|_| Error::Identity)
 }
 
-/// The check the runtime records for an observed run: the derived verdict, and evidence under
-/// [`U64_CHECK_SCHEMA`] citing every published record by kind (R15.7).
 /// The check's evidence: the composed receipt with its root object and every carried object cited
 /// when compose succeeded; the 3c evidence naming the refusal when it did not; the 3c evidence as
 /// it was when no receipt was attempted.
@@ -1984,7 +2016,7 @@ fn evidence_for(
                 OutcomeName::of(&run.outcome),
                 failed_at,
                 derived,
-                Some(&format!("{refusal:?}")),
+                Some(&refusal.describe()),
             )?,
             cited_objects,
             None,
@@ -2003,6 +2035,8 @@ fn evidence_for(
     }
 }
 
+/// The check the runtime records for an observed run: the derived verdict, and evidence under
+/// [`U64_CHECK_SCHEMA`] citing every published record by kind (R15.7).
 fn check_of(
     published: &[(RunRecordKind, String, Object)],
     outcome: OutcomeName,
@@ -2162,6 +2196,47 @@ fn cited_receipt<'a>(
         artifact_id: uuid(&evidence.artifact_id)?,
         media_type: CHECK_MEDIA_TYPE,
         schema_id: &evidence.schema_id,
+    })
+}
+
+/// N1 (R17 round 2, decision 10): the toolchain and launcher readbacks may read `Some(true)` only
+/// when EVERY stage of the workload launched — all three steps present and each `Completed`. An
+/// unlaunched run has no steps, and a partial run stops early; neither is that observation.
+fn every_stage_launched(completed: impl ExactSizeIterator<Item = bool>) -> bool {
+    completed.len() == u64_receipt::STEPS.len() && completed.into_iter().all(|step| step)
+}
+
+/// Whether a check may begin (decision 8, N7): never once the task carries a cancellation; else the
+/// verify reservation the ledger holds now.
+const fn admitted_window(cancellation: bool, reserved_verify_ms: u64) -> Option<u64> {
+    if cancellation {
+        None
+    } else {
+        Some(reserved_verify_ms)
+    }
+}
+
+/// The check recorded for a per-check plan the runtime refused (N2): `Error` under
+/// [`PLAN_REFUSED_SCHEMA`], no criteria, the plan's own cost, its cleanup settled (nothing ran),
+/// naming the refusal and the ids of the objects it left in the CAS (N13).
+fn plan_refused_check(
+    refusal: &plan::Refusal,
+    orphans: &[String],
+    used_ms: u64,
+) -> Result<Check, Error> {
+    Ok(Check {
+        verdict: VerificationVerdict::Error,
+        criteria: 0,
+        evidence: serde_json::to_vec(&serde_json::json!({
+            "kind": "plan_refused",
+            "refusal": refusal.name(),
+            "detail": format!("{refusal:?}"),
+            "orphans": orphans,
+        }))
+        .map_err(|_| Error::Identity)?,
+        schema_id: PLAN_REFUSED_SCHEMA.to_owned(),
+        used_ms: Some(used_ms),
+        cleanup_settled: true,
     })
 }
 
@@ -2448,24 +2523,26 @@ mod tests {
 
     /// The commitment varied one field at a time from `records`: the clock's id, digest and size
     /// (taken from or moved off the cleanup's), a cited kind not committed, and no clock at all.
-    fn varied_commitments(records: &Committed) -> [(&'static str, Committed); 5] {
+    fn varied_commitments(
+        records: &Committed,
+    ) -> Result<[(&'static str, Committed); 5], Box<dyn std::error::Error>> {
         use crate::store::Object;
         let index = |kind: RunRecordKind| {
             records
                 .iter()
                 .position(|(held, ..)| *held == kind)
-                .unwrap_or_else(|| unreachable!("{kind:?} committed"))
+                .ok_or(format!("{kind:?} committed"))
         };
         let (clock_at, cleanup_at) = (
-            index(RunRecordKind::RunClock),
-            index(RunRecordKind::RunCleanup),
+            index(RunRecordKind::RunClock)?,
+            index(RunRecordKind::RunCleanup)?,
         );
         let varied = |edit: &dyn Fn(&mut Committed)| {
             let mut varied = records.clone();
             edit(&mut varied);
             varied
         };
-        [
+        Ok([
             (
                 "id swapped",
                 varied(&|v| v[clock_at].1 = records[cleanup_at].1.clone()),
@@ -2492,7 +2569,7 @@ mod tests {
                 "no clock",
                 varied(&|v| v.retain(|(kind, ..)| *kind != RunRecordKind::RunClock)),
             ),
-        ]
+        ])
     }
 
     /// Four receipts over the fixture plan, each committed under `ROOT`: one citing all four
@@ -2604,7 +2681,7 @@ mod tests {
             ),
             (ROOT, CHECK_MEDIA_TYPE, ReceiptV1::SCHEMA_ID)
         );
-        for (label, commitment) in &varied_commitments(&records) {
+        for (label, commitment) in &varied_commitments(&records)? {
             assert!(
                 matches!(
                     cited_receipt(&store, deadline, &sound, lookup(commitment)),
@@ -2649,6 +2726,93 @@ mod tests {
         );
         drop(store);
         std::fs::remove_dir_all(&area)?;
+        Ok(())
+    }
+
+    /// N1 · the toolchain and launcher readbacks need EVERY stage launched: no steps (an
+    /// unlaunched run), one or two completed steps (a partial run) and a refused step are each
+    /// `false`; three completed steps alone are `true`. The review of d062102 (HIGH): `all` on an
+    /// empty run read `true`.
+    #[test]
+    fn every_stage_launched_needs_all_three_steps_completed() {
+        use super::every_stage_launched;
+        assert!(!every_stage_launched([].into_iter()), "no steps");
+        assert!(!every_stage_launched([true].into_iter()), "one step");
+        assert!(!every_stage_launched([true, true].into_iter()), "two steps");
+        assert!(
+            !every_stage_launched([true, false, true].into_iter()),
+            "a refused step"
+        );
+        assert!(!every_stage_launched([true, true, false].into_iter()));
+        assert!(every_stage_launched([true, true, true].into_iter()));
+        assert!(
+            !every_stage_launched([true, true, true, true].into_iter()),
+            "four steps is not the workload"
+        );
+    }
+
+    /// Decision 8 / N7 · a task carrying a cancellation admits no check; otherwise the window is the
+    /// reservation the ledger holds now (two values, off the origin).
+    #[test]
+    fn a_cancelled_task_admits_no_check_window() {
+        use super::admitted_window;
+        assert_eq!(admitted_window(true, 300_000), None);
+        assert_eq!(admitted_window(true, 0), None);
+        assert_eq!(admitted_window(false, 300_000), Some(300_000));
+        assert_eq!(admitted_window(false, 7), Some(7));
+    }
+
+    /// N2, N13 · the plan-refused check, asserted whole over two refusals differing in every field
+    /// (F129): `Error`, no criteria, the plan's cost, cleanup settled, the refusal's name and detail,
+    /// and the orphan ids in order.
+    #[test]
+    fn a_refused_plan_is_recorded_with_its_cost_and_its_orphans()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use super::{PLAN_REFUSED_SCHEMA, plan_refused_check};
+        use crate::app::plan::Refusal;
+        use crate::store::VerificationVerdict;
+        let orphans = [
+            "28fc0000-0000-4000-8000-000000000001".to_owned(),
+            "28fc0000-0000-4000-8000-000000000002".to_owned(),
+        ];
+        for (refusal, orphans, used_ms, name) in [
+            (Refusal::Deadline, &orphans[..], 417_u64, "plan_deadline"),
+            (
+                Refusal::Editable("src/lib.rs"),
+                &orphans[..1],
+                9,
+                "plan_editable",
+            ),
+        ] {
+            let check =
+                plan_refused_check(&refusal, orphans, used_ms).map_err(|e| format!("{e:?}"))?;
+            assert_eq!(
+                (
+                    check.verdict,
+                    check.criteria,
+                    check.schema_id.as_str(),
+                    check.used_ms,
+                    check.cleanup_settled
+                ),
+                (
+                    VerificationVerdict::Error,
+                    0,
+                    PLAN_REFUSED_SCHEMA,
+                    Some(used_ms),
+                    true
+                )
+            );
+            let evidence: serde_json::Value = serde_json::from_slice(&check.evidence)?;
+            assert_eq!(
+                evidence,
+                serde_json::json!({
+                    "kind": "plan_refused",
+                    "refusal": name,
+                    "detail": format!("{refusal:?}"),
+                    "orphans": orphans,
+                })
+            );
+        }
         Ok(())
     }
 }

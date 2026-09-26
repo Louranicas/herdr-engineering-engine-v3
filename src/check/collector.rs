@@ -296,7 +296,8 @@ impl<'a, S: Sink> Publisher<'a, S> {
     /// decision 3): the receipt's `identity.run_id` is then its own artifact id.
     ///
     /// # Errors
-    /// As [`Self::finalize`]; `Identity` when `root_id` is already held by the sink.
+    /// As [`Self::finalize`]; `Identity` when `root_id` is already held by the sink or is not the
+    /// plan's `identity.run_id`.
     pub fn finalize_as(
         &mut self,
         prepared: &consistency::Prepared,
@@ -314,6 +315,14 @@ impl<'a, S: Sink> Publisher<'a, S> {
         observed: Observed,
         root_id: Option<Id>,
     ) -> Result<Finalized, Error> {
+        // The root is the run: a caller-minted root id must be the identity's `run_id` (R17 round
+        // 2, decision 3), refused at this door rather than at accept.
+        if root_id
+            .as_ref()
+            .is_some_and(|id| *id != prepared.identity.run_id)
+        {
+            return Err(Error::Identity);
+        }
         let reasons = decided
             .reasons()
             .iter()
