@@ -51,8 +51,10 @@ pub struct RuntimeClock {
     pub origin: Instant,
     /// The origin as unix milliseconds, read once by the runtime.
     pub origin_unix_ms: u64,
-    /// The end of the attempt's work window (B14a-1c: the reservation read at begin, less the
-    /// teardown share).
+    /// The end of the observation's work window — the attempt's for a settle (B14a-1c: the work
+    /// reservation read at begin, less the teardown share), the check's for a check (B14a-3b:
+    /// `CheckWindow::until`). Which one is fixed by `store::Committed::observation()`, never by
+    /// this field alone (R14, amending R13.3: the schema's `work_cutoff_ms` is pinned).
     pub work_until: Instant,
     /// The task deadline.
     pub deadline: Instant,

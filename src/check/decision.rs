@@ -8,6 +8,11 @@ use std::collections::{BTreeMap, BTreeSet};
 
 pub const MAX_CASES: usize = 4096;
 
+/// How long after a stop intent a run may still be observed before its cleanup is late (RC04's
+/// ten-second cutoff). The runtime's check window keeps this much back for the check's own
+/// teardown (`app::runtime::CHECK_TEARDOWN`), so the two are one number, spelled here.
+pub const CLEANUP_GRACE_MS: u64 = 10_000;
+
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum Identity {
     Seed,
@@ -932,7 +937,7 @@ fn timing(input: &Input<'_>, a: &mut Assessment) -> Option<VerdictV1State> {
         || [t.timeout_intent_ms, t.cancellation_intent_ms]
             .into_iter()
             .flatten()
-            .any(|at| t.observed_ms.saturating_sub(at) > 10_000)
+            .any(|at| t.observed_ms.saturating_sub(at) > CLEANUP_GRACE_MS)
     {
         a.add(
             ReasonKind::CleanupLate,

@@ -10,8 +10,8 @@
 use habitat_engine::actions::control::{TaskRequest, Tasks};
 use habitat_engine::app::class_profile::{self, Profile};
 use habitat_engine::app::runtime::{
-    Candidate, CandidateSource, Check, Dispatch, Error as RuntimeError, Outcome, Previous, Refusal,
-    Verifier, dispatch,
+    CHECK_TEARDOWN, Candidate, CandidateSource, Check, CheckWindow, Dispatch,
+    Error as RuntimeError, Outcome, Previous, Refusal, Verifier, dispatch,
 };
 use habitat_engine::app::tasks::StoreTasks;
 use habitat_engine::check::consistency::U64_CRITERIA;
@@ -43,8 +43,9 @@ use super::tasks::{EPOCH, GENERATION, Scratch};
 type Outcome_ = Result<(), Box<dyn Error>>;
 /// What the candidate source was handed, per request.
 type Asked = Rc<RefCell<Vec<Option<Previous>>>>;
-/// What the verifier was handed, per check: the snapshot's content digest and its editable bytes.
-type Handed = Rc<RefCell<Vec<(String, Vec<u8>, Instant)>>>;
+/// What the verifier was handed, per check: the snapshot's content digest, its editable bytes,
+/// the check window, and when the double was called (a model, not a script: F101).
+type Handed = Rc<RefCell<Vec<(String, Vec<u8>, CheckWindow, Instant)>>>;
 
 const TASK: &str = "28f10000-0000-4000-8000-000000000001";
 const KEY: &str = "28f10000-0000-4000-8000-000000000002";
@@ -96,6 +97,7 @@ struct Shape<'a> {
     /// A workspace directory removed after its digest is declared, so its capture fails.
     removed: Option<&'static str>,
     teardown_ms: u64,
+    verify_ms: u64,
 }
 
 impl Default for Shape<'_> {
@@ -108,6 +110,7 @@ impl Default for Shape<'_> {
             protected_digest: None,
             removed: None,
             teardown_ms: 1_000,
+            verify_ms: 300_000,
         }
     }
 }
@@ -260,7 +263,7 @@ fn rig(shape: &Shape<'_>) -> Result<Rig, Box<dyn Error>> {
                 allocation: Allocation {
                     limit_ms: 1_200_000,
                     work_ms: shape.work_ms,
-                    verify_ms: 300_000,
+                    verify_ms: shape.verify_ms,
                 },
                 workspace_id: id(WORKSPACE),
             },
@@ -308,7 +311,7 @@ struct Oracle<'h> {
 }
 
 impl Verifier for Oracle<'_> {
-    fn check(&mut self, subject: &Snapshot, deadline: Instant) -> Check {
+    fn check(&mut self, subject: &Snapshot, window: CheckWindow) -> Check {
         let editable = subject
             .entries()
             .find(|entry| entry.path == "src/lib.rs")
@@ -322,7 +325,8 @@ impl Verifier for Oracle<'_> {
         self.seen.borrow_mut().push((
             subject.content_digest().unwrap_or_default(),
             editable,
-            deadline,
+            window,
+            Instant::now(),
         ));
         if let Some(hook) = self.hook.as_mut() {
             hook();
@@ -450,16 +454,53 @@ fn verifications(rig: &Rig) -> Result<Vec<Vec<String>>, Box<dyn Error>> {
     )
 }
 
+/// R14 · each check was handed its own window: begun after its candidate was requested and no later
+/// than the call; the cutoff is the verify reservation the ledger held THEN less the teardown share
+/// (`reserved[i]`: 300,000 ms for a first check, less the first check's cost for the second, so a
+/// window read once at dispatch cannot pass); the teardown share runs to the cutoff plus
+/// `CHECK_TEARDOWN` (the task deadline is far).
+fn assert_windows(
+    handed: &[(String, Vec<u8>, CheckWindow, Instant)],
+    requested: &[Instant],
+    reserved: [u64; 2],
+) {
+    assert_eq!((handed.len(), requested.len()), (2, 2));
+    let teardown_ms = u64::try_from(CHECK_TEARDOWN.as_millis()).unwrap_or(u64::MAX);
+    for (index, reserved_ms) in reserved.into_iter().enumerate() {
+        let (_, _, window, called) = &handed[index];
+        assert!(
+            requested[index] <= window.begun && window.begun <= *called,
+            "check {index}"
+        );
+        assert_eq!(
+            window.until.duration_since(window.begun),
+            Duration::from_millis(reserved_ms - teardown_ms),
+            "check {index}"
+        );
+        assert_eq!(
+            window.teardown_until,
+            window.until + CHECK_TEARDOWN,
+            "check {index}"
+        );
+    }
+}
+
 /// B14a-1c · fail → `repair_pending` → verifying → accepted. Two attempts, each bound to the same
 /// three digests; each verification's subject is what the verifier double was handed; the second
 /// candidate request was handed the first check's verdict and evidence.
 #[test]
 fn a_failed_check_is_repaired_and_the_second_attempt_is_accepted() -> Outcome_ {
     let rig = rig(&Shape::default())?;
-    let (source, asked) = script(vec![
+    let (mut source, asked) = script(vec![
         Candidate::Replacement(FIRST.to_vec()),
         Candidate::Replacement(SECOND.to_vec()),
     ]);
+    // When each candidate was requested: after its attempt began, before its check's window.
+    let requested: Rc<RefCell<Vec<Instant>>> = Rc::new(RefCell::new(Vec::new()));
+    let requested_at = Rc::clone(&requested);
+    source.hook = Some(Box::new(move || {
+        requested_at.borrow_mut().push(Instant::now());
+    }));
     let (verifier, handed) = oracle(vec![
         check(VerificationVerdict::Failed, 0, b"first: wrong"),
         check(VerificationVerdict::Passed, 1, b"second: exact"),
@@ -472,17 +513,14 @@ fn a_failed_check_is_repaired_and_the_second_attempt_is_accepted() -> Outcome_ {
     assert_eq!(
         handed
             .iter()
-            .map(|(_, bytes, _)| bytes.as_slice())
+            .map(|(_, bytes, _, _)| bytes.as_slice())
             .collect::<Vec<_>>(),
         [FIRST, SECOND],
         "the verifier was handed each applied candidate, in order"
     );
     assert_ne!(handed[0].0, handed[1].0);
-    // Each check was handed the task's deadline: in the future when read, within the task limit.
-    for (_, _, handed_deadline) in handed.iter() {
-        assert!(*handed_deadline <= Instant::now() + habitat_engine::task::TASK_LIMIT);
-        assert!(*handed_deadline > Instant::now());
-    }
+    // R14 · each check was handed its own window (asserted whole in `assert_windows`).
+    assert_windows(&handed, &requested.borrow(), [300_000, 300_000 - 7]);
     assert_eq!(
         rows(
             &rig,
@@ -654,13 +692,9 @@ fn a_refused_candidate_is_recorded_failed_without_a_verifier_call() -> Outcome_ 
     Ok(())
 }
 
-/// B14a-1c · each pre-dispatch refusal stops the task by its name through `finish_preparation`,
-/// with no attempt row and no source or verifier call (B14a-R1.4d, R1.5, R2.5).
-#[test]
-fn pre_dispatch_refusals_stop_the_task_before_any_attempt() -> Outcome_ {
-    let other_criteria = format!("sha256:{}", "c".repeat(64));
-    let wrong = format!("sha256:{}", "d".repeat(64));
-    let cases: [(Shape<'_>, u64, Refusal); 10] = [
+/// Every pre-dispatch refusal, each reached by one shape or capture share (R2.5 order).
+fn refusal_cases<'a>(other_criteria: &'a str, wrong: &'a str) -> [(Shape<'a>, u64, Refusal); 11] {
+    [
         (
             Shape {
                 work_ms: 0,
@@ -680,7 +714,7 @@ fn pre_dispatch_refusals_stop_the_task_before_any_attempt() -> Outcome_ {
         ),
         (
             Shape {
-                protected_digest: Some(&wrong),
+                protected_digest: Some(wrong),
                 ..Shape::default()
             },
             5_000,
@@ -704,13 +738,22 @@ fn pre_dispatch_refusals_stop_the_task_before_any_attempt() -> Outcome_ {
         ),
         (
             Shape {
-                criteria: other_criteria,
+                criteria: other_criteria.to_owned(),
                 ..Shape::default()
             },
             5_000,
             Refusal::CriteriaNotClass,
         ),
         (Shape::default(), 600_001, Refusal::ReservationTooSmall),
+        // R14.2: a verify reservation that holds nothing past the check's teardown share.
+        (
+            Shape {
+                verify_ms: 10_000,
+                ..Shape::default()
+            },
+            5_000,
+            Refusal::VerifyReservationTooSmall,
+        ),
         // Only the teardown share makes this one too small: 5,500 ≤ 5,000 capture + 1,000 teardown.
         (
             Shape {
@@ -730,13 +773,22 @@ fn pre_dispatch_refusals_stop_the_task_before_any_attempt() -> Outcome_ {
         ),
         (
             Shape {
-                baseline_digest: Some(&wrong),
+                baseline_digest: Some(wrong),
                 ..Shape::default()
             },
             5_000,
             Refusal::BaselineMismatch,
         ),
-    ];
+    ]
+}
+
+/// B14a-1c · each pre-dispatch refusal stops the task by its name through `finish_preparation`,
+/// with no attempt row and no source or verifier call (B14a-R1.4d, R1.5, R2.5).
+#[test]
+fn pre_dispatch_refusals_stop_the_task_before_any_attempt() -> Outcome_ {
+    let other_criteria = format!("sha256:{}", "c".repeat(64));
+    let wrong = format!("sha256:{}", "d".repeat(64));
+    let cases = refusal_cases(&other_criteria, &wrong);
     for (shape, capture_ms, refusal) in cases {
         let rig = rig(&shape)?;
         let (source, asked) = script(vec![Candidate::Replacement(FIRST.to_vec())]);
@@ -1008,6 +1060,65 @@ fn a_check_past_the_verify_reservation_is_an_unknown_cost() -> Outcome_ {
     );
     assert_eq!(state(&rig)?, "effect_unknown");
     assert_eq!(verifications(&rig)?[0][2], "NULL");
+    Ok(())
+}
+
+/// R14.1 · a verify reservation with no time past the check's teardown share is a check the
+/// runtime records as not run — a timeout at no cost under its own schema — never a stop that
+/// strands the task. The first check spends 290,000 of 300,000 ms; the 10,000 left are exactly the
+/// teardown share, so the second attempt's window is empty: the verifier is called once, the task
+/// fails as `VerifierTimeout`.
+#[test]
+fn an_empty_check_window_is_recorded_as_a_timeout_at_no_cost() -> Outcome_ {
+    let rig = rig(&Shape::default())?;
+    let principal = owner();
+    let (source, _) = script(vec![
+        Candidate::Replacement(FIRST.to_vec()),
+        Candidate::Replacement(SECOND.to_vec()),
+    ]);
+    let mut slow = check(VerificationVerdict::Failed, 0, b"first: wrong, slow");
+    slow.used_ms = Some(290_000);
+    let (verifier, handed) = oracle(vec![slow]);
+    let outcome = run(&rig, &principal, source, verifier, 5_000).map_err(|e| format!("{e:?}"))?;
+    assert_eq!(
+        outcome,
+        Outcome::Driven(Driven::Stopped(StopReason::VerifierTimeout))
+    );
+    assert_eq!(state(&rig)?, "failed");
+    let handed = handed.borrow();
+    assert_eq!(
+        handed.len(),
+        1,
+        "the verifier was not called for an empty window"
+    );
+    let found = verifications(&rig)?;
+    assert_eq!(found.len(), 2);
+    assert_eq!(
+        found[0],
+        vec![
+            "failed".to_owned(),
+            handed[0].0.clone(),
+            "290000".to_owned(),
+            "application/json".to_owned(),
+            "hee3.scripted-check/1".to_owned(),
+            "0000000000000000".to_owned(),
+        ]
+    );
+    assert_eq!(found[1][..1].to_vec(), vec!["timeout".to_owned()]);
+    assert_eq!(
+        found[1][2..].to_vec(),
+        vec![
+            "0".to_owned(),
+            "application/json".to_owned(),
+            "hee3.check-window-empty/1".to_owned(),
+            "0000000000000000".to_owned(),
+        ]
+    );
+    assert_ne!(found[1][1], handed[0].0, "the second attempt's own subject");
+    assert_eq!(
+        rows(&rig, "SELECT reason FROM task_stops WHERE task_id=?")?,
+        vec![vec!["verifier_timeout".to_owned()]]
+    );
     Ok(())
 }
 

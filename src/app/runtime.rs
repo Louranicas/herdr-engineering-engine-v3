@@ -24,6 +24,7 @@ use crate::store::{
 };
 use crate::task::LoopRefusal;
 use crate::task::driver::{self, Acceptance, Checked as DriverChecked, StopReason, Work};
+use crate::worker::resources::TERM_GRACE;
 use crate::worker::workspace::{self, FileIdentity, Snapshot};
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -70,14 +71,63 @@ const CHECK_MEDIA_TYPE: &str = "application/json";
 const IDLE_VERIFICATION_SCHEMA: &str = "hee3.idle-verification/1";
 /// The schema of the runtime's own class check of a refused candidate (B14a-R2.4).
 const REFUSED_CANDIDATE_SCHEMA: &str = "hee3.refused-candidate/1";
+/// The schema of the runtime's own record of a check it did not run: the verify reservation held
+/// no time past the check's teardown share (B14a-3b, R14.1).
+const CHECK_WINDOW_EMPTY_SCHEMA: &str = "hee3.check-window-empty/1";
 /// The schema of a task stop's evidence — the `kind` the stop body names.
 const TASK_STOP_SCHEMA: &str = "hee3.task-stop/1";
 /// The schema of a pre-dispatch refusal's evidence — the `kind` its body names.
 const PRE_DISPATCH_REFUSAL_SCHEMA: &str = "hee3.pre-dispatch-refusal/1";
 
-/// The check of an applied candidate. It receives the frozen snapshot, never a path to mutate.
+/// The check of an applied candidate. It receives the frozen snapshot, never a path to mutate,
+/// and the window it may run in (B14a-3b): `until` is its cutoff, `teardown_until` how long its
+/// own teardown may take after it.
 pub trait Verifier {
-    fn check(&mut self, subject: &Snapshot, deadline: Instant) -> Check;
+    fn check(&mut self, subject: &Snapshot, window: CheckWindow) -> Check;
+}
+
+/// What the check keeps back for its own teardown after its cutoff — stopping the scope
+/// (`TERM_GRACE`), the subject readbacks and the scratch release. One number with RC04's
+/// cleanup grace, so a check that honours its window is never late by construction (R14.2).
+pub const CHECK_TEARDOWN: Duration = Duration::from_secs(10);
+const _: () = assert!(CHECK_TEARDOWN.as_millis() >= TERM_GRACE.as_millis());
+const _: () =
+    assert!(CHECK_TEARDOWN.as_millis() == crate::check::decision::CLEANUP_GRACE_MS as u128);
+
+/// The window one check may run in (R14): from `begun`, its cutoff `until` — the verify
+/// reservation less [`CHECK_TEARDOWN`], or the task deadline less the same, whichever is first —
+/// and `teardown_until`, how long its teardown may run past the cutoff within the task deadline.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CheckWindow {
+    /// When the window was computed: the check's own origin.
+    pub begun: Instant,
+    /// The check's cutoff.
+    pub until: Instant,
+    /// The end of the check's teardown share.
+    pub teardown_until: Instant,
+}
+
+/// The check window from the verify reservation the ledger holds now, or `None` when no time is
+/// left for a check after its teardown share (R14.1: the runtime then records the check as not
+/// run). Pure over its arguments, so every branch is reachable by choosing them (F95).
+#[must_use]
+pub fn check_window(
+    now: Instant,
+    reserved_verify_ms: u64,
+    task_deadline: Instant,
+) -> Option<CheckWindow> {
+    let lease = reserved_verify_ms.checked_sub(millis(CHECK_TEARDOWN))?;
+    let until = task_deadline
+        .checked_sub(CHECK_TEARDOWN)?
+        .min(now + Duration::from_millis(lease));
+    if until <= now {
+        return None;
+    }
+    Some(CheckWindow {
+        begun: now,
+        until,
+        teardown_until: task_deadline.min(until + CHECK_TEARDOWN),
+    })
 }
 
 /// What the dispatcher decides for one task (B14a-R1.7): the roster record and selections the
@@ -104,6 +154,8 @@ pub enum Refusal {
     CriteriaNotClass,
     ReservationEmpty,
     ReservationTooSmall,
+    /// The verify reservation holds nothing past the check's teardown share (R14.2).
+    VerifyReservationTooSmall,
     WorkspaceNotDeclared,
     BaselineCapture,
     BaselineMismatch,
@@ -118,6 +170,7 @@ impl Refusal {
             Self::CriteriaNotClass => "criteria_not_class",
             Self::ReservationEmpty => "reservation_empty",
             Self::ReservationTooSmall => "reservation_too_small",
+            Self::VerifyReservationTooSmall => "verify_reservation_too_small",
             Self::WorkspaceNotDeclared => "workspace_not_declared",
             Self::BaselineCapture => "baseline_capture",
             Self::BaselineMismatch => "baseline_mismatch",
@@ -328,6 +381,11 @@ fn prepare(
     // reservation that cannot hold both and leave work time is refused before any capture.
     if head.reserved_work_ms <= dispatch.capture_ms.saturating_add(dispatch.teardown_ms) {
         return Err(Refusal::ReservationTooSmall);
+    }
+    // A check keeps its teardown share back from the verify reservation the same way (R14.2): one
+    // that could never hold a check is refused here, before any capture.
+    if head.reserved_verify_ms <= millis(CHECK_TEARDOWN) {
+        return Err(Refusal::VerifyReservationTooSmall);
     }
     let workspace: &Workspace = head
         .workspace_id
@@ -851,7 +909,30 @@ impl<C: CandidateSource, V: Verifier> driver::Runtime for StoreRuntime<'_, C, V>
         } else {
             let applied = begun.applied.as_ref().ok_or(Error::Identity)?;
             let subject = applied.content_digest().ok_or(Error::Identity)?;
-            (self.verifier.check(applied, self.deadline), subject)
+            // The window comes from the reservation the ledger holds now, read in a hold of its
+            // own so a second writer is caught before a check is spent (R14.3, R14.4).
+            let reserved_verify_ms = self.tasks.with_store(|store| -> Result<u64, Error> {
+                Ok(self.current(store)?.reserved_verify_ms)
+            })??;
+            let check = match check_window(Instant::now(), reserved_verify_ms, self.deadline) {
+                Some(window) => self.verifier.check(applied, window),
+                // No time for a check after its teardown share: the runtime records that it did
+                // not run, as a timeout at no cost, so the task fails rather than strands (R14.1).
+                None => Check {
+                    verdict: VerificationVerdict::Timeout,
+                    criteria: 0,
+                    evidence: serde_json::to_vec(&serde_json::json!({
+                        "kind": "check_window_empty",
+                        "reserved_verify_ms": reserved_verify_ms,
+                        "teardown_ms": millis(CHECK_TEARDOWN),
+                    }))
+                    .map_err(|_| Error::Identity)?,
+                    schema_id: CHECK_WINDOW_EMPTY_SCHEMA.to_owned(),
+                    used_ms: Some(0),
+                    cleanup_settled: true,
+                },
+            };
+            (check, subject)
         };
         let (object, artifact_id, verdict, reconciled) = self.record(index, &check, &subject)?;
         // An unknown cost or unsettled cleanup is an obligation the stop must keep (review H1).
@@ -1031,7 +1112,9 @@ fn millis(duration: Duration) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{declared_criteria, preparation_charge, teardown_deadline};
+    use super::{
+        CHECK_TEARDOWN, check_window, declared_criteria, preparation_charge, teardown_deadline,
+    };
     use std::time::{Duration, Instant};
 
     /// Review MEDIUM-1 · the charge is the observed time below the reservation and the reservation
@@ -1065,5 +1148,41 @@ mod tests {
     #[test]
     fn the_class_declares_exactly_its_criteria_bits() {
         assert_eq!(declared_criteria(), 1);
+    }
+
+    /// R14 · the check window off the origin: the reservation ends first (`until − now == R − T`);
+    /// the deadline cuts (`until == deadline − T`, teardown to the deadline); `R == T` and `R < T`
+    /// leave no window, separating `<=` from `<`; a deadline inside the teardown leaves none.
+    #[test]
+    fn a_check_window_keeps_the_teardown_on_both_arms_and_refuses_an_empty_one() {
+        let now = Instant::now();
+        let teardown_ms = u64::try_from(CHECK_TEARDOWN.as_millis()).unwrap_or(u64::MAX);
+        let far = now + Duration::from_mins(20);
+        let window = check_window(now, 300_000, far).unwrap();
+        assert_eq!(
+            (window.begun, window.until, window.teardown_until),
+            (
+                now,
+                now + Duration::from_millis(300_000 - teardown_ms),
+                now + Duration::from_millis(300_000)
+            )
+        );
+        let near = now + Duration::from_secs(45);
+        let cut = check_window(now, 300_000, near).unwrap();
+        assert_eq!(
+            (cut.begun, cut.until, cut.teardown_until),
+            (now, near.checked_sub(CHECK_TEARDOWN).unwrap(), near)
+        );
+        assert_eq!(check_window(now, teardown_ms, far), None, "R == T");
+        assert_eq!(check_window(now, teardown_ms - 1, far), None, "R < T");
+        assert_eq!(
+            check_window(now, teardown_ms + 1, far).map(|w| w.until),
+            Some(now + Duration::from_millis(1))
+        );
+        assert_eq!(
+            check_window(now, 300_000, now + CHECK_TEARDOWN),
+            None,
+            "deadline inside the teardown"
+        );
     }
 }
