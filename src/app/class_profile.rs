@@ -1827,11 +1827,18 @@ review = {{ artifact_id = "{REV_ID}", sha256 = "{REV}", byte_length = {REV_LEN},
         let graph = read_reviewed_closure(&profile, Which::Review, &root_ref)
             .map_err(|e| format!("{e:?}"))?;
         assert_eq!(graph.object_count(), fixture.objects.len());
-        // A root the profile does not name.
+        // A root the profile does not name: by digest, and by artifact id alone (the reference is
+        // compared whole — the receipt cites the id, so a substituted id is a substituted record).
         let mut other = root_ref.clone();
         other.sha256 = fixture.objects[1].reference.sha256.clone();
         assert!(matches!(
             read_reviewed_closure(&profile, Which::Review, &other),
+            Err(ReviewedError::Mismatch)
+        ));
+        let mut other_id = root_ref.clone();
+        other_id.artifact_id = fixture.objects[1].reference.artifact_id.clone();
+        assert!(matches!(
+            read_reviewed_closure(&profile, Which::Review, &other_id),
             Err(ReviewedError::Mismatch)
         ));
         // A member removed: named at its reference.
