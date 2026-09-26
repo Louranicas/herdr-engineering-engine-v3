@@ -1190,6 +1190,26 @@ mod tests {
             })
         ));
         assert!(!plan_root.exists());
+        // The shim's pin, which no probe re-hashes: the read under the pin is the only door.
+        let mut wrong_shim = Tools {
+            bwrap: f.tools.bwrap.clone(),
+            compiler: f.tools.compiler.clone(),
+            shim: f.tools.shim.clone(),
+            runtime_files: Vec::new(),
+            namespace_directories: Vec::new(),
+        };
+        wrong_shim.shim.sha256[0] ^= 0x01;
+        assert!(matches!(
+            shared(
+                &mut sink,
+                &Inputs {
+                    tools: &wrong_shim,
+                    ..base
+                }
+            ),
+            Err(Refusal::Pin { which: "shim", .. })
+        ));
+        assert!(!plan_root.exists());
         let unprotected = Snapshot::capture(&tree(&f.root, "empty", &[]), &[], deadline())
             .map_err(|e| format!("{e:?}"))?;
         assert!(matches!(
