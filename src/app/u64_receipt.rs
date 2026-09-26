@@ -866,6 +866,29 @@ mod tests {
             ),
             Err(Refusal::Evaluation)
         ));
+        // ... and the converse: a matched outcome with no vector counts.
+        let matched = crate::app::run_records::RunOutcome::of(
+            &crate::app::workload::Run::unlaunched(crate::app::workload::Outcome::Matched(
+                crate::check::u64_oracle::Evaluation {
+                    vectors: Vec::new(),
+                    matched: 1,
+                    failed: 0,
+                },
+            )),
+            &[],
+        )
+        .expect("an unlaunched run pairs zero steps with zero captures");
+        assert!(matches!(
+            compose(
+                sink,
+                &Composing {
+                    outcome: &matched,
+                    evaluation: None,
+                    ..*composing
+                }
+            ),
+            Err(Refusal::Evaluation)
+        ));
         // A plan with no case is refused by name.
         let mut planless = composing.prepared.clone();
         planless.cases.clear();
