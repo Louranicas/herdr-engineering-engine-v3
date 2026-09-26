@@ -41,14 +41,13 @@ use habitat_engine::task::driver::{Outcome as Driven, StopReason};
 use habitat_engine::worker::native::FULL_FILE;
 use habitat_engine::worker::resources::Scope;
 use habitat_engine::worker::workspace::Snapshot;
-use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::error::Error;
 use std::fs::{self, DirBuilder};
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
-use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, PoisonError, mpsc};
 use std::time::{Duration, Instant};
 
 use super::tasks::{EPOCH, GENERATION, Scratch};
@@ -72,10 +71,23 @@ struct Seen {
     recipe: String,
     workspace: String,
 }
-type Asked = Rc<RefCell<Vec<Seen>>>;
+type Asked = Arc<Mutex<Vec<Seen>>>;
 /// What the verifier was handed, per check: the snapshot's content digest, its editable bytes,
 /// the check window, and when the double was called (a model, not a script: F101).
-type Handed = Rc<RefCell<Vec<(String, Vec<u8>, CheckWindow, Instant)>>>;
+type Handed = Arc<Mutex<Vec<(String, Vec<u8>, CheckWindow, Instant)>>>;
+
+/// What a double recorded so far, copied out (a poisoned log still yields what it holds: a double
+/// that panicked mid-record must not hide what it saw before).
+fn taken<T: Clone>(log: &Mutex<Vec<T>>) -> Vec<T> {
+    log.lock().unwrap_or_else(PoisonError::into_inner).clone()
+}
+
+/// Record one value in a double's log; returns how many it now holds.
+fn record<T>(log: &Mutex<Vec<T>>, value: T) -> usize {
+    let mut log = log.lock().unwrap_or_else(PoisonError::into_inner);
+    log.push(value);
+    log.len()
+}
 
 const TASK: &str = "28f10000-0000-4000-8000-000000000001";
 const KEY: &str = "28f10000-0000-4000-8000-000000000002";
@@ -397,7 +409,7 @@ fn rig(shape: &Shape<'_>) -> Result<Rig, Box<dyn Error>> {
 struct Script<'h> {
     answers: VecDeque<Candidate>,
     seen: Asked,
-    hook: Option<Box<dyn FnMut() + 'h>>,
+    hook: Option<Box<dyn FnMut() + Send + 'h>>,
     /// A worker settle to attach to every answer — a script that claims a provider was asked (the
     /// identity-refusal proof hands one naming another attempt).
     settle: Option<Settle>,
@@ -405,14 +417,17 @@ struct Script<'h> {
 
 impl CandidateSource for Script<'_> {
     fn next(&mut self, ask: &habitat_engine::app::runtime::Ask<'_>) -> SourceAnswer {
-        self.seen.borrow_mut().push(Seen {
-            previous: ask.previous.cloned(),
-            attempt: ask.attempt.as_str().to_owned(),
-            generation: ask.generation.value(),
-            invocation: ask.invocation.as_str().to_owned(),
-            recipe: ask.recipe.as_str().to_owned(),
-            workspace: ask.workspace.as_str().to_owned(),
-        });
+        self.seen
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(Seen {
+                previous: ask.previous.cloned(),
+                attempt: ask.attempt.as_str().to_owned(),
+                generation: ask.generation.value(),
+                invocation: ask.invocation.as_str().to_owned(),
+                recipe: ask.recipe.as_str().to_owned(),
+                workspace: ask.workspace.as_str().to_owned(),
+            });
         if let Some(hook) = self.hook.as_mut() {
             hook();
         }
@@ -438,7 +453,7 @@ struct Answer {
 struct Oracle<'h> {
     answers: VecDeque<Answer>,
     seen: Handed,
-    hook: Option<Box<dyn FnMut() + 'h>>,
+    hook: Option<Box<dyn FnMut() + Send + 'h>>,
 }
 
 impl Verifier for Oracle<'_> {
@@ -454,12 +469,15 @@ impl Verifier for Oracle<'_> {
                 habitat_engine::worker::workspace::Content::Directory => None,
             })
             .unwrap_or_default();
-        self.seen.borrow_mut().push((
-            plan.subject.content_digest().unwrap_or_default(),
-            editable,
-            plan.window,
-            Instant::now(),
-        ));
+        self.seen
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push((
+                plan.subject.content_digest().unwrap_or_default(),
+                editable,
+                plan.window,
+                Instant::now(),
+            ));
         if let Some(hook) = self.hook.as_mut() {
             hook();
         }
@@ -521,11 +539,11 @@ fn cancelled_run() -> Answer {
 }
 
 fn script<'h>(answers: Vec<Candidate>) -> (Script<'h>, Asked) {
-    let seen = Rc::new(RefCell::new(Vec::new()));
+    let seen = Arc::new(Mutex::new(Vec::new()));
     (
         Script {
             answers: answers.into(),
-            seen: Rc::clone(&seen),
+            seen: Arc::clone(&seen),
             hook: None,
             settle: None,
         },
@@ -534,11 +552,11 @@ fn script<'h>(answers: Vec<Candidate>) -> (Script<'h>, Asked) {
 }
 
 fn oracle<'h>(answers: Vec<Answer>) -> (Oracle<'h>, Handed) {
-    let seen = Rc::new(RefCell::new(Vec::new()));
+    let seen = Arc::new(Mutex::new(Vec::new()));
     (
         Oracle {
             answers: answers.into(),
-            seen: Rc::clone(&seen),
+            seen: Arc::clone(&seen),
             hook: None,
         },
         seen,
@@ -680,7 +698,7 @@ fn a_settle_naming_another_attempt_is_refused_before_any_write() -> Outcome_ {
         matches!(outcome, Err(RuntimeError::Identity)),
         "{outcome:?}"
     );
-    assert!(handed.borrow().is_empty(), "no check was asked");
+    assert!(taken(&handed).is_empty(), "no check was asked");
     assert_eq!(
         rows(
             &rig,
@@ -705,23 +723,23 @@ fn a_settle_naming_another_attempt_is_refused_before_any_write() -> Outcome_ {
 
 /// A provider double for the dispatcher (F101: a model, not a script): it records every task it was
 /// asked to open, serves a scripted source/verifier pair per open in order, and raises the stop flag
-/// once it has served `stop_after` pairs — the dispatcher then ends its wait `Drained`.
-struct ScriptedProvider<'h> {
-    pairs: VecDeque<(Script<'h>, Oracle<'h>)>,
-    opened: Rc<RefCell<Vec<String>>>,
-    stop: &'h AtomicBool,
+/// once it has served `stop_after` pairs — the dispatcher then ends its wait `Drained`. It owns all
+/// it holds (`Send + 'static`), so the dispatcher runs on a thread of its own (R21 N21).
+struct ScriptedProvider {
+    pairs: VecDeque<(Script<'static>, Oracle<'static>)>,
+    opened: Arc<Mutex<Vec<String>>>,
+    stop: Arc<AtomicBool>,
     stop_after: usize,
 }
 
-impl<'h> dispatcher::Provider for ScriptedProvider<'h> {
-    type Source = Script<'h>;
-    type Verifier = Oracle<'h>;
+impl dispatcher::Provider for ScriptedProvider {
+    type Source = Script<'static>;
+    type Verifier = Oracle<'static>;
     fn open(
         &mut self,
         next: &habitat_engine::store::Dispatchable,
-    ) -> Result<(Script<'h>, Oracle<'h>), dispatcher::Unavailable> {
-        self.opened.borrow_mut().push(next.task.clone());
-        if self.opened.borrow().len() >= self.stop_after {
+    ) -> Result<(Script<'static>, Oracle<'static>), dispatcher::Unavailable> {
+        if record(&self.opened, next.task.clone()) >= self.stop_after {
             self.stop.store(true, Ordering::SeqCst);
         }
         self.pairs
@@ -730,99 +748,200 @@ impl<'h> dispatcher::Provider for ScriptedProvider<'h> {
     }
 }
 
-/// The budget every dispatcher proof runs under (F102, closure H6): past it the watchdog raises the
-/// stop and wakes the wait, and the proof FAILS on `timed_out` instead of hanging.
-const DISPATCHER_BUDGET: Duration = Duration::from_secs(20);
-
-/// Run the dispatcher over the rig until it exits, with `stop` as both the engine's drain and the
-/// between-attempts drain flag; every step it reports is collected. A watchdog thread sets the stop
-/// and wakes the tasks when a run outlives `DISPATCHER_BUDGET`, and the helper then fails the proof
-/// by name — for a dispatcher that honours its stop. One that ignores it runs on the test thread
-/// and hangs to the gate's ceiling (stated in R20 closure 2; a `Send` double to run it off-thread is
-/// B14b-2's).
-fn run_dispatcher<P: dispatcher::Provider>(
-    rig: &Rig,
-    provider: &mut P,
-    stop: &AtomicBool,
-) -> (dispatcher::Exit, Vec<String>) {
-    run_dispatcher_with(rig, provider, stop, &rig.selections)
+/// A scripted provider over `pairs` that never raises the stop itself, and the log of what it opened.
+fn provider_of(
+    pairs: Vec<(Script<'static>, Oracle<'static>)>,
+    stop: &Arc<AtomicBool>,
+) -> (ScriptedProvider, Arc<Mutex<Vec<String>>>) {
+    let opened = Arc::new(Mutex::new(Vec::new()));
+    (
+        ScriptedProvider {
+            pairs: pairs.into(),
+            opened: Arc::clone(&opened),
+            stop: Arc::clone(stop),
+            stop_after: usize::MAX,
+        },
+        opened,
+    )
 }
 
-fn run_dispatcher_with<P: dispatcher::Provider>(
-    rig: &Rig,
-    provider: &mut P,
-    stop: &AtomicBool,
-    selections: &[Selection],
-) -> (dispatcher::Exit, Vec<String>) {
-    let reported = std::sync::Mutex::new(Vec::new());
-    let report = |line: &str| {
-        if let Ok(mut lines) = reported.lock() {
-            lines.push(line.to_owned());
-        }
-    };
-    let done = AtomicBool::new(false);
-    let timed_out = AtomicBool::new(false);
-    let exit = std::thread::scope(|scope| {
-        scope.spawn(|| {
-            let started = Instant::now();
-            while !done.load(Ordering::SeqCst) {
-                if started.elapsed() >= DISPATCHER_BUDGET {
-                    timed_out.store(true, Ordering::SeqCst);
-                    stop.store(true, Ordering::SeqCst);
-                    rig.tasks.wake();
-                    return;
-                }
-                std::thread::sleep(Duration::from_millis(20));
+/// The budget every dispatcher proof runs under (F102, closure H6): past it the helper raises the
+/// stop, wakes the wait and FAILS the proof by name instead of hanging.
+const DISPATCHER_BUDGET: Duration = Duration::from_secs(20);
+
+/// Run the dispatcher over the rig with the rig's own selections, under `DISPATCHER_BUDGET`.
+fn run_dispatcher<P: dispatcher::Provider + Send + 'static>(
+    rig: &Arc<Rig>,
+    provider: P,
+    stop: &Arc<AtomicBool>,
+) -> Result<(dispatcher::Exit, Vec<String>), String> {
+    run_dispatcher_owned(
+        Arc::clone(rig),
+        provider,
+        Arc::clone(stop),
+        rig.selections.clone(),
+        DISPATCHER_BUDGET,
+    )
+}
+
+/// Run the dispatcher over the rig until it exits, with `stop` as both the engine's drain and the
+/// between-attempts drain flag; every step it reports is collected. The dispatcher runs on a thread
+/// of its own over owned state (R21 N21: an unscoped spawn, since a scoped thread is joined and so
+/// cannot be left behind), and this thread waits for its exit on one deadline, `budget`. Past it the
+/// stop is raised and the wait woken — a dispatcher that honours its stop then ends by itself — and
+/// the proof fails by name, `the dispatcher did not end within <budget>`, whether the dispatcher
+/// honours the stop or not: one that ignores it is left running and cannot hang the proof.
+fn run_dispatcher_owned<P: dispatcher::Provider + Send + 'static>(
+    rig: Arc<Rig>,
+    provider: P,
+    stop: Arc<AtomicBool>,
+    selections: Vec<Selection>,
+    budget: Duration,
+) -> Result<(dispatcher::Exit, Vec<String>), String> {
+    let (report_to, reported) = mpsc::channel::<String>();
+    let (exit_to, exited) = mpsc::channel();
+    // The thread owns the rig and the stop; this side keeps its own handles to raise the stop and
+    // wake the wait at the budget.
+    let (waker_rig, waker_stop) = (Arc::clone(&rig), Arc::clone(&stop));
+    let handle = std::thread::Builder::new()
+        .name("t28-dispatcher".to_owned())
+        .spawn(move || {
+            let mut provider = provider;
+            // The receiver outlives every send until the proof gives up on this thread; a line sent
+            // after that has no reader, which is the point of giving up.
+            let report = move |line: &str| {
+                let _ = report_to.send(line.to_owned());
+            };
+            let exit = dispatcher::Dispatcher {
+                tasks: &rig.tasks,
+                attempts: &rig.attempts,
+                provider: &mut provider,
+                agent_record_id: &rig.agent,
+                selections: &selections,
+                drain: &stop,
             }
-        });
-        let exit = dispatcher::Dispatcher {
-            tasks: &rig.tasks,
-            attempts: &rig.attempts,
-            provider,
-            agent_record_id: &rig.agent,
-            selections,
-            drain: stop,
+            .run(&report);
+            let _ = exit_to.send(exit);
+        })
+        .map_err(|error| format!("the dispatcher thread did not start: {error}"))?;
+    match exited.recv_timeout(budget) {
+        Ok(exit) => {
+            handle
+                .join()
+                .map_err(|_| "the dispatcher thread panicked after its exit".to_owned())?;
+            Ok((exit, reported.try_iter().collect()))
         }
-        .run(&report);
-        done.store(true, Ordering::SeqCst);
-        exit
-    });
-    let lines = reported
-        .lock()
-        .map(|lines| lines.clone())
-        .unwrap_or_default();
-    assert!(
-        !timed_out.load(Ordering::SeqCst),
-        "the dispatcher did not end within {DISPATCHER_BUDGET:?}: {lines:?}"
+        Err(mpsc::RecvTimeoutError::Timeout) => {
+            waker_stop.store(true, Ordering::SeqCst);
+            waker_rig.tasks.wake();
+            let lines: Vec<String> = reported.try_iter().collect();
+            Err(format!(
+                "the dispatcher did not end within {budget:?}: {lines:?}"
+            ))
+        }
+        Err(mpsc::RecvTimeoutError::Disconnected) => {
+            let lines: Vec<String> = reported.try_iter().collect();
+            let why = handle.join().err().map(|payload| {
+                payload
+                    .downcast_ref::<String>()
+                    .cloned()
+                    .or_else(|| payload.downcast_ref::<&str>().map(|s| (*s).to_owned()))
+                    .unwrap_or_default()
+            });
+            Err(format!(
+                "the dispatcher thread ended without an exit ({why:?}): {lines:?}"
+            ))
+        }
+    }
+}
+
+/// A provider whose `open` sleeps `nap` and reads no stop: the stand-in for a dispatcher that
+/// ignores its drain. It records the task it was handed, sent when its `open` returns.
+struct Sleeper {
+    nap: Duration,
+    woke: mpsc::Sender<String>,
+}
+
+impl dispatcher::Provider for Sleeper {
+    type Source = Script<'static>;
+    type Verifier = Oracle<'static>;
+    fn open(
+        &mut self,
+        next: &habitat_engine::store::Dispatchable,
+    ) -> Result<(Script<'static>, Oracle<'static>), dispatcher::Unavailable> {
+        std::thread::sleep(self.nap);
+        let _ = self.woke.send(next.task.clone());
+        Err(dispatcher::Unavailable::NoNativeProvider)
+    }
+}
+
+/// R21 N21 (D9), the helper's own control · a dispatcher that ignores its stop fails the proof by
+/// name at the budget instead of hanging it: the provider's `open` sleeps 1 s under a 200 ms budget
+/// (Q15: short, to spare `t21_process`'s margin). The helper answers `Err` naming the budget before
+/// the sleep ends, having raised the stop; the thread it left behind ends by itself — its `open`
+/// returns the task it was handed and it releases the rig (budgeted, F102) — and holds no stand-in
+/// process, so no descendant outlives the proof.
+#[test]
+fn a_dispatcher_that_ignores_its_stop_fails_the_proof_by_name() -> Outcome_ {
+    let rig = Arc::new(rig(&Shape::default())?);
+    let stop = Arc::new(AtomicBool::new(false));
+    let (woke, opened) = mpsc::channel();
+    let nap = Duration::from_secs(1);
+    let started = Instant::now();
+    let result = run_dispatcher_owned(
+        Arc::clone(&rig),
+        Sleeper { nap, woke },
+        Arc::clone(&stop),
+        rig.selections.clone(),
+        Duration::from_millis(200),
     );
-    (exit, lines)
+    let failed_after = started.elapsed();
+    let message = result
+        .err()
+        .ok_or("the proof passed a dispatcher that ignored its stop")?;
+    assert!(
+        message.starts_with("the dispatcher did not end within 200ms"),
+        "{message}"
+    );
+    assert!(
+        failed_after < nap,
+        "failed at the budget, not after the sleep: {failed_after:?} against {nap:?}"
+    );
+    assert!(stop.load(Ordering::SeqCst), "the helper raised the stop");
+    let budget = Duration::from_secs(5);
+    assert_eq!(opened.recv_timeout(budget)?, TASK, "the left thread's open");
+    let released = Instant::now();
+    while Arc::strong_count(&rig) > 1 {
+        assert!(
+            released.elapsed() < budget,
+            "the left thread still holds the rig after {:?} (budget {budget:?}): {} holders",
+            released.elapsed(),
+            Arc::strong_count(&rig)
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    Ok(())
 }
 
 /// B14b-1 (b) · the dispatcher picks the admitted task, drives it to ACCEPTED through the scripted
 /// pair, notifies, and ends `Drained` when the drain is set; the provider was opened once, for that task.
 #[test]
 fn the_dispatcher_picks_the_admitted_task_and_drives_it_to_acceptance() -> Outcome_ {
-    let rig = rig(&Shape::default())?;
+    let rig = Arc::new(rig(&Shape::default())?);
     let (source, _) = script(vec![Candidate::Replacement(SECOND.to_vec())]);
     let (mut verifier, _) = oracle(vec![matched(7)]);
-    let stop = AtomicBool::new(false);
+    let stop = Arc::new(AtomicBool::new(false));
     // The drain is raised during the one check: acceptance does not read it, the next wait does —
     // so the task is accepted and the dispatcher then ends `Drained` (a stop raised at `open` would
     // be read by `begin` and drain the dispatch instead: measured, the skeleton's first run).
-    let flag = &stop;
+    let flag = Arc::clone(&stop);
     verifier.hook = Some(Box::new(move || {
         flag.store(true, Ordering::SeqCst);
     }));
-    let opened = Rc::new(RefCell::new(Vec::new()));
-    let mut provider = ScriptedProvider {
-        pairs: VecDeque::from(vec![(source, verifier)]),
-        opened: Rc::clone(&opened),
-        stop: &stop,
-        stop_after: usize::MAX,
-    };
-    let (exit, lines) = run_dispatcher(&rig, &mut provider, &stop);
+    let (provider, opened) = provider_of(vec![(source, verifier)], &stop);
+    let (exit, lines) = run_dispatcher(&rig, provider, &stop)?;
     assert_eq!(exit, dispatcher::Exit::Drained, "{lines:?}");
-    assert_eq!(*opened.borrow(), vec![TASK.to_owned()]);
+    assert_eq!(taken(&opened), vec![TASK.to_owned()]);
     assert_eq!(state(&rig)?, "accepted");
     assert!(
         lines
@@ -838,30 +957,22 @@ fn the_dispatcher_picks_the_admitted_task_and_drives_it_to_acceptance() -> Outco
 /// pre-dispatch path with no attempt row, and never picked again: the provider is never opened.
 #[test]
 fn a_task_cancelled_before_dispatch_is_stopped_by_name_and_never_picked_again() -> Outcome_ {
-    let rig = rig(&Shape::default())?;
+    let rig = Arc::new(rig(&Shape::default())?);
     let principal = owner();
     cancel(&rig, &principal, "28f10000-0000-4000-8000-0000000000d1");
     assert_eq!(state(&rig)?, "cancellation_requested");
-    let stop = AtomicBool::new(false);
-    let opened = Rc::new(RefCell::new(Vec::new()));
+    let stop = Arc::new(AtomicBool::new(false));
     // No pair: a pick that reached `open` would end the loop `Unavailable`, which the assertion
     // below distinguishes from the drain.
-    let mut provider = ScriptedProvider {
-        pairs: VecDeque::new(),
-        opened: Rc::clone(&opened),
-        stop: &stop,
-        stop_after: usize::MAX,
-    };
+    let (provider, opened) = provider_of(Vec::new(), &stop);
     // After the cancelled task is stopped the read returns None and the wait would block: a watcher
     // raises the stop once the ledger says `cancelled` (the budget is the helper's).
-    let flag = &stop;
-    let rig_ref = &rig;
-    std::thread::scope(|scope| {
-        scope.spawn(move || stop_when(rig_ref, TASK, "cancelled", flag));
-        let (exit, lines) = run_dispatcher(&rig, &mut provider, &stop);
-        assert_eq!(exit, dispatcher::Exit::Drained, "{lines:?}");
-    });
-    assert!(opened.borrow().is_empty(), "the provider was never opened");
+    let (exit, lines) = std::thread::scope(|scope| {
+        scope.spawn(|| stop_when(&rig, TASK, "cancelled", &stop));
+        run_dispatcher(&rig, provider, &stop)
+    })?;
+    assert_eq!(exit, dispatcher::Exit::Drained, "{lines:?}");
+    assert!(taken(&opened).is_empty(), "the provider was never opened");
     assert_eq!(state(&rig)?, "cancelled");
     assert_eq!(
         rows(&rig, "SELECT reason FROM task_stops WHERE task_id=?")?,
@@ -879,9 +990,9 @@ fn a_task_cancelled_before_dispatch_is_stopped_by_name_and_never_picked_again() 
 /// operator's missing configuration (P2c-R1.5 revisited).
 #[test]
 fn no_provider_is_a_named_dispatcher_state_and_leaves_the_task_admitted() -> Outcome_ {
-    let rig = rig(&Shape::default())?;
-    let stop = AtomicBool::new(false);
-    let (exit, lines) = run_dispatcher(&rig, &mut dispatcher::NoProvider, &stop);
+    let rig = Arc::new(rig(&Shape::default())?);
+    let stop = Arc::new(AtomicBool::new(false));
+    let (exit, lines) = run_dispatcher(&rig, dispatcher::NoProvider, &stop)?;
     assert_eq!(
         exit,
         dispatcher::Exit::Unavailable(dispatcher::Unavailable::NoNativeProvider),
@@ -904,25 +1015,19 @@ fn no_provider_is_a_named_dispatcher_state_and_leaves_the_task_admitted() -> Out
 /// dispatcher exits `Drained` at its next wait.
 #[test]
 fn a_drain_between_attempts_strands_the_task_in_repair_pending_with_no_stop_written() -> Outcome_ {
-    let rig = rig(&Shape::default())?;
-    let stop = AtomicBool::new(false);
+    let rig = Arc::new(rig(&Shape::default())?);
+    let stop = Arc::new(AtomicBool::new(false));
     let (source, _) = script(vec![
         Candidate::Replacement(FIRST.to_vec()),
         Candidate::Replacement(SECOND.to_vec()),
     ]);
     let (mut verifier, _) = oracle(vec![mismatched(7), matched(7)]);
-    let flag = &stop;
+    let flag = Arc::clone(&stop);
     verifier.hook = Some(Box::new(move || {
         flag.store(true, Ordering::SeqCst);
     }));
-    let opened = Rc::new(RefCell::new(Vec::new()));
-    let mut provider = ScriptedProvider {
-        pairs: VecDeque::from(vec![(source, verifier)]),
-        opened: Rc::clone(&opened),
-        stop: &stop,
-        stop_after: usize::MAX,
-    };
-    let (exit, lines) = run_dispatcher(&rig, &mut provider, &stop);
+    let (provider, _) = provider_of(vec![(source, verifier)], &stop);
+    let (exit, lines) = run_dispatcher(&rig, provider, &stop)?;
     assert_eq!(exit, dispatcher::Exit::Drained, "{lines:?}");
     assert!(
         lines
@@ -1008,7 +1113,7 @@ fn submit_as(
 /// operator's own task, accepted first, is not touched again.
 #[test]
 fn a_non_operator_owner_is_stopped_by_name_before_any_provider() -> Outcome_ {
-    let rig = rig(&Shape::default())?;
+    let rig = Arc::new(rig(&Shape::default())?);
     let operator = owner();
     let (source, _) = script(vec![Candidate::Replacement(SECOND.to_vec())]);
     let (verifier, _) = oracle(vec![matched(7)]);
@@ -1021,22 +1126,14 @@ fn a_non_operator_owner_is_stopped_by_name_before_any_provider() -> Outcome_ {
         "28f10000-0000-4000-8000-0000000000e1",
         U64_CRITERIA.iter().map(|c| (*c).to_owned()).collect(),
     )?;
-    let stop = AtomicBool::new(false);
-    let opened = Rc::new(RefCell::new(Vec::new()));
-    let mut provider = ScriptedProvider {
-        pairs: VecDeque::new(),
-        opened: Rc::clone(&opened),
-        stop: &stop,
-        stop_after: usize::MAX,
-    };
-    let rig_ref = &rig;
-    let (readers_ref, flag) = (readers.as_str(), &stop);
-    std::thread::scope(|scope| {
-        scope.spawn(move || stop_when(rig_ref, readers_ref, "failed", flag));
-        let (exit, lines) = run_dispatcher(&rig, &mut provider, &stop);
-        assert_eq!(exit, dispatcher::Exit::Drained, "{lines:?}");
-    });
-    assert!(opened.borrow().is_empty(), "no provider for a refused task");
+    let stop = Arc::new(AtomicBool::new(false));
+    let (provider, opened) = provider_of(Vec::new(), &stop);
+    let (exit, lines) = std::thread::scope(|scope| {
+        scope.spawn(|| stop_when(&rig, &readers, "failed", &stop));
+        run_dispatcher(&rig, provider, &stop)
+    })?;
+    assert_eq!(exit, dispatcher::Exit::Drained, "{lines:?}");
+    assert!(taken(&opened).is_empty(), "no provider for a refused task");
     assert_eq!(state_of(&rig, &readers)?, "failed");
     let reason: String = ledger(&rig)?.query_row(
         "SELECT reason FROM task_stops WHERE task_id=?",
@@ -1052,30 +1149,28 @@ fn a_non_operator_owner_is_stopped_by_name_before_any_provider() -> Outcome_ {
 /// left `admitted` for the next read (the round-1 review's hot loop).
 #[test]
 fn a_stale_selection_stops_the_task_by_the_store_s_name_and_never_re_picks_it() -> Outcome_ {
-    let rig = rig(&Shape::default())?;
+    let rig = Arc::new(rig(&Shape::default())?);
     let mut stale = rig.selections.clone();
     for selection in &mut stale {
         selection.expected_revision = "99".to_owned();
     }
     let (source, _) = script(vec![Candidate::Replacement(SECOND.to_vec())]);
     let (verifier, _) = oracle(vec![matched(7)]);
-    let stop = AtomicBool::new(false);
-    let opened = Rc::new(RefCell::new(Vec::new()));
-    let mut provider = ScriptedProvider {
-        pairs: VecDeque::from(vec![(source, verifier)]),
-        opened: Rc::clone(&opened),
-        stop: &stop,
-        stop_after: usize::MAX,
-    };
-    let rig_ref = &rig;
-    let flag = &stop;
+    let stop = Arc::new(AtomicBool::new(false));
+    let (provider, opened) = provider_of(vec![(source, verifier)], &stop);
     let (exit, lines) = std::thread::scope(|scope| {
-        scope.spawn(move || stop_when(rig_ref, TASK, "failed", flag));
-        run_dispatcher_with(&rig, &mut provider, &stop, &stale)
-    });
+        scope.spawn(|| stop_when(&rig, TASK, "failed", &stop));
+        run_dispatcher_owned(
+            Arc::clone(&rig),
+            provider,
+            Arc::clone(&stop),
+            stale,
+            DISPATCHER_BUDGET,
+        )
+    })?;
     assert_eq!(exit, dispatcher::Exit::Drained, "{lines:?}");
     assert_eq!(
-        *opened.borrow(),
+        taken(&opened),
         vec![TASK.to_owned()],
         "opened once, never re-picked"
     );
@@ -1096,42 +1191,33 @@ fn a_stale_selection_stops_the_task_by_the_store_s_name_and_never_re_picks_it() 
 /// and the dispatcher picks exactly that task (the provider records it) before it exits `Unavailable`.
 #[test]
 fn a_submit_wakes_the_waiting_dispatcher_and_it_picks_the_new_task() -> Outcome_ {
-    let rig = rig(&Shape::default())?;
+    let rig = Arc::new(rig(&Shape::default())?);
     let operator = owner();
     let (source, _) = script(vec![Candidate::Replacement(SECOND.to_vec())]);
     let (verifier, _) = oracle(vec![matched(7)]);
     run(&rig, &operator, source, verifier, 5_000).map_err(|e| format!("{e:?}"))?;
     assert_eq!(state(&rig)?, "accepted");
-    let stop = AtomicBool::new(false);
-    let opened = Rc::new(RefCell::new(Vec::new()));
-    let mut provider = ScriptedProvider {
-        pairs: VecDeque::new(),
-        opened: Rc::clone(&opened),
-        stop: &stop,
-        stop_after: usize::MAX,
-    };
-    let rig_ref = &rig;
-    let submitted = std::sync::Mutex::new(None);
-    let submitted_ref = &submitted;
-    let exit = std::thread::scope(|scope| {
-        scope.spawn(move || {
+    let stop = Arc::new(AtomicBool::new(false));
+    let (provider, opened) = provider_of(Vec::new(), &stop);
+    let submitted = Mutex::new(None);
+    let (exit, _) = std::thread::scope(|scope| {
+        scope.spawn(|| {
             // Let the dispatcher reach its wait first; a submit that lands before it is seen by the
             // read instead — either way the task is picked, which is the claim.
             std::thread::sleep(Duration::from_millis(200));
             let id = submit_as(
-                rig_ref,
+                &rig,
                 &owner(),
                 "28f10000-0000-4000-8000-0000000000e2",
                 U64_CRITERIA.iter().map(|c| (*c).to_owned()).collect(),
             )
             .expect("a second admission");
-            if let Ok(mut slot) = submitted_ref.lock() {
+            if let Ok(mut slot) = submitted.lock() {
                 *slot = Some(id);
             }
         });
-        let (exit, _) = run_dispatcher(&rig, &mut provider, &stop);
-        exit
-    });
+        run_dispatcher(&rig, provider, &stop)
+    })?;
     assert_eq!(
         exit,
         dispatcher::Exit::Unavailable(dispatcher::Unavailable::NoNativeProvider)
@@ -1141,7 +1227,7 @@ fn a_submit_wakes_the_waiting_dispatcher_and_it_picks_the_new_task() -> Outcome_
         .map(|slot| slot.clone())
         .unwrap_or_default();
     assert_eq!(
-        opened.borrow().as_slice(),
+        taken(&opened).as_slice(),
         [submitted.ok_or("the second task")?]
     );
     Ok(())
@@ -1156,8 +1242,8 @@ fn a_submit_wakes_the_waiting_dispatcher_and_it_picks_the_new_task() -> Outcome_
 /// cleared" is a restart, which the second phase stands in for.
 #[test]
 fn a_task_drained_before_its_first_attempt_is_picked_again_after_the_drain() -> Outcome_ {
-    let rig = rig(&Shape::default())?;
-    let stop = AtomicBool::new(true);
+    let rig = Arc::new(rig(&Shape::default())?);
+    let stop = Arc::new(AtomicBool::new(true));
     let (mut source, _) = script(vec![Candidate::Replacement(SECOND.to_vec())]);
     let (mut verifier, _) = oracle(vec![matched(7)]);
     let outcome = dispatch(
@@ -1192,21 +1278,13 @@ fn a_task_drained_before_its_first_attempt_is_picked_again_after_the_drain() -> 
     stop.store(false, Ordering::SeqCst);
     let (source, _) = script(vec![Candidate::Replacement(SECOND.to_vec())]);
     let (verifier, _) = oracle(vec![matched(7)]);
-    let opened = Rc::new(RefCell::new(Vec::new()));
-    let mut provider = ScriptedProvider {
-        pairs: VecDeque::from(vec![(source, verifier)]),
-        opened: Rc::clone(&opened),
-        stop: &stop,
-        stop_after: usize::MAX,
-    };
-    let flag = &stop;
-    let rig_ref = &rig;
-    std::thread::scope(|scope| {
-        scope.spawn(move || stop_when(rig_ref, TASK, "accepted", flag));
-        let (exit, lines) = run_dispatcher(&rig, &mut provider, &stop);
-        assert_eq!(exit, dispatcher::Exit::Drained, "{lines:?}");
-    });
-    assert_eq!(*opened.borrow(), vec![TASK.to_owned()]);
+    let (provider, opened) = provider_of(vec![(source, verifier)], &stop);
+    let (exit, lines) = std::thread::scope(|scope| {
+        scope.spawn(|| stop_when(&rig, TASK, "accepted", &stop));
+        run_dispatcher(&rig, provider, &stop)
+    })?;
+    assert_eq!(exit, dispatcher::Exit::Drained, "{lines:?}");
+    assert_eq!(taken(&opened), vec![TASK.to_owned()]);
     assert_eq!(state(&rig)?, "accepted");
     Ok(())
 }
@@ -1437,17 +1515,17 @@ fn a_failed_check_is_repaired_and_the_second_attempt_is_accepted() -> Outcome_ {
         Candidate::Replacement(SECOND.to_vec()),
     ]);
     // When each candidate was requested: after its attempt began, before its check's window.
-    let requested: Rc<RefCell<Vec<Instant>>> = Rc::new(RefCell::new(Vec::new()));
-    let requested_at = Rc::clone(&requested);
+    let requested: Arc<Mutex<Vec<Instant>>> = Arc::new(Mutex::new(Vec::new()));
+    let requested_at = Arc::clone(&requested);
     source.hook = Some(Box::new(move || {
-        requested_at.borrow_mut().push(Instant::now());
+        record(&requested_at, Instant::now());
     }));
     let (verifier, handed) = oracle(vec![mismatched(7), matched(7)]);
     let principal = owner();
     let outcome = run(&rig, &principal, source, verifier, 5_000).map_err(|e| format!("{e:?}"))?;
     assert_eq!(outcome, Outcome::Driven(Driven::Accepted));
     assert_eq!(state(&rig)?, "accepted");
-    let handed = handed.borrow();
+    let handed = taken(&handed);
     assert_eq!(
         handed
             .iter()
@@ -1458,7 +1536,7 @@ fn a_failed_check_is_repaired_and_the_second_attempt_is_accepted() -> Outcome_ {
     );
     assert_ne!(handed[0].0, handed[1].0);
     // R14 · each check was handed its own window (asserted whole in `assert_windows`).
-    assert_windows(&handed, &requested.borrow(), [300_000, 300_000 - 7]);
+    assert_windows(&handed, &taken(&requested), [300_000, 300_000 - 7]);
     assert_eq!(
         rows(
             &rig,
@@ -1509,7 +1587,7 @@ fn a_failed_check_is_repaired_and_the_second_attempt_is_accepted() -> Outcome_ {
     );
     // The second request was handed the first check's verdict and its evidence — the runtime's
     // own record of the mismatched run, citing the four records it committed.
-    let asked = asked.borrow();
+    let asked = taken(&asked);
     assert_eq!(asked[0].previous, None);
     assert_previous(
         asked.get(1).map(|seen| &seen.previous),
@@ -1553,8 +1631,8 @@ fn an_exhausted_source_fails_the_task_after_one_attempt() -> Outcome_ {
         Outcome::Driven(Driven::Stopped(StopReason::WorkerFailed))
     );
     assert_eq!(state(&rig)?, "failed");
-    assert_eq!(asked.borrow().len(), 1);
-    assert!(handed.borrow().is_empty(), "no verifier call");
+    assert_eq!(taken(&asked).len(), 1);
+    assert!(taken(&handed).is_empty(), "no verifier call");
     assert!(verifications(&rig)?.is_empty());
     assert_eq!(
         rows(&rig, "SELECT reason FROM task_stops WHERE task_id=?")?,
@@ -1578,7 +1656,7 @@ fn a_refused_candidate_is_recorded_failed_without_a_verifier_call() -> Outcome_ 
     let outcome = run(&rig, &principal, source, verifier, 5_000).map_err(|e| format!("{e:?}"))?;
     assert_eq!(outcome, Outcome::Driven(Driven::Accepted));
     assert_eq!(
-        handed.borrow().len(),
+        taken(&handed).len(),
         1,
         "the verifier saw only the second candidate"
     );
@@ -1617,7 +1695,7 @@ fn a_refused_candidate_is_recorded_failed_without_a_verifier_call() -> Outcome_ 
         bound,
         vec![vec!["1".to_owned(), RECEIPT.to_owned(), "1".to_owned()]]
     );
-    let previous = asked.borrow()[1].previous.clone().ok_or("no previous")?;
+    let previous = taken(&asked)[1].previous.clone().ok_or("no previous")?;
     assert_eq!(
         (previous.verdict, previous.criteria),
         (VerificationVerdict::Failed, 0)
@@ -1749,7 +1827,7 @@ fn pre_dispatch_refusals_stop_the_task_before_any_attempt() -> Outcome_ {
         assert_eq!(outcome, Outcome::Refused(refusal), "{refusal:?}");
         assert_eq!(state(&rig)?, "failed", "{refusal:?}");
         assert!(rows(&rig, "SELECT id FROM attempts WHERE task_id=?")?.is_empty());
-        assert!(asked.borrow().is_empty() && handed.borrow().is_empty());
+        assert!(taken(&asked).is_empty() && taken(&handed).is_empty());
         assert_eq!(
             rows(&rig, "SELECT reason FROM task_stops WHERE task_id=?")?,
             vec![vec![refusal.name().to_owned()]],
@@ -1842,7 +1920,7 @@ fn a_cancel_during_execute_records_the_check_not_started() -> Outcome_ {
     );
     assert_eq!(state(&rig)?, "cancelled");
     assert!(
-        handed.borrow().is_empty(),
+        taken(&handed).is_empty(),
         "no verifier call after the cancel"
     );
     let recorded = verifications(&rig)?;
@@ -1970,7 +2048,7 @@ fn an_overrun_is_recorded_as_an_unknown_cost() -> Outcome_ {
         rows(&rig, "SELECT used_ms FROM attempts WHERE task_id=?")?,
         vec![vec!["NULL".to_owned()]]
     );
-    assert!(handed.borrow().is_empty());
+    assert!(taken(&handed).is_empty());
     assert!(verifications(&rig)?.is_empty());
     assert_eq!(rig.reserved_work_ms, 1_200);
     Ok(())
@@ -2037,7 +2115,7 @@ fn an_empty_check_window_is_recorded_as_a_timeout_at_no_cost() -> Outcome_ {
         Outcome::Driven(Driven::Stopped(StopReason::VerifierTimeout))
     );
     assert_eq!(state(&rig)?, "failed");
-    let handed = handed.borrow();
+    let handed = taken(&handed);
     assert_eq!(
         handed.len(),
         1,
@@ -2117,8 +2195,8 @@ fn a_spent_work_reservation_stops_the_task_by_policy() -> Outcome_ {
         )))
     );
     assert_eq!(state(&rig)?, "failed");
-    assert_eq!(asked.borrow().len(), 1, "no second attempt began");
-    assert!(handed.borrow().is_empty());
+    assert_eq!(taken(&asked).len(), 1, "no second attempt began");
+    assert!(taken(&handed).is_empty());
     assert_eq!(
         rows(&rig, "SELECT id FROM attempts WHERE task_id=?")?.len(),
         1
@@ -2386,7 +2464,7 @@ fn a_passed_check_commits_four_records_that_accept_reads_back() -> Outcome_ {
         .find(|row| row[0] == "run_clock")
         .ok_or("a clock")?;
     let clock = object_json(&rig, &clock_row[2])?;
-    let handed = handed.borrow();
+    let handed = taken(&handed);
     let window = handed[0].2;
     let teardown_ms = u64::try_from(CHECK_TEARDOWN.as_millis())?;
     assert_eq!(clock["work_cutoff_ms"], 300_000 - teardown_ms);
@@ -2635,7 +2713,7 @@ fn a_native_source_over_the_fake_drives_a_task_to_acceptance() -> Outcome_ {
     let outcome = run(&rig, &principal, source, verifier, 5_000).map_err(|e| format!("{e:?}"))?;
     assert_eq!(outcome, Outcome::Driven(Driven::Accepted));
     assert_eq!(state(&rig)?, "accepted");
-    let handed = handed.borrow();
+    let handed = taken(&handed);
     assert_eq!(handed.len(), 1);
     assert_eq!(
         handed[0].1,
@@ -2686,11 +2764,11 @@ fn a_refused_native_answer_is_recorded_as_a_refused_candidate_whole() -> Outcome
     let outcome = run(&rig, &principal, source, verifier, 5_000).map_err(|e| format!("{e:?}"))?;
     assert_eq!(outcome, Outcome::Driven(Driven::Accepted));
     assert_eq!(
-        handed.borrow().len(),
+        taken(&handed).len(),
         1,
         "no verifier call for the refused candidate"
     );
-    assert_eq!(handed.borrow()[0].1, REFERENCE_LIB.as_bytes());
+    assert_eq!(taken(&handed)[0].1, REFERENCE_LIB.as_bytes());
     let found = verifications(&rig)?;
     assert_eq!(found.len(), 2);
     assert_eq!(
@@ -2790,7 +2868,7 @@ fn a_provider_failure_stops_the_task_with_the_worker_named() -> Outcome_ {
         Outcome::Driven(Driven::Stopped(StopReason::WorkerFailed))
     );
     assert_eq!(state(&rig)?, "failed");
-    assert!(handed.borrow().is_empty());
+    assert!(taken(&handed).is_empty());
     assert_eq!(
         rows(&rig, "SELECT reason FROM task_stops WHERE task_id=?")?,
         vec![vec!["worker_failed".to_owned()]]
