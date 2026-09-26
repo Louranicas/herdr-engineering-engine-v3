@@ -4500,15 +4500,23 @@ fn check_identity() -> EvidenceIdentity<'static> {
     }
 }
 
-/// Asserts one committed record whole: identity, object and the observation that committed it.
-fn assert_committed(committed: &Committed, id: &str, object: &Object, observation: Observation) {
+/// Asserts one committed record whole: kind, identity, object and the observation that committed
+/// it.
+fn assert_committed(
+    committed: &Committed,
+    kind: RunRecordKind,
+    id: &str,
+    object: &Object,
+    observation: Observation,
+) {
     assert_eq!(
         (
+            committed.kind(),
             committed.artifact_id(),
             committed.object(),
             committed.observation()
         ),
-        (id, object, observation)
+        (kind, id, object, observation)
     );
 }
 
@@ -4564,12 +4572,14 @@ fn the_settle_and_the_check_each_commit_their_own_record_set() {
     assert_eq!(run.len(), 2);
     assert_committed(
         run.record(RunRecordKind::RunClock).unwrap(),
+        RunRecordKind::RunClock,
         IDS[0],
         &objects[0],
         Observation::Settle,
     );
     assert_committed(
         run.record(RunRecordKind::RunCleanup).unwrap(),
+        RunRecordKind::RunCleanup,
         IDS[1],
         &objects[1],
         Observation::Settle,
@@ -4585,7 +4595,10 @@ fn the_settle_and_the_check_each_commit_their_own_record_set() {
         ),
         (TASK, ATTEMPT, OBS_1)
     );
-    assert_eq!((checked.verdict(), checked.subject()), ("failed", CRITERIA));
+    assert_eq!(
+        (checked.verdict(), checked.subject()),
+        (VerificationVerdict::Failed, CRITERIA)
+    );
     let sequence: u64 = area
         .inspect()
         .query_row("SELECT sequence FROM events WHERE id=?", [OBS_1], |row| {
@@ -4593,16 +4606,29 @@ fn the_settle_and_the_check_each_commit_their_own_record_set() {
         })
         .unwrap();
     assert_eq!(checked.verification_sequence(), sequence);
-    assert_committed(checked.evidence(), RECORD_A, &receipt, Observation::Check);
+    // The receipt is returned as the reference it was recorded with: its own media type and
+    // schema, never a run record's (review of 7cd57bc, finding 1).
+    assert_eq!(
+        checked.evidence(),
+        &crate::contracts::control::EvidenceRef {
+            artifact_id: RECORD_A.to_owned(),
+            sha256: receipt.digest().to_owned(),
+            byte_length: receipt.size(),
+            media_type: "application/json".to_owned(),
+            schema_id: "hee3.u64-receipt/1".to_owned(),
+        }
+    );
     assert_eq!(checked.len(), 2);
     assert_committed(
         checked.record(RunRecordKind::RunOutcome).unwrap(),
+        RunRecordKind::RunOutcome,
         IDS[2],
         &objects[2],
         Observation::Check,
     );
     assert_committed(
         checked.record(RunRecordKind::Readbacks).unwrap(),
+        RunRecordKind::Readbacks,
         IDS[3],
         &objects[3],
         Observation::Check,
@@ -4651,9 +4677,25 @@ fn check_record_refusals_each_by_name() {
         Err(Error::Conflict)
     ));
     assert_eq!(
-        count(&area, "verifications"),
-        0,
+        (
+            count(&area, "verifications"),
+            count(&area, "attempt_records")
+        ),
+        (0, 0),
         "the refused check wrote nothing"
+    );
+    let head: (String, String) = area
+        .inspect()
+        .query_row(
+            "SELECT generation,state FROM tasks WHERE id=?",
+            [TASK],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(
+        (head.0.as_str(), head.1.as_str()),
+        ("3", "verifying"),
+        "the refused check moved nothing"
     );
     let sound = [record(RunRecordKind::RunOutcome, IDS[0], &objects[0])];
     store

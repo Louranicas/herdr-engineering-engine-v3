@@ -15,8 +15,10 @@
 //! objects it made up is narrowed to one door and one production constructor per record type, not
 //! refused.
 
+use super::verification::{VerificationVerdict, parse_verdict};
 use super::{Error, Object, Result, number, read_number, register_evidence};
-use crate::contracts::{Generation, Principal, UuidV4};
+use crate::contracts::control::EvidenceRef;
+use crate::contracts::{Generation, Principal, Sha256Digest, UuidV4};
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use std::collections::BTreeMap;
 
@@ -362,9 +364,9 @@ pub struct CommittedCheck {
     attempt: String,
     verification_event: String,
     verification_sequence: u64,
-    verdict: String,
+    verdict: VerificationVerdict,
     subject: String,
-    evidence: Committed,
+    evidence: EvidenceRef,
     records: BTreeMap<RunRecordKind, Committed>,
 }
 
@@ -393,21 +395,23 @@ impl CommittedCheck {
         self.verification_sequence
     }
 
-    /// The verdict the verification recorded, as stored.
+    /// The verdict the verification recorded, read back through the table that wrote it.
     #[must_use]
-    pub fn verdict(&self) -> &str {
-        &self.verdict
+    pub const fn verdict(&self) -> VerificationVerdict {
+        self.verdict
     }
 
-    /// The subject digest the verification bound.
+    /// The subject digest the verification bound: a `Sha256Digest` rendering, validated at read
+    /// (`Corrupt` otherwise); borrowed because the digest type owns no bytes.
     #[must_use]
     pub fn subject(&self) -> &str {
         &self.subject
     }
 
-    /// The verification's evidence (the receipt), as committed with its recorded identity.
+    /// The verification's evidence (the receipt) as the reference it was recorded with — its own
+    /// artifact id, media type and schema, never a run record's.
     #[must_use]
-    pub const fn evidence(&self) -> &Committed {
+    pub const fn evidence(&self) -> &EvidenceRef {
         &self.evidence
     }
 
@@ -431,15 +435,16 @@ impl CommittedCheck {
 }
 
 /// One verification row as `committed_check` reads it: the facts the check committed beside its
-/// records.
+/// records, and the event's own kind and task so the row is refused rather than trusted.
 struct VerificationRow {
     event: String,
     sequence: u64,
+    event_kind: String,
+    event_task: String,
     verdict: String,
     subject: String,
-    evidence_digest: String,
-    evidence_size: u64,
-    identity: Option<String>,
+    /// The receipt's reference, `None` when the row predates migration 6.
+    evidence: Option<serde_json::Value>,
 }
 
 /// The check's record set for `attempt`, visible to `principal` only (R13).
@@ -463,45 +468,46 @@ pub(super) fn committed_check(
         .ok_or(Error::NotFound)?;
     let row = db
         .query_row(
-            "SELECT v.event_id,e.sequence,v.verdict,v.subject_digest,v.evidence_digest,f.size,v.evidence_artifact_id \
+            "SELECT v.event_id,e.sequence,e.kind,e.task_id,v.verdict,v.subject_digest, \
+                    v.evidence_artifact_id,v.evidence_digest,f.size,v.evidence_media_type,v.evidence_schema_id \
              FROM verifications v JOIN events e ON e.id=v.event_id JOIN artifacts f ON f.digest=v.evidence_digest \
              WHERE v.attempt_id=?",
             [attempt],
             |row| {
+                let identified: Option<String> = row.get(6)?;
+                let evidence = match identified {
+                    Some(_) => Some(serde_json::json!({
+                        "artifact_id": row.get::<_, String>(6)?,
+                        "sha256": row.get::<_, String>(7)?,
+                        "byte_length": read_number(row, 8)?,
+                        "media_type": row.get::<_, String>(9)?,
+                        "schema_id": row.get::<_, String>(10)?,
+                    })),
+                    None => None,
+                };
                 Ok(VerificationRow {
                     event: row.get(0)?,
                     sequence: read_number(row, 1)?,
-                    verdict: row.get(2)?,
-                    subject: row.get(3)?,
-                    evidence_digest: row.get(4)?,
-                    evidence_size: read_number(row, 5)?,
-                    identity: row.get(6)?,
+                    event_kind: row.get(2)?,
+                    event_task: row.get(3)?,
+                    verdict: row.get(4)?,
+                    subject: row.get(5)?,
+                    evidence,
                 })
             },
         )
         .optional()?
         .ok_or(Error::Outstanding)?;
-    let VerificationRow {
-        event: verification_event,
-        sequence: verification_sequence,
-        verdict,
-        subject,
-        evidence_digest,
-        evidence_size,
-        identity,
-    } = row;
-    let artifact_id = identity.ok_or(Error::EvidenceIdentity)?;
-    let evidence = Committed {
-        artifact_id,
-        object: Object {
-            digest: evidence_digest,
-            size: evidence_size,
-        },
-        // The receipt is committed under the check, though it is not a run record: `kind` names
-        // what its object is, `Capture` being the nearest kind, and readers use `evidence()`.
-        kind: RunRecordKind::Capture,
-        observation: Observation::Check,
-    };
+    // The row is read back, not trusted: its event is the verification's own, of this task.
+    if row.event_kind != "verification_observed" || row.event_task != task {
+        return Err(Error::Corrupt);
+    }
+    let evidence = row.evidence.ok_or(Error::EvidenceIdentity)?;
+    let evidence = EvidenceRef::parse(&evidence).ok_or(Error::Corrupt)?;
+    let verdict = parse_verdict(&row.verdict)?;
+    Sha256Digest::parse(&row.subject).map_err(|_| Error::Corrupt)?;
+    let (verification_event, verification_sequence, subject) =
+        (row.event, row.sequence, row.subject);
     let mut statement = db.prepare(
         "SELECT r.kind,r.artifact_id,r.digest,f.size FROM attempt_records r \
          JOIN artifacts f ON f.digest=r.digest \

@@ -2,8 +2,8 @@
 //! `~/hee3-evidence/T28/B14-store-runtime-20260926/DESIGN.md`): what the runtime observed of a
 //! run, sealed like [`crate::check::decision::Decision`] — fields private, one production
 //! constructor each over the live fact, and one decoder that is reachable only through the
-//! ledger's commitment ([`crate::store::Committed`], which only [`crate::store::Store::committed_run`]
-//! constructs). So a run record is held either because the runtime observed it or because the
+//! ledger's commitment ([`crate::store::Committed`], which only the ledger's own reads —
+//! [`crate::store::Store::committed_run`] and [`crate::store::Store::committed_check`] — construct). So a run record is held either because the runtime observed it or because the
 //! ledger committed its digest when the runtime wrote it: there is no constructor from free bytes.
 //!
 //! Each record serializes to JSON (`RECORD_MEDIA_TYPE`) under its kind's schema id, both owned by

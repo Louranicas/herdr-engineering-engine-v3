@@ -174,7 +174,9 @@ impl Store {
     /// # Errors
     /// Refuses stale or repeated observations, unsettled workers, unavailable evidence,
     /// impossible cancellation and costs above the reserved bound; `Invalid` for an identity
-    /// name the wire would refuse; `Conflict` for an artifact id already bound to another digest.
+    /// name the wire would refuse; `Conflict` for an artifact id already bound to another digest;
+    /// the inventory bound past what a backup copies (the evidence registers through
+    /// `register_evidence`, as every other committed object does).
     pub fn record_verification(
         &mut self,
         expected: &Expected<'_>,
@@ -295,6 +297,24 @@ pub(super) fn require_verified(
         return Err(Error::Outstanding);
     }
     Ok(())
+}
+
+/// Every verdict, so a stored spelling is read back through the one table that wrote it.
+const VERDICTS: [VerificationVerdict; 6] = [
+    VerificationVerdict::Passed,
+    VerificationVerdict::Failed,
+    VerificationVerdict::Invalid,
+    VerificationVerdict::Error,
+    VerificationVerdict::Timeout,
+    VerificationVerdict::Cancelled,
+];
+
+/// The verdict a stored spelling names; `Corrupt` for any other, since only `verdict_name` writes it.
+pub(super) fn parse_verdict(text: &str) -> Result<VerificationVerdict> {
+    VERDICTS
+        .into_iter()
+        .find(|verdict| verdict_name(*verdict) == text)
+        .ok_or(Error::Corrupt)
 }
 
 fn verdict_name(verdict: VerificationVerdict) -> &'static str {
