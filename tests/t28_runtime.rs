@@ -7,7 +7,9 @@
 //! declared workspace digests are taken from `Snapshot::capture` — P2a pinned `content_digest`
 //! against coreutils, and no verdict here is about the digest itself.
 
+use super::t08_rig::{self, DaemonStandIn};
 use habitat_engine::actions::control::{TaskRequest, Tasks};
+use habitat_engine::app::candidates::{ClassPrompt, FilePins, NativeCandidates, render};
 use habitat_engine::app::class_profile::{self, Profile};
 use habitat_engine::app::live_verifier::LiveVerifier;
 use habitat_engine::app::runtime::{
@@ -32,6 +34,7 @@ use habitat_engine::store::{
 };
 use habitat_engine::task::control::Cancel;
 use habitat_engine::task::driver::{Outcome as Driven, StopReason};
+use habitat_engine::worker::native::FULL_FILE;
 use habitat_engine::worker::resources::Scope;
 use habitat_engine::worker::workspace::Snapshot;
 use std::cell::RefCell;
@@ -52,7 +55,19 @@ const RECEIPT: &str = ReceiptV1::SCHEMA_ID;
 
 type Outcome_ = Result<(), Box<dyn Error>>;
 /// What the candidate source was handed, per request.
-type Asked = Rc<RefCell<Vec<Option<Previous>>>>;
+/// One request the script double was handed (F101: a model that records what it was given): the
+/// previous verification, the attempt's identity, the invocation id the runtime minted, and the
+/// recipe and workspace digests.
+#[derive(Clone, Debug)]
+struct Seen {
+    previous: Option<Previous>,
+    attempt: String,
+    generation: u64,
+    invocation: String,
+    recipe: String,
+    workspace: String,
+}
+type Asked = Rc<RefCell<Vec<Seen>>>;
 /// What the verifier was handed, per check: the snapshot's content digest, its editable bytes,
 /// the check window, and when the double was called (a model, not a script: F101).
 type Handed = Rc<RefCell<Vec<(String, Vec<u8>, CheckWindow, Instant)>>>;
@@ -65,7 +80,9 @@ const ROSTER_KEY: &str = "28f10000-0000-4000-8000-000000000005";
 const OTHER_WORKSPACE: &str = "28f10000-0000-4000-8000-000000000006";
 const PROFILE_DIGEST: &str =
     "sha256:5151515151515151515151515151515151515151515151515151515151515151";
-const BASE_LIB: &[u8] = b"pub fn parse() -> u8 {\n    0\n}\n";
+/// The class's real base (`evaluation/.../base/src/lib.rs`): the bytes the reviewed closure pins, so
+/// the native source's class prompt reads the same file the workspace holds (B14a-4).
+const BASE_LIB: &[u8] = include_bytes!("../evaluation/tasks/WL-U64-PARSE-001/v1/base/src/lib.rs");
 const FIRST: &[u8] = b"pub fn parse() -> u8 {\n    1\n}\n";
 const SECOND: &[u8] = b"pub fn parse() -> u8 {\n    2\n}\n";
 /// Not UTF-8: the class refuses it before any file is created.
@@ -378,7 +395,14 @@ struct Script<'h> {
 
 impl CandidateSource for Script<'_> {
     fn next(&mut self, ask: &habitat_engine::app::runtime::Ask<'_>) -> Candidate {
-        self.seen.borrow_mut().push(ask.previous.cloned());
+        self.seen.borrow_mut().push(Seen {
+            previous: ask.previous.cloned(),
+            attempt: ask.attempt.as_str().to_owned(),
+            generation: ask.generation.value(),
+            invocation: ask.invocation.as_str().to_owned(),
+            recipe: ask.recipe.as_str().to_owned(),
+            workspace: ask.workspace.as_str().to_owned(),
+        });
         if let Some(hook) = self.hook.as_mut() {
             hook();
         }
@@ -528,6 +552,35 @@ fn run<C: CandidateSource, V: Verifier>(
         source,
         verifier,
     )
+}
+
+/// R18 A1 · the whole Ask, per attempt (F101): the attempt ids the ledger holds, generations 1 and
+/// 2, two distinct invocation ids, the recipe the profile's digest, the workspace the baseline's.
+fn assert_asked_whole(
+    rig: &Rig,
+    asked: &[Seen],
+    baseline_digest: &str,
+) -> Result<(), Box<dyn Error>> {
+    let attempt_ids = rows(
+        rig,
+        "SELECT id FROM attempts WHERE task_id=? ORDER BY CAST(generation AS INTEGER)",
+    )?;
+    assert_eq!(
+        asked
+            .iter()
+            .map(|seen| seen.attempt.clone())
+            .collect::<Vec<_>>(),
+        attempt_ids
+            .iter()
+            .map(|row| row[0].clone())
+            .collect::<Vec<_>>()
+    );
+    assert_eq!((asked[0].generation, asked[1].generation), (1, 2));
+    assert_ne!(asked[0].invocation, asked[1].invocation);
+    assert!(UuidV4::parse(&asked[0].invocation).is_ok());
+    assert_eq!(asked[0].recipe, PROFILE_DIGEST);
+    assert_eq!(asked[0].workspace, baseline_digest);
+    Ok(())
 }
 
 /// The previous check as the candidate source was handed it: its verdict, no criteria, and the
@@ -768,9 +821,14 @@ fn a_failed_check_is_repaired_and_the_second_attempt_is_accepted() -> Outcome_ {
     // The second request was handed the first check's verdict and its evidence — the runtime's
     // own record of the mismatched run, citing the four records it committed.
     let asked = asked.borrow();
-    assert_eq!(asked[0], None);
-    assert_previous(asked.get(1), VerificationVerdict::Failed, "failed")?;
+    assert_eq!(asked[0].previous, None);
+    assert_previous(
+        asked.get(1).map(|seen| &seen.previous),
+        VerificationVerdict::Failed,
+        "failed",
+    )?;
     let declared = &rig.profile.declared.workspaces[0];
+    assert_asked_whole(&rig, &asked, &declared.baseline_digest)?;
     let bound = vec![
         declared.baseline_digest.clone(),
         declared.protected_digest.clone(),
@@ -870,7 +928,7 @@ fn a_refused_candidate_is_recorded_failed_without_a_verifier_call() -> Outcome_ 
         bound,
         vec![vec!["1".to_owned(), RECEIPT.to_owned(), "1".to_owned()]]
     );
-    let previous = asked.borrow()[1].clone().ok_or("no previous")?;
+    let previous = asked.borrow()[1].previous.clone().ok_or("no previous")?;
     assert_eq!(
         (previous.verdict, previous.criteria),
         (VerificationVerdict::Failed, 0)
@@ -1790,5 +1848,231 @@ fn a_subject_refusal_is_recorded_as_a_changed_subject() -> Outcome_ {
     assert_eq!(recorded["outcome"], "invalid_subject");
     assert_eq!(recorded["observations"]["subjects"], "changed");
     assert_eq!(recorded["observations"]["process_cleanup"], "complete");
+    Ok(())
+}
+
+// ---- B14a-4 · the native candidate source end to end over the shared offline fixture (R18 proof (d)).
+
+const REFERENCE_LIB: &str =
+    include_str!("../evaluation/tasks/WL-U64-PARSE-001/v1/reference/src/lib.rs");
+const EVAL_TASK: &[u8] = include_bytes!("../evaluation/tasks/WL-U64-PARSE-001/v1/TASK.md");
+const EVAL_CARGO: &[u8] = include_bytes!("../evaluation/tasks/WL-U64-PARSE-001/v1/base/Cargo.toml");
+/// The reviewed closure's workload record: the pins the class prompt's inputs are read against.
+const WORKLOAD_RECORD: &[u8] = include_bytes!(
+    "fixtures/reviewed-003/a87e5ba9f699168556ef0859c0690113f0e1186592109dd797745593aff99121"
+);
+const NATIVE_MODEL: &str = "hee3-t28-native:qualification";
+const NATIVE_LOADED: &str = "hee3-t28-native-loaded:qualification";
+
+fn closure_pins() -> Result<FilePins, Box<dyn Error>> {
+    let record: serde_json::Value = serde_json::from_slice(WORKLOAD_RECORD)?;
+    let pin = |name: &str| -> Result<String, Box<dyn Error>> {
+        Ok(format!(
+            "sha256:{}",
+            record["files_sha256"][name]
+                .as_str()
+                .ok_or("a files_sha256 entry")?
+        ))
+    };
+    Ok(FilePins {
+        task: pin("TASK.md")?,
+        cargo: pin("base/Cargo.toml")?,
+        base: pin("base/src/lib.rs")?,
+    })
+}
+
+/// A native source over the shared fixture under the rig's scratch: the fake answers `response`
+/// with `done_reason` to any prompt (the scenario's prompt is null — attempts differ by history),
+/// under the `/2` row's literals, with the resident model at `context_length`.
+fn native_source(
+    rig: &Rig,
+    stand_in: &DaemonStandIn,
+    answers: &[(&str, &str)],
+    context_length: u64,
+) -> Result<NativeCandidates, Box<dyn Error>> {
+    let root = rig.scratch.0.join("native");
+    let (profile, mut scenario) =
+        t08_rig::fixture(&root, stand_in, NATIVE_MODEL, NATIVE_LOADED, "", (552, 258));
+    scenario["prompt"] = serde_json::Value::Null;
+    scenario["expect"] =
+        serde_json::json!({"raw": false, "options": {"num_ctx": 4096, "num_predict": 1024}});
+    scenario["ps"]["models"][0]["context_length"] = serde_json::json!(context_length);
+    // One generate answer per attempt, in order (the fake serves a list across calls).
+    let template = scenario["generated"].clone();
+    scenario["generated"] = serde_json::Value::Array(
+        answers
+            .iter()
+            .map(|(response, done_reason)| {
+                let mut answer = template.clone();
+                answer["response"] = serde_json::json!(response);
+                answer["done_reason"] = serde_json::json!(done_reason);
+                answer
+            })
+            .collect(),
+    );
+    fs::write(root.join("scenario.json"), serde_json::to_vec(&scenario)?)?;
+    let prompt = ClassPrompt::new(EVAL_TASK, EVAL_CARGO, BASE_LIB, &closure_pins()?)
+        .map_err(|e| format!("{e:?}"))?;
+    // The first attempt's prompt is the rendering over no history; pinned here as the runtime's own.
+    assert!(
+        render(&prompt, None)
+            .map_err(|e| format!("{e:?}"))?
+            .starts_with(std::str::from_utf8(EVAL_TASK)?)
+    );
+    Ok(NativeCandidates::new(profile, FULL_FILE, prompt))
+}
+
+fn stop_body(rig: &Rig) -> Result<serde_json::Value, Box<dyn Error>> {
+    let digest = rows(
+        rig,
+        "SELECT evidence_digest FROM task_stops WHERE task_id=?",
+    )?;
+    object_json(rig, &digest[0][0])
+}
+
+/// R18 (d) · the native source drives a task to acceptance: the fake hands back the reference file
+/// bare, the runtime applies it, and the verifier double is handed exactly the reference's bytes as
+/// the editable — the candidate the model produced is the candidate the check saw.
+#[test]
+fn a_native_source_over_the_fake_drives_a_task_to_acceptance() -> Outcome_ {
+    let rig = rig(&Shape::default())?;
+    let stand_in = DaemonStandIn::spawn();
+    let source = native_source(&rig, &stand_in, &[(REFERENCE_LIB, "stop")], 4096)?;
+    let principal = owner();
+    let (verifier, handed) = oracle(vec![matched(7)]);
+    let outcome = run(&rig, &principal, source, verifier, 5_000).map_err(|e| format!("{e:?}"))?;
+    assert_eq!(outcome, Outcome::Driven(Driven::Accepted));
+    assert_eq!(state(&rig)?, "accepted");
+    let handed = handed.borrow();
+    assert_eq!(handed.len(), 1);
+    assert_eq!(
+        handed[0].1,
+        REFERENCE_LIB.as_bytes(),
+        "the editable the check saw"
+    );
+    assert_eq!(verifications(&rig)?[0][0], "passed");
+    Ok(())
+}
+
+/// R18 (d) · a native answer the grammar refuses is recorded as a refused candidate, whole: verdict
+/// Failed at no cost, the refusal by its `candidate_*` name, `candidate_sha256` the digest of the text
+/// the model returned; no verifier call for it. The fake then answers the second attempt with the
+/// reference file, which the check passes: two attempts, two verifications, the task accepted.
+#[test]
+fn a_refused_native_answer_is_recorded_as_a_refused_candidate_whole() -> Outcome_ {
+    let rig = rig(&Shape::default())?;
+    let stand_in = DaemonStandIn::spawn();
+    let source = native_source(
+        &rig,
+        &stand_in,
+        &[("   \n", "stop"), (REFERENCE_LIB, "stop")],
+        4096,
+    )?;
+    let principal = owner();
+    let (verifier, handed) = oracle(vec![matched(7)]);
+    let outcome = run(&rig, &principal, source, verifier, 5_000).map_err(|e| format!("{e:?}"))?;
+    assert_eq!(outcome, Outcome::Driven(Driven::Accepted));
+    assert_eq!(
+        handed.borrow().len(),
+        1,
+        "no verifier call for the refused candidate"
+    );
+    assert_eq!(handed.borrow()[0].1, REFERENCE_LIB.as_bytes());
+    let found = verifications(&rig)?;
+    assert_eq!(found.len(), 2);
+    assert_eq!(
+        [found[0][0].clone()]
+            .into_iter()
+            .chain(found[0][2..].iter().cloned())
+            .collect::<Vec<_>>(),
+        vec![
+            "failed".to_owned(),
+            "0".to_owned(),
+            "application/json".to_owned(),
+            "hee3.refused-candidate/1".to_owned(),
+            "0000000000000000".to_owned(),
+        ]
+    );
+    assert_eq!(found[1][0], "passed");
+    let evidence = rows(
+        &rig,
+        "SELECT v.evidence_digest FROM verifications v JOIN attempts a ON a.id=v.attempt_id \
+         WHERE a.task_id=? ORDER BY CAST(a.generation AS INTEGER)",
+    )?;
+    assert_eq!(
+        object_json(&rig, &evidence[0][0])?,
+        serde_json::json!({
+            "kind": "refused_candidate",
+            "refusal": "candidate_empty",
+            "candidate_sha256": t08_rig::digest(b"   \n"),
+        })
+    );
+    Ok(())
+}
+
+/// R18 (d), A3, A9 · a provider failure stops the task `worker_failed` after ONE ask — the resident
+/// model at the qualified 512 context under the `/2` profile is `identity` at the readback before any
+/// generate — and the stop body's `worker` field names it whole; no verification was recorded.
+#[test]
+fn a_provider_failure_stops_the_task_with_the_worker_named() -> Outcome_ {
+    let rig = rig(&Shape::default())?;
+    let stand_in = DaemonStandIn::spawn();
+    let source = native_source(&rig, &stand_in, &[(REFERENCE_LIB, "stop")], 512)?;
+    let principal = owner();
+    let (verifier, handed) = oracle(vec![]);
+    let outcome = run(&rig, &principal, source, verifier, 5_000).map_err(|e| format!("{e:?}"))?;
+    assert_eq!(
+        outcome,
+        Outcome::Driven(Driven::Stopped(StopReason::WorkerFailed))
+    );
+    assert_eq!(state(&rig)?, "failed");
+    assert!(handed.borrow().is_empty());
+    assert_eq!(
+        rows(&rig, "SELECT reason FROM task_stops WHERE task_id=?")?,
+        vec![vec!["worker_failed".to_owned()]]
+    );
+    let body = stop_body(&rig)?;
+    assert_eq!(body["reason"], "worker_failed");
+    assert_eq!(body["attempts"], 1);
+    assert_eq!(
+        body["worker"],
+        serde_json::json!({
+            "provider": "ollama-local",
+            "error": "identity",
+            "state": "not_dispatched",
+            "retained": 0,
+        })
+    );
+    Ok(())
+}
+
+/// R18 (d), A2 · a work reservation past the adapter's own cap: the source passes the window through,
+/// the adapter refuses `deadline` at its door before any exchange, and the task stops `worker_failed`
+/// with the refusal named — the cap is met by name, never clamped to fit.
+#[test]
+fn a_work_reservation_past_the_adapter_cap_is_refused_by_name() -> Outcome_ {
+    // The rig's submission limit is 1,200,000 ms: 950 s of work and 200 s of verify fit inside it,
+    // and the work window (950 s less the teardown share) sits past the adapter's 900 s cap.
+    let rig = rig(&Shape {
+        work_ms: 950_000,
+        verify_ms: 200_000,
+        ..Shape::default()
+    })?;
+    let stand_in = DaemonStandIn::spawn();
+    let source = native_source(&rig, &stand_in, &[(REFERENCE_LIB, "stop")], 4096)?;
+    let principal = owner();
+    let (verifier, _) = oracle(vec![]);
+    let outcome = run(&rig, &principal, source, verifier, 5_000).map_err(|e| format!("{e:?}"))?;
+    assert_eq!(
+        outcome,
+        Outcome::Driven(Driven::Stopped(StopReason::WorkerFailed))
+    );
+    let body = stop_body(&rig)?;
+    assert_eq!(body["worker"]["error"], "deadline");
+    assert_eq!(body["worker"]["state"], "not_dispatched");
+    assert!(
+        !rig.scratch.0.join("native/calls.log").exists(),
+        "no exchange ran"
+    );
     Ok(())
 }

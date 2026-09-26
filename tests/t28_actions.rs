@@ -44,6 +44,10 @@ mod preview;
 #[path = "t28_evidence.rs"]
 mod evidence;
 
+/// The offline native fixture shared with the t08 contract battery (B14a-4, A12).
+#[path = "t08_rig.rs"]
+mod t08_rig;
+
 /// B14a-1c: the attempt lifecycle over the real ledger (`app::runtime`).
 #[path = "t28_runtime.rs"]
 mod runtime;

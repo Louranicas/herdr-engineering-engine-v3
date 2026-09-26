@@ -2235,7 +2235,9 @@ class T06QualityInventoryControls(unittest.TestCase):
         first = (ROOT / quality.CONTRACT_CLIENT_FIXTURE).read_bytes().split(b"\n", 1)[0]
         self.assertEqual(first, b"#!" + pin["path"].encode())
         self.assertEqual(pin["sha256"], hashlib.sha256(Path(pin["path"]).read_bytes()).hexdigest())
-        for source in ("tests/t08_contract.rs", "tests/t08_native.rs"):
+        # The contract battery's stand-in is declared once, in the fixture file it shares with the
+        # t28 runtime proofs (B14a-4); the native battery declares its own.
+        for source in ("tests/t08_rig.rs", "tests/t08_native.rs"):
             stand_in = quality.daemon_stand_in(ROOT, source, required=True)
             declared = re.findall(r"const EXECUTABLE: &'static str = \"(/[^\"]+)\";", (ROOT / source).read_text())
             self.assertEqual(declared, [stand_in["path"]])
@@ -2258,7 +2260,7 @@ class T06QualityInventoryControls(unittest.TestCase):
                 quality.daemon_stand_in(root, "battery.rs", required=True)
         text = ast.unparse(next(node for node in ast.parse((ROOT / "tools/check-quality").read_text()).body if isinstance(node, ast.FunctionDef) and node.name == "main"))
         self.assertIn("report['executables']['contract-client-interpreter'] = native_client_interpreter(ROOT, CONTRACT_CLIENT_FIXTURE)", text)
-        self.assertIn("report['executables']['contract-daemon-stand-in'] = daemon_stand_in(ROOT, 'tests/t08_contract.rs', required=True)", text)
+        self.assertIn("report['executables']['contract-daemon-stand-in'] = daemon_stand_in(ROOT, 'tests/t08_rig.rs', required=True)", text)
         self.assertIn("stand_in = daemon_stand_in(ROOT, 'tests/t08_native.rs', required=False)", text)
 
     def test_t09_route_census_and_owned_inputs(self):

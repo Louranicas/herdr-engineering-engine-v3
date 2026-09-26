@@ -34,7 +34,10 @@ if operation == 'generate':
     (root / 'captured-request.json').write_bytes(raw)
     request = json.loads(raw)
     expect = s['expect']
-    assert request == {'model': s['model'], 'prompt': s['prompt'], 'stream': False, 'raw': expect['raw'],
+    # A null scenario prompt admits any prompt (the t28 runtime proofs drive several attempts, whose
+    # prompts differ by their history, through one scenario); the t08 battery pins its prompt exactly.
+    prompt = request['prompt'] if s['prompt'] is None else s['prompt']
+    assert request == {'model': s['model'], 'prompt': prompt, 'stream': False, 'raw': expect['raw'],
                        'truncate': False, 'shift': False, 'keep_alive': 60,
                        'options': expect['options']}
     (root / 'generation-started').write_text('fake client reached generation')
@@ -62,6 +65,13 @@ if operation == 'generate':
         sys.stdout.write(fault['text'])
         sys.exit(0)
     value = s['generated']
+    # A LIST of generate answers is consumed in order across calls (the t28 runtime proofs drive
+    # several attempts through one scenario); a single object answers every call.
+    if isinstance(value, list):
+        counter = root / 'generate-count'
+        served = int(counter.read_text()) if counter.exists() else 0
+        counter.write_text(str(served + 1))
+        value = value[min(served, len(value) - 1)]
 else:
     value = s[operation]
     if operation == 'ps' and (root / 'generation-started').exists() and 'post_ps' in s:

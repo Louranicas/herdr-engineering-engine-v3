@@ -8,7 +8,7 @@
 //!   E model/effort recording (T08C-20..23).
 //! Synthetic model/runtime observations are never backend qualification.
 use habitat_engine::contracts::{Sha256Digest, UuidV4};
-use habitat_engine::worker::native::{self, Daemon, Error, FilePin, Profile, ProviderState};
+use habitat_engine::worker::native::{self, Error, Profile, ProviderState};
 use habitat_engine::worker::process::{Interruption, exited_during_census};
 use habitat_engine::worker::{
     self, CancelDispatch, CancelReason, Cancellation, Candidate, Capabilities, ContractError,
@@ -16,67 +16,19 @@ use habitat_engine::worker::{
     Terminal, Usage, UsageForm, UsageScope, UsageStage,
 };
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 use std::fs;
-use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
-use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::path::PathBuf;
 use std::sync::{
     Arc,
     atomic::{AtomicBool, AtomicU64, Ordering},
 };
 use std::time::{Duration, Instant};
 
-/// B14a-4 · the native candidate source through this Rig (R18 proofs (b) and (c)).
-#[path = "t08_candidates.rs"]
-mod candidates;
+/// The offline native fixture shared with the t28 runtime proofs (B14a-4, A12).
+#[path = "t08_rig.rs"]
+mod rig;
+use rig::{DaemonStandIn, digest, fixture};
 
-static NEXT: AtomicU64 = AtomicU64::new(0);
-const MODEL: &str = "hee3-t08-contract:qualification";
-/// The loaded row deliberately carries a name distinct from the request so a
-/// `provider_model` equal to it proves readback, not request echo.
-const LOADED: &str = "hee3-t08-contract-loaded:qualification";
-const PROMPT: &str = "Return exactly seven.";
-const INPUT_TOKENS: u64 = 41;
-const OUTPUT_TOKENS: u64 = 3;
-/// Pinned llama3.2:3b manifest digest observed by both actual cohorts
-/// (`tests/fixtures/native/actual/*-observation.json`).
-const PINNED_MODEL_DIGEST: &str =
-    "sha256:a80c4f17acd55265feec403c7aef86be0c25983ab279d83f3bcd3abbcb5b8b72";
-const PINNED_RUNTIME_INSTANCE: &str = "04f2b5b0-f5ad-4765-aaf0-0584759ceac7:2776062:56361454";
-/// Overbound prompt recipe: sha256 of `fixtures/native/prompt.txt` (135168 bytes).
-const OVERBOUND_RECIPE: &str =
-    "sha256:46f9ab6eac6c2d1149a4eeb47bf146ce57fd7a9cff889686a7ceb4525f8161fa";
-const OVERBOUND_PROMPT: &str = include_str!("fixtures/native/prompt.txt");
-/// Pins quoted by independent records: `root-actual-readback.json` (positive) and the
-/// overbound actual review (negative).
-const POSITIVE_OBSERVATION_SHA256: &str =
-    "ac7442748e24ebe8a0dfa25ab7d96dccfe6ccd35163cc185a647e6db85d08281";
-const OVERBOUND_OBSERVATION_SHA256: &str =
-    "bfc9699fb29da4863a45f40f2276f6dc085af285604a1af6d70a6e3c95dd2eaa";
-const POSITIVE_OBSERVATION: &[u8] =
-    include_bytes!("fixtures/native/actual/positive-observation.json");
-const OVERBOUND_OBSERVATION: &[u8] =
-    include_bytes!("fixtures/native/actual/overbound-observation.json");
-const OVERBOUND_STDOUT: &[u8] = include_bytes!("fixtures/native/actual/overbound-03-stdout");
-const OVERBOUND_STDERR: &[u8] = include_bytes!("fixtures/native/actual/overbound-03-stderr");
-
-fn digest(bytes: &[u8]) -> String {
-    use std::fmt::Write;
-    let mut out = String::from("sha256:");
-    for byte in Sha256::digest(bytes) {
-        write!(out, "{byte:02x}").unwrap();
-    }
-    out
-}
-fn pin(path: &Path) -> FilePin {
-    let raw = fs::read(path).unwrap();
-    FilePin {
-        path: path.to_owned(),
-        sha256: digest(&raw),
-        bytes: raw.len() as u64,
-    }
-}
 /// The fake client prints `json.dumps(value, separators=(',', ':'))` plus LF over a
 /// sorted-key object; `serde_json` compact rendering is the independent reference.
 fn rendered(value: &Value) -> Vec<u8> {
@@ -118,66 +70,41 @@ fn full() -> Request<'static> {
         PROMPT,
     )
 }
-/// A live process pinned as the fixture's daemon. Before QC-F3b the fixture pinned the test
-/// executable itself (47 MiB in debug), which the adapter re-hashes through `/proc/<pid>/exe`
-/// up to three times per run (`native::daemon` inside `subject` before and after generation
-/// and once before the request): 87 debug SHA-256 passes over 47 MiB were the entire 10x
-/// debug/release cost. `/usr/bin/sleep` is tens of KiB; the bound below is the control.
-struct DaemonStandIn {
-    child: Child,
-}
-impl DaemonStandIn {
-    const EXECUTABLE: &'static str = "/usr/bin/sleep";
-    /// QC-F3b control: a stand-in above this bound reintroduces the hashing cost.
-    const EXECUTABLE_BOUND: u64 = 1024 * 1024;
-    fn spawn() -> Self {
-        let child = Command::new(Self::EXECUTABLE)
-            .arg("600")
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .unwrap();
-        Self { child }
-    }
-    fn daemon(&self) -> Daemon {
-        let pid = self.child.id();
-        let exe = pin(Path::new(&format!("/proc/{pid}/exe")));
-        assert!(
-            exe.bytes <= Self::EXECUTABLE_BOUND,
-            "QC-F3b: pinned daemon executable {} (resolves to {}) is {} bytes, above the {} byte bound the adapter hashes up to three times per run",
-            exe.path.display(),
-            fs::canonicalize(&exe.path).unwrap_or_default().display(),
-            exe.bytes,
-            Self::EXECUTABLE_BOUND
-        );
-        let stat = fs::read_to_string(format!("/proc/{pid}/stat")).unwrap();
-        Daemon {
-            pid,
-            start_ticks: stat
-                .rsplit_once(')')
-                .unwrap()
-                .1
-                .split_whitespace()
-                .nth(19)
-                .unwrap()
-                .parse()
-                .unwrap(),
-            boot_id: fs::read_to_string("/proc/sys/kernel/random/boot_id")
-                .unwrap()
-                .trim()
-                .into(),
-            executable_sha256: exe.sha256,
-            executable_bytes: exe.bytes,
-        }
-    }
-}
-impl Drop for DaemonStandIn {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-    }
-}
+
+/// B14a-4 · the native candidate source through this Rig (R18 proofs (b) and (c)).
+#[path = "t08_candidates.rs"]
+mod candidates;
+
+static NEXT: AtomicU64 = AtomicU64::new(0);
+const MODEL: &str = "hee3-t08-contract:qualification";
+/// The loaded row deliberately carries a name distinct from the request so a
+/// `provider_model` equal to it proves readback, not request echo.
+const LOADED: &str = "hee3-t08-contract-loaded:qualification";
+const PROMPT: &str = "Return exactly seven.";
+const INPUT_TOKENS: u64 = 41;
+const OUTPUT_TOKENS: u64 = 3;
+/// Pinned llama3.2:3b manifest digest observed by both actual cohorts
+/// (`tests/fixtures/native/actual/*-observation.json`).
+const PINNED_MODEL_DIGEST: &str =
+    "sha256:a80c4f17acd55265feec403c7aef86be0c25983ab279d83f3bcd3abbcb5b8b72";
+const PINNED_RUNTIME_INSTANCE: &str = "04f2b5b0-f5ad-4765-aaf0-0584759ceac7:2776062:56361454";
+/// Overbound prompt recipe: sha256 of `fixtures/native/prompt.txt` (135168 bytes).
+const OVERBOUND_RECIPE: &str =
+    "sha256:46f9ab6eac6c2d1149a4eeb47bf146ce57fd7a9cff889686a7ceb4525f8161fa";
+const OVERBOUND_PROMPT: &str = include_str!("fixtures/native/prompt.txt");
+/// Pins quoted by independent records: `root-actual-readback.json` (positive) and the
+/// overbound actual review (negative).
+const POSITIVE_OBSERVATION_SHA256: &str =
+    "ac7442748e24ebe8a0dfa25ab7d96dccfe6ccd35163cc185a647e6db85d08281";
+const OVERBOUND_OBSERVATION_SHA256: &str =
+    "bfc9699fb29da4863a45f40f2276f6dc085af285604a1af6d70a6e3c95dd2eaa";
+const POSITIVE_OBSERVATION: &[u8] =
+    include_bytes!("fixtures/native/actual/positive-observation.json");
+const OVERBOUND_OBSERVATION: &[u8] =
+    include_bytes!("fixtures/native/actual/overbound-observation.json");
+const OVERBOUND_STDOUT: &[u8] = include_bytes!("fixtures/native/actual/overbound-03-stdout");
+const OVERBOUND_STDERR: &[u8] = include_bytes!("fixtures/native/actual/overbound-03-stderr");
+
 struct Rig {
     root: PathBuf,
     profile: Profile,
@@ -192,42 +119,15 @@ impl Rig {
             std::process::id(),
             NEXT.fetch_add(1, Ordering::Relaxed)
         ));
-        fs::DirBuilder::new().mode(0o700).create(&root).unwrap();
-        let blobs = root.join("blobs");
-        fs::DirBuilder::new().mode(0o700).create(&blobs).unwrap();
-        let model = b"not a real model; finite offline contract fixture";
-        let model_digest = digest(model);
-        fs::write(blobs.join(model_digest.replace(':', "-")), model).unwrap();
-        let config=serde_json::to_vec(&json!({"model_format":"gguf","model_family":"llama","model_families":["llama"],"model_type":"3.2B","file_type":"Q4_K_M","architecture":"amd64","os":"linux","rootfs":{"type":"layers","diff_ids":[model_digest]}})).unwrap();
-        let config_digest = digest(&config);
-        fs::write(blobs.join(config_digest.replace(':', "-")), &config).unwrap();
-        let manifest = root.join("manifest.json");
-        fs::write(&manifest,serde_json::to_vec(&json!({"schemaVersion":2,"mediaType":"application/vnd.docker.distribution.manifest.v2+json","config":{"mediaType":"application/vnd.docker.container.image.v1+json","digest":config_digest,"size":config.len()},"layers":[{"mediaType":"application/vnd.ollama.image.model","digest":model_digest,"size":model.len()}]})).unwrap()).unwrap();
-        let client = root.join("client.py");
-        fs::write(
-            &client,
-            include_bytes!("fixtures/native/contract-client.py"),
-        )
-        .unwrap();
-        fs::set_permissions(&client, fs::Permissions::from_mode(0o700)).unwrap();
         let stand_in = DaemonStandIn::spawn();
-        let daemon = stand_in.daemon();
-        let profile = Profile {
-            model: MODEL.into(),
-            manifest: pin(&manifest),
-            blobs,
-            client: pin(&client),
-            daemon,
-            directory: root.clone(),
-        };
-        let details = json!({"parent_model":"","format":"gguf","family":"llama","families":["llama"],"parameter_size":"3.2B","quantization_level":"Q4_K_M"});
-        let d = profile.manifest.sha256.strip_prefix("sha256:").unwrap();
-        let scenario = json!({"model":MODEL,"prompt":PROMPT,
-            "expect":{"raw":true,"options":{"num_ctx":512,"num_predict":64}},
-            "version":{"version":"0.0.0"},
-            "tags":{"models":[{"name":MODEL,"model":MODEL,"modified_at":"2026-09-21T00:00:00Z","size":2_339_219_456_u64,"digest":d,"details":details}]},
-            "ps":{"models":[{"name":LOADED,"model":LOADED,"size":2_339_219_456_u64,"size_vram":2_339_219_456_u64,"expires_at":"2026-09-21T00:01:00Z","context_length":512,"digest":d,"details":details}]},
-            "generated":{"model":MODEL,"created_at":"2026-09-21T00:00:01Z","response":"seven","done":true,"done_reason":"stop","total_duration":142_397_958,"load_duration":74_557_306,"prompt_eval_count":INPUT_TOKENS,"prompt_eval_duration":57_750_770,"eval_count":OUTPUT_TOKENS,"eval_duration":8_671_221}});
+        let (profile, scenario) = fixture(
+            &root,
+            &stand_in,
+            MODEL,
+            LOADED,
+            PROMPT,
+            (INPUT_TOKENS, OUTPUT_TOKENS),
+        );
         Self {
             root,
             profile,
