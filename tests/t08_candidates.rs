@@ -4,7 +4,7 @@
 
 use super::{LOADED, MODEL, Rig, digest, rendered};
 use habitat_engine::app::candidates::{
-    ClassPrompt, FilePins, NativeCandidates, Outcome, PromptSite, Refusal, Settle, render,
+    ClassPrompt, ClassPromptError, FilePins, NativeCandidates, Outcome, Refusal, Settle, render,
 };
 use habitat_engine::app::runtime::{Ask, Candidate, CandidateSource, Previous};
 use habitat_engine::contracts::{Sha256Digest, UuidV4};
@@ -273,7 +273,7 @@ fn t08n_02_provider_failures_stop_the_attempt_by_name_without_a_second_generate(
     wrong.base = digest(b"another base");
     assert_eq!(
         ClassPrompt::new(TASK, CARGO, BASE, &wrong).err(),
-        Some(Refusal::Prompt(PromptSite::Base))
+        Some(ClassPromptError::Base)
     );
     assert_eq!(LOADED, "hee3-t08-contract-loaded:qualification");
 }
@@ -295,4 +295,29 @@ fn t08n_04_an_unknown_adapter_id_is_refused_at_the_door() {
     );
     assert!(matches!(run, Err(native::Error::Profile)), "{run:?}");
     assert!(rig.calls().is_empty(), "{:?}", rig.calls());
+}
+
+/// The fake's control: asked past its scripted answers it exits 3 with a diagnostic, so a second
+/// generate the runtime should never make is a `Provider { Process }` failure, never a silent repeat
+/// of the last answer.
+#[test]
+fn t08n_05_the_fake_refuses_a_generate_past_its_scripted_answers() {
+    let cancelled = AtomicBool::new(false);
+    let mut rig = full_file_rig(None);
+    rig.scenario["generated"] = json!([rig.scenario["generated"].clone()]);
+    rig.scenario["generated"][0]["response"] = json!(REFERENCE);
+    rig.save();
+    let mut source = NativeCandidates::new(rig.profile.clone(), FULL_FILE, class_prompt());
+    let work_until = rig.origin + Duration::from_secs(60);
+    assert_eq!(
+        source.next(&ask(None, rig.origin, work_until, &cancelled)),
+        Candidate::Replacement(REFERENCE.as_bytes().to_vec())
+    );
+    assert!(matches!(
+        source.next(&ask(None, rig.origin, work_until, &cancelled)),
+        Candidate::Provider {
+            error: native::Error::Process,
+            ..
+        }
+    ));
 }

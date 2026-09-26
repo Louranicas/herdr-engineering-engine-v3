@@ -1871,6 +1871,9 @@ const REFERENCE_LIB: &str =
     include_str!("../evaluation/tasks/WL-U64-PARSE-001/v1/reference/src/lib.rs");
 const EVAL_TASK: &[u8] = include_bytes!("../evaluation/tasks/WL-U64-PARSE-001/v1/TASK.md");
 const EVAL_CARGO: &[u8] = include_bytes!("../evaluation/tasks/WL-U64-PARSE-001/v1/base/Cargo.toml");
+/// The measured DS13 prompt (retained fixture; its renderer is
+/// `T00-plan-20260926/DS13-frame-renderer-20260926.py`), the whole second prompt is compared against.
+const MEASURED: &str = include_str!("fixtures/native/ds13-frame-prompt.txt");
 /// The reviewed closure's workload record: the pins the class prompt's inputs are read against.
 const WORKLOAD_RECORD: &[u8] = include_bytes!(
     "fixtures/reviewed-003/a87e5ba9f699168556ef0859c0690113f0e1186592109dd797745593aff99121"
@@ -2014,13 +2017,15 @@ fn a_refused_native_answer_is_recorded_as_a_refused_candidate_whole() -> Outcome
         rig.scratch.0.join("native/captured-request.json"),
     )?)?;
     let prompt = captured["prompt"].as_str().ok_or("a captured prompt")?;
-    assert!(
-        prompt.contains(
-            "\n\nPrevious attempt: failed, 0 criteria satisfied, refused as candidate_empty.\n\nReply with the complete contents of src/lib.rs and nothing else: no prose, no fences.\n"
-        ),
-        "{prompt}"
+    // Whole: the measured DS13 frame (a retained fixture) with its history line swapped.
+    assert_eq!(
+        prompt,
+        MEASURED.replacen(
+            "\n\nFirst attempt.\n\n",
+            "\n\nPrevious attempt: failed, 0 criteria satisfied, refused as candidate_empty.\n\n",
+            1
+        )
     );
-    assert!(prompt.starts_with(std::str::from_utf8(EVAL_TASK)?));
     assert_eq!(captured["raw"], false);
     let evidence = rows(
         &rig,

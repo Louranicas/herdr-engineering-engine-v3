@@ -2346,5 +2346,69 @@ class T06QualityInventoryControls(unittest.TestCase):
                 quality.require_rust_test_summaries(fault, expected, "t09 census fault")
         quality.require_rust_test_summaries(valid, expected, "t09 census benign")
 
+
+class IncludeCensusControls(unittest.TestCase):
+    """The include census (B14a-4 closure 2): every `include_str!`/`include_bytes!` site names a
+    declared gate input, every site is parsed or refused, and main runs it and prints its count."""
+
+    FIXTURE = "tests/fixtures/native/ds13-frame-prompt.txt"
+
+    def test_census_over_the_tree_counts_every_site_and_sees_the_new_fixture(self):
+        deadline = time.monotonic() + 120
+        declared = quality.quality_subject_paths(ROOT, deadline, False)
+        sites, count = quality.include_census(ROOT, declared, deadline)
+        # An independent count of the macro sites: plain substring counting, not the census regex.
+        expected = sum((ROOT / name).read_text().count("include_str!") + (ROOT / name).read_text().count("include_bytes!")
+                       for directory in ("src", "tests") for name in quality.tree_files(ROOT, directory, deadline, ".rs"))
+        self.assertEqual(sites, expected)
+        self.assertGreaterEqual(sites, 1)
+        self.assertEqual(count, len(set(declared)))
+        self.assertIn(self.FIXTURE, declared)
+        # Negative control on the live tree: the fixture undeclared is the H1 shape, named from its site.
+        with self.assertRaisesRegex(ValueError, r"Undeclared include input: " + re.escape(self.FIXTURE)
+                                    + r" \(from src/app/candidates\.rs:\d+\)"):
+            quality.include_census(ROOT, [name for name in declared if name != self.FIXTURE], deadline)
+        # rust_only declares fewer inputs but every include is still among them.
+        quality.include_census(ROOT, quality.quality_subject_paths(ROOT, deadline, True), deadline)
+
+    def test_census_parses_both_spellings_and_refuses_the_rest(self):
+        deadline = time.monotonic() + 30
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            for directory in ("src", "tests/fixtures", "docs"):
+                (root / directory).mkdir(parents=True)
+            (root / "docs/x.md").write_text("x")
+            (root / "tests/fixtures/y.json").write_text("{}")
+            (root / "src/a.rs").write_text('const A: &str = include_str!("../docs/x.md");\n'
+                                          'const B: &[u8] = include_bytes!(\n    "../tests/fixtures/y.json"\n);\n')
+            (root / "tests/b.rs").write_text('const C: &str = include_str!(concat!(\n    env!("CARGO_MANIFEST_DIR"),\n'
+                                            '    "/tests/fixtures/y.json"\n));\n')
+            self.assertEqual(quality.include_census(root, ["docs/x.md", "tests/fixtures/y.json", "src/a.rs"], deadline),
+                             (3, 3))
+            with self.assertRaisesRegex(ValueError, r"Undeclared include input: docs/x\.md \(from src/a\.rs:1\)"):
+                quality.include_census(root, ["tests/fixtures/y.json"], deadline)
+            with self.assertRaisesRegex(ValueError, r"Undeclared include input: tests/fixtures/y\.json \(from src/a\.rs:2\)"):
+                quality.include_census(root, ["docs/x.md"], deadline)
+            (root / "src/a.rs").write_text('const A: &str = include_str!(concat!("../docs/", "x.md"));\n')
+            with self.assertRaisesRegex(ValueError, r"Unparsed include argument: src/a\.rs:1"):
+                quality.include_census(root, ["docs/x.md", "tests/fixtures/y.json"], deadline)
+            (root / "src/a.rs").write_text('\n\nconst A: &str = include_str!(env!("HOME"));\n')
+            with self.assertRaisesRegex(ValueError, r"Unparsed include argument: src/a\.rs:3"):
+                quality.include_census(root, ["tests/fixtures/y.json"], deadline)
+            (root / "src/a.rs").write_text('const A: &str = include_str!("../../etc/hostname");\n')
+            with self.assertRaisesRegex(ValueError, r"Include escapes the tree: src/a\.rs:1"):
+                quality.include_census(root, ["tests/fixtures/y.json"], deadline)
+            (root / "src/a.rs").write_text("// none\n")
+            (root / "tests/b.rs").write_text("// none\n")
+            self.assertEqual(quality.include_census(root, [], deadline), (0, 0))
+
+    def test_main_runs_the_census_and_prints_its_count(self):
+        text = ast.unparse(next(node for node in ast.parse((ROOT / "tools/check-quality").read_text()).body
+                                if isinstance(node, ast.FunctionDef) and node.name == "main"))
+        self.assertIn("include_sites, include_declared = include_census(ROOT, required, work_deadline)", text)
+        self.assertIn("print('include-census: sites=' + str(include_sites) + ' declared=' + str(include_declared), flush=True)", text)
+        self.assertIn("report['include_census'] = {'sites': include_sites, 'declared': include_declared}", text)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

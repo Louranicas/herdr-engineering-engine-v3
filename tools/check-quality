@@ -272,9 +272,10 @@ T07_STARTUP_INPUTS = ("src/app/startup.rs", "src/store/reconciliation.rs", "test
 # cohorts were produced with, registered in the manifest as an exact inventory
 # that Clippy checks and nothing runs. control-v1/ and README.stub.md under
 # tests/fixtures/native are read by no registered Rust target and stay unpinned.
-T08_CONTRACT_TARGET_COUNTS = {"t08_contract": 28}
+T08_CONTRACT_TARGET_COUNTS = {"t08_contract": 29}
 T08_CONTRACT_INPUTS = (
     "src/worker/native.rs", "src/worker/mod.rs", "tests/t08_contract.rs", "tests/t08_candidates.rs",
+    "tests/fixtures/native/ds13-frame-prompt.txt",
     "tests/fixtures/native/contract-client.py", "tests/fixtures/native/prompt.txt",
     "tests/fixtures/native/actual/positive-observation.json",
     "tests/fixtures/native/actual/overbound-observation.json",
@@ -785,6 +786,49 @@ def refuse_untracked_inputs(root, names, deadline):
                          + ", ".join(unexcused))
 
 
+INCLUDE_MACRO = re.compile(r"include_(?:str|bytes)!\s*\(")
+INCLUDE_LITERAL = re.compile(r'^\s*"([^"\\]+)"\s*\)')
+INCLUDE_MANIFEST = re.compile(r'^\s*concat!\s*\(\s*env!\s*\(\s*"CARGO_MANIFEST_DIR"\s*\)\s*,\s*"(/[^"\\]+)"\s*\)\s*\)')
+
+
+def include_census(root, declared, deadline):
+    """Every file a Rust source compiles in by `include_str!`/`include_bytes!` must be a declared
+    gate input, or the copied subject compiles against a file it never copied.
+
+    B14a-4 review H1 was the THIRD undeclared include in one day (`base/Cargo.toml`, found by a
+    reviewer each time): the gate's world is `quality_subject_paths`, and an include is a read the
+    gate could not see. Two spellings are parsed -- a literal path, resolved against the source
+    file's directory as rustc does, and `concat!(env!("CARGO_MANIFEST_DIR"), "/path")`, resolved
+    against the root; any other argument refuses by file and line, so the census is a count of
+    every macro site, never of the ones it happened to understand. Returns (sites, declared) once
+    every site's file is declared and lies under the root."""
+    declared = set(declared)
+    sites = 0
+    for directory in ("src", "tests"):
+        for name in tree_files(root, directory, deadline, ".rs"):
+            require_work_time(deadline, "include census")
+            text = (root / name).read_text()
+            for match in INCLUDE_MACRO.finditer(text):
+                sites += 1
+                line = text.count("\n", 0, match.start()) + 1
+                rest = text[match.end():]
+                literal = INCLUDE_LITERAL.match(rest)
+                manifest = INCLUDE_MANIFEST.match(rest)
+                if literal is not None:
+                    target = (root / name).parent / literal.group(1)
+                elif manifest is not None:
+                    target = root / manifest.group(1).lstrip("/")
+                else:
+                    raise ValueError("Unparsed include argument: " + name + ":" + str(line))
+                normal = os.path.normpath(str(target))
+                if not normal.startswith(str(root) + os.sep):
+                    raise ValueError("Include escapes the tree: " + name + ":" + str(line))
+                relative = os.path.relpath(normal, str(root))
+                if relative not in declared:
+                    raise ValueError("Undeclared include input: " + relative + " (from " + name + ":" + str(line) + ")")
+    return sites, len(declared)
+
+
 def quality_subject_paths(root, deadline, rust_only):
     required = ["Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "tools/check-quality",
                 "tools/development_process.py", "tools/rust-offline.py", "tools/sqlite-static.py", "tools/check-store-mutations", "tests/t25_process.py",
@@ -1263,6 +1307,9 @@ def main():
         "inventory_byte_limit": INVENTORY_BYTE_LIMIT,
         "stream_limit_bytes": STREAM_LIMIT,
     }
+    include_sites, include_declared = include_census(ROOT, required, work_deadline)
+    print("include-census: sites=" + str(include_sites) + " declared=" + str(include_declared), flush=True)
+    report["include_census"] = {"sites": include_sites, "declared": include_declared}
     work = None
     cleanup_complete = True
     try:

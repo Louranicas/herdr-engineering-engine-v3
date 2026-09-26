@@ -33,19 +33,26 @@ pub enum Refusal {
     NotOneFile,
     /// The provider proposed tools; the class has none.
     Tools,
-    /// The class prompt could not be built or rendered (the site named).
+    /// The class prompt could not be rendered for this attempt (the site named).
     Prompt(PromptSite),
 }
 
-/// Where a class prompt refused: one of the three candidate inputs at construction (never at an
-/// attempt), the previous verification's record, or the rendering's bound.
+/// Where a rendering refused at an attempt: the previous verification's record, or the rendering's
+/// bound. A construction refusal is a [`ClassPromptError`] — it never reaches an attempt, so it is
+/// not a candidate refusal by type.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PromptSite {
+    Previous,
+    Render,
+}
+
+/// Which of the class's three candidate inputs `ClassPrompt::new` refused: empty, not UTF-8, or not
+/// the bytes the reviewed closure pins.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ClassPromptError {
     Task,
     Cargo,
     Base,
-    Previous,
-    Render,
 }
 
 impl Refusal {
@@ -60,9 +67,6 @@ impl Refusal {
             Self::Tools => "candidate_tools",
             Self::Prompt(PromptSite::Previous) => "candidate_prompt_previous",
             Self::Prompt(PromptSite::Render) => "candidate_prompt_render",
-            Self::Prompt(PromptSite::Task | PromptSite::Cargo | PromptSite::Base) => {
-                "candidate_prompt"
-            }
         }
     }
 }
@@ -89,20 +93,26 @@ pub struct ClassPrompt {
 
 impl ClassPrompt {
     /// # Errors
-    /// `Prompt(Task | Cargo | Base)` when that input is empty, not UTF-8 or not the pinned bytes.
-    pub fn new(task: &[u8], cargo: &[u8], base: &[u8], pins: &FilePins) -> Result<Self, Refusal> {
-        let read = |bytes: &[u8], pin: &str, site: PromptSite| -> Result<String, Refusal> {
-            if bytes.is_empty() || digest(bytes) != pin {
-                return Err(Refusal::Prompt(site));
-            }
-            std::str::from_utf8(bytes)
-                .map(str::to_owned)
-                .map_err(|_| Refusal::Prompt(site))
-        };
+    /// The input that is empty, not UTF-8 or not the pinned bytes, by name.
+    pub fn new(
+        task: &[u8],
+        cargo: &[u8],
+        base: &[u8],
+        pins: &FilePins,
+    ) -> Result<Self, ClassPromptError> {
+        let read =
+            |bytes: &[u8], pin: &str, site: ClassPromptError| -> Result<String, ClassPromptError> {
+                if bytes.is_empty() || digest(bytes) != pin {
+                    return Err(site);
+                }
+                std::str::from_utf8(bytes)
+                    .map(str::to_owned)
+                    .map_err(|_| site)
+            };
         Ok(Self {
-            task: read(task, &pins.task, PromptSite::Task)?,
-            cargo: read(cargo, &pins.cargo, PromptSite::Cargo)?,
-            base: read(base, &pins.base, PromptSite::Base)?,
+            task: read(task, &pins.task, ClassPromptError::Task)?,
+            cargo: read(cargo, &pins.cargo, ClassPromptError::Cargo)?,
+            base: read(base, &pins.base, ClassPromptError::Base)?,
         })
     }
 }
@@ -427,7 +437,14 @@ impl CandidateSource for NativeCandidates {
 
 #[cfg(test)]
 mod tests {
-    use super::{ClassPrompt, FilePins, PromptSite, Refusal, custody_settled, grammar, render};
+    use super::{
+        ClassPrompt, ClassPromptError, FilePins, PromptSite, Refusal, custody_settled, grammar,
+        render,
+    };
+
+    /// The measured DS13 prompt's bytes, retained as a fixture (its renderer is
+    /// `T00-plan-20260926/DS13-frame-renderer-20260926.py`).
+    const MEASURED: &str = include_str!("../../tests/fixtures/native/ds13-frame-prompt.txt");
     use crate::app::evidence::digest;
     use crate::app::runtime::{Previous, REFUSED_CANDIDATE_SCHEMA};
     use crate::store::VerificationVerdict;
@@ -509,25 +526,25 @@ mod tests {
         let good = pins(t1, c1, b1);
         assert_eq!(
             ClassPrompt::new(b"", c1, b1, &good).err(),
-            Some(Refusal::Prompt(PromptSite::Task))
+            Some(ClassPromptError::Task)
         );
         assert_eq!(
             ClassPrompt::new(t1, c1, b1, &pins(b"other", c1, b1)).err(),
-            Some(Refusal::Prompt(PromptSite::Task)),
+            Some(ClassPromptError::Task),
             "bytes that are not the closure's pinned task text"
         );
         assert_eq!(
             ClassPrompt::new(t1, b"", b1, &good).err(),
-            Some(Refusal::Prompt(PromptSite::Cargo))
+            Some(ClassPromptError::Cargo)
         );
         assert_eq!(
             ClassPrompt::new(t1, c1, b"x", &good).err(),
-            Some(Refusal::Prompt(PromptSite::Base))
+            Some(ClassPromptError::Base)
         );
         let bad_utf8 = &[0xff_u8, 0xfe][..];
         assert_eq!(
             ClassPrompt::new(bad_utf8, c1, b1, &pins(bad_utf8, c1, b1)).err(),
-            Some(Refusal::Prompt(PromptSite::Task)),
+            Some(ClassPromptError::Task),
             "pinned but not UTF-8"
         );
         // A rendering past the contract's bound is never sent.
@@ -639,7 +656,6 @@ mod tests {
         );
         assert_eq!(PROFILE, "ollama-fc44-12ff8654/1");
         assert_eq!(FULL_FILE.id, "ollama-fc44-12ff8654/2");
-        assert_eq!(Refusal::Prompt(PromptSite::Task).name(), "candidate_prompt");
     }
 
     /// F4 (F113) · the frame over the class's REAL inputs hashes to the prompt the DS13 frame
@@ -675,12 +691,15 @@ mod tests {
             },
         )
         .map_err(|e| format!("{e:?}"))?;
-        let rendered = render(&prompt, None).map_err(|e| format!("{e:?}"))?;
-        assert_eq!(rendered.len(), 2_384);
+        // The fixture is pinned to the measurement's digest first, then the rendering to the
+        // fixture, byte for byte.
         assert_eq!(
-            digest(rendered.as_bytes()),
+            digest(MEASURED.as_bytes()),
             "sha256:b455a1ea30ec93fc7b8714521b7f77eb46eee24ba74016652a89edd6efafe759"
         );
+        assert_eq!(MEASURED.len(), 2_384);
+        let rendered = render(&prompt, None).map_err(|e| format!("{e:?}"))?;
+        assert_eq!(rendered, MEASURED);
         Ok(())
     }
 
@@ -688,16 +707,23 @@ mod tests {
     /// leader was reaped and its group settled.
     #[test]
     fn custody_is_settled_only_when_every_report_field_says_so() {
-        for pending in [false, true] {
-            for reaped in [false, true] {
-                for group in [false, true] {
-                    assert_eq!(
-                        custody_settled(pending, reaped, group),
-                        !pending && reaped && group,
-                        "pending={pending} reaped={reaped} group={group}"
-                    );
-                }
-            }
+        // The truth table as a literal (F94): one row settles.
+        let table: [((bool, bool, bool), bool); 8] = [
+            ((false, false, false), false),
+            ((false, false, true), false),
+            ((false, true, false), false),
+            ((false, true, true), true),
+            ((true, false, false), false),
+            ((true, false, true), false),
+            ((true, true, false), false),
+            ((true, true, true), false),
+        ];
+        for ((pending, reaped, group), expected) in table {
+            assert_eq!(
+                custody_settled(pending, reaped, group),
+                expected,
+                "pending={pending} reaped={reaped} group={group}"
+            );
         }
         assert_eq!(
             Refusal::Prompt(PromptSite::Previous).name(),
@@ -707,6 +733,5 @@ mod tests {
             Refusal::Prompt(PromptSite::Render).name(),
             "candidate_prompt_render"
         );
-        assert_eq!(Refusal::Prompt(PromptSite::Task).name(), "candidate_prompt");
     }
 }
