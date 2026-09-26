@@ -454,7 +454,7 @@ Precompiling packages...
         loader.exec_module(mutations)
         world = sorted(path.relative_to(ROOT).as_posix() for path in (ROOT / "migrations").glob("*.sql"))
         self.assertEqual(world, ["migrations/001.sql", "migrations/002.sql", "migrations/003.sql",
-                                 "migrations/004.sql", "migrations/005.sql"])
+                                 "migrations/004.sql", "migrations/005.sql", "migrations/006.sql"])
         for name in world:
             with self.subTest(migration=name):
                 self.assertIn(name, quality.T04_IMPLEMENTATION_PATHS)
@@ -663,10 +663,11 @@ Precompiling packages...
                 declaration = (("synthetic", "src/store/roster.rs", "fixture", "before", "after", "Synthetic guard control only"),)
                 with mock.patch.object(mutations, "ROSTER_MUTATIONS", declaration), mock.patch.object(mutations, "ROSTER_MUTATION_COUNT", 1):
                     selected = mutations.selected_profile("roster", quality, root)
-                    self.assertEqual(selected["library_test_count"], 98)
+                    # The T04 count plus the mocked T05 count: derived, never re-typed (S1).
+                    self.assertEqual(selected["library_test_count"], quality.T04_TEST_COUNT + 3)
                     self.assertEqual(selected["prefix"], "store::roster_tests::")
                     self.assertEqual(selected["task"], "T05")
-                self.assertEqual(mutations.selected_profile("store", quality, root)["library_test_count"], 98)
+                self.assertEqual(mutations.selected_profile("store", quality, root)["library_test_count"], quality.T04_TEST_COUNT + 3)
 
     def copy_offline_subject(self, root):
         shutil.copyfile(ROOT / "Cargo.lock", root / "Cargo.lock")
