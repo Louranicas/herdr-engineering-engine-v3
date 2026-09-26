@@ -76,7 +76,7 @@ const MIGRATIONS: [Migration; 6] = [
     // B09b + DS2 + B17: additive. Each extended table is compared over its pre-step columns.
     Migration {
         sql: include_str!("../../migrations/006.sql"),
-        body: "sha256:d2b470495342a6e7d05621e59c975e969ce4f13672ac6adf3c4d85cfb44660c0",
+        body: "sha256:6612b4cc1cc9ca481d23678e78de119e01fbeb8979fde98996a0e6087c5ca28d",
         preserves: &[
             Preserved {
                 table: "verifications",

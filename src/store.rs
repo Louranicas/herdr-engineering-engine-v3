@@ -333,6 +333,7 @@ mod evidence;
 mod reconciliation;
 mod recovery;
 mod roster;
+mod run_records;
 mod schema;
 mod staging;
 mod verification;
@@ -344,6 +345,7 @@ pub use roster::{RequestSource, RosterAttempt, RosterSnapshot, RosterStart};
 
 pub use artifact::Object;
 pub use backup::{BackupReport, RestoreStatus};
+pub use run_records::{Committed, CommittedRun, RECORD_MEDIA_TYPE, RunRecord, RunRecordKind};
 pub use schema::Chain;
 
 use crate::contracts::control::{CancelReason, Disposition, EvidenceRef};
@@ -1361,13 +1363,33 @@ impl Store {
     }
 
     /// Record independent settlement and measured work cost, retaining unknown liabilities.
-    /// `ready_to_verify` means worker custody settled; it is not verifier success.
+    /// `ready_to_verify` means worker custody settled; it is not verifier success. An observation
+    /// with no run records: [`Store::settle_attempt_with_records`] with `&[]`.
     /// # Errors
     /// Refuses a stale identity or cost above the retained conservative allocation.
     pub fn settle_attempt(
         &mut self,
         expected: &Expected<'_>,
         observation: Settlement,
+        event_id: UuidV4<'_>,
+        deadline: Instant,
+    ) -> Result<String> {
+        self.settle_attempt_with_records(expected, observation, &[], event_id, deadline)
+    }
+
+    /// [`Store::settle_attempt`], committing this observation's run records in the same
+    /// transaction, keyed by this observation's event (DS2). This is the only writer of
+    /// `attempt_records` and `attempts.settled_event`; a settled attempt admits no further
+    /// observation, so the settling event's record set is final.
+    /// # Errors
+    /// As [`Store::settle_attempt`]; `Invalid` for a repeated kind (nothing written); `Conflict`
+    /// for an artifact id already bound to another digest; `Corrupt` for an object registered with
+    /// another size; `Disposition(Inventory)` past what a backup copies.
+    pub fn settle_attempt_with_records(
+        &mut self,
+        expected: &Expected<'_>,
+        observation: Settlement,
+        records: &[RunRecord<'_>],
         event_id: UuidV4<'_>,
         deadline: Instant,
     ) -> Result<String> {
@@ -1398,7 +1420,27 @@ impl Store {
             tx.execute("UPDATE attempts SET state=?,effect=?,cleanup=?,used_ms=? WHERE id=?",params![if settled {"settled"}else{"unknown"},effect.name(),if cleanup_settled{"settled"}else{"unknown"},used_ms.map(number).transpose()?,expected.attempt.as_str()])?;
             let used=if settled {used_ms.unwrap_or(0)}else{0};
             tx.execute("UPDATE tasks SET generation=?,state=?,spent_ms=spent_ms+?,reserved_work_ms=reserved_work_ms-? WHERE id=?",params![generation,state,number(used)?,number(used)?,expected.task.as_str()])?;
-            event(tx,event_id.as_str(),expected.task.as_str(),&generation,"attempt_observed")?;Ok(generation)
+            event(tx,event_id.as_str(),expected.task.as_str(),&generation,"attempt_observed")?;
+            run_records::commit(tx, expected.attempt.as_str(), event_id.as_str(), records, settled)?;
+            Ok(generation)
+        })
+    }
+
+    /// The run records the ledger committed when `attempt` settled (DS2): exactly the settling
+    /// observation's set, from one read snapshot, visible to `principal` only. A composer that
+    /// takes the result cannot be handed a digest.
+    /// # Errors
+    /// `NotFound` when the attempt is not one of the principal's tasks'; `Outstanding` when it is
+    /// not settled; `EvidenceIdentity` when it settled before migration 6; `Corrupt` for a row the
+    /// rules refuse.
+    pub fn committed_run(
+        &mut self,
+        principal: &Principal,
+        attempt: UuidV4<'_>,
+        deadline: Instant,
+    ) -> Result<CommittedRun> {
+        self.read_snapshot(deadline, |db| {
+            run_records::committed_run(db, principal, attempt.as_str())
         })
     }
 

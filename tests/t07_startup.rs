@@ -4202,6 +4202,8 @@ fn ap41_and_ap42_keep_their_first_boot_and_are_closed_after_it() {
 /// read on every boot. No store API produces it — `finish_unaccepted` refuses outstanding work —
 /// but a restored or damaged ledger can, and it must never fall between the open predicate and
 /// the cleanup tail (the tail takes only settled attempts), which would skip it silently.
+/// The damage simulated is "never settled", so the settling event (migration 6) is cleared too: a
+/// row that keeps its settling event while reading unsettled is refused at open as corrupt.
 #[test]
 fn an_unsettled_attempt_of_a_terminal_task_is_read_every_boot() {
     let mut r = Rig::admitted();
@@ -4215,7 +4217,7 @@ fn an_unsettled_attempt_of_a_terminal_task_is_read_every_boot() {
     .unwrap();
     assert_eq!(
         db.execute(
-            "UPDATE attempts SET state='unknown', effect='unknown', cleanup='unknown', used_ms=NULL WHERE id=?",
+            "UPDATE attempts SET state='unknown', effect='unknown', cleanup='unknown', used_ms=NULL, settled_event=NULL WHERE id=?",
             [&attempt]
         )
         .unwrap(),

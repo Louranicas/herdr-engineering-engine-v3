@@ -45,7 +45,7 @@ const MIGRATION_4_BODY: &str =
 const MIGRATION_5_BODY: &str =
     "sha256:51b29ce4e4e48ea0d2e97dc517fb2bbe3ef87618d15625694f7e0b13f1e2693d";
 const MIGRATION_6_BODY: &str =
-    "sha256:d2b470495342a6e7d05621e59c975e969ce4f13672ac6adf3c4d85cfb44660c0";
+    "sha256:6612b4cc1cc9ca481d23678e78de119e01fbeb8979fde98996a0e6087c5ca28d";
 static NEXT_ROOT: AtomicU64 = AtomicU64::new(0);
 
 struct Area {
@@ -3259,7 +3259,9 @@ fn a_backup_counts_every_table_the_ledger_holds() {
     drop(store);
     let tables: Vec<String> = area
         .inspect()
-        .prepare("SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite%' ORDER BY name")
+        // Production's own predicate (review of 3a95b28, gap 2): a looser `LIKE 'sqlite%'` would
+        // exclude a table named `sqlitefoo` that production counts.
+        .prepare("SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite\\_%' ESCAPE '\\' ORDER BY name")
         .unwrap()
         .query_map([], |row| row.get(0))
         .unwrap()
@@ -3276,4 +3278,301 @@ fn a_backup_counts_every_table_the_ledger_holds() {
     ] {
         assert_eq!(report.counts.get(table), Some(&rows), "{table}");
     }
+}
+
+// ------------------------------------------------ DS2 run records (B09b-2)
+
+const OBS_1: &str = "28f00000-0000-4000-8000-0000000000e1";
+const OBS_2: &str = "28f00000-0000-4000-8000-0000000000e2";
+const OBS_3: &str = "28f00000-0000-4000-8000-0000000000e3";
+const IDS: [&str; 6] = [
+    "28f00000-0000-4000-8000-0000000000f1",
+    "28f00000-0000-4000-8000-0000000000f2",
+    "28f00000-0000-4000-8000-0000000000f3",
+    "28f00000-0000-4000-8000-0000000000f4",
+    "28f00000-0000-4000-8000-0000000000f5",
+    "28f00000-0000-4000-8000-0000000000f6",
+];
+
+fn published(store: &Store, index: usize) -> Object {
+    store
+        .publish(
+            format!("run record {index}").as_bytes(),
+            uuid(STAGE),
+            deadline(),
+        )
+        .unwrap()
+}
+
+fn record<'a>(kind: RunRecordKind, id: &'a str, object: &'a Object) -> RunRecord<'a> {
+    RunRecord {
+        kind,
+        artifact_id: uuid(id),
+        object,
+    }
+}
+
+fn unsettled() -> Settlement {
+    settled(Effect::Pending, None, false, false)
+}
+
+/// DS2 pin, off the origin: three observations of one attempt — unknown, unknown, settled — each
+/// with its own record set. `committed_run` returns the third set whole, with its own event and
+/// sequence, and never a union: the first two sets stay in `attempt_records` and are not returned.
+#[test]
+fn committed_run_is_the_settling_observations_set_and_never_a_union() {
+    let area = Area::new();
+    let mut store = area.open();
+    let active = running(&mut store);
+    let objects: Vec<Object> = (0..6).map(|index| published(&store, index)).collect();
+    let first = [record(RunRecordKind::RunClock, IDS[0], &objects[0])];
+    let generation = store
+        .settle_attempt_with_records(&active, unsettled(), &first, uuid(OBS_1), deadline())
+        .unwrap();
+    assert_eq!(generation, "3");
+    let second = [
+        record(RunRecordKind::RunClock, IDS[1], &objects[1]),
+        record(RunRecordKind::RunOutcome, IDS[2], &objects[2]),
+    ];
+    let generation = store
+        .settle_attempt_with_records(
+            &expected(3, 1),
+            unsettled(),
+            &second,
+            uuid(OBS_2),
+            deadline(),
+        )
+        .unwrap();
+    assert_eq!(generation, "4");
+    assert!(matches!(
+        store.committed_run(&principal(), uuid(ATTEMPT), deadline()),
+        Err(Error::Outstanding)
+    ));
+    let third = [
+        record(RunRecordKind::RunClock, IDS[3], &objects[3]),
+        record(RunRecordKind::RunOutcome, IDS[4], &objects[4]),
+        record(RunRecordKind::Capture, IDS[5], &objects[5]),
+    ];
+    let generation = store
+        .settle_attempt_with_records(
+            &expected(4, 1),
+            settled(Effect::None, Some(30), true, true),
+            &third,
+            uuid(OBS_3),
+            deadline(),
+        )
+        .unwrap();
+    assert_eq!(generation, "5");
+    let run = store
+        .committed_run(&principal(), uuid(ATTEMPT), deadline())
+        .unwrap();
+    assert_eq!(
+        (run.task(), run.attempt(), run.settled_event()),
+        (TASK, ATTEMPT, OBS_3)
+    );
+    assert_eq!(run.attempt_generation(), revision(1));
+    let sequence: u64 = area
+        .inspect()
+        .query_row("SELECT sequence FROM events WHERE id=?", [OBS_3], |row| {
+            read_number(row, 0)
+        })
+        .unwrap();
+    assert_eq!(run.settled_sequence(), sequence);
+    assert_eq!(run.len(), 3);
+    for (kind, id, object) in [
+        (RunRecordKind::RunClock, IDS[3], &objects[3]),
+        (RunRecordKind::RunOutcome, IDS[4], &objects[4]),
+        (RunRecordKind::Capture, IDS[5], &objects[5]),
+    ] {
+        let committed = run.record(kind).unwrap();
+        assert_eq!(
+            (
+                committed.artifact_id(),
+                committed.object(),
+                committed.schema_id()
+            ),
+            (id, object, kind.schema_id())
+        );
+    }
+    assert_eq!(run.record(RunRecordKind::RunCleanup), None);
+    assert_eq!(
+        count(&area, "attempt_records"),
+        6,
+        "earlier sets stay recorded"
+    );
+    let obs_1: i64 = area
+        .inspect()
+        .query_row(
+            "SELECT count(*) FROM attempt_records WHERE event_id=? AND artifact_id=?",
+            [OBS_1, IDS[0]],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(obs_1, 1);
+    // The settled attempt admits no further observation: the set is final (F-d).
+    assert!(matches!(
+        store.settle_attempt_with_records(
+            &expected(5, 1),
+            unsettled(),
+            &first,
+            uuid(CANCELLED),
+            deadline()
+        ),
+        Err(Error::Outstanding)
+    ));
+}
+
+/// DS2 pin: each refusal by its own name. A repeated kind writes nothing; an artifact id already
+/// bound to another digest conflicts; another principal sees nothing; an attempt settled before
+/// migration 6 has no settling event.
+#[test]
+fn run_record_refusals_each_by_name() {
+    let area = Area::new();
+    let mut store = area.open();
+    let active = running(&mut store);
+    let objects: Vec<Object> = (0..3).map(|index| published(&store, index)).collect();
+    let twice = [
+        record(RunRecordKind::RunClock, IDS[0], &objects[0]),
+        record(RunRecordKind::RunClock, IDS[1], &objects[1]),
+    ];
+    assert!(matches!(
+        store.settle_attempt_with_records(&active, unsettled(), &twice, uuid(OBS_1), deadline()),
+        Err(Error::Invalid)
+    ));
+    assert_eq!(
+        count(&area, "attempt_records"),
+        0,
+        "a refused set writes nothing"
+    );
+    assert_eq!(count(&area, "events"), 2, "no observation event either");
+    let first = [record(RunRecordKind::RunClock, IDS[0], &objects[0])];
+    store
+        .settle_attempt_with_records(&active, unsettled(), &first, uuid(OBS_1), deadline())
+        .unwrap();
+    // The same artifact id for another digest, from a later observation: bound elsewhere.
+    let rebound = [record(RunRecordKind::RunOutcome, IDS[0], &objects[1])];
+    assert!(matches!(
+        store.settle_attempt_with_records(
+            &expected(3, 1),
+            unsettled(),
+            &rebound,
+            uuid(OBS_2),
+            deadline()
+        ),
+        Err(Error::Conflict)
+    ));
+    // The same artifact id for the same digest is not a rebinding.
+    let same = [record(RunRecordKind::RunOutcome, IDS[0], &objects[0])];
+    store
+        .settle_attempt_with_records(
+            &expected(3, 1),
+            settled(Effect::None, Some(30), true, true),
+            &same,
+            uuid(OBS_2),
+            deadline(),
+        )
+        .unwrap();
+    let other = Principal::new(1001, "operator").unwrap();
+    assert!(matches!(
+        store.committed_run(&other, uuid(ATTEMPT), deadline()),
+        Err(Error::NotFound)
+    ));
+    assert!(matches!(
+        store.committed_run(&principal(), uuid(OTHER), deadline()),
+        Err(Error::NotFound)
+    ));
+    let run = store
+        .committed_run(&principal(), uuid(ATTEMPT), deadline())
+        .unwrap();
+    assert_eq!(run.len(), 1);
+    drop(store);
+    // Settled before migration 6: the row exists, the settling event was never recorded.
+    area.edit_closed(&format!(
+        "UPDATE attempts SET settled_event=NULL WHERE id='{ATTEMPT}';"
+    ));
+    let mut store = area.reopen();
+    assert!(matches!(
+        store.committed_run(&principal(), uuid(ATTEMPT), deadline()),
+        Err(Error::EvidenceIdentity)
+    ));
+}
+
+/// DS2 pin (F132 shape): a settle's records and its attempt state commit or vanish together. A cut
+/// before COMMIT leaves no record, no settling event and the attempt still observable.
+#[test]
+fn a_settle_cut_before_commit_leaves_no_record_and_no_settled_event() {
+    let area = Area::new();
+    let mut store = area.open();
+    let active = running(&mut store);
+    let object = published(&store, 0);
+    let records = [record(RunRecordKind::RunClock, IDS[0], &object)];
+    store.fault = Some(CutPoint::BeforeCommit);
+    injected(
+        store.settle_attempt_with_records(
+            &active,
+            settled(Effect::None, Some(30), true, true),
+            &records,
+            uuid(OBS_1),
+            deadline(),
+        ),
+        CutPoint::BeforeCommit,
+    );
+    store.fault = None;
+    assert_eq!(count(&area, "attempt_records"), 0);
+    let settled_event: Option<String> = area
+        .inspect()
+        .query_row(
+            "SELECT settled_event FROM attempts WHERE id=?",
+            [ATTEMPT],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(settled_event, None);
+    let generation = store
+        .settle_attempt_with_records(
+            &active,
+            settled(Effect::None, Some(30), true, true),
+            &records,
+            uuid(OBS_1),
+            deadline(),
+        )
+        .unwrap();
+    assert_eq!(generation, "3");
+    assert_eq!(count(&area, "attempt_records"), 1);
+}
+
+/// DS2 pin: the kind vocabulary is the CHECK's, and each kind names one schema; a stored kind
+/// outside the vocabulary cannot exist (the CHECK), and each spelling round-trips.
+#[test]
+fn run_record_kinds_are_the_checks_vocabulary_with_one_schema_each() {
+    let names: Vec<&str> = RunRecordKind::ALL.iter().map(|kind| kind.name()).collect();
+    assert_eq!(
+        names,
+        [
+            "run_clock",
+            "run_outcome",
+            "run_cleanup",
+            "readbacks",
+            "capture"
+        ]
+    );
+    let sql = include_str!("../migrations/006.sql");
+    for name in &names {
+        assert!(sql.contains(&format!("'{name}'")), "{name} is in the CHECK");
+    }
+    let schemas: std::collections::BTreeSet<&str> = RunRecordKind::ALL
+        .iter()
+        .map(|kind| kind.schema_id())
+        .collect();
+    assert_eq!(
+        schemas.len(),
+        RunRecordKind::ALL.len(),
+        "one schema per kind"
+    );
+    assert!(
+        schemas
+            .iter()
+            .all(|schema| schema.starts_with("hee3.") && schema.ends_with("/1"))
+    );
+    assert_eq!(RECORD_MEDIA_TYPE, "application/json");
 }
