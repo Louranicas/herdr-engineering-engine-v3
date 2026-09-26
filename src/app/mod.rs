@@ -20,5 +20,6 @@ pub mod coordinator;
 pub mod custody;
 pub mod grants;
 pub mod routing;
+pub mod run_records;
 pub mod runtime;
 pub mod tasks;

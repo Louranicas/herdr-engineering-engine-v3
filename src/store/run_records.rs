@@ -114,6 +114,12 @@ impl Committed {
     pub const fn schema_id(&self) -> &'static str {
         self.kind.schema_id()
     }
+
+    /// The kind the settle committed the record under.
+    #[must_use]
+    pub const fn kind(&self) -> RunRecordKind {
+        self.kind
+    }
 }
 
 /// The record set of the observation that settled an attempt: exactly that event's set, never a

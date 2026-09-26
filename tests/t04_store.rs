@@ -4381,3 +4381,110 @@ fn refs_at_and_over_the_bound_count_what_they_would_list() {
         }
     }
 }
+
+// ------------------------------------------------ run records read back through the commitment (B14a-2b-ii)
+
+/// B14a-2b-ii pin: a run record is read back only through the ledger's commitment. A clock and a
+/// cleanup record published, committed by the settle and read through `committed_run` come back
+/// whole; a record read as another kind is refused by both names; a commitment whose bytes were
+/// swapped for another record's is refused at decode.
+#[test]
+fn run_records_read_back_only_through_the_commitment() {
+    use crate::app::run_records::{
+        Intents, ObligationRecord, Refusal, RunCleanup, RunClock, RunRecord, RuntimeClock,
+        Settlement,
+    };
+    use std::time::Duration;
+    let area = Area::new();
+    let mut store = area.open();
+    let active = running(&mut store);
+    let origin = Instant::now();
+    let clock = RunClock::observe(
+        &RuntimeClock {
+            origin,
+            origin_unix_ms: 1_790_000_000_000,
+            work_until: origin + Duration::from_mins(15),
+            deadline: origin + Duration::from_mins(20),
+        },
+        Intents::default(),
+        Some(origin + Duration::from_millis(1_234)),
+        origin + Duration::from_millis(5_678),
+    )
+    .unwrap();
+    let cleanup = RunCleanup::of(
+        Settlement::Settled,
+        &[ObligationRecord {
+            id: "aggregate".to_owned(),
+            state: Settlement::Settled,
+        }],
+        &[],
+    );
+    let clock_object = store
+        .publish(&clock.to_bytes().unwrap(), uuid(STAGE), deadline())
+        .unwrap();
+    let cleanup_object = store
+        .publish(&cleanup.to_bytes().unwrap(), uuid(OTHER), deadline())
+        .unwrap();
+    let records = [
+        record(RunRecordKind::RunClock, IDS[0], &clock_object),
+        record(RunRecordKind::RunCleanup, IDS[1], &cleanup_object),
+    ];
+    store
+        .settle_attempt_with_records(
+            &active,
+            settled(Effect::None, Some(30), true, true),
+            &records,
+            uuid(SETTLED),
+            deadline(),
+        )
+        .unwrap();
+    let run = store
+        .committed_run(&principal(), uuid(ATTEMPT), deadline())
+        .unwrap();
+    let committed_clock = run.record(RunRecordKind::RunClock).unwrap();
+    let committed_cleanup = run.record(RunRecordKind::RunCleanup).unwrap();
+    assert_eq!(
+        RunClock::read(committed_clock, &store, deadline()).unwrap(),
+        clock
+    );
+    assert_eq!(
+        RunCleanup::read(committed_cleanup, &store, deadline()).unwrap(),
+        cleanup
+    );
+    assert!(matches!(
+        RunClock::read(committed_cleanup, &store, deadline()).err(),
+        Some(Refusal::Kind {
+            found: RunRecordKind::RunCleanup,
+            expected: RunRecordKind::RunClock
+        })
+    ));
+    // The cleanup's bytes committed under the clock's kind decode as no clock.
+    let area2 = Area::new();
+    let mut other = area2.open();
+    let active2 = running(&mut other);
+    let published = other
+        .publish(&cleanup.to_bytes().unwrap(), uuid(OTHER), deadline())
+        .unwrap();
+    let swapped = [record(RunRecordKind::RunClock, IDS[2], &published)];
+    other
+        .settle_attempt_with_records(
+            &active2,
+            settled(Effect::None, Some(30), true, true),
+            &swapped,
+            uuid(SETTLED),
+            deadline(),
+        )
+        .unwrap();
+    let run2 = other
+        .committed_run(&principal(), uuid(ATTEMPT), deadline())
+        .unwrap();
+    assert!(matches!(
+        RunClock::read(
+            run2.record(RunRecordKind::RunClock).unwrap(),
+            &other,
+            deadline()
+        )
+        .err(),
+        Some(Refusal::Encoding)
+    ));
+}
