@@ -9,12 +9,14 @@
 
 use super::t08_rig::{self, DaemonStandIn};
 use habitat_engine::actions::control::{TaskRequest, Tasks};
-use habitat_engine::app::candidates::{ClassPrompt, FilePins, NativeCandidates, render};
+use habitat_engine::app::candidates::{
+    ClassPrompt, FilePins, NativeCandidates, Outcome as CandidateOutcome, Settle, render,
+};
 use habitat_engine::app::class_profile::{self, Profile};
 use habitat_engine::app::live_verifier::LiveVerifier;
 use habitat_engine::app::runtime::{
-    CHECK_TEARDOWN, Candidate, CandidateSource, CheckPlan, CheckWindow, Dispatch,
-    Error as RuntimeError, Observed, Outcome, Previous, Refusal, Verifier, dispatch,
+    Answer as SourceAnswer, CHECK_TEARDOWN, Candidate, CandidateSource, CheckPlan, CheckWindow,
+    Dispatch, Error as RuntimeError, Observed, Outcome, Previous, Refusal, Verifier, dispatch,
 };
 use habitat_engine::app::tasks::StoreTasks;
 use habitat_engine::app::workload::{self, Outcome as RunOutcome, Run};
@@ -391,10 +393,13 @@ struct Script<'h> {
     answers: VecDeque<Candidate>,
     seen: Asked,
     hook: Option<Box<dyn FnMut() + 'h>>,
+    /// A worker settle to attach to every answer — a script that claims a provider was asked (the
+    /// identity-refusal proof hands one naming another attempt).
+    settle: Option<Settle>,
 }
 
 impl CandidateSource for Script<'_> {
-    fn next(&mut self, ask: &habitat_engine::app::runtime::Ask<'_>) -> Candidate {
+    fn next(&mut self, ask: &habitat_engine::app::runtime::Ask<'_>) -> SourceAnswer {
         self.seen.borrow_mut().push(Seen {
             previous: ask.previous.cloned(),
             attempt: ask.attempt.as_str().to_owned(),
@@ -406,7 +411,12 @@ impl CandidateSource for Script<'_> {
         if let Some(hook) = self.hook.as_mut() {
             hook();
         }
-        self.answers.pop_front().unwrap_or(Candidate::Exhausted)
+        // A script asks no provider: no worker settle travels with its candidate (R19.3) unless the
+        // proof attached one.
+        SourceAnswer {
+            candidate: self.answers.pop_front().unwrap_or(Candidate::Exhausted),
+            settle: self.settle.clone(),
+        }
     }
 }
 
@@ -512,6 +522,7 @@ fn script<'h>(answers: Vec<Candidate>) -> (Script<'h>, Asked) {
             answers: answers.into(),
             seen: Rc::clone(&seen),
             hook: None,
+            settle: None,
         },
         seen,
     )
@@ -634,6 +645,123 @@ fn object_bytes(rig: &Rig, digest: &str) -> Result<Vec<u8>, Box<dyn Error>> {
 /// A published JSON object, decoded.
 fn object_json(rig: &Rig, digest: &str) -> Result<serde_json::Value, Box<dyn Error>> {
     Ok(serde_json::from_slice(&object_bytes(rig, digest)?)?)
+}
+
+/// B14a-5 (R19.3) · a settle naming another attempt is the source's error, refused at the seam before
+/// any candidate is applied or any row written: the dispatch ends `Identity`, the attempt stays as
+/// begun with no settled event, no run record exists and no check was asked.
+#[test]
+fn a_settle_naming_another_attempt_is_refused_before_any_write() -> Outcome_ {
+    let rig = rig(&Shape::default())?;
+    let (mut source, _) = script(vec![Candidate::Replacement(SECOND.to_vec())]);
+    source.settle = Some(Settle {
+        attempt: "28f00000-0000-4000-8000-0000000000ee".to_owned(),
+        adapter: "ollama-fc44-12ff8654/2",
+        input_tokens: None,
+        output_tokens: None,
+        wall_ms: 1,
+        finish: None,
+        identity_sha256: None,
+        raw_sha256: None,
+        outcome: CandidateOutcome::Replacement(SECOND.len()),
+    });
+    let (verifier, handed) = oracle(vec![]);
+    let principal = owner();
+    let outcome = run(&rig, &principal, source, verifier, 5_000);
+    assert!(
+        matches!(outcome, Err(RuntimeError::Identity)),
+        "{outcome:?}"
+    );
+    assert!(handed.borrow().is_empty(), "no check was asked");
+    assert_eq!(
+        rows(
+            &rig,
+            "SELECT state,settled_event IS NULL FROM attempts WHERE task_id=?"
+        )?,
+        vec![vec!["running".to_owned(), "1".to_owned()]],
+        "the attempt stays as begun, unsettled"
+    );
+    assert_eq!(
+        rows(
+            &rig,
+            "SELECT count(*) FROM attempt_records r JOIN attempts a ON a.id=r.attempt_id \
+             WHERE a.task_id=?"
+        )?,
+        vec![vec!["0".to_owned()]]
+    );
+    assert!(worker_settles(&rig)?.is_empty());
+    Ok(())
+}
+
+/// One worker settle as the ledger committed it: the attempt, the record's artifact id, the record.
+struct WorkerSettleRow {
+    attempt: String,
+    artifact_id: String,
+    record: serde_json::Value,
+}
+
+/// The worker settles the ledger committed with each attempt's SETTLING observation (B14a-5: the
+/// record set `committed_run` returns is the one keyed by `attempts.settled_event`), in generation
+/// order.
+fn worker_settles(rig: &Rig) -> Result<Vec<WorkerSettleRow>, Box<dyn Error>> {
+    rows(
+        rig,
+        "SELECT a.id,r.artifact_id,r.digest FROM attempt_records r \
+         JOIN attempts a ON a.id=r.attempt_id AND a.settled_event=r.event_id \
+         WHERE a.task_id=? AND r.kind='worker_settle' ORDER BY CAST(a.generation AS INTEGER)",
+    )?
+    .into_iter()
+    .map(|row| {
+        Ok(WorkerSettleRow {
+            attempt: row[0].clone(),
+            artifact_id: row[1].clone(),
+            record: object_json(rig, &row[2])?,
+        })
+    })
+    .collect()
+}
+
+/// The worker settle the fake's scenario predicts for one answered call (wall aside): the `/2` row,
+/// the fixture's token counts, `stop`, the identity digest of the fake's `ps`, the raw digest of the
+/// `answer`-th scripted response, and the outcome with its replacement length.
+fn scripted_settle(
+    attempt: &str,
+    scenario: &serde_json::Value,
+    answer: usize,
+    outcome: &serde_json::Value,
+    replacement_bytes: Option<usize>,
+) -> serde_json::Value {
+    serde_json::json!({
+        "attempt": attempt,
+        "adapter_profile": "ollama-fc44-12ff8654/2",
+        "input_tokens": 552,
+        "output_tokens": 258,
+        "finish": "stop",
+        "identity_sha256": t08_rig::digest(&t08_rig::rendered(&scenario["ps"])),
+        "raw_sha256": t08_rig::digest(&t08_rig::rendered(&scenario["generated"][answer])),
+        "outcome": outcome,
+        "replacement_bytes": replacement_bytes,
+    })
+}
+
+/// A worker settle with its wall time taken out — the one field the fake cannot pin — for a whole
+/// comparison of the rest; the wall is returned beside it.
+fn without_wall(mut record: serde_json::Value) -> Result<(serde_json::Value, u64), Box<dyn Error>> {
+    let wall = record
+        .as_object_mut()
+        .ok_or("a record object")?
+        .remove("wall_ms")
+        .and_then(|wall| wall.as_u64())
+        .ok_or("a wall_ms number")?;
+    Ok((record, wall))
+}
+
+/// The scenario the native fake answers from, as `native_source` wrote it: the independent source
+/// of every count and digest a worker settle records.
+fn native_scenario(rig: &Rig) -> Result<serde_json::Value, Box<dyn Error>> {
+    Ok(serde_json::from_slice(&fs::read(
+        rig.scratch.0.join("native/scenario.json"),
+    )?)?)
 }
 
 /// The run records the ledger committed with the task's verifications, in kind order:
@@ -809,6 +937,10 @@ fn a_failed_check_is_repaired_and_the_second_attempt_is_accepted() -> Outcome_ {
             ],
         ],
         "both attempts settled with a known cost and no effect"
+    );
+    assert!(
+        worker_settles(&rig)?.is_empty(),
+        "a scripted source asks no provider: no worker settle is committed (R19.3)"
     );
     assert_eq!(
         verifications(&rig)?,
@@ -1968,6 +2100,27 @@ fn a_native_source_over_the_fake_drives_a_task_to_acceptance() -> Outcome_ {
         "the editable the check saw"
     );
     assert_eq!(verifications(&rig)?[0][0], "passed");
+    // B14a-5 (R19.6a) · the worker's settle, committed by the attempt's settle, read back WHOLE with
+    // the wall aside: the fake's scenario is the independent source of the counts and digests.
+    let attempt_ids = rows(
+        &rig,
+        "SELECT id FROM attempts WHERE task_id=? ORDER BY CAST(generation AS INTEGER)",
+    )?;
+    let scenario = native_scenario(&rig)?;
+    let settles = worker_settles(&rig)?;
+    assert_eq!(settles.len(), 1);
+    assert_eq!(settles[0].attempt, attempt_ids[0][0]);
+    let (record, _wall) = without_wall(settles[0].record.clone())?;
+    assert_eq!(
+        record,
+        scripted_settle(
+            &attempt_ids[0][0],
+            &scenario,
+            0,
+            &serde_json::json!("replacement"),
+            Some(REFERENCE_LIB.len())
+        )
+    );
     Ok(())
 }
 
@@ -2040,6 +2193,41 @@ fn a_refused_native_answer_is_recorded_as_a_refused_candidate_whole() -> Outcome
             "candidate_sha256": t08_rig::digest(b"   \n"),
         })
     );
+    // B14a-5 (R19.6b) · two settles, one per attempt: the refusal by its name with no length, then
+    // the replacement; each attempt's raw digest is its own scripted answer's.
+    let attempt_ids = rows(
+        &rig,
+        "SELECT id FROM attempts WHERE task_id=? ORDER BY CAST(generation AS INTEGER)",
+    )?;
+    let scenario = native_scenario(&rig)?;
+    let settles = worker_settles(&rig)?;
+    assert_eq!(settles.len(), 2);
+    let (first, _) = without_wall(settles[0].record.clone())?;
+    assert_eq!(
+        first,
+        scripted_settle(
+            &attempt_ids[0][0],
+            &scenario,
+            0,
+            &serde_json::json!({"refused": {"name": "candidate_empty"}}),
+            None
+        )
+    );
+    let (second, _) = without_wall(settles[1].record.clone())?;
+    assert_eq!(
+        second,
+        scripted_settle(
+            &attempt_ids[1][0],
+            &scenario,
+            1,
+            &serde_json::json!("replacement"),
+            Some(REFERENCE_LIB.len())
+        )
+    );
+    assert_ne!(
+        settles[0].artifact_id, settles[1].artifact_id,
+        "each record under its own artifact id"
+    );
     Ok(())
 }
 
@@ -2074,6 +2262,26 @@ fn a_provider_failure_stops_the_task_with_the_worker_named() -> Outcome_ {
             "error": "identity",
             "state": "not_dispatched",
             "retained": 0,
+        })
+    );
+    // B14a-5 (R19.6c) · the failed attempt's settle names the provider failure; nothing was read
+    // from the model, so no token, finish or digest is recorded.
+    let attempt_ids = rows(&rig, "SELECT id FROM attempts WHERE task_id=?")?;
+    let settles = worker_settles(&rig)?;
+    assert_eq!(settles.len(), 1);
+    let (record, _) = without_wall(settles[0].record.clone())?;
+    assert_eq!(
+        record,
+        serde_json::json!({
+            "attempt": attempt_ids[0][0],
+            "adapter_profile": "ollama-fc44-12ff8654/2",
+            "input_tokens": null,
+            "output_tokens": null,
+            "finish": null,
+            "identity_sha256": null,
+            "raw_sha256": null,
+            "outcome": {"provider": {"name": "identity"}},
+            "replacement_bytes": null,
         })
     );
     Ok(())

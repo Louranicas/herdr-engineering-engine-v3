@@ -9,11 +9,13 @@
 //! Each record serializes to JSON (`RECORD_MEDIA_TYPE`) under its kind's schema id, both owned by
 //! `store::run_records`, so the receipt cites it by the identity the settle recorded.
 
+use crate::app::candidates::{Outcome as CandidateOutcome, Settle};
 use crate::app::workload::{Outcome, Run, Step};
 use crate::check::decision::Timing;
 use crate::contracts::UuidV4;
 use crate::contracts::receipt::Ref;
 use crate::store::{Committed, Error as StoreError, RunRecordKind, Store};
+use crate::worker::Finish;
 use serde::{Deserialize, Serialize};
 use std::time::Instant;
 
@@ -694,20 +696,230 @@ impl RunRecord for Readbacks {
     const KIND: RunRecordKind = RunRecordKind::Readbacks;
 }
 
+/// How the model's answer ended, as the worker reported it: [`Finish`] spelled for the record, one
+/// arm per variant so a new finish is a compile error here.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FinishName {
+    Stop,
+    Length,
+    Refusal,
+    Error,
+    Cancelled,
+}
+
+impl FinishName {
+    #[must_use]
+    pub const fn of(finish: Finish) -> Self {
+        match finish {
+            Finish::Stop => Self::Stop,
+            Finish::Length => Self::Length,
+            Finish::Refusal => Self::Refusal,
+            Finish::Error => Self::Error,
+            Finish::Cancelled => Self::Cancelled,
+        }
+    }
+}
+
+/// What the worker's one call came to, without payload: the names the source itself spells
+/// (`Refusal::name`, `native::Error::name`), so the record says what the stop body and the
+/// refused-candidate evidence say.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub enum WorkerOutcome {
+    /// A replacement was handed to the runtime; `replacement_bytes` is its length.
+    Replacement,
+    /// The class grammar refused the answer under this `candidate_*` name.
+    Refused { name: String },
+    /// The provider failed by this name.
+    Provider { name: String },
+}
+
+/// The worker's settle of one attempt (B14a-5, R19.2): what the model was asked under which adapter
+/// row, what it cost in tokens and wall time, the identity and raw digests, and how it ended.
+/// Sealed like the other records: one production constructor over the settle the source handed the
+/// runtime WITH the candidate ([`crate::app::runtime::Answer`]), decoded only through the ledger's
+/// commitment.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct WorkerSettle {
+    attempt: String,
+    adapter_profile: String,
+    input_tokens: Option<u64>,
+    output_tokens: Option<u64>,
+    wall_ms: u64,
+    finish: Option<FinishName>,
+    identity_sha256: Option<String>,
+    raw_sha256: Option<String>,
+    outcome: WorkerOutcome,
+    replacement_bytes: Option<u64>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WorkerSettleFields {
+    attempt: String,
+    adapter_profile: String,
+    input_tokens: Option<u64>,
+    output_tokens: Option<u64>,
+    wall_ms: u64,
+    finish: Option<FinishName>,
+    identity_sha256: Option<String>,
+    raw_sha256: Option<String>,
+    outcome: WorkerOutcome,
+    replacement_bytes: Option<u64>,
+}
+
+impl WorkerSettle {
+    /// The one production constructor: over the settle the source handed back with its candidate.
+    #[must_use]
+    pub fn of(settle: &Settle) -> Self {
+        let (outcome, replacement_bytes) = match &settle.outcome {
+            CandidateOutcome::Replacement(len) => (
+                WorkerOutcome::Replacement,
+                Some(u64::try_from(*len).unwrap_or(u64::MAX)),
+            ),
+            CandidateOutcome::Refused(refusal) => (
+                WorkerOutcome::Refused {
+                    name: refusal.name().to_owned(),
+                },
+                None,
+            ),
+            CandidateOutcome::Provider(error) => (
+                WorkerOutcome::Provider {
+                    name: error.name().to_owned(),
+                },
+                None,
+            ),
+        };
+        Self {
+            attempt: settle.attempt.clone(),
+            adapter_profile: settle.adapter.to_owned(),
+            input_tokens: settle.input_tokens,
+            output_tokens: settle.output_tokens,
+            wall_ms: settle.wall_ms,
+            finish: settle.finish.map(FinishName::of),
+            identity_sha256: settle.identity_sha256.clone(),
+            raw_sha256: settle.raw_sha256.clone(),
+            outcome,
+            replacement_bytes,
+        }
+    }
+
+    /// The attempt the settle is of.
+    #[must_use]
+    pub fn attempt(&self) -> &str {
+        &self.attempt
+    }
+
+    /// The adapter row the request named.
+    #[must_use]
+    pub fn adapter_profile(&self) -> &str {
+        &self.adapter_profile
+    }
+
+    /// Prompt tokens the provider reported, when it did.
+    #[must_use]
+    pub const fn input_tokens(&self) -> Option<u64> {
+        self.input_tokens
+    }
+
+    /// Completion tokens the provider reported, when it did.
+    #[must_use]
+    pub const fn output_tokens(&self) -> Option<u64> {
+        self.output_tokens
+    }
+
+    /// The wall time of the call, from the source's ask to its answer.
+    #[must_use]
+    pub const fn wall_ms(&self) -> u64 {
+        self.wall_ms
+    }
+
+    /// How the answer ended, when one was reported.
+    #[must_use]
+    pub const fn finish(&self) -> Option<FinishName> {
+        self.finish
+    }
+
+    /// The digest of the provider's identity readback, when one was read.
+    #[must_use]
+    pub fn identity_sha256(&self) -> Option<&str> {
+        self.identity_sha256.as_deref()
+    }
+
+    /// The digest of the provider's raw response, when one was received.
+    #[must_use]
+    pub fn raw_sha256(&self) -> Option<&str> {
+        self.raw_sha256.as_deref()
+    }
+
+    /// What the call came to.
+    #[must_use]
+    pub const fn outcome(&self) -> &WorkerOutcome {
+        &self.outcome
+    }
+
+    /// The replacement's length, for a `Replacement` outcome.
+    #[must_use]
+    pub const fn replacement_bytes(&self) -> Option<u64> {
+        self.replacement_bytes
+    }
+
+    fn decode(bytes: &[u8]) -> Result<Self, Refusal> {
+        let fields: WorkerSettleFields =
+            serde_json::from_slice(bytes).map_err(|_| Refusal::Encoding)?;
+        UuidV4::parse(&fields.attempt).map_err(|_| Refusal::Encoding)?;
+        // A length travels with a replacement and with nothing else: the constructor's shape.
+        if matches!(fields.outcome, WorkerOutcome::Replacement)
+            != fields.replacement_bytes.is_some()
+        {
+            return Err(Refusal::Encoding);
+        }
+        Ok(Self {
+            attempt: fields.attempt,
+            adapter_profile: fields.adapter_profile,
+            input_tokens: fields.input_tokens,
+            output_tokens: fields.output_tokens,
+            wall_ms: fields.wall_ms,
+            finish: fields.finish,
+            identity_sha256: fields.identity_sha256,
+            raw_sha256: fields.raw_sha256,
+            outcome: fields.outcome,
+            replacement_bytes: fields.replacement_bytes,
+        })
+    }
+}
+
+impl sealed::Decode for WorkerSettle {
+    fn decode_bytes(bytes: &[u8]) -> Result<Self, Refusal> {
+        Self::decode(bytes)
+    }
+}
+
+impl RunRecord for WorkerSettle {
+    const KIND: RunRecordKind = RunRecordKind::WorkerSettle;
+}
+
 #[cfg(test)]
 mod tests {
     use super::sealed::Decode as _;
     use super::{
-        Cancellation, Intents, ObligationRecord, Observations, OutcomeName, OutputReadback,
-        ProcessCleanup, Readbacks, Refusal, RefusedKind, RunCleanup, RunClock, RunOutcome,
-        RunRecord, RuntimeClock, Scratch, Settlement, Subjects,
+        Cancellation, FinishName, Intents, ObligationRecord, Observations, OutcomeName,
+        OutputReadback, ProcessCleanup, Readbacks, Refusal, RefusedKind, RunCleanup, RunClock,
+        RunOutcome, RunRecord, RuntimeClock, Scratch, Settlement, Subjects, WorkerSettle,
+    };
+    use crate::app::candidates::{
+        Outcome as CandidateOutcome, Refusal as CandidateRefusal, Settle,
     };
     use crate::app::workload::{Outcome, Run, Step};
     use crate::contracts::UuidV4;
     use crate::contracts::receipt::{Id, Name, Ref, Sha};
     use crate::store::RunRecordKind;
+    use crate::worker::Finish;
     use crate::worker::namespace::NamespaceRunError;
+    use crate::worker::native::Error as NativeError;
     use crate::worker::process::Refusal as ProcessRefusal;
+    use serde_json::json;
     use std::time::{Duration, Instant};
 
     fn reference(n: u8) -> Ref {
@@ -1015,14 +1227,167 @@ mod tests {
                 <RunClock as RunRecord>::KIND,
                 <RunOutcome as RunRecord>::KIND,
                 <RunCleanup as RunRecord>::KIND,
-                <Readbacks as RunRecord>::KIND
+                <Readbacks as RunRecord>::KIND,
+                <WorkerSettle as RunRecord>::KIND
             ],
             [
                 RunRecordKind::RunClock,
                 RunRecordKind::RunOutcome,
                 RunRecordKind::RunCleanup,
-                RunRecordKind::Readbacks
+                RunRecordKind::Readbacks,
+                RunRecordKind::WorkerSettle
             ]
         );
+    }
+
+    /// B14a-5 (R19.2) · three worker settles differing in every field — a replacement, a grammar
+    /// refusal, a provider failure — encode to the pinned spelling WHOLE and round-trip through
+    /// their bytes; the finish and outcome names are the source's own.
+    #[test]
+    fn a_worker_settle_encodes_whole_and_round_trips() -> Result<(), Refusal> {
+        let sha = |c: char| Some(format!("sha256:{}", c.to_string().repeat(64)));
+        let cases = [
+            (
+                Settle {
+                    attempt: "28f00000-0000-4000-8000-0000000000a1".to_owned(),
+                    adapter: "ollama-fc44-12ff8654/2",
+                    input_tokens: Some(552),
+                    output_tokens: Some(258),
+                    wall_ms: 4_321,
+                    finish: Some(Finish::Stop),
+                    identity_sha256: sha('a'),
+                    raw_sha256: sha('b'),
+                    outcome: CandidateOutcome::Replacement(1_776),
+                },
+                json!({
+                    "attempt": "28f00000-0000-4000-8000-0000000000a1",
+                    "adapter_profile": "ollama-fc44-12ff8654/2",
+                    "input_tokens": 552, "output_tokens": 258, "wall_ms": 4321,
+                    "finish": "stop",
+                    "identity_sha256": sha('a'), "raw_sha256": sha('b'),
+                    "outcome": "replacement", "replacement_bytes": 1776,
+                }),
+            ),
+            (
+                Settle {
+                    attempt: "28f00000-0000-4000-8000-0000000000b2".to_owned(),
+                    adapter: "ollama-fc44-12ff8654/1",
+                    input_tokens: None,
+                    output_tokens: Some(64),
+                    wall_ms: 7,
+                    finish: Some(Finish::Length),
+                    identity_sha256: None,
+                    raw_sha256: sha('c'),
+                    outcome: CandidateOutcome::Refused(CandidateRefusal::Truncated),
+                },
+                json!({
+                    "attempt": "28f00000-0000-4000-8000-0000000000b2",
+                    "adapter_profile": "ollama-fc44-12ff8654/1",
+                    "input_tokens": null, "output_tokens": 64, "wall_ms": 7,
+                    "finish": "length",
+                    "identity_sha256": null, "raw_sha256": sha('c'),
+                    "outcome": {"refused": {"name": "candidate_truncated"}},
+                    "replacement_bytes": null,
+                }),
+            ),
+            (
+                Settle {
+                    attempt: "28f00000-0000-4000-8000-0000000000c3".to_owned(),
+                    adapter: "ollama-fc44-12ff8654/2",
+                    input_tokens: Some(1),
+                    output_tokens: None,
+                    wall_ms: 900_000,
+                    finish: None,
+                    identity_sha256: sha('d'),
+                    raw_sha256: None,
+                    outcome: CandidateOutcome::Provider(NativeError::Identity),
+                },
+                json!({
+                    "attempt": "28f00000-0000-4000-8000-0000000000c3",
+                    "adapter_profile": "ollama-fc44-12ff8654/2",
+                    "input_tokens": 1, "output_tokens": null, "wall_ms": 900_000,
+                    "finish": null,
+                    "identity_sha256": sha('d'), "raw_sha256": null,
+                    "outcome": {"provider": {"name": "identity"}},
+                    "replacement_bytes": null,
+                }),
+            ),
+        ];
+        for (settle, expected) in cases {
+            let record = WorkerSettle::of(&settle);
+            let bytes = record.to_bytes()?;
+            let encoded: serde_json::Value =
+                serde_json::from_slice(&bytes).map_err(|_| Refusal::Encoding)?;
+            assert_eq!(encoded, expected);
+            assert_eq!(WorkerSettle::decode_bytes(&bytes)?, record);
+            assert_eq!(record.attempt(), settle.attempt);
+            assert_eq!(record.adapter_profile(), settle.adapter);
+            assert_eq!(record.wall_ms(), settle.wall_ms);
+        }
+        // Every finish spelled, one arm per variant.
+        let spelled: Vec<String> = [
+            Finish::Stop,
+            Finish::Length,
+            Finish::Refusal,
+            Finish::Error,
+            Finish::Cancelled,
+        ]
+        .into_iter()
+        .map(|finish| serde_json::to_string(&FinishName::of(finish)).map_err(|_| Refusal::Encoding))
+        .collect::<Result<_, _>>()?;
+        assert_eq!(
+            spelled,
+            [
+                "\"stop\"",
+                "\"length\"",
+                "\"refusal\"",
+                "\"error\"",
+                "\"cancelled\""
+            ]
+        );
+        Ok(())
+    }
+
+    /// B14a-5 · bytes the constructor could not have made are refused at decode: a replacement with
+    /// no length, a refusal with one, an attempt that is not a UUID, and a field the record does not
+    /// have.
+    #[test]
+    fn a_worker_settle_refuses_bytes_the_constructor_could_not_make() {
+        let base = json!({
+            "attempt": "28f00000-0000-4000-8000-0000000000a1",
+            "adapter_profile": "ollama-fc44-12ff8654/2",
+            "input_tokens": 552, "output_tokens": 258, "wall_ms": 4321, "finish": "stop",
+            "identity_sha256": null, "raw_sha256": null,
+            "outcome": "replacement", "replacement_bytes": 1776,
+        });
+        assert!(WorkerSettle::decode_bytes(base.to_string().as_bytes()).is_ok());
+        let cases = [
+            (
+                "a replacement without its length",
+                json!({"replacement_bytes": null}),
+            ),
+            (
+                "a refusal carrying a length",
+                json!({"outcome": {"refused": {"name": "candidate_empty"}}}),
+            ),
+            (
+                "an attempt that is not a UUID",
+                json!({"attempt": "attempt-1"}),
+            ),
+            ("a field the record does not have", json!({"tokens": 3})),
+        ];
+        for (case, edit) in cases {
+            let mut faulty = base.clone();
+            for (key, value) in edit.as_object().into_iter().flatten() {
+                faulty[key] = value.clone();
+            }
+            assert!(
+                matches!(
+                    WorkerSettle::decode_bytes(faulty.to_string().as_bytes()),
+                    Err(Refusal::Encoding)
+                ),
+                "{case}"
+            );
+        }
     }
 }

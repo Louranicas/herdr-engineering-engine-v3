@@ -11,7 +11,7 @@
 //! called; B14b's dispatcher establishes it — the identity readback refuses anything else by name.
 
 use super::evidence::digest;
-use super::runtime::{Ask, Candidate, CandidateSource, Previous, REFUSED_CANDIDATE_SCHEMA};
+use super::runtime::{Answer, Ask, Candidate, CandidateSource, Previous, REFUSED_CANDIDATE_SCHEMA};
 use crate::check::consistency::U64_EDITABLE;
 use crate::store::VerificationVerdict;
 use crate::worker::native::{self, AdapterProfile, ProviderState};
@@ -241,11 +241,15 @@ pub enum Outcome {
     Provider(native::Error),
 }
 
-/// What one call to the model came to (R18 decision 6, Q2): tokens and identity as evidence, the
-/// wall in the settle — kept on the source for every call until B14a-5 gives them a ledger home.
+/// What one call to the model came to (R18 decision 6, Q2; R19.3): tokens and identity as
+/// evidence, the wall in the settle. It travels to the runtime WITH the candidate, in the
+/// [`Answer`], and the runtime commits it as the attempt's `worker_settle` run record in the
+/// settle's own hold (B14a-5) — the source keeps no copy the runtime could re-acquire.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Settle {
     pub attempt: String,
+    /// The adapter row the request named (`AdapterProfile::id`).
+    pub adapter: &'static str,
     pub input_tokens: Option<u64>,
     pub output_tokens: Option<u64>,
     pub wall_ms: u64,
@@ -262,7 +266,6 @@ pub struct NativeCandidates {
     profile: native::Profile,
     adapter: &'static AdapterProfile,
     prompt: ClassPrompt,
-    settles: Vec<Settle>,
     /// Children an exchange left pending, retained so their custody is never dropped (A4); B14b
     /// settles them.
     retained: Vec<PendingChild>,
@@ -279,15 +282,8 @@ impl NativeCandidates {
             profile,
             adapter,
             prompt,
-            settles: Vec::new(),
             retained: Vec::new(),
         }
-    }
-
-    /// Every call so far, in order.
-    #[must_use]
-    pub fn settles(&self) -> &[Settle] {
-        &self.settles
     }
 
     /// How many pending children the source holds.
@@ -339,11 +335,12 @@ impl NativeCandidates {
         settled
     }
 
-    fn ask(&mut self, ask: &Ask<'_>) -> Candidate {
+    fn ask(&mut self, ask: &Ask<'_>) -> Answer {
         let attempt = ask.attempt.as_str().to_owned();
         let begun = Instant::now();
         let mut settle = Settle {
             attempt,
+            adapter: self.adapter.id,
             input_tokens: None,
             output_tokens: None,
             wall_ms: 0,
@@ -386,8 +383,10 @@ impl NativeCandidates {
             }
         };
         settle.wall_ms = u64::try_from(begun.elapsed().as_millis()).unwrap_or(u64::MAX);
-        self.settles.push(settle);
-        candidate
+        Answer {
+            candidate,
+            settle: Some(settle),
+        }
     }
 
     fn judge(
@@ -450,7 +449,7 @@ const fn custody_settled(pending: bool, leader_reaped: bool, group_settled: bool
 }
 
 impl CandidateSource for NativeCandidates {
-    fn next(&mut self, ask: &Ask<'_>) -> Candidate {
+    fn next(&mut self, ask: &Ask<'_>) -> Answer {
         self.ask(ask)
     }
 }

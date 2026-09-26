@@ -454,7 +454,8 @@ Precompiling packages...
         loader.exec_module(mutations)
         world = sorted(path.relative_to(ROOT).as_posix() for path in (ROOT / "migrations").glob("*.sql"))
         self.assertEqual(world, ["migrations/001.sql", "migrations/002.sql", "migrations/003.sql",
-                                 "migrations/004.sql", "migrations/005.sql", "migrations/006.sql"])
+                                 "migrations/004.sql", "migrations/005.sql", "migrations/006.sql",
+                                 "migrations/007.sql"])
         for name in world:
             with self.subTest(migration=name):
                 self.assertIn(name, quality.T04_IMPLEMENTATION_PATHS)

@@ -106,9 +106,9 @@ fn t08n_01_the_source_hands_the_runtime_the_reference_file_and_names_each_refusa
     let mut source = NativeCandidates::new(rig.profile.clone(), FULL_FILE, class_prompt());
     respond(&mut rig, REFERENCE, "stop");
     let work_until = rig.origin + Duration::from_secs(60);
-    let candidate = source.next(&ask(None, rig.origin, work_until, &cancelled));
+    let answer = source.next(&ask(None, rig.origin, work_until, &cancelled));
     assert_eq!(
-        candidate,
+        answer.candidate,
         Candidate::Replacement(REFERENCE.as_bytes().to_vec())
     );
     assert_eq!(
@@ -120,6 +120,7 @@ fn t08n_01_the_source_hands_the_runtime_the_reference_file_and_names_each_refusa
     let expected_identity_raw = digest(&rendered(&rig.scenario["ps"]));
     let settle = |outcome: Outcome, finish: Option<Finish>, raw: Option<String>| Settle {
         attempt: ATTEMPT_ID.to_owned(),
+        adapter: FULL_FILE.id,
         input_tokens: Some(INPUT_TOKENS),
         output_tokens: Some(OUTPUT_TOKENS),
         wall_ms: 0,
@@ -132,8 +133,9 @@ fn t08n_01_the_source_hands_the_runtime_the_reference_file_and_names_each_refusa
         wall_ms: 0,
         ..s.clone()
     };
+    // The settle travels with the candidate (R19.3): asserted whole from the answer.
     assert_eq!(
-        whole(&source.settles()[0]),
+        whole(answer.settle.as_ref().unwrap()),
         settle(
             Outcome::Replacement(REFERENCE.len()),
             Some(Finish::Stop),
@@ -143,21 +145,24 @@ fn t08n_01_the_source_hands_the_runtime_the_reference_file_and_names_each_refusa
     // Fenced: the body.
     respond(&mut rig, &format!("```rust\n{REFERENCE}```\n"), "stop");
     assert_eq!(
-        source.next(&ask(None, rig.origin, work_until, &cancelled)),
+        source
+            .next(&ask(None, rig.origin, work_until, &cancelled))
+            .candidate,
         Candidate::Replacement(REFERENCE.as_bytes().to_vec())
     );
     // Truncated: the whole text is refused under its name, the text kept for the record.
     let cut = &REFERENCE[..200];
     respond(&mut rig, cut, "length");
+    let truncated = source.next(&ask(None, rig.origin, work_until, &cancelled));
     assert_eq!(
-        source.next(&ask(None, rig.origin, work_until, &cancelled)),
+        truncated.candidate,
         Candidate::Refused {
             refusal: Refusal::Truncated,
             text: cut.as_bytes().to_vec()
         }
     );
     assert_eq!(
-        whole(&source.settles()[2]),
+        whole(truncated.settle.as_ref().unwrap()),
         settle(
             Outcome::Refused(Refusal::Truncated),
             Some(Finish::Length),
@@ -166,7 +171,9 @@ fn t08n_01_the_source_hands_the_runtime_the_reference_file_and_names_each_refusa
     );
     respond(&mut rig, "  \n", "stop");
     assert_eq!(
-        source.next(&ask(None, rig.origin, work_until, &cancelled)),
+        source
+            .next(&ask(None, rig.origin, work_until, &cancelled))
+            .candidate,
         Candidate::Refused {
             refusal: Refusal::Empty,
             text: b"  \n".to_vec()
@@ -174,7 +181,9 @@ fn t08n_01_the_source_hands_the_runtime_the_reference_file_and_names_each_refusa
     );
     respond(&mut rig, "```rust\na\n```\nand\n```rust\nb\n```\n", "stop");
     assert!(matches!(
-        source.next(&ask(None, rig.origin, work_until, &cancelled)),
+        source
+            .next(&ask(None, rig.origin, work_until, &cancelled))
+            .candidate,
         Candidate::Refused {
             refusal: Refusal::NotOneFile,
             ..
@@ -198,8 +207,9 @@ fn t08n_03_a_second_attempt_renders_the_previous_refusal_by_name() {
     let mut source = NativeCandidates::new(second.profile.clone(), FULL_FILE, class_prompt());
     respond(&mut second, REFERENCE, "stop");
     let work_until = second.origin + Duration::from_secs(60);
+    let answer = source.next(&ask(Some(&previous), second.origin, work_until, &cancelled));
     assert_eq!(
-        source.next(&ask(Some(&previous), second.origin, work_until, &cancelled)),
+        answer.candidate,
         Candidate::Replacement(REFERENCE.as_bytes().to_vec())
     );
     let prompt = captured(&second)["prompt"].as_str().unwrap().to_owned();
@@ -209,7 +219,10 @@ fn t08n_03_a_second_attempt_renders_the_previous_refusal_by_name() {
     );
     assert!(prompt.starts_with(std::str::from_utf8(TASK).unwrap()));
     assert!(prompt.contains("Current src/lib.rs:\n"));
-    assert_eq!(source.settles().len(), 1);
+    assert!(
+        answer.settle.is_some(),
+        "one call, one settle, on the answer"
+    );
     assert_eq!(source.retained(), 0);
 }
 
@@ -228,8 +241,9 @@ fn t08n_02_provider_failures_stop_the_attempt_by_name_without_a_second_generate(
     respond(&mut rig, REFERENCE, "stop");
     let mut source = NativeCandidates::new(rig.profile.clone(), FULL_FILE, class_prompt());
     let work_until = rig.origin + Duration::from_secs(60);
+    let failed = source.next(&ask(None, rig.origin, work_until, &cancelled));
     assert_eq!(
-        source.next(&ask(None, rig.origin, work_until, &cancelled)),
+        failed.candidate,
         Candidate::Provider {
             error: native::Error::Identity,
             state: ProviderState::NotDispatched,
@@ -242,18 +256,19 @@ fn t08n_02_provider_failures_stop_the_attempt_by_name_without_a_second_generate(
         vec!["version", "tags", "ps"],
         "the readback refused before any generate"
     );
-    assert_eq!(
-        source.settles()[0].outcome,
-        Outcome::Provider(native::Error::Identity)
-    );
-    assert_eq!(source.settles()[0].finish, None);
+    let settle = failed.settle.as_ref().unwrap();
+    assert_eq!(settle.outcome, Outcome::Provider(native::Error::Identity));
+    assert_eq!(settle.finish, None);
+    assert_eq!(settle.adapter, FULL_FILE.id);
     // A work window past the adapter's cap: refused at the door, no exchange.
     let mut far = full_file_rig(None);
     respond(&mut far, REFERENCE, "stop");
     let mut source = NativeCandidates::new(far.profile.clone(), FULL_FILE, class_prompt());
     let past = far.origin + MAX_RUN + Duration::from_secs(1);
     assert_eq!(
-        source.next(&ask(None, far.origin, past, &cancelled)),
+        source
+            .next(&ask(None, far.origin, past, &cancelled))
+            .candidate,
         Candidate::Provider {
             error: native::Error::Deadline,
             state: ProviderState::NotDispatched,
@@ -264,7 +279,9 @@ fn t08n_02_provider_failures_stop_the_attempt_by_name_without_a_second_generate(
     assert!(far.calls().is_empty(), "{:?}", far.calls());
     let within = far.origin + MAX_RUN;
     assert_eq!(
-        source.next(&ask(None, far.origin, within, &cancelled)),
+        source
+            .next(&ask(None, far.origin, within, &cancelled))
+            .candidate,
         Candidate::Replacement(REFERENCE.as_bytes().to_vec()),
         "the cap itself is inside the door"
     );
@@ -310,11 +327,15 @@ fn t08n_05_the_fake_refuses_a_generate_past_its_scripted_answers() {
     let mut source = NativeCandidates::new(rig.profile.clone(), FULL_FILE, class_prompt());
     let work_until = rig.origin + Duration::from_secs(60);
     assert_eq!(
-        source.next(&ask(None, rig.origin, work_until, &cancelled)),
+        source
+            .next(&ask(None, rig.origin, work_until, &cancelled))
+            .candidate,
         Candidate::Replacement(REFERENCE.as_bytes().to_vec())
     );
     assert!(matches!(
-        source.next(&ask(None, rig.origin, work_until, &cancelled)),
+        source
+            .next(&ask(None, rig.origin, work_until, &cancelled))
+            .candidate,
         Candidate::Provider {
             error: native::Error::Process,
             ..

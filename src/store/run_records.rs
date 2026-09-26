@@ -37,19 +37,23 @@ pub enum RunRecordKind {
     Readbacks,
     /// The bounded capture of the run's output.
     Capture,
+    /// What the worker's one call to the model came to: usage, identity, wall, how it ended
+    /// (B14a-5, R19). Committed by the attempt's settle, never by a check.
+    WorkerSettle,
 }
 
 impl RunRecordKind {
     /// Every kind, in the order the CHECK spells them.
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::RunClock,
         Self::RunOutcome,
         Self::RunCleanup,
         Self::Readbacks,
         Self::Capture,
+        Self::WorkerSettle,
     ];
 
-    /// The stored spelling: the `kind` CHECK's vocabulary in `migrations/006.sql`.
+    /// The stored spelling: the `kind` CHECK's vocabulary in `migrations/007.sql` (006's, widened).
     #[must_use]
     pub const fn name(self) -> &'static str {
         match self {
@@ -58,6 +62,7 @@ impl RunRecordKind {
             Self::RunCleanup => "run_cleanup",
             Self::Readbacks => "readbacks",
             Self::Capture => "capture",
+            Self::WorkerSettle => "worker_settle",
         }
     }
 
@@ -70,6 +75,7 @@ impl RunRecordKind {
             Self::RunCleanup => "hee3.run-cleanup/1",
             Self::Readbacks => "hee3.readbacks/1",
             Self::Capture => "hee3.capture/1",
+            Self::WorkerSettle => "hee3.worker-settle/1",
         }
     }
 

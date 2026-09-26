@@ -19,6 +19,16 @@ pub fn digest(bytes: &[u8]) -> String {
     out
 }
 
+/// The bytes the contract fake prints for a scenario value: `json.dumps(value, separators=(',', ':'))`
+/// plus LF over a sorted-key object, for which `serde_json`'s compact rendering is the independent
+/// reference. One home (B14a-5): the t08 battery and the t28 proofs both derive the identity and raw
+/// digests from it.
+pub fn rendered(value: &Value) -> Vec<u8> {
+    let mut bytes = serde_json::to_vec(value).unwrap();
+    bytes.push(b'\n');
+    bytes
+}
+
 pub fn pin(path: &Path) -> FilePin {
     let raw = fs::read(path).unwrap();
     FilePin {

@@ -17,7 +17,7 @@ use super::plan;
 use super::repair::{self, Failure};
 use super::run_records::{
     Intents, ObligationRecord, OutcomeName, OutputReadback, Readbacks, RunCleanup, RunClock,
-    RunOutcome, RunRecord as _, RuntimeClock, Settlement as RecordSettlement,
+    RunOutcome, RunRecord as _, RuntimeClock, Settlement as RecordSettlement, WorkerSettle,
 };
 use super::tasks::{Poisoned, StoreTasks};
 use super::u64_receipt;
@@ -108,9 +108,19 @@ pub struct Ask<'a> {
     pub previous: Option<&'a Previous>,
 }
 
+/// What a source hands back for one ask (B14a-5, R19.3): the candidate, and the worker's settle of
+/// the call when a provider was asked — `None` only when none was (an exhausted script). The settle
+/// travels with the candidate so the runtime never re-acquires it from the source, and is committed
+/// as the attempt's `worker_settle` run record in the settle's own hold.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Answer {
+    pub candidate: Candidate,
+    pub settle: Option<super::candidates::Settle>,
+}
+
 /// Where candidates come from. `next` is asked once per attempt, inside `execute`.
 pub trait CandidateSource {
-    fn next(&mut self, ask: &Ask<'_>) -> Candidate;
+    fn next(&mut self, ask: &Ask<'_>) -> Answer;
 }
 
 /// One independent check of an applied candidate: its verdict, the criterion bits it satisfied,
@@ -801,30 +811,54 @@ impl<C: CandidateSource, V: Verifier> StoreRuntime<'_, C, V> {
 
     /// One settle of the current attempt, in one hold with its head read. `used_ms` is `None`
     /// when the measured time overran what the reservation holds now (an overrun is not a clean
-    /// failure).
+    /// failure). With a worker settle (B14a-5, R19.4), its sealed record is published and committed
+    /// in the same hold, keyed by this observation's event; `execute` has already refused a settle
+    /// naming another attempt, before anything was applied or written.
     fn settle(
         &mut self,
         index: usize,
         cleanup_settled: bool,
         ready_to_verify: bool,
+        worker: Option<&super::candidates::Settle>,
     ) -> Result<(), Error> {
         let begun = self.attempts.get(index).ok_or(Error::Identity)?;
         let used = millis(begun.charged_from.elapsed());
         let event = fresh(self.deadline)?;
+        let record_ids: [String; 2] = fresh_ids(self.deadline)?;
         let (generation, known) = self.tasks.with_store(|store| -> Result<_, Error> {
             let head = self.current(store)?;
             let used_ms = (used <= head.reserved_work_ms).then_some(used);
-            let generation = store.settle_attempt(
-                &expected(&head, begun)?,
-                Settlement {
-                    effect: Effect::None,
-                    used_ms,
-                    cleanup_settled,
-                    ready_to_verify,
-                },
-                uuid(&event)?,
-                self.deadline,
-            )?;
+            let observation = Settlement {
+                effect: Effect::None,
+                used_ms,
+                cleanup_settled,
+                ready_to_verify,
+            };
+            let generation = match worker {
+                Some(settle) => {
+                    let bytes = WorkerSettle::of(settle)
+                        .to_bytes()
+                        .map_err(|_| Error::Identity)?;
+                    let object = store.publish(&bytes, uuid(&record_ids[0])?, self.deadline)?;
+                    store.settle_attempt_with_records(
+                        &expected(&head, begun)?,
+                        observation,
+                        &[StoreRunRecord {
+                            kind: RunRecordKind::WorkerSettle,
+                            artifact_id: uuid(&record_ids[1])?,
+                            object: &object,
+                        }],
+                        uuid(&event)?,
+                        self.deadline,
+                    )?
+                }
+                None => store.settle_attempt(
+                    &expected(&head, begun)?,
+                    observation,
+                    uuid(&event)?,
+                    self.deadline,
+                )?,
+            };
             Ok((generation, used_ms.is_some()))
         })??;
         self.written(&generation, event)?;
@@ -1497,10 +1531,14 @@ impl<C: CandidateSource, V: Verifier> driver::Runtime for StoreRuntime<'_, C, V>
             cancelled: &self.cancelled,
             previous: self.previous.as_ref(),
         };
-        match self.source.next(&ask) {
+        let Answer {
+            candidate,
+            settle: worker,
+        } = answered(&mut self.source, &ask)?;
+        match candidate {
             // Exhaustion after begin is truthful (B14a-R2.3): the attempt is not ready to verify.
             Candidate::Exhausted => {
-                self.settle(index, true, false)?;
+                self.settle(index, true, false, worker.as_ref())?;
                 Ok(if self.begun(attempt)?.settled {
                     Work::Failed
                 } else {
@@ -1535,7 +1573,7 @@ impl<C: CandidateSource, V: Verifier> driver::Runtime for StoreRuntime<'_, C, V>
                         removed
                     }
                 };
-                self.settle(index, cleanup_settled, true)?;
+                self.settle(index, cleanup_settled, true, worker.as_ref())?;
                 Ok(if self.begun(attempt)?.settled {
                     Work::ReadyForCheck
                 } else {
@@ -1549,7 +1587,7 @@ impl<C: CandidateSource, V: Verifier> driver::Runtime for StoreRuntime<'_, C, V>
                 if let Some(begun) = self.attempts.get_mut(index) {
                     begun.refused = Some((text, refusal.name()));
                 }
-                self.settle(index, true, true)?;
+                self.settle(index, true, true, worker.as_ref())?;
                 Ok(if self.begun(attempt)?.settled {
                     Work::ReadyForCheck
                 } else {
@@ -1571,7 +1609,7 @@ impl<C: CandidateSource, V: Verifier> driver::Runtime for StoreRuntime<'_, C, V>
                         retained,
                     });
                 }
-                self.settle(index, cleanup_settled, false)?;
+                self.settle(index, cleanup_settled, false, worker.as_ref())?;
                 Ok(if self.begun(attempt)?.settled {
                     Work::Failed
                 } else {
@@ -1830,6 +1868,21 @@ fn expected<'b>(head: &'b TaskHead, begun: &'b Begun) -> Result<Expected<'b>, Er
 }
 
 /// `N` fresh identities, or the first entropy refusal.
+/// Ask the source for this attempt's candidate. The cheap question first (R19.3): a settle naming
+/// another attempt is the source's error, refused before any candidate is applied or any row
+/// written.
+fn answered<C: CandidateSource>(source: &mut C, ask: &Ask<'_>) -> Result<Answer, Error> {
+    let answer = source.next(ask);
+    if answer
+        .settle
+        .as_ref()
+        .is_some_and(|settle| settle.attempt != ask.attempt.as_str())
+    {
+        return Err(Error::Identity);
+    }
+    Ok(answer)
+}
+
 fn fresh_ids<const N: usize>(deadline: Instant) -> Result<[String; N], Error> {
     let mut ids = Vec::with_capacity(N);
     for _ in 0..N {

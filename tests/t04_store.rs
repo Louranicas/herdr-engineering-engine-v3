@@ -46,6 +46,10 @@ const MIGRATION_5_BODY: &str =
     "sha256:51b29ce4e4e48ea0d2e97dc517fb2bbe3ef87618d15625694f7e0b13f1e2693d";
 const MIGRATION_6_BODY: &str =
     "sha256:6612b4cc1cc9ca481d23678e78de119e01fbeb8979fde98996a0e6087c5ca28d";
+/// Migration 7's body digest, by the same method (Python's hashlib over the text below the anchor
+/// block).
+const MIGRATION_7_BODY: &str =
+    "sha256:4a1dd33f751fb2766aef7caf93b668ec786a6e933c18fbe1133504b56736b773";
 static NEXT_ROOT: AtomicU64 = AtomicU64::new(0);
 
 struct Area {
@@ -374,6 +378,12 @@ fn fresh_ledger_has_exact_runtime_profile_and_migration() {
                 5,
                 Some(MIGRATION_5_BODY.to_owned())
             ),
+            (
+                7,
+                MIGRATION_7_BODY.to_owned(),
+                6,
+                Some(MIGRATION_6_BODY.to_owned())
+            ),
         ],
         "each row names its body and links its predecessor"
     );
@@ -594,19 +604,20 @@ fn unrelated_version_zero_database_is_preserved_and_refused() {
 fn future_schema_refuses_without_downgrade() {
     let area = Area::new();
     drop(area.open());
-    area.edit_closed("PRAGMA user_version=7;");
+    area.edit_closed("PRAGMA user_version=8;");
     assert!(matches!(
         Store::open(&area.path, uuid(GEN), uuid(EPOCH), false, deadline()),
         Err(Error::Chain(Chain::Newer {
-            recorded: 7,
-            current: 6
+            recorded: 8,
+            current: 7
         }))
     ));
     assert_eq!(
         area.inspect()
             .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
             .unwrap(),
-        7
+        8,
+        "the newer version is left as recorded: no downgrade"
     );
 }
 
@@ -1135,7 +1146,7 @@ fn unexpected_trigger_refuses_exact_schema_compatibility() {
     area.edit_closed("CREATE TRIGGER surprise AFTER INSERT ON events BEGIN SELECT 1; END;");
     assert!(matches!(
         Store::open(&area.path, uuid(GEN), uuid(EPOCH), false, deadline()),
-        Err(Error::Chain(Chain::Schema { version: 6 }))
+        Err(Error::Chain(Chain::Schema { version: 7 }))
     ));
 }
 
@@ -2717,7 +2728,7 @@ fn a_migration_one_ledger_upgrades_behind_a_verified_backup_and_reopens() {
         Store::open(&area.path, uuid(GEN), uuid(EPOCH), false, deadline()),
         Err(Error::UpgradeRequired {
             recorded: 1,
-            current: 6
+            current: 7
         })
     ));
     assert_eq!(
@@ -2851,24 +2862,24 @@ fn each_migration_chain_clause_refuses_by_its_own_name() {
     let cases: [(&str, String, Chain); 10] = [
         (
             "newer than this binary",
-            "PRAGMA user_version=7;".into(),
+            "PRAGMA user_version=8;".into(),
             Chain::Newer {
-                recorded: 7,
-                current: 6,
+                recorded: 8,
+                current: 7,
             },
         ),
         (
             "missing history row",
             "DELETE FROM migration_history WHERE version=2;".into(),
             Chain::History {
-                recorded: 6,
-                rows: 5,
+                recorded: 7,
+                rows: 6,
             },
         ),
         (
             "a gap in the versions",
-            "UPDATE migration_history SET version=7 WHERE version=6;".into(),
-            Chain::Sequence { position: 6 },
+            "UPDATE migration_history SET version=8 WHERE version=7;".into(),
+            Chain::Sequence { position: 7 },
         ),
         (
             "wrong 002 digest",
@@ -2911,7 +2922,7 @@ fn each_migration_chain_clause_refuses_by_its_own_name() {
         (
             "schema differs from applying the chain",
             "CREATE INDEX surplus ON tasks(state);".into(),
-            Chain::Schema { version: 6 },
+            Chain::Schema { version: 7 },
         ),
     ];
     for (case, edit, expected) in cases {
@@ -3061,7 +3072,7 @@ fn a_migration_file_that_lost_its_pinned_body_is_refused() {
     assert_eq!(
         files,
         [
-            "001.sql", "002.sql", "003.sql", "004.sql", "005.sql", "006.sql"
+            "001.sql", "002.sql", "003.sql", "004.sql", "005.sql", "006.sql", "007.sql"
         ]
     );
     assert_eq!(files.len(), usize::try_from(schema::CURRENT).unwrap());
@@ -3314,7 +3325,7 @@ fn a_backup_counts_every_table_the_ledger_holds() {
         ("attempt_records", 0),
         ("verifications", 0),
         ("ledger_meta", 1),
-        ("migration_history", 6),
+        ("migration_history", 7),
         ("acceptance_objects", 1),
         ("task_dispositions", 0),
     ] {
@@ -3618,10 +3629,12 @@ fn run_record_kinds_are_the_checks_vocabulary_with_one_schema_each() {
             "run_outcome",
             "run_cleanup",
             "readbacks",
-            "capture"
+            "capture",
+            "worker_settle"
         ]
     );
-    let sql = include_str!("../migrations/006.sql");
+    // The CHECK lives in the rebuild (007); 006's spelling is the five it opened with.
+    let sql = include_str!("../migrations/007.sql");
     for name in &names {
         assert!(sql.contains(&format!("'{name}'")), "{name} is in the CHECK");
     }
@@ -3654,8 +3667,56 @@ fn run_record_kinds_are_the_checks_vocabulary_with_one_schema_each() {
             ("run_cleanup", "hee3.run-cleanup/1"),
             ("readbacks", "hee3.readbacks/1"),
             ("capture", "hee3.capture/1"),
+            ("worker_settle", "hee3.worker-settle/1"),
         ]
     );
+}
+
+/// B14a-5 (R19.1): migration 7's rebuilt `attempt_records` admits the worker's settle as a sixth kind
+/// and still refuses a spelling outside the vocabulary; its key survived the rebuild (one record per
+/// kind per observation) and so did its index.
+#[test]
+fn migration_seven_admits_the_worker_settle_kind_and_kept_the_key() {
+    let area = Area::new();
+    let mut store = area.open();
+    accepted(&mut store);
+    drop(store);
+    with_objects(&area);
+    let db = Connection::open_with_flags(
+        area.database(),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_NOFOLLOW,
+    )
+    .unwrap();
+    let insert = |kind: &str| {
+        db.execute(
+            &format!(
+                "INSERT INTO attempt_records(event_id,kind,attempt_id,digest,artifact_id) \
+                 VALUES('{SETTLED}','{kind}','{ATTEMPT}','{DIGEST_B}','{RECORD_B}')"
+            ),
+            [],
+        )
+    };
+    for (kind, admitted) in [
+        ("settle", false),
+        ("worker-settle", false),
+        ("worker_settle", true),
+    ] {
+        let result = insert(kind);
+        assert_eq!(result.is_ok(), admitted, "{kind}: {result:?}");
+    }
+    assert!(
+        insert("worker_settle").is_err(),
+        "the (event, kind) key: a second worker settle for one observation is refused"
+    );
+    let indexed: i64 = db
+        .query_row(
+            "SELECT count(*) FROM sqlite_master WHERE type='index' AND name='attempt_records_by_attempt' \
+             AND tbl_name='attempt_records'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(indexed, 1, "the index was recreated on the rebuilt table");
 }
 
 /// B09b pin (review of d60df83, gap 2): two records in one observation naming one artifact id for
@@ -4380,6 +4441,79 @@ fn refs_at_and_over_the_bound_count_what_they_would_list() {
             );
         }
     }
+}
+
+// ------------------------------------------------ the worker's settle through the commitment (B14a-5)
+
+/// B14a-5 (R19.1, R19.4) pin: a worker settle published and committed by the attempt's settle is the
+/// one record `committed_run` returns, under its kind's schema; read through the commitment it comes
+/// back whole, field for field; read as another kind it is refused by both names.
+#[test]
+fn a_worker_settle_reads_back_only_through_the_commitment() {
+    use crate::app::candidates::{Outcome as CandidateOutcome, Settle};
+    use crate::app::run_records::{Refusal, RunClock, RunRecord, WorkerSettle};
+    use crate::worker::Finish;
+    let area = Area::new();
+    let mut store = area.open();
+    let active = running(&mut store);
+    let settle = WorkerSettle::of(&Settle {
+        attempt: ATTEMPT.to_owned(),
+        adapter: "ollama-fc44-12ff8654/2",
+        input_tokens: Some(552),
+        output_tokens: Some(258),
+        wall_ms: 4_321,
+        finish: Some(Finish::Stop),
+        identity_sha256: Some(DIGEST_B.to_owned()),
+        raw_sha256: Some(format!("sha256:{}", "c".repeat(64))),
+        outcome: CandidateOutcome::Replacement(1_776),
+    });
+    let object = store
+        .publish(&settle.to_bytes().unwrap(), uuid(STAGE), deadline())
+        .unwrap();
+    let records = [record(RunRecordKind::WorkerSettle, IDS[0], &object)];
+    store
+        .settle_attempt_with_records(
+            &active,
+            settled(Effect::None, Some(30), true, true),
+            &records,
+            uuid(SETTLED),
+            deadline(),
+        )
+        .unwrap();
+    let run = store
+        .committed_run(&principal(), uuid(ATTEMPT), deadline())
+        .unwrap();
+    assert_eq!(run.len(), 1);
+    let committed = run.record(RunRecordKind::WorkerSettle).unwrap();
+    assert_eq!(committed.schema_id(), "hee3.worker-settle/1");
+    assert_eq!(committed.artifact_id(), IDS[0]);
+    let read = WorkerSettle::read(committed, &store, deadline()).unwrap();
+    assert_eq!(read, settle);
+    assert_eq!(
+        (
+            read.attempt(),
+            read.adapter_profile(),
+            read.input_tokens(),
+            read.output_tokens(),
+            read.wall_ms(),
+            read.replacement_bytes()
+        ),
+        (
+            ATTEMPT,
+            "ollama-fc44-12ff8654/2",
+            Some(552),
+            Some(258),
+            4_321,
+            Some(1_776)
+        )
+    );
+    assert!(matches!(
+        RunClock::read(committed, &store, deadline()).err(),
+        Some(Refusal::Kind {
+            found: RunRecordKind::WorkerSettle,
+            expected: RunRecordKind::RunClock
+        })
+    ));
 }
 
 // ------------------------------------------------ run records read back through the commitment (B14a-2b-ii)

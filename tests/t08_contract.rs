@@ -27,15 +27,8 @@ use std::time::{Duration, Instant};
 /// The offline native fixture shared with the t28 runtime proofs (B14a-4, A12).
 #[path = "t08_rig.rs"]
 mod rig;
-use rig::{DaemonStandIn, digest, fixture};
+use rig::{DaemonStandIn, digest, fixture, rendered};
 
-/// The fake client prints `json.dumps(value, separators=(',', ':'))` plus LF over a
-/// sorted-key object; `serde_json` compact rendering is the independent reference.
-fn rendered(value: &Value) -> Vec<u8> {
-    let mut bytes = serde_json::to_vec(value).unwrap();
-    bytes.push(b'\n');
-    bytes
-}
 fn request(required: &[Feature], prompt: &str) -> Request<'static> {
     Request {
         invocation: worker::Invocation {
