@@ -10,6 +10,9 @@
 
 use super::custody::{DirectoryError, FileError, PrivateDirectory};
 use super::workload::FIXED_DESTINATIONS;
+use crate::contracts::receipt::{
+    Address as _, ExpectationV1, Id, Name, Ref, ReviewV1, Sha, Validate as _,
+};
 use crate::contracts::{Sha256Digest, UuidV4};
 use crate::worker::namespace::{self, MAX_MOUNTS, SHIM_DESTINATION};
 use std::collections::BTreeSet;
@@ -71,12 +74,15 @@ pub struct RuntimeFile {
 
 /// The independently reviewed records a task's receipt binds (B14a-R8/R9): the expectation and its
 /// review — the review provenance record, which carries the reviewer's verdict over the
-/// expectation — each as the 32 bytes of its sha256. The objects are in [`REVIEWED_DIRECTORY`] and
-/// are read through [`read_reviewed`], which returns only bytes hashing to the digest asked for.
+/// expectation — each as the full reference the receipt will cite (artifact id, sha256, byte
+/// length, media type and its fixed schema id), so the profile's declaration and the receipt's
+/// citation are one spelling (B14a-2c-ii). The objects are in [`REVIEWED_DIRECTORY`] and are read
+/// through [`read_reviewed`], which returns only bytes of the declared length hashing to the
+/// declared digest, or whole through [`read_reviewed_closure`].
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Reviewed {
-    pub expectation: [u8; 32],
-    pub review: [u8; 32],
+    pub expectation: Ref,
+    pub review: Ref,
 }
 
 /// What a profile declares, typed and shape-checked, before any of it is used.
@@ -188,9 +194,10 @@ pub enum ProfileError {
         name: String,
         why: PinWhy,
     },
-    /// A `[reviewed]` entry: not a `sha256:` digest, or the review naming the expectation itself.
+    /// A `[reviewed]` entry, at its key path: not a receipt reference, not its fixed schema, or the
+    /// review naming the expectation itself.
     Reviewed {
-        name: &'static str,
+        path: String,
         why: ReviewedWhy,
     },
 }
@@ -198,7 +205,14 @@ pub enum ProfileError {
 /// Why a `[reviewed]` entry is refused.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ReviewedWhy {
+    /// Not a `sha256:` digest.
     Digest,
+    /// Not a receipt reference: the artifact id is not a v4 UUID, the media type is not a name,
+    /// or the byte length is not a count.
+    Reference,
+    /// Not the schema the entry is fixed to: `ExpectationV1` for the expectation, `ReviewV1` for
+    /// the review.
+    Schema,
     /// The review and the expectation are one record: a review of itself reviews nothing.
     Same,
 }
@@ -666,24 +680,16 @@ fn derived(files: &[RuntimeFile], declared: &[PathBuf]) -> Result<(), ProfileErr
     }
 }
 
-/// The `[reviewed]` table: exactly the expectation's and the review's digests, distinct.
+/// The `[reviewed]` table: the expectation's and the review's full references, each under its
+/// fixed schema, naming two records.
 fn reviewed(table: &toml::Table) -> Result<Reviewed, ProfileError> {
     let reviewed = sub_table(table, "", "reviewed")?;
-    only(
-        reviewed,
-        "reviewed",
-        &["expectation_sha256", "review_sha256"],
-    )?;
-    let digest = |name: &'static str| -> Result<[u8; 32], ProfileError> {
-        digest_bytes(&string(reviewed, "reviewed", name)?).ok_or(ProfileError::Reviewed {
-            name,
-            why: ReviewedWhy::Digest,
-        })
-    };
-    let (expectation, review) = (digest("expectation_sha256")?, digest("review_sha256")?);
-    if expectation == review {
+    only(reviewed, "reviewed", &["expectation", "review"])?;
+    let expectation = reference(reviewed, "expectation", ExpectationV1::SCHEMA_ID)?;
+    let review = reference(reviewed, "review", ReviewV1::SCHEMA_ID)?;
+    if review.sha256 == expectation.sha256 || review.artifact_id == expectation.artifact_id {
         return Err(ProfileError::Reviewed {
-            name: "review_sha256",
+            path: key_path("reviewed", "review"),
             why: ReviewedWhy::Same,
         });
     }
@@ -691,6 +697,56 @@ fn reviewed(table: &toml::Table) -> Result<Reviewed, ProfileError> {
         expectation,
         review,
     })
+}
+
+/// One reviewed reference under `reviewed.<key>`: the five fields of a receipt reference, the
+/// schema id fixed to `schema`, validated as the receipt will validate it.
+fn reference(reviewed: &toml::Table, key: &str, schema: &str) -> Result<Ref, ProfileError> {
+    let at = key_path("reviewed", key);
+    let table = sub_table(reviewed, "reviewed", key)?;
+    only(
+        table,
+        &at,
+        &[
+            "artifact_id",
+            "sha256",
+            "byte_length",
+            "media_type",
+            "schema_id",
+        ],
+    )?;
+    let refuse = |field: &str, why: ReviewedWhy| ProfileError::Reviewed {
+        path: key_path(&at, field),
+        why,
+    };
+    let artifact_id = Id::new(string(table, &at, "artifact_id")?)
+        .map_err(|_| refuse("artifact_id", ReviewedWhy::Reference))?;
+    let sha256 = Sha::new(string(table, &at, "sha256")?)
+        .map_err(|_| refuse("sha256", ReviewedWhy::Digest))?;
+    let byte_length = match required(table, &at, "byte_length")? {
+        toml::Value::Integer(value) => {
+            u32::try_from(*value).map_err(|_| refuse("byte_length", ReviewedWhy::Reference))?
+        }
+        _ => return Err(wrong(&at, "byte_length")),
+    };
+    let media_type = Name::new(string(table, &at, "media_type")?)
+        .map_err(|_| refuse("media_type", ReviewedWhy::Reference))?;
+    let schema_id = string(table, &at, "schema_id")?;
+    if schema_id != schema {
+        return Err(refuse("schema_id", ReviewedWhy::Schema));
+    }
+    let reference = Ref {
+        artifact_id,
+        sha256,
+        byte_length,
+        media_type,
+        schema_id: Name::new(schema_id).map_err(|_| refuse("schema_id", ReviewedWhy::Schema))?,
+    };
+    reference.validate().map_err(|_| ProfileError::Reviewed {
+        path: at,
+        why: ReviewedWhy::Reference,
+    })?;
+    Ok(reference)
 }
 
 /// Which reviewed record to read.
@@ -718,10 +774,10 @@ pub enum ReviewedError {
 }
 
 /// Read the reviewed record `which` names under custody, at most [`MAX_REVIEWED_BYTES`], and return
-/// it only if its bytes hash to the digest `profile` declares for it (B14a-2a). What comes back
-/// always hashes to what was asked for; which digest is asked for is the profile's, and a profile
-/// is composed only from the file [`read`] read — a hand-built one (as tests build) can name any
-/// record in the store, never forge one.
+/// it only if its bytes are the declared length and hash to the digest `profile` declares for it
+/// (B14a-2a). What comes back always hashes to what was asked for; which reference is asked for is
+/// the profile's, and a profile is composed only from the file [`read`] read — a hand-built one (as
+/// tests build) can name any record in the store, never forge one.
 ///
 /// # Errors
 /// Each [`ReviewedError`], named.
@@ -730,21 +786,23 @@ pub fn read_reviewed(profile: &Profile, which: Which) -> Result<Vec<u8>, Reviewe
         Which::Expectation => &profile.declared.reviewed.expectation,
         Which::Review => &profile.declared.reviewed.review,
     };
-    let name = hex(declared);
+    let name = file_name(declared);
     let held = match PrivateDirectory::open(&profile.directory.join(REVIEWED_DIRECTORY)) {
         Ok(held) => held,
         Err(DirectoryError::NotFound) => return Err(ReviewedError::NotInstalled),
         Err(DirectoryError::Custody) => return Err(ReviewedError::Custody),
         Err(DirectoryError::Io(_)) => return Err(ReviewedError::Io),
     };
-    let bytes = match held.read(&name, MAX_REVIEWED_BYTES) {
+    let bytes = match held.read(name, MAX_REVIEWED_BYTES) {
         Ok(bytes) => bytes,
         Err(FileError::NotFound) => return Err(ReviewedError::NotInstalled),
         Err(FileError::Custody) => return Err(ReviewedError::Custody),
         Err(FileError::TooLarge) => return Err(ReviewedError::TooLarge),
         Err(FileError::Io(_)) => return Err(ReviewedError::Io),
     };
-    if super::evidence::digest(&bytes) != format!("sha256:{name}") {
+    if u64::try_from(bytes.len()).ok() != Some(u64::from(declared.byte_length))
+        || super::evidence::digest(&bytes) != declared.sha256.as_str()
+    {
         return Err(ReviewedError::Mismatch);
     }
     Ok(bytes)
@@ -802,12 +860,12 @@ impl crate::check::graph::Objects for ReviewedObjects {
 
 /// The whole closure of the reviewed record `root` names, resolved from the class's `reviewed/`
 /// directory: every member present, of its declared size and digest, or the walk names the one that
-/// is not (B14a-2c-ii-a). The root is the reference the receipt will cite; its digest must be the
+/// is not (B14a-2c-ii-a). The root is the reference the receipt will cite; it must be, whole, the
 /// one the profile declares for `which`, or the closure is `Mismatch` — a profile names records,
 /// a caller cannot substitute one.
 ///
 /// # Errors
-/// [`ReviewedError::Mismatch`] when `root`'s digest is not the profile's; the directory's own
+/// [`ReviewedError::Mismatch`] when `root` is not the profile's reference; the directory's own
 /// refusals; `Missing`/`Identity`/`Bound`/`Io` from the walk, wrapped as [`ReviewedError::Closure`].
 pub fn read_reviewed_closure(
     profile: &Profile,
@@ -818,22 +876,16 @@ pub fn read_reviewed_closure(
         Which::Expectation => &profile.declared.reviewed.expectation,
         Which::Review => &profile.declared.reviewed.review,
     };
-    if root.sha256.as_str() != format!("sha256:{}", hex(declared)) {
+    if root != declared {
         return Err(ReviewedError::Mismatch);
     }
     let objects = ReviewedObjects::open(profile)?;
     crate::check::graph::Graph::resolve(&objects, root).map_err(ReviewedError::Closure)
 }
 
-/// The 64 lowercase hex of a digest's bytes: a reviewed record's file name.
-fn hex(bytes: &[u8; 32]) -> String {
-    use std::fmt::Write as _;
-    bytes
-        .iter()
-        .fold(String::with_capacity(64), |mut text, byte| {
-            let _ = write!(text, "{byte:02x}");
-            text
-        })
+/// A reviewed record's file name: the 64 hex of its declared digest.
+fn file_name(reference: &Ref) -> &str {
+    reference.sha256.as_str().trim_start_matches("sha256:")
 }
 
 fn digest_text(pins: &toml::Table, key: &str) -> Result<String, ProfileError> {
@@ -855,6 +907,8 @@ mod tests {
     /// coreutils `sha256sum` of `EXPECTATION` and `REVIEW`.
     const EXP: &str = "sha256:7a1f9aa11864adf4fdc42e57bccf14c9721c288f749cf314525c8c183df64f13";
     const REV: &str = "sha256:7676d865aaf08640fa14c6526535f9e8e47da1a955bdf479688c5f3800423740";
+    const EXP_ID: &str = "28f70000-0000-4000-8000-00000000000e";
+    const REV_ID: &str = "28f70000-0000-4000-8000-00000000000f";
     const EXPECTATION: &[u8] = b"the frozen expectation\n";
     const REVIEW: &[u8] = b"its independent review\n";
 
@@ -890,10 +944,26 @@ busctl_sha256 = "{HEX}"
 systemd_run_sha256 = "{HEX2}"
 
 [reviewed]
-expectation_sha256 = "{EXP}"
-review_sha256 = "{REV}"
-"#
+expectation = {{ artifact_id = "{EXP_ID}", sha256 = "{EXP}", byte_length = {EXP_LEN}, media_type = "application/json", schema_id = "{EXP_SCHEMA}" }}
+review = {{ artifact_id = "{REV_ID}", sha256 = "{REV}", byte_length = {REV_LEN}, media_type = "application/json", schema_id = "{REV_SCHEMA}" }}
+"#,
+            EXP_LEN = EXPECTATION.len(),
+            REV_LEN = REVIEW.len(),
+            EXP_SCHEMA = ExpectationV1::SCHEMA_ID,
+            REV_SCHEMA = ReviewV1::SCHEMA_ID,
         )
+    }
+
+    /// The reference `valid()` declares for one reviewed record, whole.
+    fn declared_reference(id: &str, digest: &str, bytes: &[u8], schema: &str) -> Ref {
+        Ref {
+            artifact_id: Id::new(id).unwrap_or_else(|_| unreachable!("a fixture id is a v4 uuid")),
+            sha256: Sha::new(digest).unwrap_or_else(|_| unreachable!("a fixture digest")),
+            byte_length: u32::try_from(bytes.len()).unwrap_or(u32::MAX),
+            media_type: Name::new("application/json")
+                .unwrap_or_else(|_| unreachable!("a media type")),
+            schema_id: Name::new(schema).unwrap_or_else(|_| unreachable!("a fixed schema id")),
+        }
     }
 
     /// The refusal `text` composes to; a text that composes fails the calling test.
@@ -1381,7 +1451,7 @@ review_sha256 = "{REV}"
             Ok((
                 good.clone(),
                 2,
-                "sha256:146b45de5f8da3028b197e3c6e0cffd45bdd990c209a31ee947fd2219e3e62d9"
+                "sha256:73f019ad64e510f50227f14c4829438c6e1b4c1df93313edf543f67f15acf3e6"
                     .to_owned()
             ))
         );
@@ -1600,78 +1670,108 @@ review_sha256 = "{REV}"
         Ok(())
     }
 
-    /// B14a-2a · `[reviewed]` is required, holds exactly two digests, and a review naming the
-    /// expectation itself is refused.
+    /// B14a-2a/2c-ii · `[reviewed]` is required and holds exactly the expectation's and the
+    /// review's full references under their fixed schemas; a field that is not a reference, a
+    /// schema that is not the fixed one, and a review naming the expectation itself (by digest or
+    /// by artifact id) are each refused at their key path.
     #[test]
-    fn the_reviewed_table_names_two_distinct_digests() -> Result<(), ProfileError> {
+    fn the_reviewed_table_names_two_distinct_references() -> Result<(), ProfileError> {
         let declared = compose(valid().as_bytes())?;
         assert_eq!(
-            (
-                hex(&declared.reviewed.expectation),
-                hex(&declared.reviewed.review)
-            ),
-            (
-                EXP.trim_start_matches("sha256:").to_owned(),
-                REV.trim_start_matches("sha256:").to_owned()
-            )
+            declared.reviewed,
+            Reviewed {
+                expectation: declared_reference(EXP_ID, EXP, EXPECTATION, ExpectationV1::SCHEMA_ID),
+                review: declared_reference(REV_ID, REV, REVIEW, ReviewV1::SCHEMA_ID),
+            }
+        );
+        let review_schema = format!("schema_id = \"{}\"", ReviewV1::SCHEMA_ID);
+        let review_line_start = format!("review = {{ artifact_id = \"{REV_ID}\"");
+        assert_eq!(
+            refused(&with(
+                &review_line_start,
+                "extra = 1\nreview = { artifact_id = 1"
+            )),
+            ProfileError::UnknownKey {
+                path: "reviewed.extra".into()
+            }
         );
         assert_eq!(
-            refused(&with(&format!("expectation_sha256 = \"{EXP}\"\n"), "")),
-            ProfileError::MissingKey {
-                path: "reviewed.expectation_sha256".into()
+            refused(&with(&review_line_start, "review = { artifact_id = 1")),
+            ProfileError::WrongType {
+                path: "reviewed.review.artifact_id".into()
             }
         );
         assert_eq!(
             refused(&with(
-                &format!("expectation_sha256 = \"{EXP}\""),
-                "expectation_sha256 = 1"
+                &format!("media_type = \"application/json\", {review_schema}"),
+                &review_schema
             )),
-            ProfileError::WrongType {
-                path: "reviewed.expectation_sha256".into()
+            ProfileError::MissingKey {
+                path: "reviewed.review.media_type".into()
             }
         );
+        assert_eq!(
+            refused(&with(
+                &review_schema,
+                &format!("{review_schema}, extra = 1")
+            )),
+            ProfileError::UnknownKey {
+                path: "reviewed.review.extra".into()
+            }
+        );
+        for (old, new, path, why) in [
+            (
+                format!("artifact_id = \"{REV_ID}\""),
+                "artifact_id = \"not-a-uuid\"".to_owned(),
+                "reviewed.review.artifact_id",
+                ReviewedWhy::Reference,
+            ),
+            (
+                format!("sha256 = \"{REV}\""),
+                "sha256 = \"x\"".to_owned(),
+                "reviewed.review.sha256",
+                ReviewedWhy::Digest,
+            ),
+            (
+                format!("sha256 = \"{EXP}\", byte_length = {}", EXPECTATION.len()),
+                format!("sha256 = \"{EXP}\", byte_length = -1"),
+                "reviewed.expectation.byte_length",
+                ReviewedWhy::Reference,
+            ),
+            (
+                review_schema.clone(),
+                format!("schema_id = \"{}\"", ExpectationV1::SCHEMA_ID),
+                "reviewed.review.schema_id",
+                ReviewedWhy::Schema,
+            ),
+            (
+                format!("sha256 = \"{REV}\""),
+                format!("sha256 = \"{EXP}\""),
+                "reviewed.review",
+                ReviewedWhy::Same,
+            ),
+            (
+                format!("artifact_id = \"{REV_ID}\""),
+                format!("artifact_id = \"{EXP_ID}\""),
+                "reviewed.review",
+                ReviewedWhy::Same,
+            ),
+        ] {
+            assert_eq!(
+                refused(&with(&old, &new)),
+                ProfileError::Reviewed {
+                    path: path.into(),
+                    why
+                },
+                "{old} -> {new}"
+            );
+        }
         let without = valid();
         let without = &without[..without.find("\n[reviewed]").unwrap_or(without.len())];
         assert_eq!(
             refused(without),
             ProfileError::MissingKey {
                 path: "reviewed".into()
-            }
-        );
-        assert_eq!(
-            refused(&format!("{}extra = 1\n", valid())),
-            ProfileError::UnknownKey {
-                path: "reviewed.extra".into()
-            }
-        );
-        assert_eq!(
-            refused(&with(
-                &format!("review_sha256 = \"{REV}\""),
-                "review_sha256 = \"x\""
-            )),
-            ProfileError::Reviewed {
-                name: "review_sha256",
-                why: ReviewedWhy::Digest
-            }
-        );
-        assert_eq!(
-            refused(&with(
-                &format!("expectation_sha256 = \"{EXP}\""),
-                "expectation_sha256 = \"x\""
-            )),
-            ProfileError::Reviewed {
-                name: "expectation_sha256",
-                why: ReviewedWhy::Digest
-            }
-        );
-        assert_eq!(
-            refused(&with(
-                &format!("review_sha256 = \"{REV}\""),
-                &format!("review_sha256 = \"{EXP}\"")
-            )),
-            ProfileError::Reviewed {
-                name: "review_sha256",
-                why: ReviewedWhy::Same
             }
         );
         Ok(())
@@ -1700,16 +1800,13 @@ review_sha256 = "{REV}"
             "../../tests/fixtures/receipt-import/nonpass.json"
         ))?;
         let root_ref = fixture.root.as_ref().clone();
-        // A profile naming the fixture root as its review (its digest), the expectation as-is.
-        let review_hex = root_ref
-            .sha256
-            .as_str()
-            .trim_start_matches("sha256:")
-            .to_owned();
-        let text = valid().replace(REV, &format!("sha256:{review_hex}"));
+        // A profile naming the fixture root as its review, whole (the parser fixes the schema to
+        // `ReviewV1`, so a receipt root is declared here by hand); the expectation as-is.
+        let mut declared = compose(valid().as_bytes()).map_err(|e| format!("{e:?}"))?;
+        declared.reviewed.review = root_ref.clone();
         let root = private("reviewed-closure");
         let profile = Profile {
-            declared: compose(text.as_bytes()).map_err(|e| format!("{e:?}"))?,
+            declared,
             directory: root.clone(),
             digest: String::new(),
         };
@@ -1768,7 +1865,7 @@ review_sha256 = "{REV}"
     fn a_reviewed_record_is_read_only_as_the_record_the_profile_names() -> Result<(), ProfileError>
     {
         let root = private("reviewed");
-        let profile = Profile {
+        let mut profile = Profile {
             declared: compose(valid().as_bytes())?,
             directory: root.clone(),
             digest: String::new(),
@@ -1791,6 +1888,13 @@ review_sha256 = "{REV}"
             Ok(EXPECTATION.to_vec())
         );
         assert_eq!(read_reviewed(&profile, Which::Review), Ok(REVIEW.to_vec()));
+        // The declared length is not the file's: not the named record, whatever its digest.
+        profile.declared.reviewed.review.byte_length += 1;
+        assert_eq!(
+            read_reviewed(&profile, Which::Review),
+            Err(ReviewedError::Mismatch)
+        );
+        profile.declared.reviewed.review.byte_length -= 1;
         // The review's bytes under the expectation's name: substituted, not the named record.
         write(&store.join(name(EXP)), REVIEW, 0o600);
         assert_eq!(

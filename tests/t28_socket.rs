@@ -1449,7 +1449,7 @@ fn the_engine_says_its_class_profile_at_start() -> Outcome {
          baseline_digest = \"{digest}\"\nprotected = \"protected\"\nprotected_digest = \"{digest}\"\n\n\
          [pins]\ncompiler = {{ host = \"/opt/rustc\", sha256 = \"{digest}\" }}\n\
          shim = {{ host = \"/opt/shim\", sha256 = \"{digest}\" }}\nruntime_files = []\n\
-         namespace_directories = []\nbusctl_sha256 = \"{digest}\"\nsystemd_run_sha256 = \"{digest}\"\n[reviewed]\nexpectation_sha256 = \"sha256:7a1f9aa11864adf4fdc42e57bccf14c9721c288f749cf314525c8c183df64f13\"\nreview_sha256 = \"sha256:7676d865aaf08640fa14c6526535f9e8e47da1a955bdf479688c5f3800423740\"\n"
+         namespace_directories = []\nbusctl_sha256 = \"{digest}\"\nsystemd_run_sha256 = \"{digest}\"\n[reviewed]\nexpectation = {{ artifact_id = \"28f70000-0000-4000-8000-00000000000e\", sha256 = \"sha256:7a1f9aa11864adf4fdc42e57bccf14c9721c288f749cf314525c8c183df64f13\", byte_length = 23, media_type = \"application/json\", schema_id = \"hee3.receipt/1:ExpectationV1\" }}\nreview = {{ artifact_id = \"28f70000-0000-4000-8000-00000000000f\", sha256 = \"sha256:7676d865aaf08640fa14c6526535f9e8e47da1a955bdf479688c5f3800423740\", byte_length = 23, media_type = \"application/json\", schema_id = \"hee3.receipt/1:ReviewV1\" }}\n"
     );
     for (installed, said) in [
         (None, "dispatch unavailable: class profile not installed"),

@@ -164,12 +164,26 @@ mod tests {
     use crate::app::run_records::OutcomeName;
     use crate::app::runtime::declared_criteria;
     use crate::app::workload::COMPILER_DESTINATION;
+    use crate::contracts::receipt::{
+        self, Address as _, ExpectationV1, Id, Name, Ref, ReviewV1, Sha,
+    };
     use crate::store::VerificationVerdict;
     use crate::worker::namespace::SHIM_DESTINATION;
     use std::time::{Duration, Instant};
 
-    fn declared() -> Declared {
-        Declared {
+    /// One reviewed reference of the fixture: a v4 id, a digest of one repeated byte, its schema.
+    fn reference(id: &str, byte: u8, schema: &str) -> Result<Ref, receipt::Error> {
+        Ok(Ref {
+            artifact_id: Id::new(id)?,
+            sha256: Sha::new(format!("sha256:{}", format!("{byte:02x}").repeat(32)))?,
+            byte_length: 1,
+            media_type: Name::new("application/json")?,
+            schema_id: Name::new(schema)?,
+        })
+    }
+
+    fn declared() -> Result<Declared, receipt::Error> {
+        Ok(Declared {
             workspaces: Vec::new(),
             compiler: HostPin {
                 host: "/opt/toolchain/rustc".into(),
@@ -188,17 +202,25 @@ mod tests {
             busctl_sha256: format!("sha256:{}", "d".repeat(64)),
             systemd_run_sha256: format!("sha256:{}", "e".repeat(64)),
             reviewed: Reviewed {
-                expectation: [0xf4; 32],
-                review: [0x05; 32],
+                expectation: reference(
+                    "28f70000-0000-4000-8000-00000000000e",
+                    0xf4,
+                    ExpectationV1::SCHEMA_ID,
+                )?,
+                review: reference(
+                    "28f70000-0000-4000-8000-00000000000f",
+                    0x05,
+                    ReviewV1::SCHEMA_ID,
+                )?,
             },
-        }
+        })
     }
 
     /// R15 · the declaration read as tools, whole: every pin's host and digest, the two fixed
     /// destinations the profile does not declare, bwrap's fixed path, the directories in order.
     #[test]
-    fn tools_carry_every_pin_to_its_fixed_destination() {
-        let declared = declared();
+    fn tools_carry_every_pin_to_its_fixed_destination() -> Result<(), receipt::Error> {
+        let declared = declared()?;
         let tools = tools(&declared);
         assert_eq!(tools.bwrap.as_os_str(), BWRAP);
         assert_eq!(
@@ -239,6 +261,7 @@ mod tests {
             )
         );
         assert_eq!(tools.namespace_directories, declared.namespace_directories);
+        Ok(())
     }
 
     /// R15.3 · one arm per outcome: the verdict and criteria each earns, the cost measured from the
