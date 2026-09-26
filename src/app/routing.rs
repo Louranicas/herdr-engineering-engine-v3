@@ -33,9 +33,9 @@ use crate::task::control::{ADMITTED_CLASSES, Spec};
 use serde_json::{Value, json};
 use std::path::Path;
 
-/// Where the operator installs the route configuration, under the home directory: its own 0700
-/// directory, mirroring the grants' (design R3.3).
-pub const ROUTING_DIRECTORY: &str = ".config/herdr-engineering-engine-v3/routing";
+/// Where the operator installs the route configuration, under the configuration root
+/// (`coordinator::config_path`): its own 0700 directory, mirroring the grants' (design R3.3).
+pub const ROUTING_DIRECTORY: &str = "routing";
 /// The route configuration's file name in [`ROUTING_DIRECTORY`].
 pub const ROUTES_FILE: &str = "routes.toml";
 /// The largest route configuration read, and the acquisition bound for everything parsed from it

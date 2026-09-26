@@ -229,6 +229,7 @@ T06_UNIT_COUNTS = {
     "app::runtime::tests::": 9, "app::run_records::tests::": 10,
     "app::live_verifier::tests::": 2, "app::plan::tests::": 5, "app::u64_receipt::tests::": 9, "worker::host::tests::": 1,
     "app::candidates::tests::": 5, "app::dispatcher::tests::": 1,
+    "app::native_provider::tests::": 2,
 }
 
 
@@ -325,6 +326,8 @@ ACTIONS_INPUTS = ("src/actions.rs", "src/worker/tools.rs", "src/actions/control.
                   "src/app/candidates.rs", "tests/t08_rig.rs",
                   # B14b-1: the dispatcher, whose proofs live in t28_runtime (library) and t28_socket.
                   "src/app/dispatcher.rs",
+                  # B14b-2: the operator's native-provider file, which serve reads (S21).
+                  "src/app/native_provider.rs",
                   "src/contracts/control.rs", "tests/t28_control.rs",
                   # IPC01: the socket, the peer principal and the file grant store.
                   "src/app/control_socket.rs", "src/app/grants.rs", "tests/t28_socket.rs",

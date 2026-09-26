@@ -220,7 +220,7 @@ const EXIT_CONTRACT: u8 = 6;
 const EXIT_REFUSED: u8 = 7;
 
 /// Where the reviewed grant records live, under the operator's configuration root (RC02).
-const GRANTS_DIRECTORY: &str = ".config/herdr-engineering-engine-v3/grants";
+const GRANTS_DIRECTORY: &str = "grants";
 
 fn main() -> ExitCode {
     let Ok(args) = arguments() else {
@@ -263,7 +263,7 @@ fn socket_path() -> Result<PathBuf, control_socket::Error> {
 /// Read the class profile (B14-P2b), say it in one line — declaration only, no capture before the
 /// socket binds — and return it: admission screens a task's workspace against it (B14-P2c).
 fn say_class_profile(home: &Path) -> Result<class_profile::Profile, class_profile::Unready> {
-    let class = home.join(class_profile::CLASS_DIRECTORY);
+    let class = coordinator::config_path(home, class_profile::CLASS_DIRECTORY);
     let read = class_profile::read(&class);
     match &read {
         Ok(profile) => eprintln!(
@@ -283,7 +283,7 @@ fn say_class_profile(home: &Path) -> Result<class_profile::Profile, class_profil
 /// The grant store under `home`: the file grants when the directory exists, `NoGrants` (every
 /// request refused forbidden, said once) when it does not, and the exit code when it is refused.
 fn open_grants(home: &Path) -> Result<Box<dyn Grants + Sync>, ExitCode> {
-    let directory = home.join(GRANTS_DIRECTORY);
+    let directory = coordinator::config_path(home, GRANTS_DIRECTORY);
     match FileGrants::open(&directory) {
         Ok(store) => Ok(Box::new(store)),
         Err(grants::Error::Io(error)) if error.kind() == io::ErrorKind::NotFound => {
@@ -352,7 +352,7 @@ fn serve() -> ExitCode {
     let health = started.health;
     // The route configuration task.preview screens against, read once under custody (B07). Its
     // outcome is said after the task owner's, so a refused ledger's reason stays in the first lines.
-    let routes = home.join(routing::ROUTING_DIRECTORY);
+    let routes = coordinator::config_path(&home, routing::ROUTING_DIRECTORY);
     let routing = routing::read(&routes);
     let tasks = match started.reconciled.map(coordinator::compose_tasks) {
         Some(Ok(tasks)) => {

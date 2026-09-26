@@ -18,9 +18,9 @@ use crate::worker::namespace::{self, MAX_MOUNTS, SHIM_DESTINATION};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-/// The class's own directory under `$HOME`: 0700, holding [`PROFILE_FILE`] and its workspaces.
-pub const CLASS_DIRECTORY: &str =
-    ".config/herdr-engineering-engine-v3/classes/rust-library-change-1";
+/// The class's own directory under the configuration root (`coordinator::config_path`): 0700,
+/// holding [`PROFILE_FILE`] and its workspaces.
+pub const CLASS_DIRECTORY: &str = "classes/rust-library-change-1";
 /// The declaration inside [`CLASS_DIRECTORY`] (0600).
 pub const PROFILE_FILE: &str = "profile.toml";
 /// The acquisition bound: `toml` parses the whole file before any row is read, so the file's size
@@ -632,7 +632,7 @@ pub fn read_declared(profile: &Profile, declared: &DeclaredFile) -> Result<Vec<u
 /// crate's convention where the error falls on a character boundary after ASCII text (a test
 /// compares the two there); toml counts bytes when the erroring byte starts a multi-byte
 /// character, so there the two may differ by that character's extra bytes (review P2b-4).
-fn position(text: &str, offset: usize) -> (usize, usize) {
+pub(crate) fn position(text: &str, offset: usize) -> (usize, usize) {
     let before = text.get(..offset.min(text.len())).unwrap_or(text);
     let (line, last) = before
         .split('\n')

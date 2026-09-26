@@ -27,6 +27,16 @@ use std::time::Instant;
 
 /// The operator's state root, under their home (RC02).
 pub const STATE_DIRECTORY: &str = ".local/state/herdr-engineering-engine-v3";
+/// The operator's configuration root, under their home (RC02): every private directory the engine
+/// reads its configuration from — the grants, the routes, the class and the native provider — is
+/// named relative to it and joined by [`config_path`], so the root is spelled once (R21 N10).
+pub const CONFIG_DIRECTORY: &str = ".config/herdr-engineering-engine-v3";
+
+/// `relative` under the configuration root under `home`: `<home>/`[`CONFIG_DIRECTORY`]`/<relative>`.
+#[must_use]
+pub fn config_path(home: &Path, relative: &str) -> PathBuf {
+    home.join(CONFIG_DIRECTORY).join(relative)
+}
 /// The manifest selecting the active generation.
 pub const ACTIVE_MANIFEST: &str = "active.json";
 /// The schema the manifest declares.

@@ -22,6 +22,7 @@ pub mod coordinator;
 pub mod custody;
 pub mod grants;
 pub mod live_verifier;
+pub mod native_provider;
 pub mod plan;
 pub mod routing;
 pub mod run_records;
