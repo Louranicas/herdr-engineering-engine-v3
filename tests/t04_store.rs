@@ -4454,6 +4454,70 @@ fn refs_at_and_over_the_bound_count_what_they_would_list() {
     }
 }
 
+// ------------------------------------------------ the dispatch read (B14b-1, R20 round 2 D1)
+
+/// B14b-1 (D1) · the one dispatch read: an admitted task is returned with its recorded owner; a task
+/// with an attempt row never is (it is the runtime's or the recovery's); two admitted tasks come
+/// back oldest first, by the admission event's sequence; an empty ledger reads `None`.
+#[test]
+fn next_dispatchable_returns_the_oldest_admitted_task_and_never_one_with_an_attempt() {
+    let area = Area::new();
+    let mut store = area.open();
+    assert_eq!(store.next_dispatchable(deadline()).unwrap(), None);
+    admit(&mut store);
+    let owner = principal();
+    store
+        .submit(
+            Submission {
+                key: uuid(OTHER),
+                task: uuid(STAGE),
+                event: uuid(CANCELLED),
+                ..submission(&owner)
+            },
+            deadline(),
+        )
+        .unwrap();
+    assert_eq!(
+        store.next_dispatchable(deadline()).unwrap(),
+        Some(Dispatchable {
+            task: TASK.to_owned(),
+            generation: "1".to_owned(),
+            owner: owner.clone(),
+            cancellation: false,
+        }),
+        "the first admission, by its event's sequence"
+    );
+    // The first task begins an attempt: it leaves the read; the second is next.
+    running(&mut store);
+    assert_eq!(
+        store
+            .next_dispatchable(deadline())
+            .unwrap()
+            .map(|next| next.task),
+        Some(STAGE.to_owned())
+    );
+}
+
+/// B14b-1 (D1) · a task cancelled before any attempt is `cancellation_requested` with no attempt row
+/// — exactly what `finish_preparation` accepts — and the read returns it flagged, so the dispatcher
+/// stops it by name instead of never seeing it (the round-1 review's first defect).
+#[test]
+fn next_dispatchable_returns_a_task_cancelled_before_any_attempt_flagged() {
+    let area = Area::new();
+    let mut store = area.open();
+    admit(&mut store);
+    let owner = principal();
+    store
+        .cancel(uuid(TASK), revision(1), uuid(CANCELLED), deadline())
+        .unwrap();
+    let next = store.next_dispatchable(deadline()).unwrap().unwrap();
+    assert_eq!(
+        (next.task.as_str(), next.cancellation, &next.owner),
+        (TASK, true, &owner)
+    );
+    assert_eq!(head_of(&store).state, "cancellation_requested");
+}
+
 // ------------------------------------------------ the worker's settle through the commitment (B14a-5)
 
 /// A migration's exact DDL for the table that `head` opens, read from the file itself (through the

@@ -753,6 +753,19 @@ pub struct Admission {
     pub sequence: u64,
 }
 
+/// What the dispatcher's one read returns (B14b-1, R20 round 2 D1): a task in `admitted`, or in
+/// `cancellation_requested` with no attempt row — exactly the pair `finish_preparation` accepts —
+/// the oldest by its admission event's sequence, with its recorded owner. Nothing here that the
+/// per-principal head re-read in `dispatch` supplies again; the owner is what that re-read needs.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Dispatchable {
+    pub task: String,
+    pub generation: String,
+    pub owner: Principal,
+    /// The task is `cancellation_requested`: the dispatcher stops it by name, never begins it.
+    pub cancellation: bool,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TaskHead {
     pub id: String,
@@ -1353,6 +1366,37 @@ impl Store {
             )
             .optional()?
             .ok_or(Error::Corrupt)
+    }
+
+    /// The dispatcher's one read (B14b-1, D1): the oldest dispatchable task, or `None`. UNSCOPED by
+    /// design — the one read past the per-principal visibility rule, named as such and bounded to
+    /// one row; `dispatch` re-reads the head as the owner before anything is written.
+    /// # Errors
+    /// `Corrupt` for a stored owner the principal rule refuses; ordinary Store failures.
+    pub fn next_dispatchable(&mut self, deadline: Instant) -> Result<Option<Dispatchable>> {
+        self.read_snapshot(deadline, |db| {
+            let row: Option<(String, String, u32, String, String)> = db
+                .query_row(
+                    "SELECT t.id,t.generation,t.principal_uid,t.principal_role,t.state FROM tasks t \
+                     JOIN events e ON e.task_id=t.id AND e.kind='admitted' \
+                     WHERE t.state='admitted' \
+                        OR (t.state='cancellation_requested' \
+                            AND NOT EXISTS(SELECT 1 FROM attempts a WHERE a.task_id=t.id)) \
+                     ORDER BY e.sequence LIMIT 1",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+                )
+                .optional()?;
+            row.map(|(task, generation, uid, role, state)| {
+                Ok(Dispatchable {
+                    task,
+                    generation,
+                    owner: Principal::new(uid, &role).map_err(|_| Error::Corrupt)?,
+                    cancellation: state == "cancellation_requested",
+                })
+            })
+            .transpose()
+        })
     }
 
     /// Reserve a unique attempt before dispatch. Previous uncertain attempts block reuse.
@@ -2301,7 +2345,7 @@ fn waiting(state: &str) -> bool {
 
 /// The one "operator only" rule: roster mutations and `task.resolve` (B08) admit only the operator
 /// role, whatever else the grant allows.
-fn operator(principal: &Principal) -> Result<()> {
+pub(crate) fn operator(principal: &Principal) -> Result<()> {
     if principal.role() == "operator" {
         Ok(())
     } else {

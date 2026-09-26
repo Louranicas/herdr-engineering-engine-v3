@@ -192,6 +192,12 @@ pub struct Drain {
 }
 
 impl Drain {
+    /// The drain as the flag the dispatcher reads between attempts (B14b-1): one flag, one owner.
+    #[must_use]
+    pub const fn flag(&self) -> &AtomicBool {
+        &self.begun
+    }
+
     /// Begin draining, and wake the accept loop by connecting to `socket` once: the loop checks
     /// the drain after every accept, so the connection that wakes it is closed unread.
     ///

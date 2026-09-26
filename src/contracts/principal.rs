@@ -2,7 +2,7 @@
 //! without importing `store`; the store re-exports it and still owns what is persisted for it.
 
 /// Stable principal supplied by the authenticated owner, never decoded from a body.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Principal {
     uid: u32,
     role: String,

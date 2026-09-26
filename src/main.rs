@@ -197,7 +197,7 @@ use habitat_engine::app::control_socket::{
 };
 use habitat_engine::app::coordinator;
 use habitat_engine::app::grants::{self, FileGrants};
-use habitat_engine::app::{class_profile, routing};
+use habitat_engine::app::{class_profile, dispatcher, routing};
 use habitat_engine::contracts::control::{FrameReader, MAX_FRAME_BYTES, ReadError};
 use habitat_engine::worker::namespace_shim::{self, NamespaceExec};
 use signal_hook::consts::SIGTERM;
@@ -280,6 +280,26 @@ fn say_class_profile(home: &Path) -> Result<class_profile::Profile, class_profil
     read
 }
 
+/// The grant store under `home`: the file grants when the directory exists, `NoGrants` (every
+/// request refused forbidden, said once) when it does not, and the exit code when it is refused.
+fn open_grants(home: &Path) -> Result<Box<dyn Grants + Sync>, ExitCode> {
+    let directory = home.join(GRANTS_DIRECTORY);
+    match FileGrants::open(&directory) {
+        Ok(store) => Ok(Box::new(store)),
+        Err(grants::Error::Io(error)) if error.kind() == io::ErrorKind::NotFound => {
+            eprintln!(
+                "habitat-engine: no grant directory at {}; every request is refused forbidden",
+                directory.display()
+            );
+            Ok(Box::new(NoGrants))
+        }
+        Err(error) => {
+            eprintln!("habitat-engine: grant directory refused: {error:?}");
+            Err(ExitCode::from(EXIT_CONTRACT))
+        }
+    }
+}
+
 /// `habitat-engine serve`: take single-instance custody of IPC01, reconcile the active
 /// generation, compose the task owner over the ledger startup left open, and only then bind and
 /// serve until SIGTERM (IPC01: acquire custody before recovery; bind after ready). SIGTERM drains
@@ -313,20 +333,9 @@ fn serve() -> ExitCode {
         eprintln!("habitat-engine: HOME is unset or relative");
         return ExitCode::from(EXIT_USAGE);
     };
-    let directory = home.join(GRANTS_DIRECTORY);
-    let store: Box<dyn Grants + Sync> = match FileGrants::open(&directory) {
-        Ok(store) => Box::new(store),
-        Err(grants::Error::Io(error)) if error.kind() == io::ErrorKind::NotFound => {
-            eprintln!(
-                "habitat-engine: no grant directory at {}; every request is refused forbidden",
-                directory.display()
-            );
-            Box::new(NoGrants)
-        }
-        Err(error) => {
-            eprintln!("habitat-engine: grant directory refused: {error:?}");
-            return ExitCode::from(EXIT_CONTRACT);
-        }
+    let store = match open_grants(&home) {
+        Ok(store) => store,
+        Err(code) => return code,
     };
     // Reconcile the active generation once, before the socket exists: health is what startup
     // left, observed at a named instant (D-C3 step 2). The manifest is read once; the generation
@@ -387,7 +396,19 @@ fn serve() -> ExitCode {
             .map(|tasks| tasks as &(dyn habitat_engine::actions::control::Tasks + Sync)),
         drain: &drain,
     };
-    if let Err(error) = serve_until_signalled(&mut signals, &listener, shared, &drain, &prepared) {
+    // The dispatcher (B14b-1): one thread beside the accept loop, over the same task owner, with
+    // no provider until B14b-2 — it runs the free checks, stops by name, and reports its named
+    // unavailable state when a task passes them.
+    let attempts = coordinator::attempts_root(&state_root);
+    if let Err(error) = serve_until_signalled(
+        &mut signals,
+        &listener,
+        shared,
+        &drain,
+        &prepared,
+        tasks.as_ref(),
+        &attempts,
+    ) {
         eprintln!("habitat-engine: accept failed: {error}");
         return ExitCode::from(EXIT_CONTRACT);
     }
@@ -406,6 +427,8 @@ fn serve_until_signalled(
     shared: control_socket::Shared<'_>,
     drain: &Drain,
     prepared: &control_socket::Prepared,
+    tasks: Option<&habitat_engine::app::tasks::StoreTasks>,
+    attempts: &Path,
 ) -> io::Result<()> {
     let report = |line: &str| eprintln!("habitat-engine: {line}");
     let handle = signals.handle();
@@ -416,8 +439,36 @@ fn serve_until_signalled(
                 if let Err(error) = drain.begin(prepared.socket()) {
                     eprintln!("habitat-engine: drain wake-up failed ({error})");
                 }
+                // The drain reaches the dispatcher's wait through the owner of both (B14b-1, D2).
+                if let Some(tasks) = tasks {
+                    tasks.notify_dispatchable();
+                }
             }
         });
+        // The dispatcher runs only over a writable ledger with a class profile (the one submit
+        // screens against); otherwise its absence is said once, like the other unavailable doors.
+        match tasks.map(|tasks| (tasks, tasks.class_profile())) {
+            Some((tasks, Ok(profile))) => {
+                scope.spawn(move || {
+                    let exit = dispatcher::Dispatcher {
+                        tasks,
+                        profile,
+                        attempts,
+                        provider: &mut dispatcher::NoProvider,
+                        agent_record_id: "",
+                        selections: &[],
+                        drain: drain.flag(),
+                        deadline: std::time::Instant::now() + habitat_engine::task::TASK_LIMIT,
+                    }
+                    .run(&report);
+                    eprintln!("habitat-engine: dispatcher stopped: {exit:?}");
+                });
+            }
+            Some((_, Err(why))) => {
+                eprintln!("habitat-engine: dispatch unavailable: {}", why.constraint());
+            }
+            None => eprintln!("habitat-engine: dispatch unavailable: no task owner"),
+        }
         let served = control_socket::run(listener, shared, &now_unix_ms, &report);
         handle.close();
         served

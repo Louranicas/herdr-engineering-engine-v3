@@ -253,11 +253,23 @@ pub struct Dispatch<'a> {
     pub teardown_ms: u64,
     /// The capture's own share: a reservation below it is refused before any capture.
     pub capture_ms: u64,
+    /// The engine's drain (B14b-1, D5): read between attempts, at `begin`, before any row — set, the
+    /// dispatch ends `Outcome::Drained` with the task resumable. It does not reach an in-flight
+    /// exchange in B14b-1 (stated gap: F15's in-exchange wake is B14b-2's).
+    pub drain: &'a AtomicBool,
 }
 
 /// Why a task was stopped before any attempt began, named in its stop (B14a-R1.4d, R1.5, R2.5).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Refusal {
+    /// The task was cancelled before any attempt (B14b-1, D4): stopped `cancelled`, by its own name.
+    CancelledBeforeDispatch,
+    /// The recorded owner is not the operator (B14b-1, D4): the store's one `operator()` rule, as a
+    /// free check before any capture.
+    OwnerNotOperator,
+    /// The attempt door refused before any attempt row existed (B14b-1, D3): the store's kind, named,
+    /// so the task is stopped rather than left re-pickable.
+    BeginRefused(BeginRefusal),
     CriteriaNotClass,
     ReservationEmpty,
     ReservationTooSmall,
@@ -279,6 +291,9 @@ impl Refusal {
     pub const fn name(self) -> &'static str {
         match self {
             Self::Plan(kind) => kind,
+            Self::CancelledBeforeDispatch => "cancelled_before_dispatch",
+            Self::OwnerNotOperator => "owner_not_operator",
+            Self::BeginRefused(kind) => kind.name(),
             Self::CriteriaNotClass => "criteria_not_class",
             Self::ReservationEmpty => "reservation_empty",
             Self::ReservationTooSmall => "reservation_too_small",
@@ -292,17 +307,64 @@ impl Refusal {
     }
 }
 
+/// The store's refusal at the attempt door, before any attempt row (B14b-1, D3): one arm per kind
+/// the door can return, named as `begin_refused_<kind>`; any other store error there is the
+/// runtime's `Error::Store` (the task is then the recovery's, never re-picked at once).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BeginRefusal {
+    Conflict,
+    Forbidden,
+    Cancelled,
+    Budget,
+    Bound,
+    Outstanding,
+}
+
+impl BeginRefusal {
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Conflict => "begin_refused_conflict",
+            Self::Forbidden => "begin_refused_forbidden",
+            Self::Cancelled => "begin_refused_cancelled",
+            Self::Budget => "begin_refused_budget",
+            Self::Bound => "begin_refused_bound",
+            Self::Outstanding => "begin_refused_outstanding",
+        }
+    }
+
+    /// The store kinds the attempt door names as refusals; `None` for any other error.
+    #[must_use]
+    pub const fn of(error: &store::Error) -> Option<Self> {
+        match error {
+            store::Error::Conflict => Some(Self::Conflict),
+            store::Error::Forbidden => Some(Self::Forbidden),
+            store::Error::Cancelled => Some(Self::Cancelled),
+            store::Error::Budget => Some(Self::Budget),
+            store::Error::Bound => Some(Self::Bound),
+            store::Error::Outstanding => Some(Self::Outstanding),
+            _ => None,
+        }
+    }
+}
+
 /// What one dispatch came to.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Outcome {
     /// Stopped before any attempt, by name; no attempt row exists.
     Refused(Refusal),
+    /// The engine's drain was set between attempts (B14b-1, D5): no stop written, the task stays
+    /// resumable and is picked after restart.
+    Drained,
     Driven(driver::Outcome),
 }
 
 #[derive(Debug)]
 pub enum Error {
     Store(store::Error),
+    /// A store error before any attempt row existed (B14b-1, R20 round 2 A2): the task is
+    /// untouched and the dispatcher names the stop; never the recovery's, never re-picked.
+    PreDispatch(store::Error),
     /// The ledger's owner panicked while holding it.
     Poisoned,
     /// Another writer touched the task other than by one cancellation or an instance observation
@@ -335,6 +397,8 @@ impl From<Poisoned> for Error {
 enum Fault {
     Error(Error),
     Stop(StopReason),
+    /// The drain observed at `begin` (B14b-1): the driver unwinds, nothing is written.
+    Drained,
 }
 
 impl From<Error> for Fault {
@@ -511,8 +575,8 @@ struct Committed {
 struct StoreRuntime<'a, C, V> {
     tasks: &'a StoreTasks,
     dispatch: Dispatch<'a>,
-    source: C,
-    verifier: V,
+    source: &'a mut C,
+    verifier: &'a mut V,
     baseline: Snapshot,
     protected: Snapshot,
     /// The pins every check launches with and the plan describes: one value (R17 round 2, 2).
@@ -544,25 +608,67 @@ const EVENTS_LIMIT: u64 = MAX_HISTORY as u64 + 1;
 ///
 /// # Errors
 /// A store, lock, identity or entropy failure, or a second writer, from any step.
-pub fn dispatch<C: CandidateSource, V: Verifier>(
-    tasks: &StoreTasks,
-    profile: &Profile,
-    dispatch: Dispatch<'_>,
-    source: C,
-    verifier: V,
+pub fn dispatch<'a, C: CandidateSource, V: Verifier>(
+    tasks: &'a StoreTasks,
+    profile: &'a Profile,
+    dispatch: Dispatch<'a>,
+    source: &'a mut C,
+    verifier: &'a mut V,
 ) -> Result<Outcome, Error> {
+    match admit(tasks, profile, dispatch)? {
+        Admission::Refused(refusal) => Ok(Outcome::Refused(refusal)),
+        Admission::Ready(admitted) => drive(tasks, *admitted, source, verifier),
+    }
+}
+
+/// What `admit` decided: the task was stopped before any attempt, by name (the stop is written),
+/// or everything a dispatch acquires before a provider is asked is ready for `drive`.
+pub enum Admission<'a> {
+    Refused(Refusal),
+    /// Boxed: the admitted state carries two snapshots and the shared plan (`large_enum_variant`).
+    Ready(Box<Admitted<'a>>),
+}
+
+/// The first phase's result (B14b-1, R20 round 2): the head and anchor read as the owner, the free
+/// checks passed, both snapshots captured and compared, the shared plan published — with no
+/// candidate source or verifier in sight, so a task the class refuses never opens a provider.
+pub struct Admitted<'a> {
+    dispatch: Dispatch<'a>,
+    profile: &'a Profile,
+    head: TaskHead,
+    anchor: String,
+    prepared: Prepared,
+    tools: Tools,
+    shared: plan::Shared,
+    origin: Instant,
+    deadline: Instant,
+}
+
+/// Phase one: read the head as the owner, run the free checks and the captures, publish the shared
+/// plan. A refusal stops the task by name through `finish_preparation`; a store error here is
+/// [`Error::PreDispatch`] — before any attempt row, the task untouched, the dispatcher's to name.
+///
+/// # Errors
+/// [`Error::PreDispatch`] for a store error before any write; [`Error::Poisoned`].
+pub fn admit<'a>(
+    tasks: &'a StoreTasks,
+    profile: &'a Profile,
+    dispatch: Dispatch<'a>,
+) -> Result<Admission<'a>, Error> {
     let origin = Instant::now();
     let deadline = origin + crate::task::TASK_LIMIT;
-    let (head, anchor) = tasks.with_store(|store| -> Result<_, Error> {
-        let head = store.get(dispatch.principal, dispatch.task, deadline)?;
-        let anchor = store.last_event(dispatch.principal, dispatch.task, deadline)?;
-        Ok((head, anchor))
-    })??;
+    let (head, anchor) = tasks
+        .with_store(|store| -> Result<_, store::Error> {
+            let head = store.get(dispatch.principal, dispatch.task, deadline)?;
+            let anchor = store.last_event(dispatch.principal, dispatch.task, deadline)?;
+            Ok((head, anchor))
+        })?
+        .map_err(Error::PreDispatch)?;
     let prepared = match prepare(&head, profile, &dispatch, origin, deadline) {
         Ok(prepared) => prepared,
         Err(refusal) => {
             refuse(tasks, &dispatch, refusal, origin, deadline)?;
-            return Ok(Outcome::Refused(refusal));
+            return Ok(Admission::Refused(refusal));
         }
     };
     // The shared plan, once per dispatch, in a hold of its own (R17 round 2, shape S): its
@@ -595,9 +701,45 @@ pub fn dispatch<C: CandidateSource, V: Verifier>(
         Err(refusal) => {
             let stop = Refusal::Plan(refusal.name());
             refuse(tasks, &dispatch, stop, origin, deadline)?;
-            return Ok(Outcome::Refused(stop));
+            return Ok(Admission::Refused(stop));
         }
     };
+    Ok(Admission::Ready(Box::new(Admitted {
+        dispatch,
+        profile,
+        head,
+        anchor,
+        prepared,
+        tools,
+        shared,
+        origin,
+        deadline,
+    })))
+}
+
+/// Phase two: drive the admitted task through the driver over `source` and `verifier`.
+///
+/// # Errors
+/// The runtime's, with a store refusal at the attempt door before any attempt row turned into a
+/// named stop (`begin_refused_<kind>`) and any other pre-attempt store error into
+/// [`Error::PreDispatch`], so no result leaves the task re-pickable at once (R20 round 2 A2).
+pub fn drive<'a, C: CandidateSource, V: Verifier>(
+    tasks: &'a StoreTasks,
+    admitted: Admitted<'a>,
+    source: &'a mut C,
+    verifier: &'a mut V,
+) -> Result<Outcome, Error> {
+    let Admitted {
+        dispatch,
+        profile,
+        head,
+        anchor,
+        prepared,
+        tools,
+        shared,
+        origin,
+        deadline,
+    } = admitted;
     let mut runtime = StoreRuntime {
         tasks,
         dispatch,
@@ -608,7 +750,7 @@ pub fn dispatch<C: CandidateSource, V: Verifier>(
         tools,
         profile,
         shared,
-        cancelled,
+        cancelled: AtomicBool::new(false),
         digests: prepared.digests,
         origin,
         deadline,
@@ -626,6 +768,22 @@ pub fn dispatch<C: CandidateSource, V: Verifier>(
             } else {
                 driver::Outcome::NeedsSettlement(reason)
             }))
+        }
+        Err(driver::Error::Runtime(Fault::Drained)) => Ok(Outcome::Drained),
+        // A store error before any attempt row (B14b-1, D3): the attempt door's own refusals stop
+        // the task by the store's name through the pre-dispatch path; any other is the
+        // dispatcher's, typed so it can never be read as the recovery's.
+        Err(driver::Error::Runtime(Fault::Error(Error::Store(error))))
+            if runtime.attempts.is_empty() =>
+        {
+            match BeginRefusal::of(&error) {
+                Some(kind) => {
+                    let stop = Refusal::BeginRefused(kind);
+                    refuse(tasks, &runtime.dispatch, stop, origin, deadline)?;
+                    Ok(Outcome::Refused(stop))
+                }
+                None => Err(Error::PreDispatch(error)),
+            }
         }
         Err(driver::Error::Runtime(Fault::Error(error))) => Err(error),
         Err(driver::Error::Policy(refusal)) => Err(Error::Policy(refusal)),
@@ -648,6 +806,14 @@ fn prepare(
     origin: Instant,
     deadline: Instant,
 ) -> Result<Prepared, Refusal> {
+    // The free checks first, in order (B14b-1, D4): cancellation, owner, criteria, reservation,
+    // workspace — before any capture.
+    if head.cancellation {
+        return Err(Refusal::CancelledBeforeDispatch);
+    }
+    if store::operator(dispatch.principal).is_err() {
+        return Err(Refusal::OwnerNotOperator);
+    }
     if head.criteria != criteria_digest(&U64_CRITERIA) {
         return Err(Refusal::CriteriaNotClass);
     }
@@ -1441,6 +1607,14 @@ impl<C: CandidateSource, V: Verifier> driver::Runtime for StoreRuntime<'_, C, V>
     }
 
     fn begin(&mut self, ordinal: Generation) -> Result<Self::Attempt, Self::Error> {
+        // The drain, between attempts, before any row (B14b-1, D5).
+        if self
+            .dispatch
+            .drain
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            return Err(Fault::Drained);
+        }
         let (attempt, event, session) = (
             fresh(self.deadline)?,
             fresh(self.deadline)?,
@@ -1542,7 +1716,7 @@ impl<C: CandidateSource, V: Verifier> driver::Runtime for StoreRuntime<'_, C, V>
         let Answer {
             candidate,
             settle: worker,
-        } = answered(&mut self.source, &ask)?;
+        } = answered(&mut *self.source, &ask)?;
         match candidate {
             // Exhaustion after begin is truthful (B14a-R2.3): the attempt is not ready to verify.
             Candidate::Exhausted => {

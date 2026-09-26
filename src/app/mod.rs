@@ -12,6 +12,7 @@ pub mod repair;
 
 pub mod receipt_import;
 
+pub mod dispatcher;
 pub mod durable_control;
 pub mod startup;
 

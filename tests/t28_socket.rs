@@ -1491,6 +1491,97 @@ fn the_engine_says_its_class_profile_at_start() -> Outcome {
     Ok(())
 }
 
+/// B14b-1 (c), the Tier-2 claim through `main` (R20 round 2 Q4): with a class profile installed,
+/// `serve` picks an admitted task and stops it by name — here `criteria_not_class`, the free refusal
+/// admission does not screen (it screens the workspace only) — and `task.get` reads the stop back
+/// through the wrapper. The ACCEPTED path through the binary stays Tier-3 (an open L3 row).
+#[test]
+fn serve_dispatches_an_admitted_task_and_stops_it_by_name_through_main() -> Outcome {
+    const KEY: &str = "28c00000-0000-4000-8000-0000000000d1";
+    let digest = format!("sha256:{}", "0".repeat(64));
+    let world = World::granting(&["task"], &["read", "durable admission"])?;
+    let (run, scope) = (&world.run, &world.scope);
+    let state = commission(&world.home)?;
+    let class = world
+        .home
+        .join(".config/herdr-engineering-engine-v3/classes/rust-library-change-1");
+    DirBuilder::new()
+        .mode(0o700)
+        .recursive(true)
+        .create(&class)?;
+    write_grant(
+        &class,
+        "profile.toml",
+        format!(
+            "schema = \"hee3.class-profile/1\"\nclass = \"rust-library-change/1\"\n\n\
+             [[workspace]]\nid = \"28c00000-0000-4000-8000-0000000000f1\"\nbaseline = \"base\"\n\
+             baseline_digest = \"{digest}\"\nprotected = \"protected\"\nprotected_digest = \"{digest}\"\n\n\
+             [pins]\ncompiler = {{ host = \"/opt/rustc\", sha256 = \"{digest}\" }}\n\
+             shim = {{ host = \"/opt/shim\", sha256 = \"{digest}\" }}\nruntime_files = []\n\
+             namespace_directories = []\nbusctl_sha256 = \"{digest}\"\nsystemd_run_sha256 = \"{digest}\"\n[reviewed]\nexpectation = {{ artifact_id = \"c220e7ce-0753-47ef-bdac-15710bc4981c\", sha256 = \"sha256:3a7faa5510790c20322ad5829091211eb8c04ab6016e16ec8391433dae3392b9\", byte_length = 794, media_type = \"application/json\", schema_id = \"hee3.receipt/1:ExpectationV1\" }}\nreview = {{ artifact_id = \"a47470c5-f11c-4f64-9ac8-6dcf80750ed6\", sha256 = \"sha256:f288225476120254f5c3a93266fc8f2a8763810462fbddd7c62161107cb39adb\", byte_length = 1145, media_type = \"application/json\", schema_id = \"hee3.receipt/1:ReviewV1\" }}\n[grant]\ngrant_id = \"28f90000-0000-4000-8000-000000000001\"\nissuer_id = \"operator\"\nauthority = {{ file = \"authority.json\", sha256 = \"{digest}\" }}\n[effect]\neffect_id = \"fixed-u64-workload-output\"\nscope = \"the rig's scope\"\nspecification = {{ file = \"isolation.json\", sha256 = \"{digest}\" }}\n"
+        )
+        .as_bytes(),
+        0o600,
+    )?;
+    let log = world.home.join("engine.log");
+    let engine = Engine::start_logged(run, &world.home, &log)?;
+    // The declared workspace, so admission admits; the default spec's criteria are not the class's.
+    let mut spec = super::tasks::spec();
+    spec["workspace_id"] = json!("28c00000-0000-4000-8000-0000000000f1");
+    let submitted = reply_of(&wrapper(
+        run,
+        scope,
+        &strs(&[
+            "task.submit".to_owned(),
+            format!("@idempotency_key={KEY}"),
+            format!("spec:={spec}"),
+        ]),
+    )?)?;
+    assert_eq!(submitted["kind"], json!("result"), "{submitted}");
+    let task = submitted["body"]["task"]["task_id"]
+        .as_str()
+        .ok_or("task id")?
+        .to_owned();
+    // Poll the artifact with a budget (F102/F137): the dispatcher's stop, read back through `task.get`.
+    let started = Instant::now();
+    let seen = loop {
+        let got = reply_of(&wrapper(
+            run,
+            scope,
+            &strs(&getting(&json!({"task_id": task}))),
+        )?)?;
+        let state_now = got["body"]["task"]["state"].clone();
+        if state_now == json!("failed") {
+            break got;
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(20),
+            "the task never left {state_now}: {got}"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    assert_eq!(seen["body"]["task"]["state"], json!("failed"), "{seen}");
+    let _output = engine.terminate(Duration::from_secs(20))?;
+    // The engine's stderr went to the log file (`start_logged`): the dispatcher's own step line.
+    let stderr = fs::read_to_string(&log)?;
+    assert!(
+        stderr.contains("dispatcher: task ") && stderr.contains("TaskDone(\"criteria_not_class\")"),
+        "{stderr}"
+    );
+    // The stop's own name, from the ledger once the engine has released it.
+    let db = rusqlite::Connection::open_with_flags(
+        &state,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NOFOLLOW,
+    )?;
+    let reason: String = db.query_row(
+        "SELECT reason FROM task_stops WHERE task_id=?",
+        [task.as_str()],
+        |row| row.get(0),
+    )?;
+    assert_eq!(reason, "criteria_not_class");
+    Ok(())
+}
+
 #[test]
 fn an_unwritable_ledger_leaves_task_actions_unavailable() -> Outcome {
     let world = World::granting(&["app", "task"], &["read", "durable admission"])?;

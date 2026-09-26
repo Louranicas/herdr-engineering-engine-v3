@@ -302,6 +302,14 @@ pub fn state_root(home: &Path) -> PathBuf {
     home.join(STATE_DIRECTORY)
 }
 
+/// The attempts root the dispatcher materialises workspaces, job roots and plan roots under
+/// (B14b-1, R20 round 2 A9 first half): ONE function of the state root, never a `Dispatch` field a
+/// caller fills. B14b-2 records each attempt's root in the ledger at begin.
+#[must_use]
+pub fn attempts_root(state_root: &Path) -> PathBuf {
+    state_root.join("attempts")
+}
+
 /// Hand the ledger startup reconciled, still open and still locked, to the task owner. Nothing is
 /// re-read: not the manifest, not the store.
 ///

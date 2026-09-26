@@ -51,7 +51,7 @@ use crate::store::{
 };
 use crate::task::control::{Cancel, List, Preview, Resolve, Selector, Spec};
 use serde_json::{Value, json};
-use std::sync::Mutex;
+use std::sync::{Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 /// How long an issued engine cursor names a resumable position.
@@ -64,6 +64,10 @@ pub const VISIBILITY_REVISION: &str = "0";
 /// The ledger, held writable for the life of the coordinator.
 pub struct StoreTasks {
     store: Mutex<Store>,
+    /// Paired with `store` (B14b-1, R20 round 2 D2): the dispatcher reads and waits under the one
+    /// guard the writers commit under, so a submit or cancel between its read and its wait cannot
+    /// be lost.
+    dispatchable: Condvar,
     epoch: String,
     routing: Result<Routing, Unready>,
     /// The class profile admission screens a task's workspace against (B14-P2c), read at start.
@@ -92,10 +96,53 @@ impl StoreTasks {
     pub fn new(store: Store, epoch: String) -> Self {
         Self {
             store: Mutex::new(store),
+            dispatchable: Condvar::new(),
             epoch,
             routing: Err(Unready::NotInstalled),
             class_profile: Err(class_profile::Unready::NotInstalled),
         }
+    }
+
+    /// The dispatcher's wait (B14b-1, D2): the next dispatchable task, read and awaited under the
+    /// store's own guard, with no interval of its own — the writers notify (`notify_dispatchable`)
+    /// after every commit that can make a task dispatchable, and `stopped` (the engine's drain) ends
+    /// the wait with `None`.
+    ///
+    /// # Errors
+    /// [`Poisoned`] when an earlier holder panicked; a store read failure as `Err(Ok(..))`'s inner
+    /// error is carried to the caller as the dispatcher's own stop.
+    pub fn wait_dispatchable(
+        &self,
+        stopped: &dyn Fn() -> bool,
+        deadline: Instant,
+    ) -> Result<Result<Option<crate::store::Dispatchable>, StoreError>, Poisoned> {
+        let mut store = self.store.lock().map_err(|_| Poisoned)?;
+        loop {
+            if stopped() {
+                return Ok(Ok(None));
+            }
+            match store.next_dispatchable(deadline) {
+                Ok(Some(next)) => return Ok(Ok(Some(next))),
+                Ok(None) => {}
+                Err(error) => return Ok(Err(error)),
+            }
+            store = self.dispatchable.wait(store).map_err(|_| Poisoned)?;
+        }
+    }
+
+    /// Wake the dispatcher: called after a commit that can make a task dispatchable (submit,
+    /// cancel), after a dispatch completes, and by the drain.
+    pub fn notify_dispatchable(&self) {
+        self.dispatchable.notify_all();
+    }
+
+    /// The class profile the dispatcher dispatches under: the ONE submit screens against (R20 round
+    /// 2 A11), never a second copy that could differ.
+    ///
+    /// # Errors
+    /// Why there is none (not installed, refused at read), as the owner recorded it at start.
+    pub fn class_profile(&self) -> Result<&Profile, &class_profile::Unready> {
+        self.class_profile.as_ref()
     }
 
     /// The route configuration `task.preview` screens against, composed once (B07), or why there
@@ -571,6 +618,8 @@ impl Tasks for StoreTasks {
                 ),
                 other => store_fault(&other),
             })?;
+        // A task became dispatchable: wake the dispatcher (B14b-1, D2), under the same guard.
+        self.notify_dispatchable();
         drop(store);
         self.admitted(
             &admission,
@@ -782,6 +831,8 @@ impl Tasks for StoreTasks {
                 .at("/precondition"),
                 other => store_fault(&other),
             })?;
+        // A cancel can make a task dispatchable as `cancellation_requested` (B14b-1, D1): wake.
+        self.notify_dispatchable();
         drop(store);
         cancelled(&record, replayed)
     }
