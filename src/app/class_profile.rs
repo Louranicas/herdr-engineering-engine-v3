@@ -1031,6 +1031,20 @@ pub enum ReviewedError {
     /// A member of the record's closure is absent, of another size or digest, over the bound, or
     /// unreadable, as the walker reports it (`Missing` names the kind of absence, not the member).
     Closure(crate::check::graph::Error),
+    /// The closure's workload record does not yield the class's candidate inputs (R21 N22).
+    Workload(WorkloadWhy),
+}
+
+/// Why a closure does not yield the class's candidate inputs.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WorkloadWhy {
+    /// No raw member, or more than one, is a workload record naming exactly the class's three
+    /// candidate inputs.
+    Record,
+    /// The record's pin for a candidate input is absent or not 64 lowercase hex.
+    Pin,
+    /// The `TASK.md` the record pins is not a member of the closure.
+    Task,
 }
 
 /// Read the reviewed record `which` names under custody, at most [`MAX_REVIEWED_BYTES`], and return
@@ -1132,6 +1146,74 @@ pub fn read_reviewed_closure(
     }
     let objects = ReviewedObjects::open(profile)?;
     crate::check::graph::Graph::resolve(&objects, root).map_err(ReviewedError::Closure)
+}
+
+/// The class's candidate inputs as the reviewed closure pins them (R21 N22): the workload record's
+/// `files_sha256` for `TASK.md`, `base/Cargo.toml` and `base/src/lib.rs`, and the `TASK.md` bytes
+/// themselves — a member of the same closure, so the prompt's task text is the reviewed one and no
+/// second file is read. The root is the review's: its shared-assumptions page cites both the task
+/// text and the workload record as evidence (measured by the unit test; the expectation's closure
+/// reaches neither).
+///
+/// # Errors
+/// [`read_reviewed_closure`]'s refusals for the review root; [`ReviewedError::Workload`] with the
+/// [`WorkloadWhy`] that names what the closure lacks.
+pub fn candidate_inputs(
+    profile: &Profile,
+) -> Result<(super::candidates::FilePins, Vec<u8>), ReviewedError> {
+    let graph = read_reviewed_closure(profile, Which::Review, declared(profile, Which::Review))?;
+    workload_inputs(&graph)
+}
+
+/// The class's candidate inputs as a workload record names them, in its order: the task text and
+/// the baseline's two files (`ClassPrompt::new`'s `task`, `cargo`, `base`).
+const CANDIDATE_INPUTS: [&str; 3] = ["TASK.md", "base/Cargo.toml", "base/src/lib.rs"];
+
+/// The two fields of a workload record this reads; the record's other fields are its own.
+#[derive(serde::Deserialize)]
+struct WorkloadRecord {
+    candidate_inputs: Vec<String>,
+    files_sha256: std::collections::BTreeMap<String, String>,
+}
+
+/// The pure half of [`candidate_inputs`], over a resolved closure (F95: reachable by argument). The
+/// workload record is the one raw member that decodes as a record naming exactly
+/// [`CANDIDATE_INPUTS`]; its pins are spelled `sha256:` as `FilePins` holds them; the task text is
+/// the raw member that pin names, whose bytes the walker already held to it.
+fn workload_inputs(
+    graph: &crate::check::graph::Graph,
+) -> Result<(super::candidates::FilePins, Vec<u8>), ReviewedError> {
+    let refuse = |why| ReviewedError::Workload(why);
+    let mut records = graph
+        .nodes()
+        .filter(|node| node.record().is_none())
+        .filter_map(|node| serde_json::from_slice::<WorkloadRecord>(node.bytes()).ok())
+        .filter(|record| record.candidate_inputs == CANDIDATE_INPUTS);
+    let (Some(record), None) = (records.next(), records.next()) else {
+        return Err(refuse(WorkloadWhy::Record));
+    };
+    let pin = |name: &str| -> Result<String, ReviewedError> {
+        let hex = record
+            .files_sha256
+            .get(name)
+            .ok_or(refuse(WorkloadWhy::Pin))?;
+        let spelled = format!("sha256:{hex}");
+        Sha256Digest::parse(&spelled).map_err(|_| refuse(WorkloadWhy::Pin))?;
+        Ok(spelled)
+    };
+    let [task, cargo, base] = CANDIDATE_INPUTS;
+    let pins = super::candidates::FilePins {
+        task: pin(task)?,
+        cargo: pin(cargo)?,
+        base: pin(base)?,
+    };
+    let text = graph
+        .nodes()
+        .find(|node| node.record().is_none() && node.reference().sha256.as_str() == pins.task)
+        .ok_or(refuse(WorkloadWhy::Task))?
+        .bytes()
+        .to_vec();
+    Ok((pins, text))
 }
 
 /// The reference the profile declares for `which`, untyped for comparison with what a caller cites.
@@ -2403,6 +2485,120 @@ specification = {{ file = "isolation.json", sha256 = "{SPEC}" }}
             read_reviewed_closure(&profile, Which::Review, &longer),
             Err(ReviewedError::Closure(Error::Identity))
         ));
+        Ok(())
+    }
+
+    /// A reviewed store in memory: bytes by the digest a reference names, `Missing` otherwise —
+    /// what it answers is a function of what it is asked (F101).
+    struct Memory(std::collections::BTreeMap<String, Vec<u8>>);
+
+    impl crate::check::graph::Objects for Memory {
+        fn open(
+            &self,
+            reference: &Ref,
+        ) -> Result<Box<dyn std::io::Read + '_>, crate::check::graph::Error> {
+            self.0
+                .get(reference.sha256.as_str())
+                .map(|bytes| Box::new(bytes.as_slice()) as Box<dyn std::io::Read>)
+                .ok_or(crate::check::graph::Error::Missing)
+        }
+    }
+
+    /// The closure of one raw member alone: a graph of one node, whatever its bytes say.
+    fn raw_closure(bytes: &[u8]) -> Result<crate::check::graph::Graph, Box<dyn std::error::Error>> {
+        let sha256 = super::super::evidence::digest(bytes);
+        let root = Ref {
+            artifact_id: Id::new("28e00000-0000-4000-8000-00000000000a")?,
+            sha256: Sha::new(sha256.clone())?,
+            byte_length: u32::try_from(bytes.len())?,
+            media_type: Name::new("application/octet-stream")?,
+            schema_id: Name::new("hee3.raw/1")?,
+        };
+        let memory = Memory(std::iter::once((sha256, bytes.to_vec())).collect());
+        crate::check::graph::Graph::resolve(&memory, &root).map_err(|e| format!("{e:?}").into())
+    }
+
+    /// R21 N22 (K3 measured) · the candidate inputs are the closure's own: the workload record
+    /// `a87e5ba9…`'s `files_sha256` for the three inputs — each also coreutils `sha256sum` of
+    /// `evaluation/tasks/WL-U64-PARSE-001/v1/{TASK.md,base/Cargo.toml,base/src/lib.rs}` — and the
+    /// `TASK.md` member's bytes. The review's root reaches both; the expectation's reaches neither.
+    /// Each refusal site is named by what only it produces.
+    #[test]
+    fn the_candidate_inputs_are_the_closure_s_own_pins_and_task_text()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use super::super::candidates::FilePins;
+        const TASK: &str = "7e7e5d422ff4b486180de35efa4241cdc5d282a2a8d8bff87c3aec21338ce339";
+        const RECORD: &str = "a87e5ba9f699168556ef0859c0690113f0e1186592109dd797745593aff99121";
+        let root = private("candidate-inputs");
+        let profile = Profile {
+            declared: compose(valid().as_bytes()).map_err(|e| format!("{e:?}"))?,
+            directory: root.clone(),
+            digest: String::new(),
+        };
+        assert_eq!(candidate_inputs(&profile), Err(ReviewedError::NotInstalled));
+        let store = root.join(REVIEWED_DIRECTORY);
+        fs::DirBuilder::new().mode(0o700).create(&store)?;
+        install_closure(&store)?;
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/reviewed-003");
+        let task = fs::read(fixture.join(TASK))?;
+        assert_eq!(task.len(), 1498);
+        assert_eq!(
+            candidate_inputs(&profile),
+            Ok((
+                FilePins {
+                    task: format!("sha256:{TASK}"),
+                    cargo:
+                        "sha256:b0e12aac7ebf609e0be87029a4881d1b67c91780679b6495c0bf06b313db5da7"
+                            .into(),
+                    base: "sha256:6fd50c63a83a1a9cae3b88bcc11ebad723cb5b86c443148d112567cc002cb5df"
+                        .into(),
+                },
+                task.clone()
+            ))
+        );
+        // K3: the expectation's closure holds no workload record at all.
+        let expectation = read_reviewed_closure(
+            &profile,
+            Which::Expectation,
+            profile.declared.reviewed.expectation().as_ref(),
+        )
+        .map_err(|e| format!("{e:?}"))?;
+        assert_eq!(
+            workload_inputs(&expectation),
+            Err(ReviewedError::Workload(WorkloadWhy::Record))
+        );
+        // The record gone from the store: the walk names the absence before any pin is read.
+        let record = fs::read(fixture.join(RECORD))?;
+        fs::remove_file(store.join(RECORD))?;
+        assert_eq!(
+            candidate_inputs(&profile),
+            Err(ReviewedError::Closure(crate::check::graph::Error::Missing))
+        );
+        // The pure half, over one-member closures: the record without its task text, the task
+        // text without a record, a record naming other candidate inputs, and a record whose
+        // TASK.md pin is not lowercase hex or is absent.
+        let text = std::str::from_utf8(&record)?;
+        assert_eq!(text.matches(TASK).count(), 1);
+        let upper = text.replace(TASK, &TASK.to_uppercase());
+        let unpinned = text.replace(&format!("\"TASK.md\": \"{TASK}\""), "\"TASK\": \"\"");
+        assert_ne!(unpinned, text);
+        let renamed = text.replacen("\"TASK.md\",", "\"TASK.txt\",", 1);
+        assert_ne!(renamed, text);
+        for (bytes, why) in [
+            (record.as_slice(), WorkloadWhy::Task),
+            (task.as_slice(), WorkloadWhy::Record),
+            (renamed.as_bytes(), WorkloadWhy::Record),
+            (upper.as_bytes(), WorkloadWhy::Pin),
+            (unpinned.as_bytes(), WorkloadWhy::Pin),
+        ] {
+            let closure = raw_closure(bytes)?;
+            assert_eq!(closure.object_count(), 1);
+            assert_eq!(
+                workload_inputs(&closure),
+                Err(ReviewedError::Workload(why)),
+                "{why:?}"
+            );
+        }
         Ok(())
     }
 
