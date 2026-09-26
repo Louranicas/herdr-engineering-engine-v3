@@ -277,3 +277,22 @@ fn t08n_02_provider_failures_stop_the_attempt_by_name_without_a_second_generate(
     );
     assert_eq!(LOADED, "hee3-t08-contract-loaded:qualification");
 }
+
+/// R18 decision 1 · an adapter id the table does not hold is refused at the door as `Profile`, before
+/// any exchange — never admitted as the qualified row.
+#[test]
+fn t08n_04_an_unknown_adapter_id_is_refused_at_the_door() {
+    let rig = full_file_rig(None);
+    rig.save();
+    let mut request = super::full();
+    request.adapter_profile = "ollama-fc44-12ff8654/9".into();
+    let run = native::execute(
+        &request,
+        &rig.profile,
+        rig.origin,
+        rig.origin + Duration::from_secs(60),
+        &AtomicBool::new(false),
+    );
+    assert!(matches!(run, Err(native::Error::Profile)), "{run:?}");
+    assert!(rig.calls().is_empty(), "{:?}", rig.calls());
+}

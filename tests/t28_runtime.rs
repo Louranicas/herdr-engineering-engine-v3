@@ -578,6 +578,20 @@ fn assert_asked_whole(
     assert_eq!((asked[0].generation, asked[1].generation), (1, 2));
     assert_ne!(asked[0].invocation, asked[1].invocation);
     assert!(UuidV4::parse(&asked[0].invocation).is_ok());
+    assert!(
+        asked
+            .iter()
+            .all(|seen| attempt_ids.iter().all(|row| row[0] != seen.invocation)),
+        "an invocation id is minted for the call, never an attempt id reused"
+    );
+    assert_eq!(
+        asked[1]
+            .previous
+            .as_ref()
+            .map(|previous| previous.schema_id.as_str()),
+        Some(RECEIPT),
+        "the previous verification carries the schema its evidence was recorded under"
+    );
     assert_eq!(asked[0].recipe, PROFILE_DIGEST);
     assert_eq!(asked[0].workspace, baseline_digest);
     Ok(())

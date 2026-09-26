@@ -160,10 +160,8 @@ pub fn grammar(text: &str, finish: Finish) -> Result<Vec<u8>, Refusal> {
     if finish == Finish::Length {
         return Err(Refusal::Truncated);
     }
-    if text.trim().is_empty() {
-        return Err(Refusal::Empty);
-    }
-    // Each line's byte range; a fence is a line starting with three backticks at column 0.
+    // Each line's byte range; a fence is a line starting with three backticks at column 0. A blank
+    // text is a blank body: the one emptiness rule sits after the fences are read.
     let mut fences: Vec<(usize, usize)> = Vec::new();
     let mut start = 0;
     while start < text.len() {
@@ -544,6 +542,12 @@ mod tests {
                 Finish::Stop
             ),
             Ok(b"pub fn a() {}\n\nfn b() {}\n".to_vec())
+        );
+        let indented = "fn a() {}\n    ```\n    not a fence\n    ```\n";
+        assert_eq!(
+            grammar(indented, Finish::Stop),
+            Ok(indented.as_bytes().to_vec()),
+            "an indented fence line is text: the whole text is the file"
         );
         assert_eq!(
             grammar("```  \nx\n```", Finish::Stop),
