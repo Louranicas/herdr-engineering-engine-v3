@@ -62,10 +62,13 @@ pub enum Candidate {
     },
     /// The provider could not be asked, or answered without a final candidate (R18 A3): the task
     /// stops — no further generate after a lost response — with the failure named in the stop body;
-    /// `cleanup_settled` is every exchange's custody, `retained` the children the source now holds.
-    /// STATED GAP (review F2): with `cleanup_settled` false the attempt is `Unsettled`, an unsettled
-    /// attempt stops nothing (B14a-R1.4), and nothing in B14a-4 settles it later — B14b, which
-    /// settles the retained children, records the failure then.
+    /// `cleanup_settled` is every exchange's custody, `retained` the children the source held at the
+    /// answer. The runtime settles the source's retained children after every answer (R21 N18) and
+    /// the attempt's cleanup is settled only when this is and none is still pending. STATED GAP
+    /// (review F2, narrowed by N18): with `cleanup_settled` false the attempt stays `Unsettled` — the
+    /// flag does not tell a retained child, which the settle turn answers for, from a reaped leader
+    /// whose group was not empty, which nothing does — and an unsettled attempt stops nothing
+    /// (B14a-R1.4): recovery's (B17).
     Provider {
         error: crate::worker::native::Error,
         state: crate::worker::native::ProviderState,
@@ -406,6 +409,14 @@ pub enum Outcome {
     Driven(driver::Outcome),
 }
 
+/// What `drive` came to (R21 N18): the outcome, and the custody the source's retained children came
+/// to over the dispatch — settled in total, and still pending at the last settle turn.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Dispatched {
+    pub outcome: Outcome,
+    pub custody: Custody,
+}
+
 #[derive(Debug)]
 pub enum Error {
     Store(store::Error),
@@ -653,6 +664,9 @@ struct StoreRuntime<'a, C, V> {
     /// "no row yet" rule, keyed on the commit, never on the vector.
     row_committed: bool,
     previous: Option<Previous>,
+    /// The custody the source's retained children came to (R21 N18): settled over the dispatch,
+    /// and pending after the last settle turn.
+    custody: Custody,
 }
 
 /// The most task events that may follow the runtime's own last write: every instance observation
@@ -672,7 +686,9 @@ pub fn dispatch<'a, C: CandidateSource, V: Verifier>(
 ) -> Result<Outcome, Error> {
     match admit(tasks, profile, dispatch)? {
         Admission::Refused(refusal) => Ok(Outcome::Refused(refusal)),
-        Admission::Ready(admitted) => drive(tasks, *admitted, source, verifier),
+        Admission::Ready(admitted) => {
+            drive(tasks, *admitted, source, verifier).map(|dispatched| dispatched.outcome)
+        }
     }
 }
 
@@ -834,7 +850,8 @@ pub(crate) fn capture_share(
     }
 }
 
-/// Phase two: drive the admitted task through the driver over `source` and `verifier`.
+/// Phase two: drive the admitted task through the driver over `source` and `verifier`; the outcome
+/// with the custody the source's retained children came to (R21 N18).
 ///
 /// # Errors
 /// The runtime's, with a store refusal at the attempt door before any attempt row turned into a
@@ -845,7 +862,7 @@ pub fn drive<'a, C: CandidateSource, V: Verifier>(
     admitted: Admitted<'a>,
     source: &'a mut C,
     verifier: &'a mut V,
-) -> Result<Outcome, Error> {
+) -> Result<Dispatched, Error> {
     let Admitted {
         dispatch,
         profile,
@@ -876,9 +893,10 @@ pub fn drive<'a, C: CandidateSource, V: Verifier>(
         attempts: Vec::new(),
         row_committed: false,
         previous: None,
+        custody: Custody::default(),
     };
     let count = u8::try_from(U64_CRITERIA.len()).map_err(|_| Error::Identity)?;
-    match driver::run(&mut runtime, count) {
+    let outcome = match driver::run(&mut runtime, count) {
         Ok(outcome) => Ok(Outcome::Driven(outcome)),
         Err(driver::Error::Runtime(Fault::Stop(reason))) => {
             // A stop before any row (a racing cancel at the first begin, a spent reservation) is
@@ -915,7 +933,11 @@ pub fn drive<'a, C: CandidateSource, V: Verifier>(
         }
         Err(driver::Error::Runtime(Fault::Error(error))) => Err(error),
         Err(driver::Error::Policy(refusal)) => Err(Error::Policy(refusal)),
-    }
+    }?;
+    Ok(Dispatched {
+        outcome,
+        custody: runtime.custody,
+    })
 }
 
 struct Prepared {
@@ -1140,6 +1162,19 @@ impl<C: CandidateSource, V: Verifier> StoreRuntime<'_, C, V> {
         Ok(())
     }
 
+    /// One settle turn over the source's retained children (R21 N18), under the dispatch deadline
+    /// and the runtime's cancel flag — no limit of its own; the counts are added to the dispatch's
+    /// custody. Asked after every answer (K5: a success arm does not carry the source's custody).
+    /// True when no child is still pending — never a reason to read a source's unsettled cleanup as
+    /// settled, since the source's flag cannot tell a retained child from a reaped leader's live
+    /// group, which nothing settles.
+    fn settle_custody(&mut self) -> bool {
+        let custody = self.source.settle_retained(self.deadline, &self.cancelled);
+        self.custody.settled = self.custody.settled.saturating_add(custody.settled);
+        self.custody.pending = custody.pending;
+        custody.pending == 0
+    }
+
     /// One settle of the current attempt, in one hold with its head read. `used_ms` is `None`
     /// when the measured time overran what the reservation holds now (an overrun is not a clean
     /// failure). With a worker settle (B14a-5, R19.4), its sealed record is published and committed
@@ -1147,9 +1182,10 @@ impl<C: CandidateSource, V: Verifier> StoreRuntime<'_, C, V> {
     /// naming another attempt, before anything was applied or written. STATED (R19 round 2, finding
     /// 7): when this observation does not settle the attempt (an unknown cost, an unsettled
     /// cleanup), the record is committed under this event but `attempts.settled_event` is not set,
-    /// so `committed_run` cannot return it; the later observation that settles the attempt (B14b,
-    /// which settles retained children) must commit the worker settle again or the run's record
-    /// set has none — B14b's obligation, named here.
+    /// so `committed_run` cannot return it. The source's retained children are settled inside
+    /// `drive` before this observation (R21 N18), so the one observation carries the custody; a
+    /// later settle, which must commit the worker settle again, is left only where a child is still
+    /// pending at the dispatch deadline or the source's own cleanup did not settle — recovery's.
     fn settle(
         &mut self,
         index: usize,
@@ -1893,10 +1929,13 @@ impl<C: CandidateSource, V: Verifier> driver::Runtime for StoreRuntime<'_, C, V>
             candidate,
             settle: worker,
         } = answered(&mut *self.source, &ask)?;
+        // After EVERY answer, before the attempt's settle (R21 N18, K5): each arm's cleanup is
+        // settled only when its own is and no retained child is still pending.
+        let held = self.settle_custody();
         match candidate {
             // Exhaustion after begin is truthful (B14a-R2.3): the attempt is not ready to verify.
             Candidate::Exhausted => {
-                self.settle(index, true, false, worker.as_ref())?;
+                self.settle(index, held, false, worker.as_ref())?;
                 Ok(if self.begun(attempt)?.settled {
                     Work::Failed
                 } else {
@@ -1931,7 +1970,7 @@ impl<C: CandidateSource, V: Verifier> driver::Runtime for StoreRuntime<'_, C, V>
                         removed
                     }
                 };
-                self.settle(index, cleanup_settled, true, worker.as_ref())?;
+                self.settle(index, cleanup_settled && held, true, worker.as_ref())?;
                 Ok(if self.begun(attempt)?.settled {
                     Work::ReadyForCheck
                 } else {
@@ -1945,7 +1984,7 @@ impl<C: CandidateSource, V: Verifier> driver::Runtime for StoreRuntime<'_, C, V>
                 if let Some(begun) = self.attempts.get_mut(index) {
                     begun.refused = Some((text, refusal.name()));
                 }
-                self.settle(index, true, true, worker.as_ref())?;
+                self.settle(index, held, true, worker.as_ref())?;
                 Ok(if self.begun(attempt)?.settled {
                     Work::ReadyForCheck
                 } else {
@@ -1967,7 +2006,7 @@ impl<C: CandidateSource, V: Verifier> driver::Runtime for StoreRuntime<'_, C, V>
                         retained,
                     });
                 }
-                self.settle(index, cleanup_settled, false, worker.as_ref())?;
+                self.settle(index, cleanup_settled && held, false, worker.as_ref())?;
                 Ok(if self.begun(attempt)?.settled {
                     Work::Failed
                 } else {

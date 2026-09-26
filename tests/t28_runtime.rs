@@ -1017,7 +1017,10 @@ fn the_dispatcher_picks_the_admitted_task_and_drives_it_to_acceptance() -> Outco
             drain_is_the_dispatcher_s: true,
         }
     );
-    assert_eq!(taken(&readied), vec![("ready", until, false)]);
+    assert_eq!(
+        taken(&readied),
+        vec![("ready", until, false), ("settle_retained", until, false)]
+    );
     Ok(())
 }
 
@@ -1610,8 +1613,9 @@ fn each_attempt_is_asked_from_its_own_charge_start() -> Outcome_ {
     };
     let (origin, deadline) = admitted.window();
     assert_eq!(deadline.duration_since(origin), TASK_LIMIT);
-    let outcome =
-        drive(&rig.tasks, *admitted, &mut source, &mut verifier).map_err(|e| format!("{e:?}"))?;
+    let outcome = drive(&rig.tasks, *admitted, &mut source, &mut verifier)
+        .map_err(|e| format!("{e:?}"))?
+        .outcome;
     assert_eq!(outcome, Outcome::Driven(Driven::Accepted));
     let (asked, handed) = (taken(&asked), taken(&handed));
     assert_eq!((asked.len(), handed.len()), (2, 2));
@@ -1676,8 +1680,9 @@ fn a_provider_not_ready_at_attempt_one_leaves_the_task_admitted_and_writes_nothi
     let drain = AtomicBool::new(false);
     let admitted = admitted(&rig, &principal, &drain)?;
     let (_, until) = admitted.window();
-    let outcome =
-        drive(&rig.tasks, *admitted, &mut source, &mut verifier).map_err(|e| format!("{e:?}"))?;
+    let outcome = drive(&rig.tasks, *admitted, &mut source, &mut verifier)
+        .map_err(|e| format!("{e:?}"))?
+        .outcome;
     assert_eq!(
         outcome,
         Outcome::NotReady(habitat_engine::worker::native::Error::Identity)
@@ -1749,11 +1754,15 @@ fn each_attempt_is_preceded_by_its_own_provider_response_observation() -> Outcom
     let drain = AtomicBool::new(false);
     let admitted = admitted(&rig, &principal, &drain)?;
     let (_, until) = admitted.window();
-    let outcome =
-        drive(&rig.tasks, *admitted, &mut source, &mut verifier).map_err(|e| format!("{e:?}"))?;
+    let outcome = drive(&rig.tasks, *admitted, &mut source, &mut verifier)
+        .map_err(|e| format!("{e:?}"))?
+        .outcome;
     assert_eq!(outcome, Outcome::Driven(Driven::Accepted));
     assert_eq!(taken(&asked).len(), 2);
-    assert_eq!(taken(&readied), vec![("ready", until, false); 2]);
+    assert_eq!(
+        taken(&readied),
+        [("ready", until, false), ("settle_retained", until, false)].repeat(2)
+    );
     let (observed, started) = (observations(&rig)?, attempt_starts(&rig)?);
     assert_eq!((observed.len(), started.len()), (2, 2));
     assert!(
@@ -1814,6 +1823,114 @@ fn each_attempt_is_preceded_by_its_own_provider_response_observation() -> Outcom
             vec![attempts[1][0].clone(), observed[1].0.clone()],
         ]
     );
+    Ok(())
+}
+
+/// What one custody dispatch came to: the dispatcher's lines, the source's ready/settle log, the
+/// dispatch deadline `open` was handed, and the rig.
+type CustodyRun = (
+    Vec<String>,
+    Vec<(&'static str, Instant, bool)>,
+    Instant,
+    Arc<Rig>,
+);
+
+/// One dispatch over a scripted answer and a scripted custody, through the dispatcher: the lines it
+/// reported, what the source's `ready`/`settle_retained` were handed, the dispatch deadline `open`
+/// was handed, and the rig to read the ledger from. The source's hook raises the drain inside the
+/// one ask, so the dispatch runs to its end and the dispatcher's next wait ends `Drained`.
+fn custody_run(answer: Candidate, custody: Custody) -> Result<CustodyRun, Box<dyn Error>> {
+    let rig = Arc::new(rig(&Shape::default())?);
+    let (mut source, _) = script(vec![answer]);
+    source.custody = custody;
+    let readied = Arc::clone(&source.readied);
+    let stop = Arc::new(AtomicBool::new(false));
+    let flag = Arc::clone(&stop);
+    source.hook = Some(Box::new(move || flag.store(true, Ordering::SeqCst)));
+    let (verifier, _) = oracle(vec![matched(7)]);
+    let (provider, _) = provider_of(vec![(source, verifier)], &stop);
+    let opened = Arc::clone(&provider.admitted);
+    let (exit, lines) = run_dispatcher(&rig, provider, &stop)?;
+    assert_eq!(exit, dispatcher::Exit::Drained, "{lines:?}");
+    let (_, until) = taken(&opened).first().ok_or("an open")?.window;
+    Ok((lines, taken(&readied), until, rig))
+}
+
+/// R21 N18, K5 · the source's retained children are settled inside `drive` after EVERY answer,
+/// before the attempt's settle, under the dispatch deadline, and the attempt's cleanup is settled
+/// only when the arm's own is and none is still pending; the dispatcher reports the custody by name.
+/// Three fixtures differing in every field: (1) a success arm — a replacement, whose custody the
+/// source does not pass on (K5) — with one child still pending: the attempt is not settled and the
+/// task is left `needs settlement`, no check run; (2) a provider arm whose own cleanup settled, with
+/// two retained children now settled: the attempt settles and the task stops `worker_failed`; (3) a
+/// provider arm whose own cleanup did NOT settle, with its child now settled: still unsettled — a
+/// source's unsettled cleanup is never read as settled on a pending count of zero, since a reaped
+/// leader with a live group leaves nothing retained to settle.
+#[test]
+fn a_retained_child_is_settled_inside_drive_before_the_attempt_s_settle() -> Outcome_ {
+    let provider = |cleanup_settled, retained| Candidate::Provider {
+        error: habitat_engine::worker::native::Error::Identity,
+        state: habitat_engine::worker::native::ProviderState::NotDispatched,
+        cleanup_settled,
+        retained,
+    };
+    let fixtures = [
+        (
+            Candidate::Replacement(SECOND.to_vec()),
+            Custody {
+                settled: 0,
+                pending: 1,
+            },
+            "TaskLeft(\"needs settlement\"), custody: settled=0 pending=1",
+            ("1", 0),
+        ),
+        (
+            provider(true, 2),
+            Custody {
+                settled: 2,
+                pending: 0,
+            },
+            "TaskDone(\"stopped\"), custody: settled=2 pending=0",
+            ("0", 1),
+        ),
+        (
+            provider(false, 1),
+            Custody {
+                settled: 1,
+                pending: 0,
+            },
+            "TaskLeft(\"needs settlement\"), custody: settled=1 pending=0",
+            ("1", 0),
+        ),
+    ];
+    for (answer, custody, step, (unsettled, stops)) in fixtures {
+        let (lines, readied, until, rig) = custody_run(answer, custody)?;
+        let line = format!("dispatcher: task {TASK} -> {step}");
+        assert!(lines.contains(&line), "{line} in {lines:?}");
+        assert_eq!(
+            readied,
+            vec![("ready", until, false), ("settle_retained", until, false)],
+            "{step}"
+        );
+        assert_eq!(
+            rows(
+                &rig,
+                "SELECT settled_event IS NULL FROM attempts WHERE task_id=?"
+            )?,
+            vec![vec![unsettled.to_owned()]],
+            "{step}"
+        );
+        assert_eq!(
+            count(&rig, "SELECT count(*) FROM verifications")?,
+            0,
+            "{step}"
+        );
+        assert_eq!(
+            count(&rig, "SELECT count(*) FROM task_stops")?,
+            stops,
+            "{step}"
+        );
+    }
     Ok(())
 }
 

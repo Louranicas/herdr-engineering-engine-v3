@@ -316,25 +316,37 @@ fn run<P: Provider>(dispatcher: Dispatcher<'_, P>, report: &(dyn Fn(&str) + Sync
                 drain,
             },
         );
-        let result = match admitted {
-            Err(error) => Err(error),
-            Ok(Admission::Refused(refusal)) => Ok(Outcome::Refused(refusal)),
+        // The custody a driven dispatch's retained children came to (R21 N18), reported by name.
+        let (result, custody) = match admitted {
+            Err(error) => (Err(error), None),
+            Ok(Admission::Refused(refusal)) => (Ok(Outcome::Refused(refusal)), None),
             Ok(Admission::Ready(ready)) => match provider.open(&next, &ready) {
                 Err(why) => {
                     report(&format!("dispatcher: {}", why.name()));
                     return Exit::Unavailable(why);
                 }
-                Ok((mut source, mut verifier)) => drive(tasks, *ready, &mut source, &mut verifier),
+                Ok((mut source, mut verifier)) => {
+                    match drive(tasks, *ready, &mut source, &mut verifier) {
+                        Ok(driven) => (Ok(driven.outcome), Some(driven.custody)),
+                        Err(error) => (Err(error), None),
+                    }
+                }
             },
         };
         let step = classify(&result);
         report(&format!(
-            "dispatcher: task {} -> {step:?}{}",
+            "dispatcher: task {} -> {step:?}{}{}",
             next.task,
             result
                 .as_ref()
                 .err()
                 .map(|error| format!(" ({error:?})"))
+                .unwrap_or_default(),
+            custody
+                .map(|custody| format!(
+                    ", custody: settled={} pending={}",
+                    custody.settled, custody.pending
+                ))
                 .unwrap_or_default()
         ));
         handled = Some(next.task.clone());
