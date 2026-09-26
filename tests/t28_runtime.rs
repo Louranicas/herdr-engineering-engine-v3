@@ -623,6 +623,22 @@ fn a_refused_candidate_is_recorded_failed_without_a_verifier_call() -> Outcome_ 
             "0000000000000001".to_owned(),
         ]
     );
+    // B09b: the accepted object is the second check's receipt, under the identity the verification
+    // recorded — one id per object across the verification and acceptance doors.
+    let bound = rows(
+        &rig,
+        "SELECT o.artifact_id=v.evidence_artifact_id, o.schema_id, c.manifest_artifact_id=c.event_id \
+         FROM acceptance_objects o JOIN acceptances c ON c.event_id=o.event_id \
+         JOIN verifications v ON v.attempt_id=c.attempt_id WHERE c.task_id=?",
+    )?;
+    assert_eq!(
+        bound,
+        vec![vec![
+            "1".to_owned(),
+            "hee3.scripted-check/1".to_owned(),
+            "1".to_owned()
+        ]]
+    );
     let previous = asked.borrow()[1].clone().ok_or("no previous")?;
     assert_eq!(
         (previous.verdict, previous.criteria),

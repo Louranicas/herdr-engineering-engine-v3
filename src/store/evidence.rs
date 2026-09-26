@@ -18,7 +18,10 @@
 //!   content-addressed object directory (objects are never deleted, so the check is sound).
 
 use super::recovery::{TaskView, read_view};
-use super::{Error, Object, Principal, Result, Store, artifact, number, read_number, remaining};
+use super::{
+    Error, MANIFEST_MEDIA_TYPE, MANIFEST_SCHEMA_ID, Object, Principal, Result, Store, artifact,
+    number, read_number, remaining,
+};
 use crate::contracts::UuidV4;
 use crate::contracts::control::{EvidenceRef, EvidenceView};
 use rusqlite::{Connection, OptionalExtension, params};
@@ -93,22 +96,26 @@ fn read_evidence(
     view: EvidenceView,
     deadline: Instant,
 ) -> Result<Vec<EvidenceRef>> {
-    // A verification recorded before migration 6 carries no identity (B09b); an acceptance carries
-    // none until its door records it (B09b-3b). Either is refused, never guessed.
+    // A verification or an acceptance recorded before migration 6 carries no identity (B09b):
+    // refused, never guessed.
     let unrecorded: bool = db.query_row(
         "SELECT EXISTS(SELECT 1 FROM verifications v JOIN attempts a ON a.id=v.attempt_id \
          WHERE a.task_id=?1 AND v.evidence_artifact_id IS NULL) \
-         OR EXISTS(SELECT 1 FROM acceptances WHERE task_id=?1)",
+         OR EXISTS(SELECT 1 FROM acceptances WHERE task_id=?1 AND manifest_artifact_id IS NULL)",
         [task],
         |row| row.get(0),
     )?;
     if unrecorded {
         return Err(Error::EvidenceIdentity);
     }
-    let mut references: Vec<EvidenceRef> = stop_reference(db, task)?.into_iter().collect();
-    if view == EvidenceView::Refs {
-        references.extend(verification_references(db, task, deadline)?);
-    }
+    // `summary` (B09 R1.2): the stop, the manifest, each attempt's verification — ≤ 5 by
+    // construction. `refs` adds the acceptance's objects and every disposition's references.
+    let stop = stop_reference(db, task)?;
+    let mut references: Vec<EvidenceRef> = stop.iter().cloned().collect();
+    references.extend(manifest_reference(db, task)?);
+    references.extend(verification_references(db, task, deadline)?);
+    // The summary's references beyond the stop, which a disposition already counts (review D1).
+    let beyond_stop = references.len() - usize::from(stop.is_some());
     if view == EvidenceView::Refs {
         let dispositions: u64 = db.query_row(
             "SELECT coalesce(sum(json_array_length(CAST(evidence AS TEXT))),0) \
@@ -116,9 +123,20 @@ fn read_evidence(
             [task],
             |row| read_number(row, 0),
         )?;
+        let accepted: u64 = db.query_row(
+            "SELECT count(*) FROM acceptance_objects o JOIN acceptances c ON c.event_id=o.event_id \
+             WHERE c.task_id=?",
+            [task],
+            |row| read_number(row, 0),
+        )?;
         // The stop's reference is, by `stop_reference`'s own check, the first reference of an
-        // abandonment this sum already counts: it is not added again (review D1).
-        let found = dispositions;
+        // abandonment this sum already counts: it is not added again (review D1). The acceptance's
+        // objects and the summary already built are counted before any object is read (B09b;
+        // review of 213850e G1: a LIMIT alone truncates silently).
+        let found = dispositions
+            .checked_add(accepted)
+            .and_then(|sum| sum.checked_add(u64::try_from(beyond_stop).ok()?))
+            .ok_or(Error::Bound)?;
         if found > MAX_VIEW_REFS {
             return Err(Error::EvidenceBound {
                 found,
@@ -126,6 +144,12 @@ fn read_evidence(
             });
         }
         remaining(deadline)?;
+        for reference in acceptance_object_references(db, task, deadline)? {
+            // An exact repeat (the verification's receipt accepted as an object) is one reference.
+            if !references.contains(&reference) {
+                references.push(reference);
+            }
+        }
         let mut statement = db.prepare(
             "SELECT d.evidence FROM task_dispositions d JOIN events e ON e.id=d.event_id \
              WHERE d.task_id=? ORDER BY e.sequence",
@@ -145,6 +169,61 @@ fn read_evidence(
     Ok(references)
 }
 
+/// A stored identity row as the wire's one reader would parse it: a value it refuses is corruption.
+fn reference_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Value> {
+    Ok(serde_json::json!({
+        "artifact_id": row.get::<_, String>(0)?,
+        "sha256": row.get::<_, String>(1)?,
+        "byte_length": read_number(row, 2)?,
+        "media_type": row.get::<_, String>(3)?,
+        "schema_id": row.get::<_, String>(4)?,
+    }))
+}
+
+/// The acceptance's manifest, as the reference it was recorded with (B09b): its own artifact id,
+/// the manifest's digest and registered size, the manifest's constant media type and schema.
+fn manifest_reference(db: &Connection, task: &str) -> Result<Option<EvidenceRef>> {
+    let row = db
+        .query_row(
+            "SELECT c.manifest_artifact_id,c.manifest_digest,f.size FROM acceptances c \
+             JOIN artifacts f ON f.digest=c.manifest_digest WHERE c.task_id=? AND c.manifest_artifact_id IS NOT NULL",
+            [task],
+            |row| {
+                Ok(serde_json::json!({
+                    "artifact_id": row.get::<_, String>(0)?,
+                    "sha256": row.get::<_, String>(1)?,
+                    "byte_length": read_number(row, 2)?,
+                    "media_type": MANIFEST_MEDIA_TYPE,
+                    "schema_id": MANIFEST_SCHEMA_ID,
+                }))
+            },
+        )
+        .optional()?;
+    row.map(|value| EvidenceRef::parse(&value).ok_or(Error::Corrupt))
+        .transpose()
+}
+
+/// The acceptance's objects, each as the reference the manifest bound (B09b), in artifact-id
+/// order; bounded by the caller's count, read under `MAX_VIEW_REFS + 1`.
+fn acceptance_object_references(
+    db: &Connection,
+    task: &str,
+    deadline: Instant,
+) -> Result<Vec<EvidenceRef>> {
+    let mut statement = db.prepare(
+        "SELECT o.artifact_id,o.digest,f.size,o.media_type,o.schema_id FROM acceptance_objects o \
+         JOIN acceptances c ON c.event_id=o.event_id JOIN artifacts f ON f.digest=o.digest \
+         WHERE c.task_id=? AND o.artifact_id IS NOT NULL ORDER BY o.artifact_id LIMIT ?",
+    )?;
+    let rows = statement.query_map(params![task, number(MAX_VIEW_REFS + 1)?], reference_row)?;
+    let mut references = Vec::new();
+    for row in rows {
+        remaining(deadline)?;
+        references.push(EvidenceRef::parse(&row?).ok_or(Error::Corrupt)?);
+    }
+    Ok(references)
+}
+
 /// Each verification's evidence, as the reference it was recorded with (B09b): the stored identity
 /// beside the object's digest and registered size, in event order, re-read by the wire's one
 /// reader so a stored value it would refuse is corruption.
@@ -159,15 +238,7 @@ fn verification_references(
          JOIN artifacts f ON f.digest=v.evidence_digest \
          WHERE a.task_id=? AND v.evidence_artifact_id IS NOT NULL ORDER BY e.sequence LIMIT ?",
     )?;
-    let rows = statement.query_map(params![task, number(MAX_VIEW_REFS + 1)?], |row| {
-        Ok(serde_json::json!({
-            "artifact_id": row.get::<_, String>(0)?,
-            "sha256": row.get::<_, String>(1)?,
-            "byte_length": read_number(row, 2)?,
-            "media_type": row.get::<_, String>(3)?,
-            "schema_id": row.get::<_, String>(4)?,
-        }))
-    })?;
+    let rows = statement.query_map(params![task, number(MAX_VIEW_REFS + 1)?], reference_row)?;
     let mut references = Vec::new();
     for row in rows {
         remaining(deadline)?;
@@ -188,7 +259,8 @@ fn stored(bytes: &[u8]) -> Result<Vec<EvidenceRef>> {
         .collect()
 }
 
-/// The stop's evidence, recovered only through the disposition its event names (R2.1).
+/// The stop's evidence: the identity the stop door recorded (B09b), or, for a stop recorded before
+/// migration 6, the one recovered through the disposition its event names (R2.1).
 fn stop_reference(db: &Connection, task: &str) -> Result<Option<EvidenceRef>> {
     let Some((event, digest)) = db
         .query_row(
@@ -200,13 +272,27 @@ fn stop_reference(db: &Connection, task: &str) -> Result<Option<EvidenceRef>> {
     else {
         return Ok(None);
     };
+    let recorded = db
+        .query_row(
+            "SELECT s.evidence_artifact_id,s.evidence_digest,f.size,s.evidence_media_type,s.evidence_schema_id \
+             FROM task_stops s JOIN artifacts f ON f.digest=s.evidence_digest \
+             WHERE s.task_id=? AND s.evidence_artifact_id IS NOT NULL",
+            [task],
+            reference_row,
+        )
+        .optional()?
+        .map(|value| EvidenceRef::parse(&value).ok_or(Error::Corrupt))
+        .transpose()?;
     let disposition: Option<String> = db.query_row(
         "SELECT json_extract(CAST(body AS TEXT),'$.disposition_id') FROM events WHERE id=?",
         [&event],
         |row| row.get(0),
     )?;
+    // A stop naming no disposition (a failure, a cancellation) has only what its door recorded; one
+    // naming an abandonment is checked through the join its event records (R2.1), and what the
+    // door recorded must be that join's first reference.
     let Some(disposition) = disposition else {
-        return Err(Error::EvidenceIdentity);
+        return recorded.ok_or(Error::EvidenceIdentity).map(Some);
     };
     let evidence: Vec<u8> = db
         .query_row(
@@ -227,6 +313,9 @@ fn stop_reference(db: &Connection, task: &str) -> Result<Option<EvidenceRef>> {
         |row| read_number(row, 0),
     )?;
     if first.sha256 != digest || first.byte_length != size {
+        return Err(Error::Corrupt);
+    }
+    if recorded.is_some_and(|stored| stored != first) {
         return Err(Error::Corrupt);
     }
     Ok(Some(first))

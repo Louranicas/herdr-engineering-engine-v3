@@ -380,7 +380,7 @@ fn more_than_64_references_route_to_the_summary() -> Outcome {
 /// `unavailable`, `retry: never`, never guessed; `none` answers. Since B09b the verification door
 /// records identity, so the failed task's verification is made a pre-migration-6 row (its identity
 /// columns NULL) in the ledger file; the accepted task, its verification removed, holds only an
-/// acceptance, whose identity no door records yet (B09b-3b) (review G3). Each clause alone. The
+/// acceptance made a pre-migration-6 row the same way (review G3). Each clause alone. The
 /// principal door comes first: another operator's view of the same task is `not_found`, which says
 /// nothing of what the task holds (review G6).
 #[test]
@@ -403,6 +403,15 @@ fn identity_the_ledger_did_not_record_is_refused_not_guessed() -> Outcome {
         &nth(0x05b2, 2),
     )?;
     assert_eq!(removed, 1, "the accepted task keeps only its acceptance");
+    let unidentified = tamper(
+        &scratch,
+        "UPDATE acceptances SET manifest_artifact_id=NULL WHERE task_id=?",
+        &ids[1],
+    )?;
+    assert_eq!(
+        unidentified, 1,
+        "the accepted task's acceptance predates migration 6"
+    );
     let mut replies = Vec::new();
     for (index, task) in ids.iter().enumerate() {
         for (offset, view) in ["summary", "refs"].into_iter().enumerate() {
@@ -547,7 +556,8 @@ fn a_stop_whose_disposition_names_another_object_is_corrupt() -> Outcome {
     conforms(&[("task.get", &digest)])
 }
 
-/// B09-E5 · the stop names no disposition: unrecoverable, `unavailable`, `never`.
+/// B09-E5 · the stop names no disposition and its door recorded no identity (a stop from before
+/// migration 6): unrecoverable, `unavailable`, `never`.
 #[test]
 fn a_stop_naming_no_disposition_has_no_recorded_identity() -> Outcome {
     let scratch = Scratch::new()?;
@@ -557,6 +567,15 @@ fn a_stop_naming_no_disposition_has_no_recorded_identity() -> Outcome {
             &scratch,
             "UPDATE events SET body=CAST(json_remove(CAST(body AS TEXT),'$.disposition_id') AS BLOB) \
              WHERE kind='task_stopped' AND ?<>''",
+            "x",
+        )?,
+        1
+    );
+    assert_eq!(
+        tamper(
+            &scratch,
+            "UPDATE task_stops SET evidence_artifact_id=NULL, evidence_media_type=NULL, \
+             evidence_schema_id=NULL WHERE ?<>''",
             "x",
         )?,
         1
@@ -956,4 +975,28 @@ fn refs_list_only_the_tasks_own_verification_as_recorded() -> Outcome {
         );
     }
     Ok(())
+}
+
+/// B09b · an abandonment's stop is named by its disposition's first reference (B09 R2.1) and its
+/// door recorded that identity beside the digest: the two must agree, so a stop row whose recorded
+/// media type differs from the join's is corruption (`internal`), never answered from either alone.
+#[test]
+fn a_stops_recorded_identity_must_be_its_dispositions_first_reference() -> Outcome {
+    let scratch = Scratch::new()?;
+    let (tasks, task, _) = abandoned(&scratch)?;
+    assert_eq!(
+        tamper(
+            &scratch,
+            "UPDATE task_stops SET evidence_media_type='text/other' WHERE task_id=?",
+            &task,
+        )?,
+        1
+    );
+    let disagreeing = get(&tasks, &task, "summary", 7)?;
+    assert_eq!(
+        disagreeing["code"],
+        json!("internal"),
+        "recorded identity differs from the join: {disagreeing}"
+    );
+    conforms(&[("task.get", &disagreeing)])
 }

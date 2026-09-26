@@ -19,8 +19,8 @@ use crate::contracts::receipt::Name;
 use crate::contracts::roster::{MAX_HISTORY, Selection};
 use crate::contracts::{Generation, Sha256Digest, UuidV4};
 use crate::store::{
-    self, Binding, Effect, EvidenceIdentity, Expected, Object, Principal, RosterStart, Settlement,
-    Stop, Store, TaskHead, Verification, VerificationVerdict,
+    self, Binding, Effect, EvidenceIdentity, Expected, Identified, Object, Principal, RosterStart,
+    Settlement, Stop, Store, TaskHead, Verification, VerificationVerdict,
 };
 use crate::task::LoopRefusal;
 use crate::task::driver::{self, Acceptance, Checked as DriverChecked, StopReason, Work};
@@ -70,6 +70,10 @@ const CHECK_MEDIA_TYPE: &str = "application/json";
 const IDLE_VERIFICATION_SCHEMA: &str = "hee3.idle-verification/1";
 /// The schema of the runtime's own class check of a refused candidate (B14a-R2.4).
 const REFUSED_CANDIDATE_SCHEMA: &str = "hee3.refused-candidate/1";
+/// The schema of a task stop's evidence — the `kind` the stop body names.
+const TASK_STOP_SCHEMA: &str = "hee3.task-stop/1";
+/// The schema of a pre-dispatch refusal's evidence — the `kind` its body names.
+const PRE_DISPATCH_REFUSAL_SCHEMA: &str = "hee3.pre-dispatch-refusal/1";
 
 /// The check of an applied candidate. It receives the frozen snapshot, never a path to mutate.
 pub trait Verifier {
@@ -197,6 +201,10 @@ pub struct Attempt {
 pub struct Evidence {
     object: Object,
     subject: String,
+    /// The identity the verification recorded the object under (B09b): the acceptance names the
+    /// same object by the same id.
+    artifact_id: String,
+    schema_id: String,
 }
 
 #[derive(Debug)]
@@ -375,13 +383,13 @@ fn refuse(
     origin: Instant,
     deadline: Instant,
 ) -> Result<(), Error> {
-    let (staging, event) = (fresh(deadline)?, fresh(deadline)?);
+    let (staging, event, artifact) = (fresh(deadline)?, fresh(deadline)?, fresh(deadline)?);
     let reason = Name::new(refusal.name()).map_err(|_| Error::Identity)?;
     tasks.with_store(|store| -> Result<(), Error> {
         let head = store.get(dispatch.principal, dispatch.task, deadline)?;
         let observed_ms = millis(origin.elapsed());
         let bytes = serde_json::to_vec(&serde_json::json!({
-            "kind": "hee3.pre-dispatch-refusal/1",
+            "kind": PRE_DISPATCH_REFUSAL_SCHEMA,
             "task": dispatch.task.as_str(),
             "refusal": refusal.name(),
             "observed_ms": observed_ms,
@@ -395,6 +403,11 @@ fn refuse(
                 generation: parse_generation(&head.generation)?,
                 reason: &reason,
                 evidence: &object,
+                identity: EvidenceIdentity {
+                    artifact_id: uuid(&artifact)?,
+                    media_type: CHECK_MEDIA_TYPE,
+                    schema_id: PRE_DISPATCH_REFUSAL_SCHEMA,
+                },
                 event: uuid(&event)?,
             },
             Settlement {
@@ -506,7 +519,7 @@ impl<C: CandidateSource, V: Verifier> StoreRuntime<'_, C, V> {
         index: usize,
         check: &Check,
         subject: &str,
-    ) -> Result<(Object, VerificationVerdict, bool), Error> {
+    ) -> Result<(Object, String, VerificationVerdict, bool), Error> {
         let begun = self.attempts.get(index).ok_or(Error::Identity)?;
         let (staging, event, artifact) = (
             fresh(self.deadline)?,
@@ -564,7 +577,7 @@ impl<C: CandidateSource, V: Verifier> StoreRuntime<'_, C, V> {
             criteria: check.criteria,
             evidence: check.evidence.clone(),
         });
-        Ok((object, verdict, reconciled))
+        Ok((object, artifact, verdict, reconciled))
     }
 
     /// Stop the task, deciding and writing in one hold (review M2). (b) An attempt whose work or
@@ -581,20 +594,14 @@ impl<C: CandidateSource, V: Verifier> StoreRuntime<'_, C, V> {
         }
         let name = stop_name(reason);
         let stop_bytes = serde_json::to_vec(&serde_json::json!({
-            "kind": "hee3.task-stop/1", "reason": name, "attempts": self.attempts.len(),
+            "kind": TASK_STOP_SCHEMA, "reason": name, "attempts": self.attempts.len(),
         }))
         .map_err(|_| Error::Identity)?;
         let idle_bytes = serde_json::to_vec(&serde_json::json!({
             "kind": "verification_not_started", "durable_cancellation": true,
         }))
         .map_err(|_| Error::Identity)?;
-        let ids = [
-            fresh(self.deadline)?,
-            fresh(self.deadline)?,
-            fresh(self.deadline)?,
-            fresh(self.deadline)?,
-            fresh(self.deadline)?,
-        ];
+        let ids: [String; 6] = fresh_ids(self.deadline)?;
         let reason = Name::new(name).map_err(|_| Error::Identity)?;
         let last = self.attempts.last();
         let idle_subject = match last {
@@ -643,6 +650,11 @@ impl<C: CandidateSource, V: Verifier> StoreRuntime<'_, C, V> {
                 generation: parse_generation(&generation)?,
                 reason: &reason,
                 evidence: &object,
+                identity: EvidenceIdentity {
+                    artifact_id: uuid(&ids[5])?,
+                    media_type: CHECK_MEDIA_TYPE,
+                    schema_id: TASK_STOP_SCHEMA,
+                },
                 event: uuid(&ids[3])?,
             };
             Ok(if last.is_none() {
@@ -664,7 +676,7 @@ impl<C: CandidateSource, V: Verifier> StoreRuntime<'_, C, V> {
                 store.finish_unaccepted(self.dispatch.principal, stop, self.deadline)?
             })
         })??;
-        let [_, _, _, event, _] = ids;
+        let [_, _, _, event, _, _] = ids;
         self.written(&stopped.generation, event)?;
         Ok(true)
     }
@@ -841,14 +853,19 @@ impl<C: CandidateSource, V: Verifier> driver::Runtime for StoreRuntime<'_, C, V>
             let subject = applied.content_digest().ok_or(Error::Identity)?;
             (self.verifier.check(applied, self.deadline), subject)
         };
-        let (object, verdict, reconciled) = self.record(index, &check, &subject)?;
+        let (object, artifact_id, verdict, reconciled) = self.record(index, &check, &subject)?;
         // An unknown cost or unsettled cleanup is an obligation the stop must keep (review H1).
         if !reconciled {
             return Ok(DriverChecked::Unsettled);
         }
         Ok(match verdict {
             VerificationVerdict::Passed => DriverChecked::Passed {
-                evidence: Evidence { object, subject },
+                evidence: Evidence {
+                    object,
+                    subject,
+                    artifact_id,
+                    schema_id: check.schema_id.clone(),
+                },
                 criteria: check.criteria,
             },
             VerificationVerdict::Failed => DriverChecked::Failed {
@@ -877,13 +894,23 @@ impl<C: CandidateSource, V: Verifier> driver::Runtime for StoreRuntime<'_, C, V>
             .with_store(|store| -> Result<Option<String>, Error> {
                 let head = self.current(store)?;
                 let expected = expected(&head, begun)?;
+                // The accepted object is the verification's receipt, named as the verification
+                // named it (B09b): one identity per object, wherever it is recorded.
+                let identified = Identified {
+                    object: evidence.object.clone(),
+                    identity: EvidenceIdentity {
+                        artifact_id: uuid(&evidence.artifact_id)?,
+                        media_type: CHECK_MEDIA_TYPE,
+                        schema_id: &evidence.schema_id,
+                    },
+                };
                 let result = store
                     .prepare_verified_acceptance(
                         &expected,
                         uuid(&event)?,
                         Sha256Digest::parse(&evidence.subject).map_err(|_| Error::Identity)?,
                         &evidence.object,
-                        std::slice::from_ref(&evidence.object),
+                        std::slice::from_ref(&identified),
                         self.deadline,
                     )
                     .and_then(|published| store.accept(&published, 0, self.deadline));
@@ -969,6 +996,15 @@ fn expected<'b>(head: &'b TaskHead, begun: &'b Begun) -> Result<Expected<'b>, Er
         attempt: uuid(&begun.id)?,
         attempt_generation: parse_generation(&begun.generation)?,
     })
+}
+
+/// `N` fresh identities, or the first entropy refusal.
+fn fresh_ids<const N: usize>(deadline: Instant) -> Result<[String; N], Error> {
+    let mut ids = Vec::with_capacity(N);
+    for _ in 0..N {
+        ids.push(fresh(deadline)?);
+    }
+    ids.try_into().map_err(|_| Error::Entropy)
 }
 
 fn fresh(deadline: Instant) -> Result<String, Error> {

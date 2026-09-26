@@ -216,7 +216,7 @@ fn verifying(store: &mut Store) -> Expected<'static> {
 fn proof(store: &Store, active: &Expected<'_>) -> PublishedAcceptance {
     let object = store.publish(b"hello", uuid(STAGE), deadline()).unwrap();
     store
-        .prepare_acceptance(active, uuid(ACCEPTED), &[object], deadline())
+        .prepare_acceptance(active, uuid(ACCEPTED), &identified(&[object]), deadline())
         .unwrap()
 }
 fn accepted(store: &mut Store) -> PublishedAcceptance {
@@ -258,6 +258,36 @@ fn inspect_backup(area: &Area) -> Result<BackupReport> {
         Sha256Digest::parse(&identity).unwrap(),
         deadline(),
     )
+}
+
+/// Test-only (B09b): each object named by an artifact id derived from its digest, so one digest
+/// keeps one id across every door that records it; leaked so the identity borrows nothing.
+fn identified(objects: &[Object]) -> Vec<Identified<'static>> {
+    objects
+        .iter()
+        .map(|object| {
+            let d = &object.digest()[7..];
+            let id: &'static str = Box::leak(
+                format!(
+                    "{}-{}-4{}-8{}-{}",
+                    &d[0..8],
+                    &d[8..12],
+                    &d[12..15],
+                    &d[15..18],
+                    &d[18..30]
+                )
+                .into_boxed_str(),
+            );
+            Identified {
+                object: object.clone(),
+                identity: EvidenceIdentity {
+                    artifact_id: UuidV4::parse(id).unwrap(),
+                    media_type: "application/json",
+                    schema_id: "hee3.test-object/1",
+                },
+            }
+        })
+        .collect()
 }
 
 /// Exact runtime/profile and complete initial migration are independently visible.
@@ -1897,7 +1927,7 @@ fn cancellation_first_prevents_acceptance_even_for_prepared_durable_proof() {
     match store.prepare_acceptance(
         &expected(4, 1),
         uuid(OTHER),
-        &published.data.objects,
+        &identified(&published.data.objects),
         deadline(),
     ) {
         Ok(fresh) => assert!(matches!(
@@ -2112,7 +2142,7 @@ fn manifest_requires_nonempty_unique_available_proof_objects() {
         store.prepare_acceptance(
             &active,
             uuid(ACCEPTED),
-            &[object.clone(), object.clone()],
+            &identified(&[object.clone(), object.clone()]),
             deadline()
         ),
         Err(Error::Invalid)
@@ -2120,7 +2150,7 @@ fn manifest_requires_nonempty_unique_available_proof_objects() {
     fs::remove_file(area.object_path(&object)).unwrap();
     assert!(
         store
-            .prepare_acceptance(&active, uuid(ACCEPTED), &[object], deadline())
+            .prepare_acceptance(&active, uuid(ACCEPTED), &identified(&[object]), deadline())
             .is_err()
     );
     no_acceptance(&area);
@@ -2134,7 +2164,7 @@ fn manifest_publication_failure_retains_durable_unreferenced_bytes() {
     let object = store.publish(b"hello", uuid(STAGE), deadline()).unwrap();
     store.fault = Some(CutPoint::ManifestPublished);
     injected(
-        store.prepare_acceptance(&active, uuid(ACCEPTED), &[object], deadline()),
+        store.prepare_acceptance(&active, uuid(ACCEPTED), &identified(&[object]), deadline()),
         CutPoint::ManifestPublished,
     );
     no_acceptance(&area);
@@ -3044,6 +3074,13 @@ const RECORD_B: &str = "28f00000-0000-4000-8000-0000000000b2";
 const DIGEST_B: &str = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 const DIGEST_C: &str = "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
 
+/// Register `digest` in `artifacts` on a closed ledger, so a planted identity row satisfies its FK.
+fn area_bind(area: &Area, digest: &str, size: u64) {
+    area.edit_closed(&format!(
+        "INSERT INTO artifacts(digest,size) VALUES('{digest}',{size}) ON CONFLICT(digest) DO NOTHING;"
+    ));
+}
+
 /// The rows a DS2 plant needs on a verifying ledger: two registered objects to cite.
 fn with_objects(area: &Area) {
     area.edit_closed(&format!(
@@ -3182,8 +3219,13 @@ fn migration_six_checks_refuse_partial_identity_and_non_hex_criteria() {
     )
     .unwrap();
     for (sql, admitted) in [
+        // The fixture's acceptance records a whole identity (B09b-3b): a partial one is one
+        // member set and the others NULL.
         (
-            format!("UPDATE acceptance_objects SET artifact_id='{RECORD_A}'"),
+            format!(
+                "UPDATE acceptance_objects SET artifact_id='{RECORD_A}', media_type=NULL, \
+                 schema_id=NULL"
+            ),
             false,
         ),
         (
@@ -3883,5 +3925,425 @@ fn verification_identity_rebinding_and_reference_refusals() {
     assert!(matches!(
         store.task_evidence(&principal(), uuid(TASK), EvidenceView::Refs, deadline()),
         Err(Error::EvidenceIdentity)
+    ));
+}
+
+// ------------------------------------------------ stop and acceptance identity; the views (B09b-3b)
+
+/// The wire's reference for `object` under `identity`.
+fn wire_ref(
+    identity: &EvidenceIdentity<'_>,
+    object: &Object,
+) -> crate::contracts::control::EvidenceRef {
+    identity.reference(object)
+}
+
+/// B09b pin (F124, B09 R1.2): a stopped task's `summary` is its stop's reference, whole, as the
+/// stop door recorded it — over two fixtures differing in every member; `refs` adds nothing for a
+/// task with no disposition and no acceptance.
+#[test]
+fn a_stops_reference_round_trips_whole_in_summary_and_refs() {
+    use crate::contracts::control::EvidenceView;
+    for (index, (artifact, media, schema, bytes)) in [
+        (
+            RECORD_A,
+            "application/json",
+            "hee3.task-stop/1",
+            &b"stopped: exhausted"[..],
+        ),
+        (
+            RECORD_B,
+            "text/plain",
+            "hee3.operator-note/3",
+            &b"a longer stop note, by hand"[..],
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let area = Area::new();
+        let mut store = area.open();
+        let active = verifying(&mut store);
+        // A verifying task stops only once its latest attempt was checked.
+        let receipt = store.publish(b"receipt", uuid(OTHER), deadline()).unwrap();
+        let check = EvidenceIdentity {
+            artifact_id: uuid(OBS_2),
+            media_type: "application/json",
+            schema_id: "hee3.u64-receipt/1",
+        };
+        let mut failed = observe(&receipt, check);
+        failed.verdict = VerificationVerdict::Failed;
+        store
+            .record_verification(&active, &failed, uuid(OBS_1), deadline())
+            .unwrap();
+        let active = expected(4, 1);
+        let evidence = store.publish(bytes, uuid(STAGE), deadline()).unwrap();
+        let identity = EvidenceIdentity {
+            artifact_id: uuid(artifact),
+            media_type: media,
+            schema_id: schema,
+        };
+        let reason = crate::contracts::receipt::Name::new("fixture_stop").unwrap();
+        store
+            .finish_unaccepted(
+                &principal(),
+                terminal::Stop {
+                    task: active.task,
+                    generation: active.task_generation,
+                    reason: &reason,
+                    evidence: &evidence,
+                    identity,
+                    event: uuid(CANCELLED),
+                },
+                deadline(),
+            )
+            .unwrap();
+        let expected_refs = [wire_ref(&identity, &evidence), wire_ref(&check, &receipt)];
+        for view in [EvidenceView::Summary, EvidenceView::Refs] {
+            let (_, references) = store
+                .task_evidence(&principal(), uuid(TASK), view, deadline())
+                .unwrap();
+            assert_eq!(references, expected_refs, "fixture {index}: {view:?}");
+        }
+    }
+}
+
+/// B09b pin: an accepted task's `summary` names the manifest (the acceptance event's id, the
+/// manifest's constant media type and schema, its digest and registered size) after the attempt's
+/// verification; `refs` adds each accepted object as the manifest bound it, whole. Two objects,
+/// each differing from the other in every member.
+#[test]
+fn an_acceptances_manifest_and_objects_round_trip_whole() {
+    use crate::contracts::control::{EvidenceRef, EvidenceView};
+    let area = Area::new();
+    let mut store = area.open();
+    let active = verifying(&mut store);
+    let receipt = store.publish(b"receipt", uuid(STAGE), deadline()).unwrap();
+    let check = EvidenceIdentity {
+        artifact_id: uuid(RECORD_A),
+        media_type: "application/json",
+        schema_id: "hee3.u64-receipt/1",
+    };
+    store
+        .record_verification(&active, &observe(&receipt, check), uuid(OBS_1), deadline())
+        .unwrap();
+    let candidate = store
+        .publish(b"the candidate bytes", uuid(OTHER), deadline())
+        .unwrap();
+    let candidate_identity = EvidenceIdentity {
+        artifact_id: uuid(RECORD_B),
+        media_type: "text/x-rust",
+        schema_id: "hee3.candidate/2",
+    };
+    let objects = [
+        Identified {
+            object: receipt.clone(),
+            identity: check,
+        },
+        Identified {
+            object: candidate.clone(),
+            identity: candidate_identity,
+        },
+    ];
+    let published = store
+        .prepare_verified_acceptance(
+            &expected(4, 1),
+            uuid(ACCEPTED),
+            Sha256Digest::parse(CRITERIA).unwrap(),
+            &receipt,
+            &objects,
+            deadline(),
+        )
+        .unwrap();
+    assert_eq!(store.accept(&published, 0, deadline()).unwrap(), 5);
+    let manifest = EvidenceRef {
+        artifact_id: ACCEPTED.to_owned(),
+        sha256: published.object().digest().to_owned(),
+        byte_length: published.object().size(),
+        media_type: MANIFEST_MEDIA_TYPE.to_owned(),
+        schema_id: MANIFEST_SCHEMA_ID.to_owned(),
+    };
+    let (_, summary) = store
+        .task_evidence(&principal(), uuid(TASK), EvidenceView::Summary, deadline())
+        .unwrap();
+    assert_eq!(summary, [manifest.clone(), wire_ref(&check, &receipt)]);
+    let (_, refs) = store
+        .task_evidence(&principal(), uuid(TASK), EvidenceView::Refs, deadline())
+        .unwrap();
+    // Objects follow in artifact-id order; the receipt, accepted as an object under the identity
+    // its verification recorded, is an exact repeat and appears once.
+    assert_eq!(
+        refs,
+        [
+            manifest,
+            wire_ref(&check, &receipt),
+            wire_ref(&candidate_identity, &candidate)
+        ]
+    );
+    let stored: (String, i64) = area
+        .inspect()
+        .query_row(
+            "SELECT manifest_artifact_id, (SELECT count(*) FROM acceptance_objects WHERE artifact_id IS NOT NULL) FROM acceptances",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(stored, (ACCEPTED.to_owned(), 2));
+}
+
+/// B09b pin: a stop identity the wire would refuse is `Invalid` before any write; a stop naming
+/// an artifact id bound elsewhere is `Conflict`.
+#[test]
+fn stop_identity_refusals_each_by_name() {
+    let area = Area::new();
+    let mut store = area.open();
+    let active = verifying(&mut store);
+    let receipt = store.publish(b"receipt", uuid(STAGE), deadline()).unwrap();
+    let other = store.publish(b"other", uuid(OTHER), deadline()).unwrap();
+    let check = EvidenceIdentity {
+        artifact_id: uuid(RECORD_A),
+        media_type: "application/json",
+        schema_id: "hee3.u64-receipt/1",
+    };
+    store
+        .record_verification(&active, &observe(&receipt, check), uuid(OBS_1), deadline())
+        .unwrap();
+    let reason = crate::contracts::receipt::Name::new("fixture_stop").unwrap();
+    let stop = |identity: EvidenceIdentity<'static>| terminal::Stop {
+        task: uuid(TASK),
+        generation: revision(3),
+        reason: &reason,
+        evidence: &other,
+        identity,
+        event: uuid(CANCELLED),
+    };
+    assert!(matches!(
+        store.finish_unaccepted(
+            &principal(),
+            stop(EvidenceIdentity {
+                artifact_id: uuid(RECORD_B),
+                media_type: "",
+                schema_id: "x"
+            }),
+            deadline()
+        ),
+        Err(Error::Invalid)
+    ));
+    // RECORD_A names the receipt's digest: the same id for `other` is a rebinding.
+    assert!(matches!(
+        store.finish_unaccepted(
+            &principal(),
+            stop(EvidenceIdentity {
+                artifact_id: uuid(RECORD_A),
+                media_type: "application/json",
+                schema_id: "hee3.task-stop/1"
+            }),
+            deadline()
+        ),
+        Err(Error::Conflict)
+    ));
+    assert_eq!(
+        count(&area, "task_stops"),
+        0,
+        "a refused stop writes nothing"
+    );
+}
+
+/// B09b pin: an acceptance object bound elsewhere is `Conflict` at `accept` (nothing accepted).
+#[test]
+fn acceptance_identity_refusals_each_by_name() {
+    let area = Area::new();
+    let mut store = area.open();
+    let active = verifying(&mut store);
+    let receipt = store.publish(b"receipt", uuid(STAGE), deadline()).unwrap();
+    let other = store.publish(b"other", uuid(OTHER), deadline()).unwrap();
+    let check = EvidenceIdentity {
+        artifact_id: uuid(RECORD_A),
+        media_type: "application/json",
+        schema_id: "hee3.u64-receipt/1",
+    };
+    store
+        .record_verification(&active, &observe(&receipt, check), uuid(OBS_1), deadline())
+        .unwrap();
+    let rebound = [
+        Identified {
+            object: receipt.clone(),
+            identity: check,
+        },
+        Identified {
+            object: other.clone(),
+            identity: EvidenceIdentity {
+                artifact_id: uuid(RECORD_A),
+                media_type: "text/plain",
+                schema_id: "hee3.x/1",
+            },
+        },
+    ];
+    let published = store
+        .prepare_verified_acceptance(
+            &expected(4, 1),
+            uuid(ACCEPTED),
+            Sha256Digest::parse(CRITERIA).unwrap(),
+            &receipt,
+            &rebound,
+            deadline(),
+        )
+        .unwrap();
+    assert!(matches!(
+        store.accept(&published, 0, deadline()),
+        Err(Error::Conflict)
+    ));
+    assert_eq!(
+        count(&area, "acceptances"),
+        0,
+        "a refused acceptance writes nothing"
+    );
+}
+
+/// B09b pin: the manifest's own id is the acceptance event's; an event id already bound as an
+/// artifact id to another digest refuses the acceptance (nothing accepted); a sound acceptance then
+/// records; an acceptance recorded before migration 6 still refuses the view `EvidenceIdentity`.
+#[test]
+fn a_manifest_id_bound_elsewhere_accepts_nothing() {
+    use crate::contracts::control::EvidenceView;
+    let area = Area::new();
+    let mut store = area.open();
+    let active = verifying(&mut store);
+    let receipt = store.publish(b"receipt", uuid(STAGE), deadline()).unwrap();
+    let other = store.publish(b"other", uuid(OTHER), deadline()).unwrap();
+    let check = EvidenceIdentity {
+        artifact_id: uuid(RECORD_A),
+        media_type: "application/json",
+        schema_id: "hee3.u64-receipt/1",
+    };
+    store
+        .record_verification(&active, &observe(&receipt, check), uuid(OBS_1), deadline())
+        .unwrap();
+    // The manifest's own id is the acceptance event's: an event id already bound as an artifact id
+    // to another digest (a run record here) refuses the acceptance, nothing accepted.
+    area_bind(&area, other.digest(), other.size());
+    let sound = [Identified {
+        object: receipt.clone(),
+        identity: check,
+    }];
+    let published = store
+        .prepare_verified_acceptance(
+            &expected(4, 1),
+            uuid(ACCEPTED),
+            Sha256Digest::parse(CRITERIA).unwrap(),
+            &receipt,
+            &sound,
+            deadline(),
+        )
+        .unwrap();
+    drop(store);
+    area.edit_closed(&format!(
+        "INSERT INTO attempt_records(event_id,kind,attempt_id,digest,artifact_id) \
+         VALUES('{SETTLED}','capture','{ATTEMPT}','{}','{ACCEPTED}');",
+        other.digest()
+    ));
+    let mut store = area.reopen();
+    assert!(matches!(
+        store.accept(&published, 0, deadline()),
+        Err(Error::Conflict)
+    ));
+    assert_eq!(
+        count(&area, "acceptances"),
+        0,
+        "a manifest id bound elsewhere accepts nothing"
+    );
+    area.edit_closed(&format!(
+        "DELETE FROM attempt_records WHERE artifact_id='{ACCEPTED}';"
+    ));
+    drop(store);
+    let mut store = area.reopen();
+    let published = store
+        .prepare_verified_acceptance(
+            &expected(4, 1),
+            uuid(ACCEPTED),
+            Sha256Digest::parse(CRITERIA).unwrap(),
+            &receipt,
+            &sound,
+            deadline(),
+        )
+        .unwrap();
+    store.accept(&published, 0, deadline()).unwrap();
+    drop(store);
+    area.edit_closed("UPDATE acceptances SET manifest_artifact_id=NULL;");
+    let mut store = area.reopen();
+    assert!(matches!(
+        store.task_evidence(&principal(), uuid(TASK), EvidenceView::Summary, deadline()),
+        Err(Error::EvidenceIdentity)
+    ));
+}
+
+/// B09b pin (review of 213850e, G1): `refs` counts the acceptance's objects with the summary before
+/// any object is read, and refuses past the contract's 64 with both numbers rather than truncating;
+/// `summary` of the same task answers, being bounded by construction.
+#[test]
+fn refs_over_the_bound_refuse_with_both_numbers_never_truncate() {
+    use crate::contracts::control::EvidenceView;
+    let area = Area::new();
+    let mut store = area.open();
+    let active = verifying(&mut store);
+    let receipt = store.publish(b"receipt", uuid(STAGE), deadline()).unwrap();
+    let check = EvidenceIdentity {
+        artifact_id: uuid(RECORD_A),
+        media_type: "application/json",
+        schema_id: "hee3.u64-receipt/1",
+    };
+    store
+        .record_verification(&active, &observe(&receipt, check), uuid(OBS_1), deadline())
+        .unwrap();
+    // 63 objects beside the receipt: with the manifest and the verification, 66 references.
+    let mut objects = vec![Identified {
+        object: receipt.clone(),
+        identity: check,
+    }];
+    let ids: Vec<String> = (0..63)
+        .map(|index| format!("28f00000-0000-4000-8000-0000000{index:05x}"))
+        .collect();
+    let published: Vec<Object> = (0..63)
+        .map(|index| {
+            store
+                .publish(
+                    format!("object {index}").as_bytes(),
+                    uuid(&ids[index]),
+                    deadline(),
+                )
+                .unwrap()
+        })
+        .collect();
+    for (index, object) in published.iter().enumerate() {
+        objects.push(Identified {
+            object: object.clone(),
+            identity: EvidenceIdentity {
+                artifact_id: uuid(&ids[index]),
+                media_type: "text/plain",
+                schema_id: "hee3.object/1",
+            },
+        });
+    }
+    let prepared = store
+        .prepare_verified_acceptance(
+            &expected(4, 1),
+            uuid(ACCEPTED),
+            Sha256Digest::parse(CRITERIA).unwrap(),
+            &receipt,
+            &objects,
+            deadline(),
+        )
+        .unwrap();
+    store.accept(&prepared, 0, deadline()).unwrap();
+    let (_, summary) = store
+        .task_evidence(&principal(), uuid(TASK), EvidenceView::Summary, deadline())
+        .unwrap();
+    assert_eq!(summary.len(), 2, "manifest and verification");
+    assert!(matches!(
+        store.task_evidence(&principal(), uuid(TASK), EvidenceView::Refs, deadline()),
+        Err(Error::EvidenceBound {
+            found: 66,
+            limit: MAX_VIEW_REFS
+        })
     ));
 }

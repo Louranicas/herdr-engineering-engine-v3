@@ -90,7 +90,7 @@ fn inventory_proof(
         id(ACCEPTED),
         Sha256Digest::parse(SUBJECT).unwrap(),
         evidence,
-        objects,
+        &identified(objects),
         deadline(),
     )
 }
@@ -170,6 +170,36 @@ fn register_unrelated_evidence(store: &mut Store) {
             deadline(),
         )
         .unwrap();
+}
+
+/// Test-only (B09b): each object named by an artifact id derived from its digest, so one digest
+/// keeps one id across every door that records it; leaked so the identity borrows nothing.
+fn identified(objects: &[Object]) -> Vec<habitat_engine::store::Identified<'static>> {
+    objects
+        .iter()
+        .map(|object| {
+            let d = &object.digest()[7..];
+            let id: &'static str = Box::leak(
+                format!(
+                    "{}-{}-4{}-8{}-{}",
+                    &d[0..8],
+                    &d[8..12],
+                    &d[12..15],
+                    &d[15..18],
+                    &d[18..30]
+                )
+                .into_boxed_str(),
+            );
+            habitat_engine::store::Identified {
+                object: object.clone(),
+                identity: habitat_engine::store::EvidenceIdentity {
+                    artifact_id: UuidV4::parse(id).unwrap(),
+                    media_type: "application/json",
+                    schema_id: "hee3.test-object/1",
+                },
+            }
+        })
+        .collect()
 }
 
 #[test]
@@ -267,7 +297,12 @@ fn general_acceptance_preserves_its_sixty_four_object_limit() {
     let objects = inventory(&store, &evidence, 65);
     let before = head(&store);
     assert!(matches!(
-        store.prepare_acceptance(&expected("3"), id(ACCEPTED), &objects, deadline()),
+        store.prepare_acceptance(
+            &expected("3"),
+            id(ACCEPTED),
+            &identified(&objects),
+            deadline()
+        ),
         Err(habitat_engine::store::Error::Bound)
     ));
     assert_eq!(head(&store), before);
@@ -537,7 +572,7 @@ fn proof(store: &Store, evidence: &Object, current: &str) -> PublishedAcceptance
             id(ACCEPTED),
             Sha256Digest::parse(SUBJECT).unwrap(),
             evidence,
-            std::slice::from_ref(evidence),
+            &identified(std::slice::from_ref(evidence)),
             deadline(),
         )
         .unwrap()
@@ -551,7 +586,7 @@ fn cannot_prepare(store: &Store, evidence: &Object, current: &str) {
                 id(ACCEPTED),
                 Sha256Digest::parse(SUBJECT).unwrap(),
                 evidence,
-                std::slice::from_ref(evidence),
+                &identified(std::slice::from_ref(evidence)),
                 deadline(),
             )
             .is_err()
@@ -772,7 +807,7 @@ fn an_acceptance_prepared_before_a_verification_is_stale() {
         .prepare_acceptance(
             &expected("3"),
             id(ACCEPTED),
-            std::slice::from_ref(&evidence),
+            &identified(std::slice::from_ref(&evidence)),
             deadline(),
         )
         .unwrap();
@@ -1232,7 +1267,7 @@ fn repaired_attempt_requires_its_own_check_and_costs_accumulate_once() {
                 id(ACCEPTED),
                 Sha256Digest::parse(SUBJECT).unwrap(),
                 &evidence,
-                std::slice::from_ref(&evidence),
+                &identified(std::slice::from_ref(&evidence)),
                 deadline()
             )
             .is_err()
@@ -1265,7 +1300,7 @@ fn repaired_attempt_requires_its_own_check_and_costs_accumulate_once() {
             id(ACCEPTED),
             Sha256Digest::parse(SUBJECT).unwrap(),
             &evidence,
-            std::slice::from_ref(&evidence),
+            &identified(std::slice::from_ref(&evidence)),
             deadline(),
         )
         .unwrap();
@@ -1319,7 +1354,7 @@ fn pass_proof_is_bound_to_exact_subject_not_just_a_successful_verdict() {
                 id(ACCEPTED),
                 Sha256Digest::parse(CRITERIA).unwrap(),
                 &evidence,
-                std::slice::from_ref(&evidence),
+                &identified(std::slice::from_ref(&evidence)),
                 deadline()
             )
             .is_err()
@@ -1353,7 +1388,7 @@ fn acceptance_object_inventory_must_include_the_exact_check_evidence() {
                 id(ACCEPTED),
                 Sha256Digest::parse(SUBJECT).unwrap(),
                 &evidence,
-                std::slice::from_ref(&candidate),
+                &identified(std::slice::from_ref(&candidate)),
                 deadline()
             )
             .is_err()
@@ -1364,7 +1399,7 @@ fn acceptance_object_inventory_must_include_the_exact_check_evidence() {
             id(ACCEPTED),
             Sha256Digest::parse(SUBJECT).unwrap(),
             &evidence,
-            &[candidate, evidence.clone()],
+            &identified(&[candidate, evidence.clone()]),
             deadline(),
         )
         .unwrap();

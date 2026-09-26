@@ -409,10 +409,51 @@ fn finish(
             generation: generation(current),
             reason: &Name::new(REASON).unwrap(),
             evidence,
+            identity: evidence_identity(id(event)),
             event: id(event),
         },
         until,
     )
+}
+
+/// The identity a test names its stop or verification evidence by (B09b): the event's own id, so
+/// two pieces of evidence never share an artifact id.
+fn evidence_identity(artifact: UuidV4<'_>) -> habitat_engine::store::EvidenceIdentity<'_> {
+    habitat_engine::store::EvidenceIdentity {
+        artifact_id: artifact,
+        media_type: "application/json",
+        schema_id: "hee3.test-evidence/1",
+    }
+}
+
+/// Test-only (B09b): each object named by an artifact id derived from its digest, so one digest
+/// keeps one id across every door that records it; leaked so the identity borrows nothing.
+fn identified(objects: &[Object]) -> Vec<habitat_engine::store::Identified<'static>> {
+    objects
+        .iter()
+        .map(|object| {
+            let d = &object.digest()[7..];
+            let id: &'static str = Box::leak(
+                format!(
+                    "{}-{}-4{}-8{}-{}",
+                    &d[0..8],
+                    &d[8..12],
+                    &d[12..15],
+                    &d[15..18],
+                    &d[18..30]
+                )
+                .into_boxed_str(),
+            );
+            habitat_engine::store::Identified {
+                object: object.clone(),
+                identity: habitat_engine::store::EvidenceIdentity {
+                    artifact_id: UuidV4::parse(id).unwrap(),
+                    media_type: "application/json",
+                    schema_id: "hee3.test-object/1",
+                },
+            }
+        })
+        .collect()
 }
 
 #[test]
@@ -778,7 +819,7 @@ fn accepted_task_cannot_be_reclassified_as_an_unaccepted_stop() {
             id(ACCEPTED),
             Sha256Digest::parse(SUBJECT).unwrap(),
             &rig.evidence,
-            std::slice::from_ref(&rig.evidence),
+            &identified(std::slice::from_ref(&rig.evidence)),
             deadline(),
         )
         .unwrap();
@@ -990,7 +1031,7 @@ fn prepared_acceptance_and_new_work_cannot_reopen_a_committed_unaccepted_stop() 
             id(ACCEPTED),
             Sha256Digest::parse(SUBJECT).unwrap(),
             &rig.evidence,
-            std::slice::from_ref(&rig.evidence),
+            &identified(std::slice::from_ref(&rig.evidence)),
             deadline(),
         )
         .unwrap();
@@ -1035,6 +1076,7 @@ fn finish_preparation(
             generation: generation(current),
             reason: &Name::new(REASON).unwrap(),
             evidence: &rig.evidence,
+            identity: evidence_identity(id(event)),
             event: id(event),
         },
         facts,

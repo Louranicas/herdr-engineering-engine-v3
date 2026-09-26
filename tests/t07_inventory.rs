@@ -234,7 +234,7 @@ impl Rig {
                 id(ACCEPT),
                 Sha256Digest::parse(DIGEST).unwrap(),
                 &evidence,
-                std::slice::from_ref(&evidence),
+                &identified(std::slice::from_ref(&evidence)),
                 deadline(),
             )
             .unwrap();
@@ -272,6 +272,49 @@ impl Rig {
         assert!(!self.snapshot().tasks.is_empty());
     }
 }
+
+/// The identity a test names its stop or verification evidence by (B09b): the event's own id, so
+/// two pieces of evidence never share an artifact id.
+fn evidence_identity(artifact: UuidV4<'_>) -> habitat_engine::store::EvidenceIdentity<'_> {
+    habitat_engine::store::EvidenceIdentity {
+        artifact_id: artifact,
+        media_type: "application/json",
+        schema_id: "hee3.test-evidence/1",
+    }
+}
+
+/// Test-only (B09b): each object named by an artifact id derived from its digest, so one digest
+/// keeps one id across every door that records it; leaked so the identity borrows nothing.
+fn identified(
+    objects: &[habitat_engine::store::Object],
+) -> Vec<habitat_engine::store::Identified<'static>> {
+    objects
+        .iter()
+        .map(|object| {
+            let d = &object.digest()[7..];
+            let id: &'static str = Box::leak(
+                format!(
+                    "{}-{}-4{}-8{}-{}",
+                    &d[0..8],
+                    &d[8..12],
+                    &d[12..15],
+                    &d[15..18],
+                    &d[18..30]
+                )
+                .into_boxed_str(),
+            );
+            habitat_engine::store::Identified {
+                object: object.clone(),
+                identity: habitat_engine::store::EvidenceIdentity {
+                    artifact_id: UuidV4::parse(id).unwrap(),
+                    media_type: "application/json",
+                    schema_id: "hee3.test-object/1",
+                },
+            }
+        })
+        .collect()
+}
+
 #[test]
 fn empty_inventory_is_complete_and_epoch_bound() {
     let a = Area::new();
@@ -483,7 +526,7 @@ fn earlier_cancellation_survives_and_refuses_acceptance() {
             id(ACCEPT),
             Sha256Digest::parse(DIGEST).unwrap(),
             &evidence,
-            std::slice::from_ref(&evidence),
+            &identified(std::slice::from_ref(&evidence)),
             deadline()
         ),
         Err(Error::Cancelled)
@@ -511,6 +554,7 @@ fn preattempt_terminal_stop_survives_reopen() {
                 generation: generation("1"),
                 reason: &Name::new("prep_failed").unwrap(),
                 evidence: &evidence,
+                identity: evidence_identity(id(STOP)),
                 event: id(STOP),
             },
             Settlement {

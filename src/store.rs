@@ -338,7 +338,12 @@ mod schema;
 mod staging;
 mod verification;
 pub use staging::ArtifactStaging;
-pub use verification::{EvidenceIdentity, Verification, VerificationVerdict};
+pub use verification::{EvidenceIdentity, Identified, Verification, VerificationVerdict};
+
+/// The media type every acceptance manifest is published under (B09 E1); never stored.
+pub const MANIFEST_MEDIA_TYPE: &str = "application/json";
+/// The schema every acceptance manifest decodes under (B09 E1); never stored.
+pub const MANIFEST_SCHEMA_ID: &str = "hee3.acceptance-manifest/1";
 
 pub use evidence::{MAX_VIEW_REFS, ObjectReader};
 pub use roster::{RequestSource, RosterAttempt, RosterSnapshot, RosterStart};
@@ -1644,10 +1649,13 @@ impl Store {
                     "reason": ABANDONED_BY_OPERATOR, "disposition_id": input.disposition_id.as_str(),
                 }))?;
                 let evidence = &objects[0];
+                // The stop is named by the disposition's first reference (B08's join, kept): the
+                // identity that reference carries, checked against the object it names (B09b).
+                let identity = EvidenceIdentity::of(&input.evidence[0], evidence)?;
                 terminal::close(tx, &terminal::Closing {
                     task: input.task.as_str(), expected: generation.parse().map_err(|_| Error::Corrupt)?,
                     event: input.stop_event.as_str(), evidence: &evidence.digest, evidence_size: evidence.size,
-                    reason: ABANDONED_BY_OPERATOR, state: if head.cancellation { "cancelled" } else { "abandoned" },
+                    identity, reason: ABANDONED_BY_OPERATOR, state: if head.cancellation { "cancelled" } else { "abandoned" },
                     body: &stop_body, spent: (!unknown_usage).then_some(spent), recipient: &recipient,
                 })?;
             }
@@ -1725,21 +1733,36 @@ impl Store {
         &self,
         expected: &Expected<'_>,
         event_id: UuidV4<'_>,
-        objects: &[Object],
+        objects: &[Identified<'_>],
         deadline: Instant,
     ) -> Result<PublishedAcceptance> {
         self.prepare_acceptance_inner(expected, event_id, objects, None, deadline)
     }
 
+    /// The manifest binds its own artifact id (B09 R1.1 F11) and every object's identity (B09b):
+    /// the manifest is named by the acceptance's own event, which is unique to this acceptance.
     fn prepare_acceptance_inner(
         &self,
         expected: &Expected<'_>,
         event_id: UuidV4<'_>,
-        objects: &[Object],
+        identified: &[Identified<'_>],
         verification: Option<verification::VerifiedSubject>,
         deadline: Instant,
     ) -> Result<PublishedAcceptance> {
         remaining(deadline)?;
+        for each in identified {
+            each.identity.check()?;
+        }
+        let objects: Vec<Object> = identified.iter().map(|each| each.object.clone()).collect();
+        let objects = objects.as_slice();
+        let identities: Vec<ObjectIdentity> = identified
+            .iter()
+            .map(|each| ObjectIdentity {
+                artifact_id: each.identity.artifact_id.as_str().to_owned(),
+                media_type: each.identity.media_type.to_owned(),
+                schema_id: each.identity.schema_id.to_owned(),
+            })
+            .collect();
         schema::bound(&self.connection, deadline)?;
         let head = head(&self.connection, expected.task.as_str())?;
         same_generation(&head, expected.task_generation)?;
@@ -1767,12 +1790,14 @@ impl Store {
         }
         let data = Manifest {
             event: event_id.as_str().to_owned(),
+            artifact_id: event_id.as_str().to_owned(),
             task: expected.task.as_str().to_owned(),
             task_generation: head.generation,
             attempt: expected.attempt.as_str().to_owned(),
             attempt_generation: expected.attempt_generation.to_string(),
             criteria: head.criteria,
             objects: objects.to_vec(),
+            identities,
             verification,
         };
         let bytes = serde_json::to_vec(&data)?;
@@ -1842,9 +1867,15 @@ impl Store {
                 let size:u64=tx.query_row("SELECT size FROM artifacts WHERE digest=?",[&object.digest],|row|read_number(row,0))?;
                 if size!=object.size {return Err(Error::Corrupt);}
             }
+            // Every identity the acceptance records is one digest wherever it is recorded (B09b).
+            if data.identities.len()!=data.objects.len() {return Err(Error::Corrupt);}
+            if run_records::identity_bound_elsewhere(tx,&data.artifact_id,&published.manifest.digest)? {return Err(Error::Conflict);}
+            for (object,identity) in data.objects.iter().zip(&data.identities) {
+                if run_records::identity_bound_elsewhere(tx,&identity.artifact_id,&object.digest)? {return Err(Error::Conflict);}
+            }
             let sequence=event(tx,&data.event,&data.task,&generation,"accepted")?;
-            tx.execute("INSERT INTO acceptances(event_id,task_id,attempt_id,generation,criteria_digest,manifest_digest) VALUES(?,?,?,?,?,?)",params![data.event,data.task,data.attempt,data.attempt_generation,data.criteria,published.manifest.digest])?;
-            for object in &data.objects {tx.execute("INSERT INTO acceptance_objects(event_id,digest) VALUES(?,?)",params![data.event,object.digest])?;}
+            tx.execute("INSERT INTO acceptances(event_id,task_id,attempt_id,generation,criteria_digest,manifest_digest,manifest_artifact_id) VALUES(?,?,?,?,?,?,?)",params![data.event,data.task,data.attempt,data.attempt_generation,data.criteria,published.manifest.digest,data.artifact_id])?;
+            for (object,identity) in data.objects.iter().zip(&data.identities) {tx.execute("INSERT INTO acceptance_objects(event_id,digest,artifact_id,media_type,schema_id) VALUES(?,?,?,?,?)",params![data.event,object.digest,identity.artifact_id,identity.media_type,identity.schema_id])?;}
             tx.execute("UPDATE tasks SET generation=?,state='accepted',accepted_event=?,spent_ms=spent_ms+?,reserved_work_ms=0,reserved_verify_ms=0 WHERE id=?",params![generation,data.event,number(verification_ms)?,data.task])?;
             cut_point!(fault,CutPoint::AcceptanceWrite);
             let (uid,role):(u32,String)=tx.query_row("SELECT principal_uid,principal_role FROM tasks WHERE id=?",[&data.task],|row|Ok((row.get(0)?,row.get(1)?)))?;
@@ -1918,15 +1949,27 @@ fn require_normal(connection: &Connection, epoch: &str, inspection_only: bool) -
     }
 }
 
+/// One accepted object's identity as the manifest binds it (B09b).
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+struct ObjectIdentity {
+    artifact_id: String,
+    media_type: String,
+    schema_id: String,
+}
+
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 struct Manifest {
     event: String,
+    /// The manifest's own artifact id: the acceptance event's, bound into the bytes (B09 F11).
+    artifact_id: String,
     task: String,
     task_generation: String,
     attempt: String,
     attempt_generation: String,
     criteria: String,
     objects: Vec<Object>,
+    /// `objects[i]`'s identity is `identities[i]` (B09b).
+    identities: Vec<ObjectIdentity>,
     verification: Option<verification::VerifiedSubject>,
 }
 

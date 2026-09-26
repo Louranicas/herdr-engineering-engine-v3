@@ -595,7 +595,7 @@ impl Rig {
                 id(ACCEPT),
                 Sha256Digest::parse(DIGEST).unwrap(),
                 &evidence,
-                std::slice::from_ref(&evidence),
+                &identified(std::slice::from_ref(&evidence)),
                 deadline(),
             )
             .unwrap();
@@ -619,6 +619,7 @@ impl Rig {
                     generation: generation(&revision),
                     reason: &reason,
                     evidence: &evidence,
+                    identity: evidence_identity(id(STOP)),
                     event: id(STOP),
                 },
                 deadline(),
@@ -774,6 +775,36 @@ fn evidence_identity(artifact: UuidV4<'_>) -> habitat_engine::store::EvidenceIde
         media_type: "application/json",
         schema_id: "hee3.test-evidence/1",
     }
+}
+
+/// Test-only (B09b): each object named by an artifact id derived from its digest, so one digest
+/// keeps one id across every door that records it; leaked so the identity borrows nothing.
+fn identified(objects: &[Object]) -> Vec<habitat_engine::store::Identified<'static>> {
+    objects
+        .iter()
+        .map(|object| {
+            let d = &object.digest()[7..];
+            let id: &'static str = Box::leak(
+                format!(
+                    "{}-{}-4{}-8{}-{}",
+                    &d[0..8],
+                    &d[8..12],
+                    &d[12..15],
+                    &d[15..18],
+                    &d[18..30]
+                )
+                .into_boxed_str(),
+            );
+            habitat_engine::store::Identified {
+                object: object.clone(),
+                identity: habitat_engine::store::EvidenceIdentity {
+                    artifact_id: UuidV4::parse(id).unwrap(),
+                    media_type: "application/json",
+                    schema_id: "hee3.test-object/1",
+                },
+            }
+        })
+        .collect()
 }
 
 /// `T07-AP-01` · an admitted ledger with no attempt: the pass opens both ways,
@@ -3969,16 +4000,28 @@ fn fail_tasks(r: &mut Rig, n: u32) {
         store
             .finish_unaccepted(
                 &principal(),
-                Stop {
-                    task: id(&task),
-                    generation: generation(&now),
-                    reason: &reason,
-                    evidence: &evidence,
-                    event: id(&stop),
-                },
+                stop_of(&task, &now, &reason, &evidence, &stop),
                 deadline(),
             )
             .unwrap();
+    }
+}
+
+/// A stop of `task` at generation `now`, its evidence named by the stop event's own id.
+fn stop_of<'a>(
+    task: &'a str,
+    now: &'a str,
+    reason: &'a Name,
+    evidence: &'a Object,
+    stop: &'a str,
+) -> Stop<'a> {
+    Stop {
+        task: id(task),
+        generation: generation(now),
+        reason,
+        evidence,
+        identity: evidence_identity(id(stop)),
+        event: id(stop),
     }
 }
 
@@ -4379,7 +4422,7 @@ fn accept_tasks(r: &mut Rig, n: u32, base: u16) {
                 id(&role(8)),
                 Sha256Digest::parse(DIGEST).unwrap(),
                 &evidence,
-                std::slice::from_ref(&evidence),
+                &identified(std::slice::from_ref(&evidence)),
                 deadline(),
             )
             .unwrap();

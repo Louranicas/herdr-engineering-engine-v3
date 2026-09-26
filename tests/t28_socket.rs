@@ -1236,6 +1236,7 @@ pub(super) fn fail_task(
                 generation: now.parse()?,
                 reason: &reason,
                 evidence,
+                identity: evidence_identity(UuidV4::parse(&nth(0x28d8))?),
                 event: UuidV4::parse(&nth(0x28d8))?,
             },
             until,

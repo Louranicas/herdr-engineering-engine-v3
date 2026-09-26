@@ -1,5 +1,7 @@
 //! Terminal nonacceptance after existing work and verification obligations settle.
 
+use super::run_records::identity_bound_elsewhere;
+use super::verification::EvidenceIdentity;
 use super::{
     Effect, Error, Object, Principal, Result, Settlement, Store, event, head, next, number,
     same_generation,
@@ -15,6 +17,8 @@ pub struct Stop<'a> {
     pub generation: Generation,
     pub reason: &'a Name,
     pub evidence: &'a Object,
+    /// The identity the stop's evidence is named by (B09b): stored beside its digest.
+    pub identity: EvidenceIdentity<'a>,
     pub event: UuidV4<'a>,
 }
 
@@ -69,6 +73,7 @@ impl Store {
         preparation: Option<Settlement>,
         deadline: Instant,
     ) -> Result<Stopped> {
+        stop.identity.check()?;
         self.get(principal, stop.task, deadline)?;
         self.read_object(stop.evidence, deadline)?;
         let mut body = serde_json::json!({
@@ -128,7 +133,7 @@ impl Store {
             let state = if current.cancellation { "cancelled" } else { "failed" };
             let generation = close(tx, &Closing {
                 task: stop.task.as_str(), expected: stop.generation, event: stop.event.as_str(),
-                evidence: &stop.evidence.digest, evidence_size: stop.evidence.size, reason: stop.reason.as_str(), state, body: &body,
+                evidence: &stop.evidence.digest, evidence_size: stop.evidence.size, identity: stop.identity, reason: stop.reason.as_str(), state, body: &body,
                 spent: Some(spent), recipient: &principal.recipient(),
             })?;
             Ok(Stopped { generation, cancelled: current.cancellation })
@@ -146,6 +151,8 @@ pub(super) struct Closing<'a> {
     pub(super) event: &'a str,
     pub(super) evidence: &'a str,
     pub(super) evidence_size: u64,
+    /// The evidence's recorded identity (B09b).
+    pub(super) identity: EvidenceIdentity<'a>,
     pub(super) reason: &'a str,
     pub(super) state: &'static str,
     pub(super) body: &'a [u8],
@@ -170,6 +177,11 @@ pub(super) fn close(tx: &rusqlite::Transaction<'_>, closing: &Closing<'_>) -> Re
     if stored_size != closing.evidence_size {
         return Err(Error::Corrupt);
     }
+    // The evidence's identity is one digest everywhere it is recorded (B09b): a stop naming an
+    // artifact id another door bound to another digest is refused, not recorded twice.
+    if identity_bound_elsewhere(tx, closing.identity.artifact_id.as_str(), closing.evidence)? {
+        return Err(Error::Conflict);
+    }
     let generation = next(closing.expected)?;
     event(tx, closing.event, closing.task, &generation, "task_stopped")?;
     tx.execute(
@@ -177,13 +189,17 @@ pub(super) fn close(tx: &rusqlite::Transaction<'_>, closing: &Closing<'_>) -> Re
         params![closing.body, closing.event],
     )?;
     tx.execute(
-        "INSERT INTO task_stops(task_id,event_id,evidence_digest,reason,state) VALUES(?,?,?,?,?)",
+        "INSERT INTO task_stops(task_id,event_id,evidence_digest,reason,state,\
+         evidence_artifact_id,evidence_media_type,evidence_schema_id) VALUES(?,?,?,?,?,?,?,?)",
         params![
             closing.task,
             closing.event,
             closing.evidence,
             closing.reason,
-            closing.state
+            closing.state,
+            closing.identity.artifact_id.as_str(),
+            closing.identity.media_type,
+            closing.identity.schema_id
         ],
     )?;
     match closing.spent {

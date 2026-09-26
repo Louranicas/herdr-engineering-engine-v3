@@ -77,6 +77,15 @@ impl<'a> EvidenceIdentity<'a> {
     }
 }
 
+/// An object together with the identity a receipt names it by (B09b): what an acceptance is handed.
+#[derive(Clone, Debug)]
+pub struct Identified<'a> {
+    /// The object, as [`super::Store::publish`] returned it.
+    pub object: Object,
+    /// The identity it is named by.
+    pub identity: EvidenceIdentity<'a>,
+}
+
 /// The 64 criteria a check satisfied, stored as sixteen lower-hex digits (B17; a `u64` above
 /// `i64::MAX` cannot be an INTEGER column).
 pub(super) fn criteria_text(criteria: Option<u64>) -> Option<String> {
@@ -130,7 +139,7 @@ impl Store {
         event_id: UuidV4<'_>,
         subject: Sha256Digest<'_>,
         evidence: &Object,
-        objects: &[Object],
+        objects: &[Identified<'_>],
         deadline: Instant,
     ) -> Result<PublishedAcceptance> {
         super::schema::bound(&self.connection, deadline)?;
@@ -150,7 +159,7 @@ impl Store {
             evidence: evidence.clone(),
         };
         require_verified(&self.connection, expected.attempt.as_str(), &verified)?;
-        if !objects.iter().any(|object| object == evidence) {
+        if !objects.iter().any(|each| each.object == *evidence) {
             return Err(Error::Invalid);
         }
         self.prepare_acceptance_inner(expected, event_id, objects, Some(verified), deadline)

@@ -11,7 +11,7 @@ use habitat_engine::contracts::UuidV4;
 use habitat_engine::contracts::control::{
     ErrorCode, EvidenceView, criteria_digest, request_sha256,
 };
-use habitat_engine::store::{Error as StoreError, Principal, Store};
+use habitat_engine::store::{Error as StoreError, Object, Principal, Store};
 use habitat_engine::task::control::{Selector, get, submission};
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
@@ -100,6 +100,36 @@ fn evidence_identity(artifact: UuidV4<'_>) -> habitat_engine::store::EvidenceIde
         media_type: "application/json",
         schema_id: "hee3.test-evidence/1",
     }
+}
+
+/// Test-only (B09b): each object named by an artifact id derived from its digest, so one digest
+/// keeps one id across every door that records it; leaked so the identity borrows nothing.
+fn identified(objects: &[Object]) -> Vec<habitat_engine::store::Identified<'static>> {
+    objects
+        .iter()
+        .map(|object| {
+            let d = &object.digest()[7..];
+            let id: &'static str = Box::leak(
+                format!(
+                    "{}-{}-4{}-8{}-{}",
+                    &d[0..8],
+                    &d[8..12],
+                    &d[12..15],
+                    &d[15..18],
+                    &d[18..30]
+                )
+                .into_boxed_str(),
+            );
+            habitat_engine::store::Identified {
+                object: object.clone(),
+                identity: habitat_engine::store::EvidenceIdentity {
+                    artifact_id: UuidV4::parse(id).unwrap(),
+                    media_type: "application/json",
+                    schema_id: "hee3.test-object/1",
+                },
+            }
+        })
+        .collect()
 }
 
 #[test]
@@ -1306,7 +1336,7 @@ pub(super) fn staged(
             UuidV4::parse(&nth(0x05b8, index))?,
             criteria,
             &evidence,
-            std::slice::from_ref(&evidence),
+            &identified(std::slice::from_ref(&evidence)),
             until,
         )
         .map_err(fault)?;
