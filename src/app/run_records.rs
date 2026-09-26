@@ -1348,11 +1348,13 @@ mod tests {
         Ok(())
     }
 
-    /// B14a-5 · bytes the constructor could not have made are refused at decode: a replacement with
-    /// no length, a refusal with one, an attempt that is not a UUID, and a field the record does not
-    /// have.
+    /// B14a-5 · four shapes the constructor cannot make are refused at decode: a replacement with no
+    /// length, a refusal with one, an attempt that is not a UUID, and a field the record does not
+    /// have. (Not every such shape: a provider outcome with tokens, or a finish of `length` on a
+    /// replacement, decodes — the looseness matches the sibling records and the objects are
+    /// digest-pinned; R19 round 1 finding 9, stated.)
     #[test]
-    fn a_worker_settle_refuses_bytes_the_constructor_could_not_make() {
+    fn a_worker_settle_refuses_four_shapes_the_constructor_cannot_make() {
         let base = json!({
             "attempt": "28f00000-0000-4000-8000-0000000000a1",
             "adapter_profile": "ollama-fc44-12ff8654/2",

@@ -257,8 +257,10 @@ pub(super) fn commit(
         return Err(Error::Invalid);
     }
     // The worker's settle is the attempt's settle's to commit (B14a-5, R19 round 2 finding 5): a
-    // check that hands one in is refused before any write. The settle door stays the generic
-    // run-record door DS2 specified (the five kinds have committed there since B14a-2b-ii).
+    // check that hands one in is refused here, inside the door's transaction, which rolls back the
+    // verification row and the task update already written — nothing is committed. The settle door
+    // stays the generic run-record door DS2 specified (the five kinds have committed there since
+    // B14a-2b-ii).
     if observation == Observation::Check && kinds.contains(&RunRecordKind::WorkerSettle) {
         return Err(Error::Invalid);
     }

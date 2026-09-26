@@ -4581,7 +4581,8 @@ fn an_acceptance_prepared_at_a_stale_generation_is_refused_conflict() {
 }
 
 /// B14a-5 (R19 round 2, finding 5) · the worker's settle is the attempt's settle's to commit: a check
-/// that hands one in is refused `Invalid` before any write — no verification row, no record.
+/// that hands one in is refused `Invalid` inside the door's transaction, which rolls back — no
+/// verification row, no record.
 #[test]
 fn the_check_door_refuses_a_worker_settle_record() {
     let area = Area::new();

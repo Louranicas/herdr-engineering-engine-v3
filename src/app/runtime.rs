@@ -110,8 +110,9 @@ pub struct Ask<'a> {
 
 /// What a source hands back for one ask (B14a-5, R19.3): the candidate, and the worker's settle of
 /// the call — the native source settles every call, a provider asked or the prompt refused before
-/// one was (Q3); `None` is a source that made no settle at all (the scripted double, an exhausted
-/// script). The settle travels with the candidate so the runtime never re-acquires it from the
+/// one was (Q3; with the closure's pinned inputs the render bound is a defensive door no test
+/// reaches — F95, stated); `None` is a source that made no settle at all (the scripted double, an
+/// exhausted script). The settle travels with the candidate so the runtime never re-acquires it from the
 /// source, and is committed as the attempt's `worker_settle` run record in the settle's own hold.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Answer {
@@ -877,12 +878,10 @@ impl<C: CandidateSource, V: Verifier> StoreRuntime<'_, C, V> {
         Ok(())
     }
 
-    /// Record one check of the current attempt, in one hold with its head read, and remember it
-    /// for the next candidate. A cost past what the verify reservation holds is recorded unknown
-    /// (B14a-R1.8, review M4c); a `Cancelled` verdict for a task nobody cancelled is the
-    /// verifier's error, never a cancellation. Returns the evidence and whether the check settled.
     /// Publish `check`'s evidence and commit the verification with `records`, in the caller's
-    /// hold: one transaction for the verdict, the receipt and the run records (R13.2).
+    /// hold: one transaction for the verdict, the receipt and the run records (R13.2). A cost past
+    /// what the verify reservation holds is recorded unknown (B14a-R1.8, review M4c); a
+    /// `Cancelled` verdict for a task nobody cancelled is the verifier's error, never a cancellation.
     fn commit(
         &self,
         store: &mut Store,
