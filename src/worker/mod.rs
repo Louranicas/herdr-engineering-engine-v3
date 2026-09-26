@@ -1008,4 +1008,6 @@ pub mod resources;
 
 pub mod aggregate;
 
+/// The host as the receipt records it.
+pub mod host;
 pub mod native;

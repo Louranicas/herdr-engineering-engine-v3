@@ -12,12 +12,19 @@ use super::runtime::declared_criteria;
 use crate::check::decision::{DiagnosticState, Identity, IdentityFact, IdentityState};
 use crate::check::graph::{self, Objects};
 use crate::contracts::receipt::{
-    EnvironmentV1, LimitsV1, Maybe, Name, Ref, Text, U64, VerdictV1State,
+    CleanupContractV1, EnvironmentV1, HostV1, Id, LimitsV1, List, Maybe, Name, ObligationPageV1,
+    ObligationV1, ObligationV1State, Payload, Ref, Text, TypedRef, U64, VerdictV1State,
 };
 use crate::store::{Object, RunRecordKind, Store, VerificationVerdict};
+use crate::worker::host;
 use crate::worker::namespace::{MAX_CHANNEL, SCRATCH_BYTES};
 use crate::worker::namespace_shim::ENVIRONMENT;
 use crate::worker::resources::{ATTEMPT_LIMITS, TERM_GRACE};
+
+/// The owner every runtime obligation and the cleanup contract name.
+pub const RUNTIME_OWNER: &str = "hee3.runtime";
+/// The four obligations the runtime's cleanup record settles, in its order.
+pub const OBLIGATIONS: [&str; 4] = ["process", "scratch", "retained_paths", "aggregate"];
 use std::io::{Cursor, Read};
 use std::time::Instant;
 
@@ -187,6 +194,80 @@ pub fn limits(
     })
 }
 
+/// The receipt's host record over the facts read (R16 round 2, decision 3) and the payload the raw
+/// readings were published as.
+///
+/// # Errors
+/// `Scalar`/`Bound` when a reading is not a receipt name (an os id past 128 bytes, a kernel line
+/// past 4096).
+pub fn host_record(
+    facts: &host::Facts,
+    raw: Payload,
+) -> Result<HostV1, crate::contracts::receipt::Error> {
+    Ok(HostV1 {
+        os: Name::new(facts.os.as_str())?,
+        release: Name::new(facts.release.as_str())?,
+        architecture: Name::new(facts.architecture.as_str())?,
+        kernel: Text::new(facts.kernel.as_str())?,
+        boot_id: Name::new(facts.boot_id.as_str())?,
+        logical_cpus: facts.logical_cpus,
+        memory_bytes: U64::new(facts.memory_bytes.to_string())?,
+        facts: raw,
+    })
+}
+
+/// The cleanup contract's obligations as the pre-execution rows the receipt carries: the runtime's
+/// four, `open`, material, owned by [`RUNTIME_OWNER`], each citing the readback specification
+/// (R16 round 2, decision 9). `ids` are the fresh obligation ids, one per row.
+///
+/// # Errors
+/// `Scalar` for an id that is not a UUID; `Bound` past the list's size (never for four).
+pub fn obligation_rows(
+    ids: &[String; 4],
+    readback_specification: &Ref,
+) -> Result<Vec<ObligationV1>, crate::contracts::receipt::Error> {
+    OBLIGATIONS
+        .into_iter()
+        .zip(ids)
+        .map(|(scope, id)| {
+            Ok(ObligationV1 {
+                obligation_id: Id::new(id.as_str())?,
+                owner_id: Name::new(RUNTIME_OWNER)?,
+                scope: Text::new(scope)?,
+                material: true,
+                state: ObligationV1State::Open,
+                evidence: List::new(vec![readback_specification.clone()])?,
+                reason: Text::new("settled by the runtime's cleanup record")?,
+            })
+        })
+        .collect()
+}
+
+/// The cleanup contract the check runs under (R16 round 2, decision 9): the stop grace, the whole
+/// check deadline (as the 003 lane recorded the task's), every descendant reaped, the obligation
+/// page, and the readback specification as its payload.
+///
+/// # Errors
+/// `Scalar` when a value has no decimal rendering the receipt admits.
+pub fn cleanup_contract(
+    deadline_ms: u64,
+    obligations: TypedRef<ObligationPageV1>,
+    readback_specification: Payload,
+) -> Result<CleanupContractV1, crate::contracts::receipt::Error> {
+    Ok(CleanupContractV1 {
+        owner_id: Name::new(RUNTIME_OWNER)?,
+        term_grace_ms: U64::new(
+            u64::try_from(TERM_GRACE.as_millis())
+                .unwrap_or(u64::MAX)
+                .to_string(),
+        )?,
+        deadline_ms: U64::new(deadline_ms.to_string())?,
+        require_empty_descendants: true,
+        obligations,
+        readback_specification,
+    })
+}
+
 /// The ledger as an [`Objects`] owner (R16 round 2, decision 6): a reference resolves to the object
 /// the content-addressed store holds under its digest and size — `read_object` verifies both against
 /// the bytes, so a reference that lies is `Io` and a reference to nothing is `Missing`. Registration
@@ -221,13 +302,16 @@ impl Objects for LedgerObjects<'_> {
 #[cfg(test)]
 mod tests {
     use super::{
-        Readbacks, STRICT_EMPTY_DIAGNOSTICS, ZERO_EXTERNAL_COST, cited_kind, diagnostics_of,
-        environment_rows, identities, limits, record_role, verdict_of,
+        OBLIGATIONS, RUNTIME_OWNER, Readbacks, STRICT_EMPTY_DIAGNOSTICS, ZERO_EXTERNAL_COST,
+        cited_kind, cleanup_contract, diagnostics_of, environment_rows, host_record, identities,
+        limits, obligation_rows, record_role, verdict_of,
     };
     use crate::app::runtime::declared_criteria;
     use crate::check::decision::{DiagnosticState, Identity, IdentityState};
-    use crate::contracts::receipt::Text;
-    use crate::contracts::receipt::VerdictV1State;
+    use crate::contracts::receipt::{
+        Id, Name, ObligationPageV1, ObligationV1State, Payload, Ref, Sha, Text, TypedRef,
+        VerdictV1State,
+    };
     use crate::store::{RunRecordKind, VerificationVerdict};
 
     /// R16.1 · every kind's role round-trips, and a role that is not a run record's cites nothing.
@@ -331,6 +415,133 @@ mod tests {
             Some(ZERO_EXTERNAL_COST)
         );
         Ok(())
+    }
+
+    /// R16.3 · the host record carries every fact read, whole (two fixtures differing in every field
+    /// would need two hosts; this one is this host's reading), and refuses a fact the receipt cannot
+    /// name.
+    #[test]
+    fn the_host_record_carries_every_fact() -> Result<(), Box<dyn std::error::Error>> {
+        let facts = crate::worker::host::Facts {
+            os: "fedora".to_owned(),
+            release: "44".to_owned(),
+            architecture: "x86_64".to_owned(),
+            kernel: "7.2.5-200.fc44.x86_64".to_owned(),
+            boot_id: "270eb2e7-bf61-4a5c-9618-2c7e71817fb4".to_owned(),
+            logical_cpus: 16,
+            memory_bytes: 100_926_410_752,
+            raw: b"raw".to_vec(),
+        };
+        let raw = payload("raw")?;
+        let record = host_record(&facts, raw.clone())?;
+        assert_eq!(
+            (
+                record.os.as_str(),
+                record.release.as_str(),
+                record.architecture.as_str(),
+                record.kernel.as_str(),
+                record.boot_id.as_str(),
+                record.logical_cpus,
+                record.memory_bytes.get(),
+            ),
+            (
+                "fedora",
+                "44",
+                "x86_64",
+                "7.2.5-200.fc44.x86_64",
+                "270eb2e7-bf61-4a5c-9618-2c7e71817fb4",
+                16,
+                100_926_410_752
+            )
+        );
+        assert_eq!(record.facts, raw);
+        let mut unnameable = facts;
+        unnameable.os = "x".repeat(129);
+        assert!(host_record(&unnameable, payload("raw")?).is_err());
+        Ok(())
+    }
+
+    /// R16.9 · four open, material obligations owned by the runtime, each citing the readback
+    /// specification, in the cleanup record's order; the contract carries the stop grace, the whole
+    /// deadline and every descendant reaped.
+    #[test]
+    fn the_obligations_and_the_contract_name_the_runtime() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let ids = [
+            "28f40000-0000-4000-8000-000000000001".to_owned(),
+            "28f40000-0000-4000-8000-000000000002".to_owned(),
+            "28f40000-0000-4000-8000-000000000003".to_owned(),
+            "28f40000-0000-4000-8000-000000000004".to_owned(),
+        ];
+        let spec = payload("readback specification")?;
+        let rows = obligation_rows(&ids, spec.as_ref())?;
+        assert_eq!(rows.len(), 4);
+        for (index, row) in rows.iter().enumerate() {
+            assert_eq!(
+                (
+                    row.obligation_id.as_str(),
+                    row.owner_id.as_str(),
+                    row.scope.as_str(),
+                    row.material,
+                    row.state,
+                    row.evidence.as_slice().len(),
+                ),
+                (
+                    ids[index].as_str(),
+                    RUNTIME_OWNER,
+                    OBLIGATIONS[index],
+                    true,
+                    ObligationV1State::Open,
+                    1
+                ),
+                "row {index}"
+            );
+        }
+        assert!(
+            obligation_rows(
+                &[
+                    "not-a-uuid".to_owned(),
+                    ids[1].clone(),
+                    ids[2].clone(),
+                    ids[3].clone()
+                ],
+                spec.as_ref()
+            )
+            .is_err()
+        );
+        let page = TypedRef::<ObligationPageV1>::new(reference(
+            "page",
+            "hee3.receipt/1:ObligationPageV1",
+        )?)?;
+        let contract = cleanup_contract(300_000, page, spec)?;
+        assert_eq!(
+            (
+                contract.owner_id.as_str(),
+                contract.term_grace_ms.get(),
+                contract.deadline_ms.get(),
+                contract.require_empty_descendants
+            ),
+            (RUNTIME_OWNER, 5_000, 300_000, true)
+        );
+        Ok(())
+    }
+
+    /// A raw payload reference for a test, over the bytes' own digest.
+    fn payload(bytes: &str) -> Result<Payload, Box<dyn std::error::Error>> {
+        Ok(Payload::new(reference(bytes, "hee3.raw/1")?)?)
+    }
+
+    fn reference(bytes: &str, schema: &str) -> Result<Ref, Box<dyn std::error::Error>> {
+        Ok(Ref {
+            artifact_id: Id::new(format!(
+                "28f40000-0000-4000-8000-{:012x}",
+                bytes.len() + schema.len()
+            ))?,
+            sha256: Sha::new(crate::app::evidence::digest(bytes.as_bytes()))?,
+            byte_length: u32::try_from(bytes.len())?,
+            media_type: Name::new("application/octet-stream")?,
+            schema_id: Name::new(schema)?,
+        })
     }
 
     /// R16.7 · the seven RC04 states, one ledger verdict each; criteria only on a pass.
