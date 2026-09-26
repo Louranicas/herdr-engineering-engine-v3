@@ -59,7 +59,7 @@ pub fn cited_kind(role: &str) -> Option<RunRecordKind> {
     let name = role.strip_prefix(RUN_RECORD_ROLE)?;
     RunRecordKind::ALL
         .into_iter()
-        .find(|kind| kind.name() == name)
+        .find(|kind| name.starts_with(kind.name()) || kind.name().starts_with(name))
 }
 
 /// The ledger's verdict and criteria for an RC04 verdict state — one arm per state, so a new state
@@ -815,8 +815,9 @@ mod tests {
         }
     }
 
-    /// The receipt decodes, its verdict is the decision's, and it cites the four records as
-    /// `run_record:<kind>` rows equal to what was published; returns the decoded root.
+    /// The receipt decodes, its verdict is the decision's, it cites the four records as
+    /// `run_record:<kind>` rows equal to what was published, and its unsettled-obligations page
+    /// carries exactly the aggregate (unknown) citing the cleanup record; returns the decoded root.
     fn assert_records_cited(
         sink: &Evidence<'_>,
         composed: &super::Composed,
@@ -853,6 +854,36 @@ mod tests {
             .collect();
         published.sort_by_key(|row| row.0);
         assert_eq!(cited, published);
+        // The unsettled obligations page carries exactly the aggregate (unknown), citing the
+        // cleanup record it came from.
+        let unresolved = graph
+            .rows(root.observations.unresolved_obligations.as_ref())
+            .map_err(|e| format!("{e:?}"))?;
+        assert_eq!(unresolved.len(), 1);
+        let row: crate::contracts::receipt::ObligationV1 =
+            serde_json::from_value(unresolved[0].clone())?;
+        let cleanup_row = records
+            .iter()
+            .find(|(kind, _, _)| *kind == RunRecordKind::RunCleanup)
+            .ok_or("a cleanup record")?;
+        assert_eq!(
+            (
+                row.scope.as_str(),
+                row.state,
+                row.material,
+                row.owner_id.as_str(),
+                row.evidence.as_slice().len(),
+                row.evidence.as_slice()[0].artifact_id.as_str(),
+            ),
+            (
+                "aggregate",
+                ObligationV1State::Unknown,
+                true,
+                RUNTIME_OWNER,
+                1,
+                cleanup_row.1.as_str()
+            )
+        );
         Ok(root)
     }
 
