@@ -1824,6 +1824,7 @@ impl<C: CandidateSource, V: Verifier> driver::Runtime for StoreRuntime<'_, C, V>
             baseline: Sha256Digest::parse(baseline).map_err(|_| Error::Identity)?,
             protected: Sha256Digest::parse(protected).map_err(|_| Error::Identity)?,
             profile: Sha256Digest::parse(profile).map_err(|_| Error::Identity)?,
+            root: self.dispatch.attempts,
         };
         // The first attempt's settle charges the preparation too (B14a-R2.5).
         let charged_from = if self.attempts.is_empty() {

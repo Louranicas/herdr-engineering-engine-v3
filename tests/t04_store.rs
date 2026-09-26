@@ -50,6 +50,10 @@ const MIGRATION_6_BODY: &str =
 /// block).
 const MIGRATION_7_BODY: &str =
     "sha256:4a1dd33f751fb2766aef7caf93b668ec786a6e933c18fbe1133504b56736b773";
+/// Migration 8's body digest (B14b-2), by `awk` after the end marker piped to `sha256sum` and
+/// independently by Python's hashlib; the same `awk` rule reproduces `MIGRATION_7_BODY`.
+const MIGRATION_8_BODY: &str =
+    "sha256:d4096a2ca6f33f064b0f10951dcd909f400e2f04a2df4c5052158c07bdeb818d";
 static NEXT_ROOT: AtomicU64 = AtomicU64::new(0);
 
 struct Area {
@@ -384,6 +388,12 @@ fn fresh_ledger_has_exact_runtime_profile_and_migration() {
                 6,
                 Some(MIGRATION_6_BODY.to_owned())
             ),
+            (
+                8,
+                MIGRATION_8_BODY.to_owned(),
+                7,
+                Some(MIGRATION_7_BODY.to_owned())
+            ),
         ],
         "each row names its body and links its predecessor"
     );
@@ -604,19 +614,19 @@ fn unrelated_version_zero_database_is_preserved_and_refused() {
 fn future_schema_refuses_without_downgrade() {
     let area = Area::new();
     drop(area.open());
-    area.edit_closed("PRAGMA user_version=8;");
+    area.edit_closed("PRAGMA user_version=9;");
     assert!(matches!(
         Store::open(&area.path, uuid(GEN), uuid(EPOCH), false, deadline()),
         Err(Error::Chain(Chain::Newer {
-            recorded: 8,
-            current: 7
+            recorded: 9,
+            current: 8
         }))
     ));
     assert_eq!(
         area.inspect()
             .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
             .unwrap(),
-        8,
+        9,
         "the newer version is left as recorded: no downgrade"
     );
 }
@@ -1146,7 +1156,7 @@ fn unexpected_trigger_refuses_exact_schema_compatibility() {
     area.edit_closed("CREATE TRIGGER surprise AFTER INSERT ON events BEGIN SELECT 1; END;");
     assert!(matches!(
         Store::open(&area.path, uuid(GEN), uuid(EPOCH), false, deadline()),
-        Err(Error::Chain(Chain::Schema { version: 7 }))
+        Err(Error::Chain(Chain::Schema { version: 8 }))
     ));
 }
 
@@ -2614,7 +2624,7 @@ fn v1_statement(head: &str) -> &'static str {
 /// rebuilt from migration 1's DDL, with foreign keys off as they are on this connection.
 fn downgrade_to_v1(area: &Area) {
     area.edit_closed(&format!(
-        "BEGIN; DROP TABLE attempt_records; DROP INDEX task_dispositions_by_task; \
+        "BEGIN; DROP TABLE attempt_paths; DROP TABLE attempt_records; DROP INDEX task_dispositions_by_task; \
          ALTER TABLE verifications DROP COLUMN satisfied_criteria; \
          ALTER TABLE verifications DROP COLUMN evidence_schema_id; \
          ALTER TABLE verifications DROP COLUMN evidence_media_type; \
@@ -2728,7 +2738,7 @@ fn a_migration_one_ledger_upgrades_behind_a_verified_backup_and_reopens() {
         Store::open(&area.path, uuid(GEN), uuid(EPOCH), false, deadline()),
         Err(Error::UpgradeRequired {
             recorded: 1,
-            current: 7
+            current: 8
         })
     ));
     assert_eq!(
@@ -2862,24 +2872,24 @@ fn each_migration_chain_clause_refuses_by_its_own_name() {
     let cases: [(&str, String, Chain); 10] = [
         (
             "newer than this binary",
-            "PRAGMA user_version=8;".into(),
+            "PRAGMA user_version=9;".into(),
             Chain::Newer {
-                recorded: 8,
-                current: 7,
+                recorded: 9,
+                current: 8,
             },
         ),
         (
             "missing history row",
             "DELETE FROM migration_history WHERE version=2;".into(),
             Chain::History {
-                recorded: 7,
-                rows: 6,
+                recorded: 8,
+                rows: 7,
             },
         ),
         (
             "a gap in the versions",
-            "UPDATE migration_history SET version=8 WHERE version=7;".into(),
-            Chain::Sequence { position: 7 },
+            "UPDATE migration_history SET version=9 WHERE version=8;".into(),
+            Chain::Sequence { position: 8 },
         ),
         (
             "wrong 002 digest",
@@ -2922,7 +2932,7 @@ fn each_migration_chain_clause_refuses_by_its_own_name() {
         (
             "schema differs from applying the chain",
             "CREATE INDEX surplus ON tasks(state);".into(),
-            Chain::Schema { version: 7 },
+            Chain::Schema { version: 8 },
         ),
     ];
     for (case, edit, expected) in cases {
@@ -3072,7 +3082,7 @@ fn a_migration_file_that_lost_its_pinned_body_is_refused() {
     assert_eq!(
         files,
         [
-            "001.sql", "002.sql", "003.sql", "004.sql", "005.sql", "006.sql", "007.sql"
+            "001.sql", "002.sql", "003.sql", "004.sql", "005.sql", "006.sql", "007.sql", "008.sql"
         ]
     );
     assert_eq!(files.len(), usize::try_from(schema::CURRENT).unwrap());
@@ -3325,7 +3335,7 @@ fn a_backup_counts_every_table_the_ledger_holds() {
         ("attempt_records", 0),
         ("verifications", 0),
         ("ledger_meta", 1),
-        ("migration_history", 7),
+        ("migration_history", 8),
         ("acceptance_objects", 1),
         ("task_dispositions", 0),
     ] {
@@ -3728,6 +3738,101 @@ fn migration_seven_admits_the_worker_settle_kind_and_kept_the_key() {
         )
         .unwrap();
     assert_eq!(indexed, 1, "the index was recreated on the rebuilt table");
+}
+
+/// B14b-2 (R21 N13, N17; D6) · migration 8 adds `attempt_paths`: one root per BOUND attempt (its key
+/// references `attempt_bindings`, so a root without a binding is refused by the key, not by a
+/// clause), absolute, 2 to 4096 BYTES (a 2 049-character root of two-byte characters is 4 097 bytes
+/// and refused). A migration-7 ledger holding an attempt upgrades behind a backup and gains no row
+/// for it: no root is invented for an attempt begun before the table existed.
+#[test]
+fn migration_8_adds_attempt_paths_and_a_seven_ledger_upgrades_with_none() {
+    let area = Area::new();
+    let mut store = area.open();
+    let active = running(&mut store);
+    // Settled, so the upgrade's backup holds no outstanding worker custody.
+    store
+        .settle_attempt(
+            &active,
+            settled(Effect::None, Some(30), true, true),
+            uuid(SETTLED),
+            deadline(),
+        )
+        .unwrap();
+    drop(store);
+    let db = Connection::open_with_flags(
+        area.database(),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_NOFOLLOW,
+    )
+    .unwrap();
+    let digest = format!("sha256:{}", "1".repeat(64));
+    let two_byte = format!("/{}", "\u{e9}".repeat(2048));
+    let longest = format!("/{}", "r".repeat(4095));
+    let cases: [(&str, bool, &str, Option<&str>); 7] = [
+        ("an unbound attempt", false, "/r1", Some("FOREIGN KEY")),
+        ("relative", true, "r1", Some("CHECK")),
+        ("the bare root", true, "/", Some("CHECK")),
+        (
+            "4 097 bytes in 2 049 characters",
+            true,
+            &two_byte,
+            Some("CHECK"),
+        ),
+        ("absolute", true, "/r1", None),
+        ("4 096 bytes", true, &longest, None),
+        ("empty", true, "", Some("CHECK")),
+    ];
+    for (case, bound, root, refused) in cases {
+        let binding = if bound {
+            format!(
+                "INSERT INTO attempt_bindings(attempt_id,task_id,baseline_digest,protected_digest,\
+                 profile_digest) VALUES('{ATTEMPT}','{TASK}','{digest}','{digest}','{digest}');"
+            )
+        } else {
+            String::new()
+        };
+        let result = db.execute_batch(&format!(
+            "SAVEPOINT s; {binding} INSERT INTO attempt_paths(attempt_id,root) VALUES('{ATTEMPT}','{root}'); \
+             ROLLBACK TO s; RELEASE s;"
+        ));
+        match refused {
+            None => assert!(result.is_ok(), "{case}: {result:?}"),
+            Some(clause) => {
+                assert!(
+                    result.as_ref().err().is_some_and(|error| error
+                        .to_string()
+                        .contains(&format!("{clause} constraint failed"))),
+                    "{case}: {result:?}"
+                );
+                db.execute_batch("ROLLBACK TO s; RELEASE s;").unwrap();
+            }
+        }
+    }
+    db.close().unwrap();
+    assert_eq!(count(&area, "attempt_paths"), 0, "every case rolled back");
+    // Downgrade to migration 7 by hand (no production path does): the table and its history row.
+    area.edit_closed(
+        "BEGIN; DROP TABLE attempt_paths; DELETE FROM migration_history WHERE version=8; \
+         PRAGMA user_version=7; COMMIT;",
+    );
+    assert!(matches!(
+        Store::open(&area.path, uuid(GEN), uuid(EPOCH), false, deadline()),
+        Err(Error::UpgradeRequired {
+            recorded: 7,
+            current: 8
+        })
+    ));
+    let backup = Area::new();
+    let upgrade =
+        Store::upgrade(&area.path, uuid(GEN), uuid(EPOCH), &backup.path, deadline()).unwrap();
+    assert_eq!((upgrade.from, upgrade.to), (7, 8));
+    assert_eq!(
+        (count(&area, "attempts"), count(&area, "attempt_paths")),
+        (1, 0),
+        "the attempt kept, no root invented for it"
+    );
+    assert_eq!(user_version(&area.inspect()), 8);
+    drop(area.open());
 }
 
 /// B09b pin (review of d60df83, gap 2): two records in one observation naming one artifact id for
@@ -4586,7 +4691,8 @@ fn a_migration_six_ledger_with_run_records_upgrades_through_seven_keeping_every_
         "BEGIN; CREATE TEMP TABLE held AS SELECT * FROM attempt_records; DROP TABLE attempt_records; \
          {} INSERT INTO attempt_records SELECT * FROM held; DROP TABLE held; \
          CREATE INDEX attempt_records_by_attempt ON attempt_records(attempt_id); \
-         DELETE FROM migration_history WHERE version=7; PRAGMA user_version=6; COMMIT;",
+         DROP TABLE attempt_paths; DELETE FROM migration_history WHERE version>=7; \
+         PRAGMA user_version=6; COMMIT;",
         ddl_of(
             include_str!("../migrations/006.sql"),
             "CREATE TABLE attempt_records ("
@@ -4601,19 +4707,19 @@ fn a_migration_six_ledger_with_run_records_upgrades_through_seven_keeping_every_
         Store::open(&area.path, uuid(GEN), uuid(EPOCH), false, deadline()),
         Err(Error::UpgradeRequired {
             recorded: 6,
-            current: 7
+            current: 8
         })
     ));
     let backup = Area::new();
     let upgrade =
         Store::upgrade(&area.path, uuid(GEN), uuid(EPOCH), &backup.path, deadline()).unwrap();
-    assert_eq!((upgrade.from, upgrade.to), (6, 7));
+    assert_eq!((upgrade.from, upgrade.to), (6, 8));
     assert_eq!(
         attempt_records_rows(&area),
         rows,
         "every run record survives the rebuild"
     );
-    assert_eq!(user_version(&area.inspect()), 7);
+    assert_eq!(user_version(&area.inspect()), 8);
     drop(area.open());
 }
 

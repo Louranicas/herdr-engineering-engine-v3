@@ -13,7 +13,7 @@ use std::collections::VecDeque;
 use std::fmt::Write as _;
 use std::fs::{self, DirBuilder};
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 const GEN: &str = "00000000-0000-4000-8000-000000000001";
@@ -2169,6 +2169,7 @@ fn binding() -> Binding<'static> {
         baseline: Sha256Digest::parse(BIND_BASE).unwrap(),
         protected: Sha256Digest::parse(BIND_PROT).unwrap(),
         profile: Sha256Digest::parse(BIND_PROF).unwrap(),
+        root: Path::new("/t05/attempts"),
     }
 }
 
@@ -2236,6 +2237,123 @@ fn a_bound_task_refuses_an_unbound_attempt() {
             .is_ok(),
         "the same begin, bound, is admitted from that state"
     );
+}
+
+/// B14b-2 (R21 N13, N17; X074) · a bound begin records its root in the same transaction and returns
+/// the leaves it derived from THAT root and attempt: two begins differing in root and attempt, each
+/// row and each leaf pair asserted whole. A root migration 8's CHECK would refuse (relative, bare, not
+/// UTF-8, 4097 bytes) is refused `Invalid` by name before any row.
+#[test]
+fn a_bound_begin_records_its_root_and_returns_the_leaves_it_derived() {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+    let owner = principal();
+    let area = Area::new();
+    let mut store = area.open();
+    clock(&mut store, 100);
+    let profile = create(&mut store, 1);
+    observe(&mut store, &profile.head);
+    admit(&mut store);
+    let selections = [choose(&profile.head)];
+    let before = ledger(&area);
+    let long = format!("/{}", "r".repeat(4096));
+    for root in [
+        Path::new("t05/attempts"),
+        Path::new("/"),
+        Path::new(OsStr::from_bytes(b"/t05/\xff")),
+        Path::new(&long),
+    ] {
+        let refused = store.begin_bound_attempt(
+            bound_start(&owner, &profile.head, &selections),
+            &Binding { root, ..binding() },
+            deadline(),
+        );
+        assert!(
+            matches!(refused, Err(Error::Invalid)),
+            "{root:?}: {refused:?}"
+        );
+        assert_eq!(
+            ledger(&area),
+            before,
+            "{root:?}: a refused begin writes nothing"
+        );
+    }
+    let first = store
+        .begin_bound_attempt(
+            bound_start(&owner, &profile.head, &selections),
+            &binding(),
+            deadline(),
+        )
+        .unwrap();
+    repair_pending(&mut store);
+    let mut again = bound_start(&owner, &profile.head, &selections);
+    again.expected = generation(3);
+    again.attempt = uuid(BIND_OTHER);
+    again.event = uuid(BIND_RESTARTED);
+    let second = store
+        .begin_bound_attempt(
+            again,
+            &Binding {
+                root: Path::new("/srv/hee/other-root"),
+                ..binding()
+            },
+            deadline(),
+        )
+        .unwrap();
+    assert_eq!(
+        paths_rows(&area),
+        [
+            (
+                "00000000-0000-4000-8000-000000000006".to_owned(),
+                "/t05/attempts".to_owned()
+            ),
+            (
+                "00000000-0000-4000-8000-0000000000b2".to_owned(),
+                "/srv/hee/other-root".to_owned()
+            ),
+        ]
+    );
+    assert_eq!(
+        leaves(&first),
+        (
+            PathBuf::from("/t05/attempts"),
+            "00000000-0000-4000-8000-000000000006".to_owned(),
+            PathBuf::from("/t05/attempts/00000000-0000-4000-8000-000000000006"),
+            PathBuf::from("/t05/attempts/00000000-0000-4000-8000-000000000006.check"),
+        )
+    );
+    assert_eq!(
+        leaves(&second),
+        (
+            PathBuf::from("/srv/hee/other-root"),
+            "00000000-0000-4000-8000-0000000000b2".to_owned(),
+            PathBuf::from("/srv/hee/other-root/00000000-0000-4000-8000-0000000000b2"),
+            PathBuf::from("/srv/hee/other-root/00000000-0000-4000-8000-0000000000b2.check"),
+        )
+    );
+}
+
+/// Every `attempt_paths` row, in key order.
+fn paths_rows(area: &Area) -> Vec<(String, String)> {
+    area.inspect()
+        .prepare("SELECT attempt_id,root FROM attempt_paths ORDER BY attempt_id")
+        .unwrap()
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap()
+}
+
+/// A bound begin's leaves, every accessor read: the workspace's parts, the workspace, the job root.
+fn leaves(begun: &RosterAttempt) -> (PathBuf, String, PathBuf, PathBuf) {
+    let paths = begun.paths.as_ref().unwrap();
+    let (parent, name) = paths.workspace_parts();
+    (
+        parent.to_path_buf(),
+        name.to_owned(),
+        paths.workspace(),
+        paths.job_root(),
+    )
 }
 
 /// B14a-1a · a task with an unbound attempt refuses a bound begin `Conflict` — from a state where

@@ -11,8 +11,8 @@ use crate::contracts::roster::{
     MAX_INPUT, MAX_PINS, MAX_RECORDS, Outcome, Pin, Selection,
 };
 use crate::store::{
-    AttemptHead, Binding, begin_attempt_in, cancellation_body, event, head, outcome_decided,
-    request_cancellation,
+    AttemptHead, AttemptPaths, Binding, attempt_leaves, attempt_root, begin_attempt_in,
+    cancellation_body, event, head, outcome_decided, request_cancellation,
 };
 use rusqlite::{OptionalExtension, params};
 
@@ -35,6 +35,9 @@ pub struct RosterAttempt {
     pub attempt: AttemptHead,
     pub instance: Instance,
     pub pins: Vec<Pin>,
+    /// A bound begin's leaves under the root it recorded (B14b-2, R21 N13); `None` for an unbound
+    /// begin, which records no root.
+    pub paths: Option<AttemptPaths>,
 }
 
 pub(super) fn instance(
@@ -240,6 +243,9 @@ impl Store {
         deadline: Instant,
     ) -> Result<RosterAttempt> {
         validate_start(&input)?;
+        let root = binding
+            .map(|binding| attempt_root(binding.root))
+            .transpose()?;
         let id = fresh_id!(self.clock, deadline)?;
         let clock = self.clock.clone();
         let fault = self.fault();
@@ -257,13 +263,17 @@ impl Store {
             if let Some(binding)=&binding {
                 tx.execute("INSERT INTO attempt_bindings(attempt_id,task_id,baseline_digest,protected_digest,profile_digest) VALUES(?,?,?,?,?)",params![attempt.id,input.task.as_str(),binding.baseline.as_str(),binding.protected.as_str(),binding.profile.as_str()])?;
             }
+            if let Some(root)=root {
+                tx.execute("INSERT INTO attempt_paths(attempt_id,root) VALUES(?,?)",params![attempt.id,root])?;
+            }
+            let paths=binding.map(|binding|attempt_leaves(binding.root,&attempt.id));
             let instance=Instance { id,generation:"1".to_owned(),revision:"1".to_owned(),agent_record_id:input.agent_record_id.to_owned(),agent_record_version:agent.record.head.record_version.clone(),task_id:input.task.as_str().to_owned(),attempt_id:attempt.id.clone(),attempt_generation:attempt.generation.clone(),session_id:input.session.as_str().to_owned(),workspace_ref:input.workspace.as_str().to_owned(),started:now,lease_expires_monotonic_ms:lease,state:InstanceState::Starting,usage_ms:None };
             for pin in &pins {
                 tx.execute("INSERT INTO roster_pins VALUES(?,?,?,?)",params![attempt.id,pin.record.head.record_id,pin.record.head.record_version,serde_json::to_vec(pin)?])?;
             }
             retain_instance(tx,&instance,input.event.as_str())?;
             cut_point!(fault,CutPoint::RosterPin);
-            Ok(RosterAttempt { attempt,instance,pins })
+            Ok(RosterAttempt { attempt,instance,pins,paths })
         })
     }
 

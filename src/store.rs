@@ -365,7 +365,7 @@ use rusqlite::{
 };
 use sha2::{Digest, Sha256};
 use std::fs::File;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 type Result<T> = std::result::Result<T, Error>;
@@ -639,11 +639,64 @@ pub struct Submission<'a> {
 /// What an attempt begun for an installed workspace is bound to (B14a-1a): the content digests of
 /// the baseline and protected snapshots captured at dispatch (`Snapshot::content_digest`) and of
 /// the class profile it was dispatched under. Every digest is required: the row cannot be partial.
+/// `root` (B14b-2, R21 N13/N17) is the directory the attempt's leaves are materialised under,
+/// recorded in the same transaction (migration 8); the leaves are derived from it once, by
+/// [`attempt_leaves`].
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Binding<'a> {
     pub baseline: Sha256Digest<'a>,
     pub protected: Sha256Digest<'a>,
     pub profile: Sha256Digest<'a>,
+    pub root: &'a Path,
+}
+
+/// An attempt's two leaves under its recorded root (B14b-2, R21 N13/N17): the workspace
+/// `<root>/<attempt>` and the check's job root `<root>/<attempt>.check`. Built only by
+/// [`attempt_leaves`], the one derivation: the store returns it from a bound begin, and a restart
+/// derives it from the root the ledger recorded, so the runtime and recovery cannot name different
+/// directories for one attempt.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AttemptPaths {
+    root: PathBuf,
+    id: String,
+}
+
+impl AttemptPaths {
+    /// The workspace's parent and leaf name, as `repair::apply_candidate` takes them.
+    #[must_use]
+    pub fn workspace_parts(&self) -> (&Path, &str) {
+        (&self.root, &self.id)
+    }
+
+    /// `<root>/<attempt>`: the attempt's materialised workspace.
+    #[must_use]
+    pub fn workspace(&self) -> PathBuf {
+        self.root.join(&self.id)
+    }
+
+    /// `<root>/<attempt>.check`: the attempt's check job root.
+    #[must_use]
+    pub fn job_root(&self) -> PathBuf {
+        self.root.join(format!("{}.check", self.id))
+    }
+}
+
+/// The one derivation of an attempt's leaves from its root (B14b-2, R21 N13).
+#[must_use]
+pub fn attempt_leaves(root: &Path, attempt_id: &str) -> AttemptPaths {
+    AttemptPaths {
+        root: root.to_path_buf(),
+        id: attempt_id.to_owned(),
+    }
+}
+
+/// A binding's root as the ledger stores it (migration 8's CHECK, refused here by name first): UTF-8,
+/// absolute, 2 to 4096 bytes. `Invalid` otherwise (X074), before any row.
+fn attempt_root(root: &Path) -> Result<&str> {
+    match root.to_str() {
+        Some(text) if text.starts_with('/') && (2..=4096).contains(&text.len()) => Ok(text),
+        _ => Err(Error::Invalid),
+    }
 }
 
 /// Why `task.resolve` refuses (B08), by what decided it. Each maps to its own wire member.
