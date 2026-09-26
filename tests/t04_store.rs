@@ -3344,6 +3344,21 @@ fn committed_run_is_the_settling_observations_set_and_never_a_union() {
         )
         .unwrap();
     assert_eq!(generation, "4");
+    // Read back, not inferred: an unsettled observation records no settling event (a plant that
+    // set it on every observation survived the read through `committed_run`, which refuses
+    // `Outstanding` before it looks).
+    let settled_event: Option<String> = area
+        .inspect()
+        .query_row(
+            "SELECT settled_event FROM attempts WHERE id=?",
+            [ATTEMPT],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        settled_event, None,
+        "two unsettled observations, no settling event"
+    );
     assert!(matches!(
         store.committed_run(&principal(), uuid(ATTEMPT), deadline()),
         Err(Error::Outstanding)
