@@ -1160,6 +1160,14 @@ fn identity(
     catalogue(exchanges, profile, deadline, cancelled)?;
     resident(exchanges, profile, adapter, deadline, cancelled)
 }
+/// A model name the adapter sends: 1..=256 bytes of ASCII alphanumerics and `-_:./`.
+fn model_name(model: &str) -> bool {
+    !model.is_empty()
+        && model.len() <= 256
+        && model
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"-_:./".contains(&b))
+}
 fn elapsed(origin: Instant) -> Result<u64, Error> {
     u64::try_from(origin.elapsed().as_millis()).map_err(|_| Error::Deadline)
 }
@@ -1208,12 +1216,7 @@ pub fn execute<'a>(
     if request.selection.provider != PROVIDER
         || request.selection.model != profile.model
         || request.selection.effort.is_some()
-        || profile.model.is_empty()
-        || profile.model.len() > 256
-        || !profile
-            .model
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b"-_:./".contains(&b))
+        || !model_name(&profile.model)
     {
         return Err(Error::Profile);
     }
@@ -1334,4 +1337,91 @@ fn execute_inner(
     )?;
     run.provider = ProviderState::ObservedComplete;
     Ok(())
+}
+
+/// What the readback says of a resident model (R21 N4): the catalogue's raw bytes as read, and the
+/// resident identity at the adapter's context.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Readback {
+    pub catalogue: Vec<u8>,
+    pub identity: Identity,
+}
+
+/// One load's record (R21 N5): every exchange with its report — any pending child stays inside its
+/// report for the caller's custody sweep, never dropped here — the provider observation, and the
+/// readback that decides residency, or the refusal that stopped the load.
+#[derive(Debug)]
+pub struct Loaded {
+    pub exchanges: Vec<Exchange>,
+    pub provider: ProviderState,
+    pub readback: Result<Readback, Error>,
+}
+
+/// Make the profile's model resident at the adapter row's context (R21 N4, N5): the subject check,
+/// the catalogue, one `generate` with an empty prompt under the row's template and options, then
+/// the resident readback. The generate's response is deliberately not decoded — no recorded
+/// load-only response exists to type it against (F113; DS18 UNMEASURED) — so only a clean exit
+/// counts, and the `/api/ps` readback alone decides. `keep_alive` is the adapter's 60 as in every
+/// request (HELD, N5). The caller's deadline and cancellation bound every exchange; there is no
+/// `MAX_RUN` door here, since a load has no origin of its own (R21 Q7, open).
+///
+/// # Errors
+/// Before any exchange: `Deadline`/`Cancelled` at the door, `Profile` for a model name the adapter
+/// would not send, and the subject check's refusal. Once an exchange is attempted, `Ok` carries
+/// every report and the refusal in `readback`.
+pub fn load(
+    profile: &Profile,
+    adapter: &AdapterProfile,
+    deadline: Instant,
+    cancelled: &AtomicBool,
+) -> Result<Loaded, Error> {
+    tick(deadline, cancelled)?;
+    if !model_name(&profile.model) {
+        return Err(Error::Profile);
+    }
+    subject(profile, deadline, cancelled)?;
+    let mut exchanges = Vec::new();
+    let mut provider = ProviderState::NotDispatched;
+    let readback = load_inner(
+        &mut exchanges,
+        &mut provider,
+        profile,
+        adapter,
+        deadline,
+        cancelled,
+    );
+    if readback.is_ok() {
+        provider = ProviderState::ObservedComplete;
+    }
+    Ok(Loaded {
+        exchanges,
+        provider,
+        readback,
+    })
+}
+fn load_inner(
+    exchanges: &mut Vec<Exchange>,
+    provider: &mut ProviderState,
+    profile: &Profile,
+    adapter: &AdapterProfile,
+    deadline: Instant,
+    cancelled: &AtomicBool,
+) -> Result<Readback, Error> {
+    let catalogue = catalogue(exchanges, profile, deadline, cancelled)?;
+    let input = serde_json::to_vec(&json!({"model":profile.model,"prompt":"","stream":false,
+        "raw":!adapter.templated,"truncate":false,"shift":false,"keep_alive":60,
+        "options":{"num_ctx":adapter.num_ctx,"num_predict":adapter.num_predict}}))
+    .map_err(|_| Error::Json)?;
+    exchange(
+        exchanges,
+        profile,
+        Operation::Generate { provider, input },
+        deadline,
+        cancelled,
+    )?;
+    let identity = resident(exchanges, profile, adapter, deadline, cancelled)?;
+    Ok(Readback {
+        catalogue,
+        identity,
+    })
 }

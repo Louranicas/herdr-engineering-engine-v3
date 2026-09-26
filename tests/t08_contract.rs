@@ -867,3 +867,121 @@ fn the_stat_parser_reads_state_ppid_pgrp_and_start_ticks_past_a_hostile_comm() {
         None
     );
 }
+
+/// One load scenario over the Rig: the daemon idle before the load (DS18's recorded `/api/ps`,
+/// `{"models":[]}`, `DS18-daemon-20260927.json`), the fake expecting the row's request and an empty
+/// prompt, and `post_ps` either resident at `context` or still idle.
+fn load_rig(raw: bool, context: u64, predict: u64, resident_after: bool) -> Rig {
+    let mut r = Rig::new();
+    r.prompt("");
+    r.scenario["expect"] =
+        json!({"raw": raw, "options": {"num_ctx": context, "num_predict": predict}});
+    let mut resident = r.scenario["ps"].clone();
+    resident["models"][0]["context_length"] = json!(context);
+    r.scenario["post_ps"] = if resident_after {
+        resident
+    } else {
+        json!({"models": []})
+    };
+    r.scenario["ps"] = json!({"models": []});
+    r.save();
+    r
+}
+
+/// R21 N4, N5 · `load` sends the adapter row's load request — an empty prompt under the row's
+/// template and options — after the catalogue, and is decided by the `/api/ps` readback, never by
+/// the generate response (which it does not decode). Two rows differing in `raw`, `num_ctx` and
+/// `num_predict`, each asserted whole against a literal request; a daemon still idle after the load
+/// is `Identity`, with every exchange kept for custody and the provider `Unknown`.
+#[test]
+fn a_load_sends_the_row_s_request_and_is_decided_by_the_ps_readback() {
+    let running = AtomicBool::new(false);
+    for (row, raw, context, predict) in [
+        (&native::ADAPTERS[0], true, 512, 64),
+        (native::FULL_FILE, false, 4096, 1024),
+    ] {
+        let r = load_rig(raw, context, predict, true);
+        let loaded = native::load(
+            &r.profile,
+            row,
+            r.origin + Duration::from_secs(60),
+            &running,
+        )
+        .unwrap();
+        assert_eq!(
+            r.calls(),
+            ["version", "tags", "generate", "ps"],
+            "{}",
+            row.id
+        );
+        assert_eq!(
+            loaded
+                .exchanges
+                .iter()
+                .map(|e| e.operation)
+                .collect::<Vec<_>>(),
+            ["version", "tags", "generate", "ps"]
+        );
+        let captured: Value =
+            serde_json::from_slice(&fs::read(r.root.join("captured-request.json")).unwrap())
+                .unwrap();
+        assert_eq!(
+            captured,
+            json!({"model": MODEL, "prompt": "", "stream": false, "raw": raw, "truncate": false,
+                   "shift": false, "keep_alive": 60,
+                   "options": {"num_ctx": context, "num_predict": predict}}),
+            "{}",
+            row.id
+        );
+        let readback = loaded.readback.unwrap();
+        assert_eq!(readback.catalogue, rendered(&r.scenario["tags"]));
+        let mut identity = r.expected_identity();
+        identity.adapter_profile = row.id.into();
+        identity.raw = rendered(&r.scenario["post_ps"]);
+        assert_eq!(readback.identity, identity);
+        assert_eq!(loaded.provider, ProviderState::ObservedComplete);
+        for exchange in &loaded.exchanges {
+            let report = exchange.result.as_ref().unwrap();
+            assert!(
+                report.pending.is_none() && report.leader_reaped,
+                "{report:?}"
+            );
+        }
+    }
+    // Still idle after the load: the readback decides, whatever the generate printed.
+    let r = load_rig(true, 512, 64, false);
+    let loaded = native::load(
+        &r.profile,
+        &native::ADAPTERS[0],
+        r.origin + Duration::from_secs(60),
+        &running,
+    )
+    .unwrap();
+    assert_eq!(loaded.readback.err(), Some(Error::Identity));
+    assert_eq!(loaded.provider, ProviderState::Unknown);
+    assert_eq!(r.calls(), ["version", "tags", "generate", "ps"]);
+    assert_eq!(loaded.exchanges.len(), 4);
+    // Before any exchange: a poisoned client is refused at the subject check, and a raised flag at
+    // the door — no process either way.
+    let r = load_rig(true, 512, 64, true);
+    r.poison_client();
+    assert!(matches!(
+        native::load(
+            &r.profile,
+            &native::ADAPTERS[0],
+            r.origin + Duration::from_secs(60),
+            &running
+        ),
+        Err(Error::Subject)
+    ));
+    assert!(matches!(
+        native::load(
+            &r.profile,
+            &native::ADAPTERS[0],
+            r.origin + Duration::from_secs(60),
+            &AtomicBool::new(true)
+        ),
+        Err(Error::Cancelled)
+    ));
+    assert!(r.calls().is_empty());
+}
