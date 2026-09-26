@@ -4,7 +4,7 @@
 
 use super::{LOADED, MODEL, Rig, digest, rendered};
 use habitat_engine::app::candidates::{
-    ClassPrompt, FilePins, NativeCandidates, Outcome, Refusal, Settle, render,
+    ClassPrompt, FilePins, NativeCandidates, Outcome, PromptSite, Refusal, Settle, render,
 };
 use habitat_engine::app::runtime::{Ask, Candidate, CandidateSource, Previous};
 use habitat_engine::contracts::{Sha256Digest, UuidV4};
@@ -273,7 +273,7 @@ fn t08n_02_provider_failures_stop_the_attempt_by_name_without_a_second_generate(
     wrong.base = digest(b"another base");
     assert_eq!(
         ClassPrompt::new(TASK, CARGO, BASE, &wrong).err(),
-        Some(Refusal::Prompt("base"))
+        Some(Refusal::Prompt(PromptSite::Base))
     );
     assert_eq!(LOADED, "hee3-t08-contract-loaded:qualification");
 }

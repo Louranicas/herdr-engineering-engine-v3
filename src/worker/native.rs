@@ -352,8 +352,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 /// One adapter profile: the id a request names and the token caps every door reads — the request's
-/// `options`, the post-hoc usage check and the identity readback's `context_length` (B14a-4, R18
-/// decision 1: the caps are one value read three times, never three literals).
+/// `options` and `raw`, the post-hoc usage check, the identity readback's `context_length` and its
+/// `adapter_profile` (B14a-4, R18 decision 1: the caps are one value read at four sites, never literals).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AdapterProfile {
     pub id: &'static str,

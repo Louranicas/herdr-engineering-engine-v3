@@ -71,7 +71,10 @@ if operation == 'generate':
         counter = root / 'generate-count'
         served = int(counter.read_text()) if counter.exists() else 0
         counter.write_text(str(served + 1))
-        value = value[min(served, len(value) - 1)]
+        if served >= len(value):
+            sys.stderr.write(f'fixture: asked for generate answer {served + 1} of {len(value)} scripted\n')
+            sys.exit(3)
+        value = value[served]
 else:
     value = s[operation]
     if operation == 'ps' and (root / 'generation-started').exists() and 'post_ps' in s:

@@ -33,8 +33,19 @@ pub enum Refusal {
     NotOneFile,
     /// The provider proposed tools; the class has none.
     Tools,
-    /// The class prompt could not be rendered for this attempt (the site named).
-    Prompt(&'static str),
+    /// The class prompt could not be built or rendered (the site named).
+    Prompt(PromptSite),
+}
+
+/// Where a class prompt refused: one of the three candidate inputs at construction (never at an
+/// attempt), the previous verification's record, or the rendering's bound.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PromptSite {
+    Task,
+    Cargo,
+    Base,
+    Previous,
+    Render,
 }
 
 impl Refusal {
@@ -47,7 +58,11 @@ impl Refusal {
             Self::Empty => "candidate_empty",
             Self::NotOneFile => "candidate_not_one_file",
             Self::Tools => "candidate_tools",
-            Self::Prompt(_) => "candidate_prompt",
+            Self::Prompt(PromptSite::Previous) => "candidate_prompt_previous",
+            Self::Prompt(PromptSite::Render) => "candidate_prompt_render",
+            Self::Prompt(PromptSite::Task | PromptSite::Cargo | PromptSite::Base) => {
+                "candidate_prompt"
+            }
         }
     }
 }
@@ -74,9 +89,9 @@ pub struct ClassPrompt {
 
 impl ClassPrompt {
     /// # Errors
-    /// `Prompt("task" | "cargo" | "base")` when that input is empty, not UTF-8 or not the pinned bytes.
+    /// `Prompt(Task | Cargo | Base)` when that input is empty, not UTF-8 or not the pinned bytes.
     pub fn new(task: &[u8], cargo: &[u8], base: &[u8], pins: &FilePins) -> Result<Self, Refusal> {
-        let read = |bytes: &[u8], pin: &str, site: &'static str| -> Result<String, Refusal> {
+        let read = |bytes: &[u8], pin: &str, site: PromptSite| -> Result<String, Refusal> {
             if bytes.is_empty() || digest(bytes) != pin {
                 return Err(Refusal::Prompt(site));
             }
@@ -85,9 +100,9 @@ impl ClassPrompt {
                 .map_err(|_| Refusal::Prompt(site))
         };
         Ok(Self {
-            task: read(task, &pins.task, "task")?,
-            cargo: read(cargo, &pins.cargo, "cargo")?,
-            base: read(base, &pins.base, "base")?,
+            task: read(task, &pins.task, PromptSite::Task)?,
+            cargo: read(cargo, &pins.cargo, PromptSite::Cargo)?,
+            base: read(base, &pins.base, PromptSite::Base)?,
         })
     }
 }
@@ -99,7 +114,7 @@ impl ClassPrompt {
 /// record — and the reply instruction.
 ///
 /// # Errors
-/// `Prompt("previous")` when a refused-candidate record cannot be read; `Prompt("render")` when the
+/// `Prompt(Previous)` when a refused-candidate record cannot be read; `Prompt(Render)` when the
 /// rendering is past the contract's prompt bound.
 pub fn render(prompt: &ClassPrompt, previous: Option<&Previous>) -> Result<String, Refusal> {
     let history = match previous {
@@ -112,10 +127,10 @@ pub fn render(prompt: &ClassPrompt, previous: Option<&Previous>) -> Result<Strin
             );
             if previous.schema_id == REFUSED_CANDIDATE_SCHEMA {
                 let record: serde_json::Value = serde_json::from_slice(&previous.evidence)
-                    .map_err(|_| Refusal::Prompt("previous"))?;
+                    .map_err(|_| Refusal::Prompt(PromptSite::Previous))?;
                 let refusal = record["refusal"]
                     .as_str()
-                    .ok_or(Refusal::Prompt("previous"))?;
+                    .ok_or(Refusal::Prompt(PromptSite::Previous))?;
                 line.push_str(", refused as ");
                 line.push_str(refusal);
             }
@@ -132,7 +147,7 @@ pub fn render(prompt: &ClassPrompt, previous: Option<&Previous>) -> Result<Strin
         base = prompt.base,
     );
     if rendered.len() > MAX_PROMPT_BYTES {
-        return Err(Refusal::Prompt("render"));
+        return Err(Refusal::Prompt(PromptSite::Render));
     }
     Ok(rendered)
 }
@@ -275,17 +290,19 @@ impl NativeCandidates {
     }
 
     /// Take every pending child out of the run's exchanges (A4) and say whether every exchange's
-    /// custody settled: each report reaped its leader and its group, and left no child.
+    /// custody settled — the decision is [`custody_settled`], pure over what each report says.
     fn custody(&mut self, run: &mut native::Run<'_>) -> bool {
         let mut settled = true;
         for exchange in &mut run.exchanges {
             if let Ok(report) = &mut exchange.result {
-                if let Some(child) = report.pending.take() {
+                let pending = report.pending.take();
+                settled &= custody_settled(
+                    pending.is_some(),
+                    report.leader_reaped,
+                    report.process_group_settled,
+                );
+                if let Some(child) = pending {
                     self.retained.push(child);
-                    settled = false;
-                }
-                if !report.leader_reaped || !report.process_group_settled {
-                    settled = false;
                 }
             }
         }
@@ -395,6 +412,13 @@ impl NativeCandidates {
     }
 }
 
+/// One exchange's custody (A4), decided from its report alone (F95: the branch is reached only by a
+/// live child or an unreaped leader the process module hands back, which no fake can arrange):
+/// settled only when no child is pending, the leader was reaped and its group settled.
+const fn custody_settled(pending: bool, leader_reaped: bool, group_settled: bool) -> bool {
+    !pending && leader_reaped && group_settled
+}
+
 impl CandidateSource for NativeCandidates {
     fn next(&mut self, ask: &Ask<'_>) -> Candidate {
         self.ask(ask)
@@ -403,7 +427,7 @@ impl CandidateSource for NativeCandidates {
 
 #[cfg(test)]
 mod tests {
-    use super::{ClassPrompt, FilePins, Refusal, grammar, render};
+    use super::{ClassPrompt, FilePins, PromptSite, Refusal, custody_settled, grammar, render};
     use crate::app::evidence::digest;
     use crate::app::runtime::{Previous, REFUSED_CANDIDATE_SCHEMA};
     use crate::store::VerificationVerdict;
@@ -459,12 +483,9 @@ mod tests {
             evidence: br#"{"kind":"refused_candidate","refusal":"candidate_truncated","candidate_sha256":"sha256:00"}"#.to_vec(),
             schema_id: REFUSED_CANDIDATE_SCHEMA.to_owned(),
         };
-        assert!(
-            render(&second, Some(&refused))
-                .map_err(|e| format!("{e:?}"))?
-                .contains(
-                    "\n\nPrevious attempt: failed, 0 criteria satisfied, refused as candidate_truncated.\n\n"
-                )
+        assert_eq!(
+            render(&second, Some(&refused)).map_err(|e| format!("{e:?}"))?,
+            "Reject leading zeros.\n\nThis request supersedes the task's return clause: do not return a patch or an explanation.\n\nCurrent Cargo.toml:\n[package]\nname = \"two\"\n\nCurrent src/lib.rs:\n// base two\n\nPrevious attempt: failed, 0 criteria satisfied, refused as candidate_truncated.\n\nReply with the complete contents of src/lib.rs and nothing else: no prose, no fences.\n"
         );
         let malformed = Previous {
             evidence: b"not json".to_vec(),
@@ -472,7 +493,7 @@ mod tests {
         };
         assert_eq!(
             render(&second, Some(&malformed)).err(),
-            Some(Refusal::Prompt("previous"))
+            Some(Refusal::Prompt(PromptSite::Previous))
         );
         let passed = Previous {
             verdict: VerificationVerdict::Passed,
@@ -480,41 +501,43 @@ mod tests {
             evidence: Vec::new(),
             schema_id: "hee3.receipt/1:ReceiptV1".to_owned(),
         };
-        assert!(
-            render(&second, Some(&passed))
-                .map_err(|e| format!("{e:?}"))?
-                .contains("Previous attempt: passed, 1 criteria satisfied.")
+        assert_eq!(
+            render(&second, Some(&passed)).map_err(|e| format!("{e:?}"))?,
+            "Reject leading zeros.\n\nThis request supersedes the task's return clause: do not return a patch or an explanation.\n\nCurrent Cargo.toml:\n[package]\nname = \"two\"\n\nCurrent src/lib.rs:\n// base two\n\nPrevious attempt: passed, 1 criteria satisfied.\n\nReply with the complete contents of src/lib.rs and nothing else: no prose, no fences.\n"
         );
         // Construction: each input against its pin, by site.
         let good = pins(t1, c1, b1);
         assert_eq!(
             ClassPrompt::new(b"", c1, b1, &good).err(),
-            Some(Refusal::Prompt("task"))
+            Some(Refusal::Prompt(PromptSite::Task))
         );
         assert_eq!(
             ClassPrompt::new(t1, c1, b1, &pins(b"other", c1, b1)).err(),
-            Some(Refusal::Prompt("task")),
+            Some(Refusal::Prompt(PromptSite::Task)),
             "bytes that are not the closure's pinned task text"
         );
         assert_eq!(
             ClassPrompt::new(t1, b"", b1, &good).err(),
-            Some(Refusal::Prompt("cargo"))
+            Some(Refusal::Prompt(PromptSite::Cargo))
         );
         assert_eq!(
             ClassPrompt::new(t1, c1, b"x", &good).err(),
-            Some(Refusal::Prompt("base"))
+            Some(Refusal::Prompt(PromptSite::Base))
         );
         let bad_utf8 = &[0xff_u8, 0xfe][..];
         assert_eq!(
             ClassPrompt::new(bad_utf8, c1, b1, &pins(bad_utf8, c1, b1)).err(),
-            Some(Refusal::Prompt("task")),
+            Some(Refusal::Prompt(PromptSite::Task)),
             "pinned but not UTF-8"
         );
         // A rendering past the contract's bound is never sent.
         let big = vec![b'b'; 262_000];
         let large =
             ClassPrompt::new(t1, c1, &big, &pins(t1, c1, &big)).map_err(|e| format!("{e:?}"))?;
-        assert_eq!(render(&large, None).err(), Some(Refusal::Prompt("render")));
+        assert_eq!(
+            render(&large, None).err(),
+            Some(Refusal::Prompt(PromptSite::Render))
+        );
         Ok(())
     }
 
@@ -616,6 +639,74 @@ mod tests {
         );
         assert_eq!(PROFILE, "ollama-fc44-12ff8654/1");
         assert_eq!(FULL_FILE.id, "ollama-fc44-12ff8654/2");
-        assert_eq!(Refusal::Prompt("x").name(), "candidate_prompt");
+        assert_eq!(Refusal::Prompt(PromptSite::Task).name(), "candidate_prompt");
+    }
+
+    /// F4 (F113) · the frame over the class's REAL inputs hashes to the prompt the DS13 frame
+    /// measurements sent to the server on 2026-09-26 — rendered by an independent implementation
+    /// (Python, `DS13-frame-20260926.json` and `DS13-frame2-20260926.json`, `prompt_sha256`, 2,384
+    /// bytes) — with the inputs read against the reviewed closure's own pins.
+    #[test]
+    fn the_frame_over_the_real_inputs_is_the_measured_prompt()
+    -> Result<(), Box<dyn std::error::Error>> {
+        const TASK: &[u8] = include_bytes!("../../evaluation/tasks/WL-U64-PARSE-001/v1/TASK.md");
+        const CARGO: &[u8] =
+            include_bytes!("../../evaluation/tasks/WL-U64-PARSE-001/v1/base/Cargo.toml");
+        const BASE: &[u8] =
+            include_bytes!("../../evaluation/tasks/WL-U64-PARSE-001/v1/base/src/lib.rs");
+        const WORKLOAD_RECORD: &[u8] = include_bytes!(
+            "../../tests/fixtures/reviewed-003/a87e5ba9f699168556ef0859c0690113f0e1186592109dd797745593aff99121"
+        );
+        let record: serde_json::Value = serde_json::from_slice(WORKLOAD_RECORD)?;
+        let pin = |name: &str| -> Result<String, Box<dyn std::error::Error>> {
+            Ok(format!(
+                "sha256:{}",
+                record["files_sha256"][name].as_str().ok_or(name)?
+            ))
+        };
+        let prompt = ClassPrompt::new(
+            TASK,
+            CARGO,
+            BASE,
+            &FilePins {
+                task: pin("TASK.md")?,
+                cargo: pin("base/Cargo.toml")?,
+                base: pin("base/src/lib.rs")?,
+            },
+        )
+        .map_err(|e| format!("{e:?}"))?;
+        let rendered = render(&prompt, None).map_err(|e| format!("{e:?}"))?;
+        assert_eq!(rendered.len(), 2_384);
+        assert_eq!(
+            digest(rendered.as_bytes()),
+            "sha256:b455a1ea30ec93fc7b8714521b7f77eb46eee24ba74016652a89edd6efafe759"
+        );
+        Ok(())
+    }
+
+    /// A4 · one exchange's custody, every combination: settled only when nothing is pending, the
+    /// leader was reaped and its group settled.
+    #[test]
+    fn custody_is_settled_only_when_every_report_field_says_so() {
+        for pending in [false, true] {
+            for reaped in [false, true] {
+                for group in [false, true] {
+                    assert_eq!(
+                        custody_settled(pending, reaped, group),
+                        !pending && reaped && group,
+                        "pending={pending} reaped={reaped} group={group}"
+                    );
+                }
+            }
+        }
+        assert_eq!(
+            Refusal::Prompt(PromptSite::Previous).name(),
+            "candidate_prompt_previous"
+        );
+        assert_eq!(
+            Refusal::Prompt(PromptSite::Render).name(),
+            "candidate_prompt_render"
+        );
+        assert_eq!(Refusal::Prompt(PromptSite::Task).name(), "candidate_prompt");
     }
 }

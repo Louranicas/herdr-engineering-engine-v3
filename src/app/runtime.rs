@@ -61,6 +61,9 @@ pub enum Candidate {
     /// The provider could not be asked, or answered without a final candidate (R18 A3): the task
     /// stops — no further generate after a lost response — with the failure named in the stop body;
     /// `cleanup_settled` is every exchange's custody, `retained` the children the source now holds.
+    /// STATED GAP (review F2): with `cleanup_settled` false the attempt is `Unsettled`, an unsettled
+    /// attempt stops nothing (B14a-R1.4), and nothing in B14a-4 settles it later — B14b, which
+    /// settles the retained children, records the failure then.
     Provider {
         error: crate::worker::native::Error,
         state: crate::worker::native::ProviderState,

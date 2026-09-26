@@ -2008,6 +2008,20 @@ fn a_refused_native_answer_is_recorded_as_a_refused_candidate_whole() -> Outcome
         ]
     );
     assert_eq!(found[1][0], "passed");
+    // The second attempt's prompt, as the fake captured it: the history names the first attempt's
+    // refusal (F6, end to end) and the frame's other parts are the class's.
+    let captured: serde_json::Value = serde_json::from_slice(&fs::read(
+        rig.scratch.0.join("native/captured-request.json"),
+    )?)?;
+    let prompt = captured["prompt"].as_str().ok_or("a captured prompt")?;
+    assert!(
+        prompt.contains(
+            "\n\nPrevious attempt: failed, 0 criteria satisfied, refused as candidate_empty.\n\nReply with the complete contents of src/lib.rs and nothing else: no prose, no fences.\n"
+        ),
+        "{prompt}"
+    );
+    assert!(prompt.starts_with(std::str::from_utf8(EVAL_TASK)?));
+    assert_eq!(captured["raw"], false);
     let evidence = rows(
         &rig,
         "SELECT v.evidence_digest FROM verifications v JOIN attempts a ON a.id=v.attempt_id \

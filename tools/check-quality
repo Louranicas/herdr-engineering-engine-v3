@@ -186,8 +186,10 @@ T06_INPUTS = (
     # (B14-P4); the fixture's generator beside it is read by no test and earns no input status.
     "evaluation/tasks/WL-U64-PARSE-001/v1/base/src/lib.rs",
     "evaluation/tasks/WL-U64-PARSE-001/v1/reference.patch",
-    # t06_collector pins prepare_u64's editable binding to the class's own TASK.md.
+    # t06_collector pins prepare_u64's editable binding to the class's own TASK.md; the native
+    # candidate source's proofs read the class's three candidate inputs (B14a-4), the third here.
     "evaluation/tasks/WL-U64-PARSE-001/v1/TASK.md",
+    "evaluation/tasks/WL-U64-PARSE-001/v1/base/Cargo.toml",
     "tests/fixtures/patch/cases.json",
     # t06_workspace's content-digest known answer and t28_tasks's criteria-digest known answer (B14-P2a).
     "tests/fixtures/digest/cases.json",
@@ -225,7 +227,7 @@ T06_UNIT_COUNTS = {
     "worker::resources::limit_tests::": 3, "worker::workspace::manifest_tests::": 2,
     "app::runtime::tests::": 8, "app::run_records::tests::": 8,
     "app::live_verifier::tests::": 2, "app::plan::tests::": 5, "app::u64_receipt::tests::": 9, "worker::host::tests::": 1,
-    "app::candidates::tests::": 3,
+    "app::candidates::tests::": 5,
 }
 
 
