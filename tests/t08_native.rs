@@ -777,3 +777,236 @@ fn a_main_pid_reply_is_one_u32_and_zero_is_no_process() {
         Err(ManagerError::Manager)
     );
 }
+
+/// The `MainPid` seam's double (F101): it records every unit, deadline and cancellation reading it
+/// was handed, and answers one scripted pid or refusal.
+struct MainPidDouble {
+    answer: Result<u32, Error>,
+    asked: Vec<(String, Instant, bool)>,
+}
+impl native::MainPid for MainPidDouble {
+    fn main_pid(
+        &mut self,
+        unit: &str,
+        deadline: Instant,
+        cancelled: &AtomicBool,
+    ) -> Result<u32, Error> {
+        self.asked
+            .push((unit.to_owned(), deadline, cancelled.load(Ordering::Acquire)));
+        self.answer
+    }
+}
+
+/// A `/usr/bin/sh` whose one child is a `/usr/bin/sleep`: `MainPID` is the shell, the pinned
+/// executable is its descendant's — the host's own shape (DS18: `ollama.service`'s `MainPID` 1901
+/// is `/usr/bin/toolbox`; the daemon, 2693, is two links below it). The sleep is killed by its pid
+/// and reaped by the shell's `wait`, so nothing is orphaned; the group is killed only as a fallback.
+struct ShellWithChild {
+    shell: Child,
+    child: Option<u32>,
+}
+impl ShellWithChild {
+    fn spawn() -> Result<Self, Box<dyn std::error::Error>> {
+        use std::os::unix::process::CommandExt;
+        let shell = Command::new("/usr/bin/sh")
+            .args(["-c", "/usr/bin/sleep 600 & wait"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .process_group(0)
+            .spawn()?;
+        let mut guard = Self { shell, child: None };
+        let budget = Duration::from_secs(5);
+        let start = Instant::now();
+        let running = AtomicBool::new(false);
+        while guard.child.is_none() {
+            let census = habitat_engine::worker::process::census(start + budget, &running)
+                .map_err(|e| format!("census: {e:?}"))?;
+            guard.child = census
+                .iter()
+                .find(|(_, stat)| stat.ppid == guard.shell.id())
+                .map(|(pid, _)| *pid);
+            if guard.child.is_none() && start.elapsed() >= budget {
+                return Err(format!(
+                    "the shell {} forked no child within {budget:?} (elapsed {:?})",
+                    guard.shell.id(),
+                    start.elapsed()
+                )
+                .into());
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        Ok(guard)
+    }
+}
+impl Drop for ShellWithChild {
+    fn drop(&mut self) {
+        use rustix::process::{Pid, Signal, kill_process, kill_process_group};
+        if let Some(pid) = self.child.and_then(|pid| Pid::from_raw(pid.cast_signed())) {
+            let _ = kill_process(pid, Signal::KILL);
+        } else if let Some(group) = Pid::from_raw(self.shell.id().cast_signed()) {
+            let _ = kill_process_group(group, Signal::KILL);
+        }
+        let _ = self.shell.wait();
+    }
+}
+
+/// The resolved daemon, compared field by field (`Daemon` has no `PartialEq`).
+fn same_daemon(got: &Daemon, want: &Daemon) -> bool {
+    (
+        got.pid,
+        got.start_ticks,
+        got.boot_id.as_str(),
+        got.executable_sha256.as_str(),
+        got.executable_bytes,
+    ) == (
+        want.pid,
+        want.start_ticks,
+        want.boot_id.as_str(),
+        want.executable_sha256.as_str(),
+        want.executable_bytes,
+    )
+}
+
+/// `MainPID` is a shell; the pinned executable is its child, resolved through the descendant walk.
+fn resolves_below_a_shell(
+    pin: &native::DaemonPin,
+    expected: &Daemon,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let shell = ShellWithChild::spawn()?;
+    let child = shell.child.ok_or("no child")?;
+    let later = Instant::now() + Duration::from_secs(40);
+    let mut seam = MainPidDouble {
+        answer: Ok(shell.shell.id()),
+        asked: vec![],
+    };
+    let other = native::DaemonPin {
+        unit: "hee3-t08-shell.service".into(),
+        ..pin.clone()
+    };
+    let below = native::resolve(&other, &mut seam, later, &AtomicBool::new(false))
+        .map_err(|e| format!("{e:?}"))?;
+    let stat = fs::read_to_string(format!("/proc/{child}/stat"))?;
+    let ticks: u64 = stat
+        .rsplit_once(')')
+        .ok_or("stat")?
+        .1
+        .split_whitespace()
+        .nth(19)
+        .ok_or("field 22")?
+        .parse()?;
+    assert!(
+        same_daemon(
+            &below,
+            &Daemon {
+                pid: child,
+                start_ticks: ticks,
+                ..expected.clone()
+            }
+        ),
+        "{below:?}"
+    );
+    assert_ne!(child, expected.pid);
+    assert_eq!(
+        seam.asked,
+        vec![("hee3-t08-shell.service".to_owned(), later, false)]
+    );
+    Ok(())
+}
+
+/// R21 N6, N7 · the resolver: candidates are `MainPID` and its descendants, each `/proc/<pid>/exe`
+/// hashed against the pin, and exactly one must match. Over the stand-in (`MainPID` is the pinned
+/// process itself) and over a shell whose descendant is the pinned executable (the host's shape),
+/// the resolved daemon equals what the stand-in reader (`DaemonStandIn::daemon`, a separate reader of
+/// `/proc`) reports, field by field. The seam's double saw the unit, the deadline and the
+/// cancellation the caller passed. A pin nothing matches is `Identity`; a pin that is not a pin is
+/// `Profile` before the seam is asked; the seam's refusal passes through; the selection is pure.
+#[test]
+fn the_resolver_selects_the_one_candidate_whose_executable_is_the_pin()
+-> Result<(), Box<dyn std::error::Error>> {
+    use native::{DaemonPin, resolve, select_daemon};
+    use std::collections::BTreeSet;
+    let stand_in = DaemonStandIn::spawn();
+    let expected = stand_in.daemon();
+    let pin = DaemonPin {
+        unit: "hee3-t08-stand-in.service".into(),
+        executable_sha256: expected.executable_sha256.clone(),
+        executable_bytes: expected.executable_bytes,
+    };
+    let running = AtomicBool::new(false);
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let asked_once = vec![("hee3-t08-stand-in.service".to_owned(), deadline, false)];
+    // MainPID is the pinned process.
+    let mut seam = MainPidDouble {
+        answer: Ok(expected.pid),
+        asked: vec![],
+    };
+    let resolved = resolve(&pin, &mut seam, deadline, &running).map_err(|e| format!("{e:?}"))?;
+    assert!(
+        same_daemon(&resolved, &expected),
+        "{resolved:?} != {expected:?}"
+    );
+    assert_eq!(seam.asked, asked_once);
+    resolves_below_a_shell(&pin, &expected)?;
+    // A pin no candidate's executable matches: zero matches.
+    let mut seam = MainPidDouble {
+        answer: Ok(expected.pid),
+        asked: vec![],
+    };
+    let foreign = DaemonPin {
+        executable_sha256: format!("sha256:{}", "0".repeat(64)),
+        ..pin.clone()
+    };
+    assert!(matches!(
+        resolve(&foreign, &mut seam, deadline, &running),
+        Err(Error::Identity)
+    ));
+    // A pin that is not a pin is refused before the seam is asked.
+    for broken in [
+        DaemonPin {
+            executable_bytes: 0,
+            ..pin.clone()
+        },
+        DaemonPin {
+            executable_sha256: "12ff8654".into(),
+            ..pin.clone()
+        },
+    ] {
+        assert!(matches!(
+            resolve(&broken, &mut seam, deadline, &running),
+            Err(Error::Profile)
+        ));
+    }
+    assert_eq!(seam.asked, asked_once, "only the foreign pin asked");
+    // A raised flag stops before the seam; the seam's own refusal passes through.
+    let mut seam = MainPidDouble {
+        answer: Err(Error::Identity),
+        asked: vec![],
+    };
+    assert!(matches!(
+        resolve(&pin, &mut seam, deadline, &AtomicBool::new(true)),
+        Err(Error::Cancelled)
+    ));
+    assert_eq!(seam.asked, vec![]);
+    assert!(matches!(
+        resolve(&pin, &mut seam, deadline, &running),
+        Err(Error::Identity)
+    ));
+    assert_eq!(seam.asked, asked_once);
+    // The selection, pure: exactly one candidate in the matched set.
+    assert_eq!(
+        select_daemon(&[1, 2], &BTreeSet::new()),
+        Err(Error::Identity)
+    );
+    assert_eq!(
+        select_daemon(&[1, 2], &BTreeSet::from([1, 2])),
+        Err(Error::Identity)
+    );
+    assert_eq!(select_daemon(&[1, 2], &BTreeSet::from([2])), Ok(2));
+    assert_eq!(
+        select_daemon(&[1, 2], &BTreeSet::from([3])),
+        Err(Error::Identity),
+        "a match outside the candidates is not a candidate"
+    );
+    Ok(())
+}

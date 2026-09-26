@@ -243,12 +243,12 @@ def has_t06(root):
 T07_TARGET_COUNTS = {"t07_inventory": 52}
 T07_INPUTS = ("src/store/recovery.rs", "tests/t07_inventory.rs")
 # Reviewed T08 native adapter extension: one registered offline-client target
-# with 21 controls and no library-unit namespace. The Rust tests copy the
+# with 26 controls and no library-unit namespace. The Rust tests copy the
 # fixture client and execute it through its own interpreter line, so that
 # interpreter is an evidence pin (see native_client_interpreter), never a
 # candidate input; the other files under tests/fixtures/native are not read by
 # any registered Rust test and earn no input status here.
-T08_TARGET_COUNTS = {"t08_native": 25}
+T08_TARGET_COUNTS = {"t08_native": 26}
 T08_INPUTS = ("src/worker/native.rs", "tests/t08_native.rs", "tests/fixtures/native/client.py")
 NATIVE_CLIENT_FIXTURE = "tests/fixtures/native/client.py"
 # Reviewed T07 engine reconciliation policy target: 58 controls. tests/recovery.rs

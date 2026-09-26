@@ -338,12 +338,14 @@
 use super::{
     CancelReason, Candidate, Capabilities, Contract, ContractError, Envelope, Event, Feature,
     Finish, Identity, IdentityOrigin, Request, Terminal, Usage, UsageForm, UsageScope, UsageStage,
+    aggregate,
     process::{self, ProcessReport, ProcessSpec},
 };
 use crate::contracts::Sha256Digest;
 use serde::Deserialize;
 use serde_json::json;
 use sha2::{Digest, Sha256};
+use std::collections::BTreeSet;
 use std::fs::{self, File};
 use std::io::Read;
 use std::os::unix::fs::MetadataExt;
@@ -448,6 +450,10 @@ pub enum Error {
     Response,
     Process,
     Contract(ContractError),
+    /// The resolver's `/proc` census was not observed, or was past its bound (both numbers).
+    Census(process::CensusError),
+    /// More descendants of `MainPID` than [`MAX_DAEMON_CANDIDATES`]: found, and the bound.
+    Candidates(process::DescendantBound),
 }
 impl Error {
     /// The adapter's refusal by name, as a stop body records it.
@@ -464,6 +470,8 @@ impl Error {
             Self::Response => "response",
             Self::Process => "process",
             Self::Contract(_) => "contract",
+            Self::Census(_) => "census",
+            Self::Candidates(_) => "candidates",
         }
     }
 }
@@ -733,6 +741,139 @@ fn daemon(profile: &Profile, deadline: Instant, cancelled: &AtomicBool) -> Resul
         return Err(Error::Identity);
     }
     Ok(())
+}
+
+/// The operator's pin for the daemon process (R21 N6): the service unit whose `MainPID` roots the
+/// search, and the executable the daemon must be running. The pid, its start ticks and the boot id
+/// are never declared: they are this incarnation's, read by [`resolve`] per dispatch.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DaemonPin {
+    pub unit: String,
+    pub executable_sha256: String,
+    pub executable_bytes: u64,
+}
+
+/// Where a unit's main process id comes from: the user manager in production ([`Systemd`]), a
+/// double in the gate (R21 N7: in-gate the seam returns the daemon stand-in's own pid).
+pub trait MainPid {
+    /// # Errors
+    /// The source's refusal, by name.
+    fn main_pid(
+        &mut self,
+        unit: &str,
+        deadline: Instant,
+        cancelled: &AtomicBool,
+    ) -> Result<u32, Error>;
+}
+
+/// The user manager over the one pinned busctl door (`aggregate::main_pid`, R21 N6).
+#[derive(Debug)]
+pub struct Systemd(pub aggregate::Config);
+
+impl MainPid for Systemd {
+    /// The manager's deadline and cancellation keep their names; every other refusal (an absent,
+    /// inactive or process-less unit, the door's own checks) is `Identity`: no daemon to resolve.
+    fn main_pid(
+        &mut self,
+        unit: &str,
+        deadline: Instant,
+        cancelled: &AtomicBool,
+    ) -> Result<u32, Error> {
+        aggregate::main_pid(&self.0, unit, deadline, cancelled).map_err(|error| match error {
+            aggregate::Error::Deadline => Error::Deadline,
+            aggregate::Error::Cancelled => Error::Cancelled,
+            _ => Error::Identity,
+        })
+    }
+}
+
+/// The most descendants of `MainPID` the resolver considers (its candidates are `MainPID` and at
+/// most this many below it); more is refused as [`Error::Candidates`] with both numbers. The value
+/// is R21 Q5, held for review; the host measured three processes in the chain (DS18).
+pub const MAX_DAEMON_CANDIDATES: usize = 64;
+
+/// The one candidate whose executable matched (R21 N7), pure over the candidate list and the matched
+/// set: zero or several matching candidates are `Identity`, and a matched pid outside the candidates
+/// is not one.
+///
+/// # Errors
+/// `Identity` unless exactly one candidate matched.
+pub fn select_daemon(candidates: &[u32], matched: &BTreeSet<u32>) -> Result<u32, Error> {
+    let mut hits = candidates.iter().filter(|pid| matched.contains(pid));
+    match (hits.next(), hits.next()) {
+        (Some(pid), None) => Ok(*pid),
+        _ => Err(Error::Identity),
+    }
+}
+
+/// The daemon this dispatch talks to (R21 N6, N7): `MainPID` of the pinned unit from `source`, then
+/// a `/proc` census and the descendant walk below it; every candidate's `/proc/<pid>/exe` is hashed
+/// against the pin, and an executable that cannot be opened (EACCES across a toolbox, F2) or does
+/// not hash to it is a non-match. Exactly one candidate must match. Its start ticks are the
+/// census's and must read the same after the hashing (no pid reuse in between); the boot id is read
+/// last. Everything runs under the caller's deadline and cancellation.
+///
+/// # Errors
+/// `Profile` for a pin that is not one (zero bytes, a digest not `sha256:` + 64 hex), before the
+/// source is asked; the source's refusal; `Deadline`/`Cancelled`; `Census` for an unobserved or
+/// overbound census; `Candidates` past [`MAX_DAEMON_CANDIDATES`]; `Identity` for zero or several
+/// matches, `MainPID` absent from the census, or a start that moved.
+pub fn resolve(
+    pin: &DaemonPin,
+    source: &mut dyn MainPid,
+    deadline: Instant,
+    cancelled: &AtomicBool,
+) -> Result<Daemon, Error> {
+    if pin.executable_bytes == 0 || Sha256Digest::parse(&pin.executable_sha256).is_err() {
+        return Err(Error::Profile);
+    }
+    tick(deadline, cancelled)?;
+    let main = source.main_pid(&pin.unit, deadline, cancelled)?;
+    let census = process::census(deadline, cancelled).map_err(|error| match error {
+        process::CensusError::Deadline => Error::Deadline,
+        process::CensusError::Cancelled => Error::Cancelled,
+        other => Error::Census(other),
+    })?;
+    let below =
+        process::descendants(&census, main, MAX_DAEMON_CANDIDATES).map_err(Error::Candidates)?;
+    let candidates: Vec<u32> = std::iter::once(main).chain(below).collect();
+    let mut matched = BTreeSet::new();
+    for pid in &candidates {
+        let executable = FilePin {
+            path: PathBuf::from(format!("/proc/{pid}/exe")),
+            sha256: pin.executable_sha256.clone(),
+            bytes: pin.executable_bytes,
+        };
+        match hash_file(&executable, deadline, cancelled) {
+            Ok(()) => {
+                matched.insert(*pid);
+            }
+            Err(error @ (Error::Deadline | Error::Cancelled)) => return Err(error),
+            Err(_) => {}
+        }
+    }
+    let pid = select_daemon(&candidates, &matched)?;
+    let start_ticks = census
+        .iter()
+        .find(|(listed, _)| *listed == pid)
+        .map(|(_, stat)| stat.start_ticks)
+        .ok_or(Error::Identity)?;
+    let now = process::parse_stat(&small(Path::new(&format!("/proc/{pid}/stat")))?)
+        .ok_or(Error::Identity)?;
+    if now.start_ticks != start_ticks {
+        return Err(Error::Identity);
+    }
+    let boot_id = String::from_utf8(small(Path::new("/proc/sys/kernel/random/boot_id"))?)
+        .map_err(|_| Error::Identity)?
+        .trim()
+        .to_owned();
+    Ok(Daemon {
+        pid,
+        start_ticks,
+        boot_id,
+        executable_sha256: pin.executable_sha256.clone(),
+        executable_bytes: pin.executable_bytes,
+    })
 }
 fn subject(profile: &Profile, deadline: Instant, cancelled: &AtomicBool) -> Result<(), Error> {
     for path in [
