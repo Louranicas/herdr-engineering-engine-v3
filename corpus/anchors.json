@@ -36,7 +36,7 @@
   },
   "learnings": {
     "id": "HEE3-LEARNINGS-001",
-    "sha256": "0760e032d25052be9ad739b79d4f77e81eab2b55d0cd010516ad0b2869f77c00",
+    "sha256": "8b7997fb03daaa8dbdd52ed286bc3f5c8b7896005bf7d9ae48d8cd79811f4e9d",
     "note": "Learnings/Index.md",
     "sources": 13,
     "lessons": 14
@@ -3690,7 +3690,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "0760e032d25052be9ad739b79d4f77e81eab2b55d0cd010516ad0b2869f77c00",
+        "convention_sha256": "8b7997fb03daaa8dbdd52ed286bc3f5c8b7896005bf7d9ae48d8cd79811f4e9d",
         "lessons": [
           "LRN01",
           "LRN03",
@@ -7032,7 +7032,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "0760e032d25052be9ad739b79d4f77e81eab2b55d0cd010516ad0b2869f77c00",
+        "convention_sha256": "8b7997fb03daaa8dbdd52ed286bc3f5c8b7896005bf7d9ae48d8cd79811f4e9d",
         "lessons": [
           "LRN01",
           "LRN04",
@@ -9996,7 +9996,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "0760e032d25052be9ad739b79d4f77e81eab2b55d0cd010516ad0b2869f77c00",
+        "convention_sha256": "8b7997fb03daaa8dbdd52ed286bc3f5c8b7896005bf7d9ae48d8cd79811f4e9d",
         "lessons": [
           "LRN04",
           "LRN05",
@@ -11846,7 +11846,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "0760e032d25052be9ad739b79d4f77e81eab2b55d0cd010516ad0b2869f77c00",
+        "convention_sha256": "8b7997fb03daaa8dbdd52ed286bc3f5c8b7896005bf7d9ae48d8cd79811f4e9d",
         "lessons": [
           "LRN05",
           "LRN08",
@@ -13487,7 +13487,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "0760e032d25052be9ad739b79d4f77e81eab2b55d0cd010516ad0b2869f77c00",
+        "convention_sha256": "8b7997fb03daaa8dbdd52ed286bc3f5c8b7896005bf7d9ae48d8cd79811f4e9d",
         "lessons": [
           "LRN05",
           "LRN08",
@@ -15295,7 +15295,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "0760e032d25052be9ad739b79d4f77e81eab2b55d0cd010516ad0b2869f77c00",
+        "convention_sha256": "8b7997fb03daaa8dbdd52ed286bc3f5c8b7896005bf7d9ae48d8cd79811f4e9d",
         "lessons": [
           "LRN08",
           "LRN09",
@@ -20139,7 +20139,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "0760e032d25052be9ad739b79d4f77e81eab2b55d0cd010516ad0b2869f77c00",
+        "convention_sha256": "8b7997fb03daaa8dbdd52ed286bc3f5c8b7896005bf7d9ae48d8cd79811f4e9d",
         "lessons": [
           "LRN03",
           "LRN05",
@@ -25643,7 +25643,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "0760e032d25052be9ad739b79d4f77e81eab2b55d0cd010516ad0b2869f77c00",
+        "convention_sha256": "8b7997fb03daaa8dbdd52ed286bc3f5c8b7896005bf7d9ae48d8cd79811f4e9d",
         "lessons": [
           "LRN01",
           "LRN02",
@@ -27169,7 +27169,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "0760e032d25052be9ad739b79d4f77e81eab2b55d0cd010516ad0b2869f77c00",
+        "convention_sha256": "8b7997fb03daaa8dbdd52ed286bc3f5c8b7896005bf7d9ae48d8cd79811f4e9d",
         "lessons": [
           "LRN05",
           "LRN06",
@@ -28973,7 +28973,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "0760e032d25052be9ad739b79d4f77e81eab2b55d0cd010516ad0b2869f77c00",
+        "convention_sha256": "8b7997fb03daaa8dbdd52ed286bc3f5c8b7896005bf7d9ae48d8cd79811f4e9d",
         "lessons": [
           "LRN07",
           "LRN08",
@@ -30565,7 +30565,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "0760e032d25052be9ad739b79d4f77e81eab2b55d0cd010516ad0b2869f77c00",
+        "convention_sha256": "8b7997fb03daaa8dbdd52ed286bc3f5c8b7896005bf7d9ae48d8cd79811f4e9d",
         "lessons": [
           "LRN03",
           "LRN08",
@@ -32121,7 +32121,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "0760e032d25052be9ad739b79d4f77e81eab2b55d0cd010516ad0b2869f77c00",
+        "convention_sha256": "8b7997fb03daaa8dbdd52ed286bc3f5c8b7896005bf7d9ae48d8cd79811f4e9d",
         "lessons": [
           "LRN01",
           "LRN03",
@@ -33851,7 +33851,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "0760e032d25052be9ad739b79d4f77e81eab2b55d0cd010516ad0b2869f77c00",
+        "convention_sha256": "8b7997fb03daaa8dbdd52ed286bc3f5c8b7896005bf7d9ae48d8cd79811f4e9d",
         "lessons": [
           "LRN06",
           "LRN07",
@@ -35228,7 +35228,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "0760e032d25052be9ad739b79d4f77e81eab2b55d0cd010516ad0b2869f77c00",
+        "convention_sha256": "8b7997fb03daaa8dbdd52ed286bc3f5c8b7896005bf7d9ae48d8cd79811f4e9d",
         "lessons": [
           "LRN01",
           "LRN08",
@@ -37230,7 +37230,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "0760e032d25052be9ad739b79d4f77e81eab2b55d0cd010516ad0b2869f77c00",
+        "convention_sha256": "8b7997fb03daaa8dbdd52ed286bc3f5c8b7896005bf7d9ae48d8cd79811f4e9d",
         "lessons": [
           "LRN03",
           "LRN05",
@@ -39212,7 +39212,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "0760e032d25052be9ad739b79d4f77e81eab2b55d0cd010516ad0b2869f77c00",
+        "convention_sha256": "8b7997fb03daaa8dbdd52ed286bc3f5c8b7896005bf7d9ae48d8cd79811f4e9d",
         "lessons": [
           "LRN03",
           "LRN05",
@@ -41930,7 +41930,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "0760e032d25052be9ad739b79d4f77e81eab2b55d0cd010516ad0b2869f77c00",
+        "convention_sha256": "8b7997fb03daaa8dbdd52ed286bc3f5c8b7896005bf7d9ae48d8cd79811f4e9d",
         "lessons": [
           "LRN01",
           "LRN02",
@@ -43800,7 +43800,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "0760e032d25052be9ad739b79d4f77e81eab2b55d0cd010516ad0b2869f77c00",
+        "convention_sha256": "8b7997fb03daaa8dbdd52ed286bc3f5c8b7896005bf7d9ae48d8cd79811f4e9d",
         "lessons": [
           "LRN01",
           "LRN02",
@@ -45198,7 +45198,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "0760e032d25052be9ad739b79d4f77e81eab2b55d0cd010516ad0b2869f77c00",
+        "convention_sha256": "8b7997fb03daaa8dbdd52ed286bc3f5c8b7896005bf7d9ae48d8cd79811f4e9d",
         "lessons": [
           "LRN03",
           "LRN04",
@@ -46685,7 +46685,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "0760e032d25052be9ad739b79d4f77e81eab2b55d0cd010516ad0b2869f77c00",
+        "convention_sha256": "8b7997fb03daaa8dbdd52ed286bc3f5c8b7896005bf7d9ae48d8cd79811f4e9d",
         "lessons": [
           "LRN03",
           "LRN04",
@@ -48177,7 +48177,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "0760e032d25052be9ad739b79d4f77e81eab2b55d0cd010516ad0b2869f77c00",
+        "convention_sha256": "8b7997fb03daaa8dbdd52ed286bc3f5c8b7896005bf7d9ae48d8cd79811f4e9d",
         "lessons": [
           "LRN04",
           "LRN08",
@@ -49730,7 +49730,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "0760e032d25052be9ad739b79d4f77e81eab2b55d0cd010516ad0b2869f77c00",
+        "convention_sha256": "8b7997fb03daaa8dbdd52ed286bc3f5c8b7896005bf7d9ae48d8cd79811f4e9d",
         "lessons": [
           "LRN01",
           "LRN02",
@@ -54806,8 +54806,8 @@
       "bytes": 6019
     },
     "tools/check-quality": {
-      "sha256": "3eaac0187565e42ebeaf90a8cb5bdd16ade8174f2a02c8d4a0ebacbec7908bad",
-      "bytes": 93250
+      "sha256": "cf22ee6a0afc4aaf27009d86207e9a04943c26f4398473190f38915638535b99",
+      "bytes": 93480
     },
     "tools/development_process.py": {
       "sha256": "e76e3a794193e5df7ee96fabf700113d718527745a0f9a9dba1e04fd5c7baaf3",
@@ -55922,12 +55922,12 @@
       "bytes": 29889
     },
     "src/app/evidence.rs": {
-      "sha256": "91d893854991a4bde7f0063bd01bb04574ef9e349ac4450d3aa1b10e1ea7e076",
-      "bytes": 9926
+      "sha256": "8ccb5a63673f2bbb36c2df367498bb151bafaa767f7aa40308387f8c834a597f",
+      "bytes": 10352
     },
     "src/app/mod.rs": {
-      "sha256": "01aa4e82a9cca7a8622725c6cd8e5a272f8a0a612f8a321d236e2fe2a8f7cd6d",
-      "bytes": 456
+      "sha256": "fcadd870d1dfc1581dfe491da2724f3ede84ab6478eb72cad8cfca867b6739da",
+      "bytes": 470
     },
     "src/app/receipt_import.rs": {
       "sha256": "393bd6b147ebe968ffe29532665c1e542972d9f1ea9708699cc6ef962ba0735d",
@@ -55938,32 +55938,32 @@
       "bytes": 29247
     },
     "src/app/subjects.rs": {
-      "sha256": "8ff1ca294f0af4a36a0258d32675ad3e15a6f77973929ab9be44b99c051355fa",
-      "bytes": 9133
+      "sha256": "4b827e331c57d5707628ae10b9f782f2356169a18f31224102f6d2f2fb2188ec",
+      "bytes": 11101
     },
     "src/app/workload.rs": {
-      "sha256": "a95581bf7394b222fe5060f5d6f5769dafed55403392d129dbf0f6b13c543b4b",
-      "bytes": 21318
+      "sha256": "227a88e24597cb7758ca5a9a14b46dd112b27abe12537d45b13be951cbbc79d1",
+      "bytes": 21994
     },
     "src/bin/namespace_shim.rs": {
       "sha256": "fb6d07323426e5ed5c5624cf9e21cb4fbd3d4ef8c25f17b0e49868f8d25ace8e",
       "bytes": 1314
     },
     "src/check/collector.rs": {
-      "sha256": "ea294df04142476d24986316b62bb601c8afc6fb6abe7ec26336b25056e3b572",
-      "bytes": 25485
+      "sha256": "2d3479acffd3ef4eec85be71595d67c84c9ff450b21009b83b7d1f4e29f4f107",
+      "bytes": 27394
     },
     "src/check/consistency.rs": {
-      "sha256": "e6c3b219738d4fd1124b52a144476735ab34dbac7cf5df6c1b8d18765fae767e",
-      "bytes": 27895
+      "sha256": "ab697c9e5bdc7bb11e830713ff011f420f5a667068c7e51da6b1f1c670e0631b",
+      "bytes": 28622
     },
     "src/check/decision.rs": {
       "sha256": "58d799f6ca549a34263479ab589c0bab16dbd7f1098a6a8d4db3a4b3242ed091",
       "bytes": 29499
     },
     "src/check/graph.rs": {
-      "sha256": "02c8a99fd89f9eae3df9533f5eb85b788a4e4457e62b4ea9fac859fe4c4704a4",
-      "bytes": 16437
+      "sha256": "b758a9c4ae77b305d361125e7e18a331c396befdd5dda2368ce6c8720dfa0a9c",
+      "bytes": 16627
     },
     "src/check/u64_oracle.rs": {
       "sha256": "1fb908e7fbe4154a79e10578512381716819145d478700c44189b62cdc98371f",
@@ -56022,8 +56022,8 @@
       "bytes": 6469
     },
     "src/worker/namespace.rs": {
-      "sha256": "1140141ae7851b7e2f54dc6392529a021af5b9042c986ad74db197e7d7b55673",
-      "bytes": 75582
+      "sha256": "c6ece43dd5e1f650d3c196bac7f81c5237e49acc46d6d50d6d43bf9ca9fcec82",
+      "bytes": 77841
     },
     "src/worker/namespace_shim.rs": {
       "sha256": "add12c89a66449bb5ae5b17f68aa8443613e3abc4b0c1acf361d9481a500d3a5",
@@ -56110,8 +56110,8 @@
       "bytes": 12040
     },
     "tests/t06_subjects.rs": {
-      "sha256": "dd1f3395eca4776a0417c2659e25e33b5d8cc5b681eb36b9cb2f43a63df41549",
-      "bytes": 9781
+      "sha256": "272d9e68b0820c1796afa725402a00f82809c47753483105c1fa2c6a8edd6810",
+      "bytes": 11982
     },
     "tests/t06_terminal.rs": {
       "sha256": "1badf9e38cb5f2fff14c06e94e90aacc82d3c90e9e0625f57cc70077b4a19af4",
