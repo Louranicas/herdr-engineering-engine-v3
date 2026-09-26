@@ -54836,8 +54836,8 @@
       "bytes": 6019
     },
     "tools/check-quality": {
-      "sha256": "5136165d0a1b2463cb30e7bc28587260d23fa0bab1b140cbeca8694b0634f8c3",
-      "bytes": 98605
+      "sha256": "03fe2af1ec8f8befcedd4defba165a1384a9d9350ace7860b501538da85535bb",
+      "bytes": 98782
     },
     "tools/development_process.py": {
       "sha256": "e76e3a794193e5df7ee96fabf700113d718527745a0f9a9dba1e04fd5c7baaf3",
@@ -55588,8 +55588,8 @@
       "bytes": 14607
     },
     "tests/t04_store.rs": {
-      "sha256": "c951a0a9595bafaa2a7ed86f3963d3c0f5bc092eeeb9d8f47866a5dcadfef6fc",
-      "bytes": 177607
+      "sha256": "ddf881ec138d97c6f0997b600e43fd0d83e2f9739f2f4224b52e2d0370642eb0",
+      "bytes": 180547
     },
     "docs/store-contract.md": {
       "sha256": "b65ffe744d2abf93c3b0c40345787940213806ade52e9ef010e17f3012a81396",
@@ -55600,7 +55600,7 @@
       "bytes": 10139
     },
     "tools/check-store-mutations": {
-      "sha256": "c0f2b4c5c96a94031c85189152777df29e76f409603ee778a0ad5cf41a7905a6",
+      "sha256": "7d8cdeb5431609437862c0867c01bd2fab35fc75f64d88d1a1ed7044ac388322",
       "bytes": 19831
     },
     "tools/sqlite-inputs/sqlite-amalgamation-3530400.zip": {
@@ -55960,8 +55960,8 @@
       "bytes": 10352
     },
     "src/app/mod.rs": {
-      "sha256": "cee5caabd7c36bfec0b0bd04155106fc74305e1046178bfc8ee61d2ff07e11f2",
-      "bytes": 490
+      "sha256": "17bff200c9532a33c27ef417105339b380c5a1c5abbdd5083ad7233af15d8f2e",
+      "bytes": 510
     },
     "src/app/receipt_import.rs": {
       "sha256": "393bd6b147ebe968ffe29532665c1e542972d9f1ea9708699cc6ef962ba0735d",
@@ -56028,8 +56028,8 @@
       "bytes": 26561
     },
     "src/main.rs": {
-      "sha256": "8d1932abe0d57b71c1c99fe9d3f7d4c2f49fd317499dc735fdd23d06db5bd4c9",
-      "bytes": 37802
+      "sha256": "5c8092ccb5101ff7784979b382b6076276720f9566a285c5972ceb6aa4b30726",
+      "bytes": 40041
     },
     "src/store/staging.rs": {
       "sha256": "8bb17b5598550fd2c002dc7063ddfa56cf4a6e0a51566264b908ba655acce5d3",
@@ -56136,8 +56136,8 @@
       "bytes": 12082
     },
     "tests/t06_store.rs": {
-      "sha256": "af84ef1461e7bc1ba03483713269706d25f304fc593dbceb1f32ae44e7ed7d2c",
-      "bytes": 57384
+      "sha256": "af17f03de5c2f220b3de1c745ac57bee95a9f5aa18c6ca487e871b72731a75fc",
+      "bytes": 57885
     },
     "tests/t06_store_staging.rs": {
       "sha256": "1a91e080d901ff45b3b145cf09fc49590c2be215ae92467b243585b0f0473593",
