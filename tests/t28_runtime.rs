@@ -125,6 +125,34 @@ fn private(path: &Path) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+/// The toolchain binary behind `rustc` (`RUSTC` when the gate sets it, else `rustc --print
+/// sysroot`), never a rustup proxy: the plan pins and probes the executable itself.
+fn rustc() -> Result<PathBuf, Box<dyn Error>> {
+    if let Some(path) = std::env::var_os("RUSTC") {
+        return Ok(PathBuf::from(path));
+    }
+    let sysroot = std::process::Command::new("rustc")
+        .arg("--print")
+        .arg("sysroot")
+        .output()?;
+    let path = PathBuf::from(String::from_utf8(sysroot.stdout)?.trim()).join("bin/rustc");
+    if !path.is_file() {
+        return Err(format!("no toolchain rustc at {}", path.display()).into());
+    }
+    Ok(path)
+}
+
+fn hex_digest(bytes: &[u8]) -> String {
+    use sha2::Digest as _;
+    sha2::Sha256::digest(bytes)
+        .iter()
+        .fold(String::new(), |mut text, byte| {
+            use std::fmt::Write as _;
+            let _ = write!(text, "{byte:02x}");
+            text
+        })
+}
+
 fn file(path: &Path, bytes: &[u8]) -> Result<(), Box<dyn Error>> {
     use std::io::Write as _;
     let mut handle = fs::OpenOptions::new()
@@ -231,16 +259,43 @@ fn installed(root: &Path, shape: &Shape<'_>) -> Result<Profile, Box<dyn Error>> 
     let base_digest = digest_of(&base)?;
     let protected_digest = digest_of(&protected)?;
     let zero = format!("sha256:{}", "0".repeat(64));
+    // The reviewed closure the shared plan publishes at dispatch: the 003 lane's, installed by
+    // digest as the operator would (the same fixture the class-profile and plan proofs use).
+    let reviewed = class.join("reviewed");
+    private(&reviewed)?;
+    for entry in fs::read_dir(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/reviewed-003"
+    ))? {
+        let entry = entry?;
+        file(&reviewed.join(entry.file_name()), &fs::read(entry.path())?)?;
+    }
+    // The pins the shared plan reads under (R17 round 2): the toolchain's own rustc, a stand-in
+    // shim whose bytes are its pin, and the declared grant and effect files beside the profile.
+    let compiler = rustc()?;
+    let compiler_digest = format!("sha256:{}", hex_digest(&fs::read(&compiler)?));
+    let shim_bytes = b"#!/bin/sh\nexit 0\n";
+    let shim = class.join("stand-in-shim");
+    file(&shim, shim_bytes)?;
+    let shim_digest = format!("sha256:{}", hex_digest(shim_bytes));
+    let authority = b"{\"authority\":\"WL-U64 fixed workload\",\"issuer\":\"operator\"}\n";
+    let specification = b"{\"isolation\":\"bwrap --unshare-all; no network\"}\n";
+    file(&class.join("authority.json"), authority)?;
+    file(&class.join("isolation.json"), specification)?;
+    let authority_digest = format!("sha256:{}", hex_digest(authority));
+    let specification_digest = format!("sha256:{}", hex_digest(specification));
     let text = format!(
         "schema = \"hee3.class-profile/1\"\nclass = \"rust-library-change/1\"\n\n\
          [[workspace]]\nid = \"{}\"\nbaseline = \"base\"\nbaseline_digest = \"{}\"\n\
          protected = \"protected\"\nprotected_digest = \"{}\"\n\n\
-         [pins]\ncompiler = {{ host = \"/opt/rustc\", sha256 = \"{zero}\" }}\n\
-         shim = {{ host = \"/opt/shim\", sha256 = \"{zero}\" }}\nruntime_files = []\n\
-         namespace_directories = []\nbusctl_sha256 = \"{zero}\"\nsystemd_run_sha256 = \"{zero}\"\n[reviewed]\nexpectation = {{ artifact_id = \"c220e7ce-0753-47ef-bdac-15710bc4981c\", sha256 = \"sha256:3a7faa5510790c20322ad5829091211eb8c04ab6016e16ec8391433dae3392b9\", byte_length = 794, media_type = \"application/json\", schema_id = \"hee3.receipt/1:ExpectationV1\" }}\nreview = {{ artifact_id = \"a47470c5-f11c-4f64-9ac8-6dcf80750ed6\", sha256 = \"sha256:f288225476120254f5c3a93266fc8f2a8763810462fbddd7c62161107cb39adb\", byte_length = 1145, media_type = \"application/json\", schema_id = \"hee3.receipt/1:ReviewV1\" }}\n[grant]\ngrant_id = \"28f90000-0000-4000-8000-000000000001\"\nissuer_id = \"operator\"\nauthority = {{ file = \"authority.json\", sha256 = \"{zero}\" }}\n[effect]\neffect_id = \"fixed-u64-workload-output\"\nscope = \"the rig's scope\"\nspecification = {{ file = \"isolation.json\", sha256 = \"{zero}\" }}\n",
+         [pins]\ncompiler = {{ host = \"{}\", sha256 = \"{compiler_digest}\" }}\n\
+         shim = {{ host = \"{}\", sha256 = \"{shim_digest}\" }}\nruntime_files = []\n\
+         namespace_directories = []\nbusctl_sha256 = \"{zero}\"\nsystemd_run_sha256 = \"{zero}\"\n[reviewed]\nexpectation = {{ artifact_id = \"c220e7ce-0753-47ef-bdac-15710bc4981c\", sha256 = \"sha256:3a7faa5510790c20322ad5829091211eb8c04ab6016e16ec8391433dae3392b9\", byte_length = 794, media_type = \"application/json\", schema_id = \"hee3.receipt/1:ExpectationV1\" }}\nreview = {{ artifact_id = \"a47470c5-f11c-4f64-9ac8-6dcf80750ed6\", sha256 = \"sha256:f288225476120254f5c3a93266fc8f2a8763810462fbddd7c62161107cb39adb\", byte_length = 1145, media_type = \"application/json\", schema_id = \"hee3.receipt/1:ReviewV1\" }}\n[grant]\ngrant_id = \"28f90000-0000-4000-8000-000000000001\"\nissuer_id = \"operator\"\nauthority = {{ file = \"authority.json\", sha256 = \"{authority_digest}\" }}\n[effect]\neffect_id = \"fixed-u64-workload-output\"\nscope = \"the rig's scope\"\nspecification = {{ file = \"isolation.json\", sha256 = \"{specification_digest}\" }}\n",
         shape.declared,
         shape.baseline_digest.unwrap_or(&base_digest),
         shape.protected_digest.unwrap_or(&protected_digest),
+        compiler.display(),
+        shim.display(),
     );
     if let Some(name) = shape.removed {
         fs::remove_dir_all(class.join(name))?;
@@ -1117,14 +1172,18 @@ fn a_second_writer_is_refused_as_a_concurrent_writer() -> Outcome_ {
 /// settlement.
 #[test]
 fn an_overrun_is_recorded_as_an_unknown_cost() -> Outcome_ {
+    // The work reservation holds the dispatch's own plan (charged to attempt 1) and leaves a
+    // window the hook then sleeps past: the overrun is the candidate's, not the plan's.
     let rig = rig(&Shape {
-        work_ms: 40,
+        work_ms: 1_200,
         teardown_ms: 0,
         ..Shape::default()
     })?;
     let principal = owner();
     let (mut source, _) = script(vec![Candidate::Replacement(SECOND.to_vec())]);
-    source.hook = Some(Box::new(|| std::thread::sleep(Duration::from_millis(80))));
+    source.hook = Some(Box::new(|| {
+        std::thread::sleep(Duration::from_millis(1_400));
+    }));
     let (verifier, handed) = oracle(vec![]);
     let outcome = run(&rig, &principal, source, verifier, 10).map_err(|e| format!("{e:?}"))?;
     assert_eq!(
@@ -1138,7 +1197,7 @@ fn an_overrun_is_recorded_as_an_unknown_cost() -> Outcome_ {
     );
     assert!(handed.borrow().is_empty());
     assert!(verifications(&rig)?.is_empty());
-    assert_eq!(rig.reserved_work_ms, 40);
+    assert_eq!(rig.reserved_work_ms, 1_200);
     Ok(())
 }
 
@@ -1534,7 +1593,7 @@ fn the_live_verifier_records_a_refused_launch_with_four_records() -> Outcome_ {
     let rig = rig(&Shape::default())?;
     let principal = owner();
     let (source, _) = script(vec![Candidate::Replacement(SECOND.to_vec())]);
-    let verifier = LiveVerifier::new(&rig.profile.declared, bad_pin_scopes());
+    let verifier = LiveVerifier::new(bad_pin_scopes());
     let outcome = run(&rig, &principal, source, verifier, 5_000).map_err(|e| format!("{e:?}"))?;
     assert_eq!(
         outcome,

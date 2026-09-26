@@ -20,14 +20,22 @@ use super::class_profile::{Profile, ReviewedError, Which, read_declared, read_re
 use super::evidence::{self, Evidence};
 use super::live_verifier::BWRAP;
 use super::subjects;
-use super::u64_receipt::{RUNTIME_OWNER, environment_rows};
-use super::workload::{COMPILE_FLAGS, FIXED_DESTINATIONS, Tools};
+use super::u64_receipt::{
+    OBLIGATIONS, RUNTIME_OWNER, cleanup_contract, environment_rows, limits, obligation_rows,
+};
+use super::workload::{COMPILE_FLAGS, DRIVER_DESTINATION, FIXED_DESTINATIONS, Tools};
 use crate::check::collector::{self, Publisher, Sink as _};
+use crate::check::consistency::{
+    self, Editable, Prepared, U64_BOUNDS, U64_EDITABLE, U64Attempt, derive_patch, patch_ceiling,
+    prepare_u64,
+};
+use crate::check::patch;
 use crate::check::u64_oracle::{self, FrozenOracle};
 use crate::contracts::receipt::{
-    BuildProfileV1, EffectPageV1, EffectV1, EnvironmentPageV1, GrantPageV1, GrantV1,
-    LanguageFlagsPageV1, LanguageFlagsV1, List, LockPageV1, Maybe, Name, Payload, Ref, Sha,
-    StandardPageV1, StandardV1, SubjectFileV1Origin, SubjectV1, Text, ToolPageV1, ToolV1, TypedRef,
+    BuildProfileV1, EffectPageV1, EffectV1, EnvironmentPageV1, Generation, GrantPageV1, GrantV1,
+    Id, LanguageFlagsPageV1, LanguageFlagsV1, List, LockPageV1, Maybe, Name, ObligationPageV1,
+    Payload, Ref, RelPath, Sha, StandardPageV1, StandardV1, SubjectFileV1Origin, SubjectV1, Text,
+    ToolPageV1, ToolV1, TypedRef,
 };
 use crate::store::Object;
 use crate::worker::namespace::{self, NamespaceError, pinned_bytes};
@@ -164,6 +172,42 @@ pub enum Refusal {
     },
     /// A value had no rendering the receipt admits.
     Encoding,
+    /// The seed-to-result patch could not be derived (the editable file missing or past its bound).
+    Patch(patch::Error),
+    /// `prepare_u64` refused the plan (ids not distinct, an empty argv).
+    Plan(consistency::Error),
+}
+
+impl Refusal {
+    /// The stop reason a pre-dispatch plan refusal is recorded under (R17 round 2, N2): the kind,
+    /// never the detail — the detail is this value's `Debug`.
+    #[must_use]
+    pub const fn name(&self) -> &'static str {
+        match self {
+            Self::Cancelled => "plan_cancelled",
+            Self::PlanRootExists => "plan_root_exists",
+            Self::PlanRootNotCanonical => "plan_root_not_canonical",
+            Self::PlanTeardown => "plan_teardown",
+            Self::ClosureConflict { .. } => "plan_closure_conflict",
+            Self::Deadline
+            | Self::Pin {
+                error: NamespaceError::Deadline,
+                ..
+            } => "plan_deadline",
+            Self::Pin { .. } => "plan_pin",
+            Self::Protected(_) => "plan_protected",
+            Self::Oracle(_) => "plan_oracle",
+            Self::Closure(_) => "plan_closure",
+            Self::Declared { .. } => "plan_declared",
+            Self::Publish { .. } => "plan_publish",
+            Self::Subject { .. } => "plan_subject",
+            Self::Capture { .. } => "plan_capture",
+            Self::CompilerVersion { .. } => "plan_compiler_version",
+            Self::Encoding => "plan_encoding",
+            Self::Patch(_) => "plan_patch",
+            Self::Plan(_) => "plan_prepare",
+        }
+    }
 }
 
 /// Name the stage a publisher refusal came from.
@@ -694,6 +738,163 @@ pub fn isolation_profile() -> Result<Vec<u8>, Refusal> {
         "launcher": BWRAP,
     });
     serde_json::to_vec(&value).map_err(|_| Refusal::Encoding)
+}
+
+/// The readback specification the cleanup contract cites: the four obligations the runtime owns
+/// and the rule it settles them by, rendered from the constants that enforce it (R16 round 2, 9).
+///
+/// # Errors
+/// `Encoding` when the rendering fails.
+pub fn readback_specification() -> Result<Vec<u8>, Refusal> {
+    let value = serde_json::json!({
+        "kind": "hee3.readback-specification/1",
+        "owner": RUNTIME_OWNER,
+        "obligations": OBLIGATIONS.to_vec(),
+        "rule": "after the check's cutoff: every owned process and FIFO terminated, the scratch \
+                 descriptors released, every retained path removed within the teardown share, and \
+                 the resource aggregate read back; each obligation settled separately, never inferred",
+    });
+    serde_json::to_vec(&value).map_err(|_| Refusal::Encoding)
+}
+
+/// What the per-check plan needs (R17 round 2, shape C): the shared part, the profile, the seed
+/// and applied snapshots, the identities the runtime minted before the plan (the run id IS the
+/// verification's evidence artifact id — decision 3), the previous attempt's run when it recorded
+/// a receipt, the check's wall in ms (also its cleanup deadline — L4), and the deadline.
+pub struct CheckInputs<'a> {
+    pub shared: &'a Shared,
+    pub profile: &'a Profile,
+    pub baseline: &'a Snapshot,
+    pub applied: &'a Snapshot,
+    pub task: &'a str,
+    pub attempt: &'a str,
+    pub run: &'a str,
+    pub generation: &'a str,
+    pub parent_run: Option<&'a str>,
+    pub obligation_ids: &'a [String; 4],
+    pub wall_ms: u64,
+    pub deadline: Instant,
+}
+
+/// The per-check plan: the frozen `Prepared` the collector copies into the receipt, and the
+/// objects this publication registered (the carry-over into compose's sink — decision 7).
+#[derive(Clone, Debug)]
+pub struct Planned {
+    pub prepared: Prepared,
+    pub objects: Vec<(Ref, Object)>,
+    pub added: usize,
+}
+
+/// Compose the per-check plan into `sink` (a fresh sink over the ledger, in the check's own hold):
+/// the result subject, the seed-to-result patch by the one derivation `patch_binding` re-derives
+/// (N5), the limits and the cleanup contract over the four pre-execution obligations, and the
+/// identity — then `prepare_u64`, the one door for the plan.
+///
+/// # Errors
+/// Each [`Refusal`], named.
+pub fn check(sink: &mut Evidence<'_>, inputs: &CheckInputs<'_>) -> Result<Planned, Refusal> {
+    if Instant::now() >= inputs.deadline {
+        return Err(Refusal::Deadline);
+    }
+    let before = sink.registered().len();
+    let result = subjects::publish(
+        sink,
+        inputs.applied,
+        SubjectFileV1Origin::Authored,
+        inputs.deadline,
+    )
+    .map_err(|error| Refusal::Subject {
+        role: "result",
+        error: error.kind,
+    })?;
+    let editable = Editable {
+        path: RelPath::new(U64_EDITABLE.to_owned()).map_err(|_| Refusal::Encoding)?,
+        bounds: U64_BOUNDS,
+    };
+    let patch_bytes = derive_patch(
+        snapshot_file(inputs.baseline, U64_EDITABLE)?,
+        snapshot_file(inputs.applied, U64_EDITABLE)?,
+        &editable,
+        patch_ceiling(&editable),
+    )
+    .map_err(Refusal::Patch)?;
+    let patch_payload = payload(sink, &patch_bytes, "text/x-diff")?;
+    let specification = payload(sink, &readback_specification()?, "application/json")?;
+    let mut publisher = Publisher::new(sink);
+    let limits_record = publisher
+        .record(&limits(inputs.wall_ms, inputs.wall_ms).map_err(|_| Refusal::Encoding)?)
+        .map_err(at("limits"))?;
+    let rows = obligation_rows(inputs.obligation_ids, specification.as_ref())
+        .map_err(|_| Refusal::Encoding)?;
+    let obligations = page!(publisher, ObligationPageV1, rows, "obligations");
+    let contract = publisher
+        .record(
+            &cleanup_contract(inputs.wall_ms, obligations, specification)
+                .map_err(|_| Refusal::Encoding)?,
+        )
+        .map_err(at("cleanup contract"))?;
+    let shared = inputs.shared;
+    let reviewed = &inputs.profile.declared.reviewed;
+    let attempt = U64Attempt {
+        schema_sha256: Sha::new(schema_sha256()).map_err(|_| Refusal::Encoding)?,
+        run_id: Id::new(inputs.run).map_err(|_| Refusal::Encoding)?,
+        task_id: Id::new(inputs.task).map_err(|_| Refusal::Encoding)?,
+        attempt_id: Id::new(inputs.attempt).map_err(|_| Refusal::Encoding)?,
+        generation: Generation::new(inputs.generation).map_err(|_| Refusal::Encoding)?,
+        profile_id: name(&format!(
+            "{}@{}",
+            super::class_profile::CLASS,
+            inputs.profile.digest
+        ))?,
+        parent_run: match inputs.parent_run {
+            Some(run) => Maybe::present(Id::new(run).map_err(|_| Refusal::Encoding)?),
+            None => Maybe::unavailable(text(if inputs.generation == "1" {
+                "first_attempt"
+            } else {
+                "separate_attempt_same_task"
+            })?),
+        },
+        subjects: crate::contracts::receipt::SubjectsV1 {
+            seed_subject: shared.seed.clone(),
+            result_subject: Maybe::present(result),
+            seed_to_result_patch: Maybe::present(patch_payload),
+            fixtures: shared.fixtures.clone(),
+            oracle: shared.oracle.clone(),
+            harness: shared.harness.clone(),
+            collector: shared.collector.clone(),
+            launcher: shared.launcher.clone(),
+            locks: shared.locks.clone(),
+            toolchain: shared.toolchain.clone(),
+            target_features_build_profile: shared.build.clone(),
+            standards: shared.standards.clone(),
+            isolation_profile: shared.isolation.clone(),
+        },
+        argv: List::new(vec![text(DRIVER_DESTINATION)?]).map_err(|_| Refusal::Encoding)?,
+        environment: shared.environment.clone(),
+        grants: shared.grants.clone(),
+        limits: limits_record,
+        allowed_effects: shared.effects.clone(),
+        cleanup_contract: contract,
+        expectation: reviewed.expectation().clone(),
+        case_design_review: reviewed.review().clone(),
+    };
+    let prepared = prepare_u64(attempt).map_err(Refusal::Plan)?;
+    Ok(Planned {
+        prepared,
+        objects: sink.registered().values().cloned().collect(),
+        added: sink.registered().len().saturating_sub(before),
+    })
+}
+
+/// A file of a snapshot by path, or the patch refusal naming the editable as missing.
+fn snapshot_file<'a>(snapshot: &'a Snapshot, file: &str) -> Result<&'a [u8], Refusal> {
+    snapshot
+        .entries()
+        .find_map(|entry| match &entry.content {
+            workspace::Content::File { bytes, .. } if entry.path == file => Some(bytes.as_slice()),
+            _ => None,
+        })
+        .ok_or(Refusal::Patch(patch::Error::Bound))
 }
 
 /// The digest the receipt's `schema_sha256` names: the schema bytes this binary carries.

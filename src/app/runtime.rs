@@ -13,17 +13,21 @@ use super::capture;
 use super::class_profile::{Profile, Workspace};
 use super::evidence::{Evidence as Sink, digest, fresh_id};
 use super::live_verifier::{Cleanup, checked};
+use super::plan;
 use super::repair::{self, Failure};
 use super::run_records::{
     Intents, ObligationRecord, OutcomeName, OutputReadback, Readbacks, RunCleanup, RunClock,
     RunOutcome, RunRecord as _, RuntimeClock, Settlement as RecordSettlement,
 };
 use super::tasks::{Poisoned, StoreTasks};
-use super::workload::{self, Outcome as WorkloadOutcome, Run, Step};
+use super::u64_receipt;
+use super::workload::{self, Outcome as WorkloadOutcome, Run, Step, Tools};
+use crate::check::collector;
 use crate::check::consistency::{U64_BOUNDS, U64_CRITERIA, U64_EDITABLE};
 use crate::check::decision::CLEANUP_GRACE_MS;
 use crate::contracts::control::criteria_digest;
 use crate::contracts::receipt::Name;
+use crate::contracts::receipt::{Address as _, ReceiptV1, Ref};
 use crate::contracts::roster::{MAX_HISTORY, Selection};
 use crate::contracts::{Generation, Sha256Digest, UuidV4};
 use crate::store::{
@@ -33,6 +37,7 @@ use crate::store::{
 };
 use crate::task::LoopRefusal;
 use crate::task::driver::{self, Acceptance, Checked as DriverChecked, StopReason, Work};
+use crate::worker::host;
 use crate::worker::resources::TERM_GRACE;
 use crate::worker::workspace::{self, FileIdentity, Snapshot};
 use std::fs;
@@ -94,6 +99,9 @@ pub const U64_CHECK_SCHEMA: &str = "hee3.u64-check/1";
 const TASK_STOP_SCHEMA: &str = "hee3.task-stop/1";
 /// The schema of a pre-dispatch refusal's evidence — the `kind` its body names.
 const PRE_DISPATCH_REFUSAL_SCHEMA: &str = "hee3.pre-dispatch-refusal/1";
+/// A per-check plan that refused before the producer ran (R17 round 2, N2): the runtime's fourth
+/// own evidence shape — no run records, the refusal named, verdict `Error`.
+const PLAN_REFUSED_SCHEMA: &str = "hee3.plan-refused/1";
 
 /// What one check is handed (R15 round 2): the frozen applied snapshot (never a path to mutate),
 /// the protected snapshot, a private job root of its own beside the attempt's directory, the window
@@ -103,6 +111,9 @@ pub struct CheckPlan<'a> {
     pub subject: &'a Snapshot,
     pub protected: &'a Snapshot,
     pub job_root: &'a Path,
+    /// The pins the verifier launches with: the runtime's own value, the one its plan described
+    /// (R17 round 2, decision 2) — never re-derived by the verifier.
+    pub tools: &'a Tools,
     pub window: CheckWindow,
     pub cancelled: &'a AtomicBool,
 }
@@ -198,12 +209,16 @@ pub enum Refusal {
     BaselineMismatch,
     ProtectedCapture,
     ProtectedMismatch,
+    /// The shared plan could not be published before dispatch (R17 round 2, N2): the kind named,
+    /// the detail in the dispatcher's log.
+    Plan(&'static str),
 }
 
 impl Refusal {
     #[must_use]
     pub const fn name(self) -> &'static str {
         match self {
+            Self::Plan(kind) => kind,
             Self::CriteriaNotClass => "criteria_not_class",
             Self::ReservationEmpty => "reservation_empty",
             Self::ReservationTooSmall => "reservation_too_small",
@@ -315,6 +330,11 @@ struct Begun {
     verified: bool,
     /// The check, once recorded, had a known cost and settled cleanup (review H1).
     check_settled: bool,
+    /// The per-check plan this attempt's check ran under (R17 round 2, shape C), when one was.
+    planned: Option<plan::Planned>,
+    /// The run id of the receipt this attempt's check recorded, for the next attempt's
+    /// `parent_run` (L3); `None` when the check's evidence was not a receipt.
+    receipt_run: Option<String>,
 }
 
 /// What a verification commits beside its row: the run records and the objects they cite.
@@ -322,6 +342,9 @@ struct Begun {
 struct Committing<'a> {
     records: &'a [StoreRunRecord<'a>],
     cited: &'a [Object],
+    /// The evidence object when the composer already published it (the receipt root under the
+    /// verification's artifact id — R16r2.6): `commit` then publishes nothing itself.
+    root: Option<&'a Object>,
 }
 
 impl Committing<'static> {
@@ -329,7 +352,56 @@ impl Committing<'static> {
     const NONE: Self = Self {
         records: &[],
         cited: &[],
+        root: None,
     };
+}
+
+/// What the verifier's observation is recorded with: the window it ran in, the job root to tear
+/// down, the applied snapshot to read back, the subject digest and the ids minted at plan time.
+struct Observation<'a> {
+    observed: Observed,
+    window: CheckWindow,
+    job_root: &'a Path,
+    applied: &'a Snapshot,
+    subject: &'a str,
+    ids: &'a [String; 3],
+}
+
+/// What a check's teardown settled and read back, with the two records derived from it.
+struct Settled {
+    subjects_verified: bool,
+    protected_unchanged: bool,
+    cleanup: Cleanup,
+    cleanup_record: RunCleanup,
+    clock: RunClock,
+}
+
+/// What the 3c evidence is built from when no receipt is recorded: the derived check, the
+/// captured objects, the records and the run.
+struct Fallback<'a> {
+    cited_objects: Vec<Object>,
+    published: &'a [(RunRecordKind, String, Object)],
+    run: &'a Run,
+    failed_at: Option<&'a str>,
+    derived: super::live_verifier::Checked,
+    root_id: &'a str,
+}
+
+/// A composed receipt with every object its sink holds, or the composer's refusal.
+type Composition = Result<(u64_receipt::Composed, Vec<(Ref, Object)>), u64_receipt::Refusal>;
+
+/// What one receipt is composed from, beside the plan: the check's records and run.
+#[derive(Clone, Copy)]
+struct ComposeInputs<'a> {
+    clock: &'a RunClock,
+    outcome: &'a RunOutcome,
+    cleanup: &'a RunCleanup,
+    records: &'a [(RunRecordKind, String, Object)],
+    captures: &'a [Option<capture::Captured>],
+    run: &'a Run,
+    root_id: &'a str,
+    subjects_verified: bool,
+    protected_unchanged: bool,
 }
 
 /// One verification as the ledger committed it, for the runtime's own bookkeeping.
@@ -353,6 +425,12 @@ struct StoreRuntime<'a, C, V> {
     verifier: V,
     baseline: Snapshot,
     protected: Snapshot,
+    /// The pins every check launches with and the plan describes: one value (R17 round 2, 2).
+    tools: Tools,
+    /// The class profile the dispatch read: the plan's declarations and the readback's digest.
+    profile: &'a Profile,
+    /// The shared part of every plan this dispatch composes, published once at dispatch.
+    shared: plan::Shared,
     /// The flag a check's workload reads; nothing sets it in B14a-3c (a durable cancel during a
     /// check is honoured at the driver's next read — B19/B21 own the wake).
     cancelled: AtomicBool,
@@ -397,6 +475,39 @@ pub fn dispatch<C: CandidateSource, V: Verifier>(
             return Ok(Outcome::Refused(refusal));
         }
     };
+    // The shared plan, once per dispatch, in a hold of its own (R17 round 2, shape S): its
+    // refusal is a stop before any attempt, named by kind. It runs under the dispatch's own
+    // deadline — the capture share bounds the two snapshot captures, not megabytes of pinned
+    // bytes and a compiler probe — and its time is attempt 1's, charged from the origin
+    // (B14a-R2.5; R17 round 2 N6 revisited: the deadline passed through is the task's).
+    let tools = super::live_verifier::tools(&profile.declared);
+    let cancelled = AtomicBool::new(false);
+    let plan_root = dispatch
+        .attempts
+        .join(format!("{}.plan", dispatch.task.as_str()));
+    let shared = tasks.with_store(|store| {
+        let mut sink = Sink::new(store, deadline);
+        plan::shared(
+            &mut sink,
+            &plan::Inputs {
+                tools: &tools,
+                profile,
+                baseline: &prepared.baseline,
+                protected: &prepared.protected,
+                plan_root: &plan_root,
+                deadline,
+                cancelled: &cancelled,
+            },
+        )
+    })?;
+    let shared = match shared {
+        Ok(shared) => shared,
+        Err(refusal) => {
+            let stop = Refusal::Plan(refusal.name());
+            refuse(tasks, &dispatch, stop, origin, deadline)?;
+            return Ok(Outcome::Refused(stop));
+        }
+    };
     let mut runtime = StoreRuntime {
         tasks,
         dispatch,
@@ -404,7 +515,10 @@ pub fn dispatch<C: CandidateSource, V: Verifier>(
         verifier,
         baseline: prepared.baseline,
         protected: prepared.protected,
-        cancelled: AtomicBool::new(false),
+        tools,
+        profile,
+        shared,
+        cancelled,
         digests: prepared.digests,
         origin,
         deadline,
@@ -670,7 +784,10 @@ impl<C: CandidateSource, V: Verifier> StoreRuntime<'_, C, V> {
         } else {
             check.verdict
         };
-        let object = store.publish(&check.evidence, uuid(staging)?, self.deadline)?;
+        let object = match committing.root {
+            Some(root) => root.clone(),
+            None => store.publish(&check.evidence, uuid(staging)?, self.deadline)?,
+        };
         let generation = store.record_verification_with_records(
             &expected(&head, begun)?,
             &Verification {
@@ -721,14 +838,17 @@ impl<C: CandidateSource, V: Verifier> StoreRuntime<'_, C, V> {
     fn record_observed(
         &mut self,
         index: usize,
-        observed: Observed,
-        window: CheckWindow,
-        job_root: &Path,
-        applied: &Snapshot,
-        subject: &str,
+        observation: Observation<'_>,
     ) -> Result<Committed, Error> {
+        let Observation {
+            observed,
+            window,
+            job_root,
+            applied,
+            subject,
+            ids,
+        } = observation;
         let begun = self.attempts.get(index).ok_or(Error::Identity)?;
-        let ids: [String; 3] = fresh_ids(self.deadline)?;
         let record_ids: [String; 8] = fresh_ids(self.deadline)?;
         let committed = self
             .tasks
@@ -737,22 +857,22 @@ impl<C: CandidateSource, V: Verifier> StoreRuntime<'_, C, V> {
                 let teardown = window.teardown_until.min(self.deadline);
                 let capture = capture_run(store, &run, teardown, self.deadline)?;
                 let complete = capture.complete();
+                let capture_refs = capture.refs();
                 let Captures {
                     steps: captures,
                     outputs,
                     objects: cited_objects,
                     failed_at,
                 } = capture;
-                let subjects_verified = applied.readback_source(teardown).is_ok();
-                let protected_unchanged = self.protected.readback_source(teardown).is_ok();
-                // The check's own teardown: the job root and everything the run retained under it,
-                // always attempted, settled only when it finished within the teardown share.
-                let removed = fs::remove_dir_all(job_root).is_ok() || !job_root.exists();
-                let retained_removed = removed && Instant::now() < teardown;
-                let (cleanup, cleanup_record) = cleanup_of(&run, retained_removed);
-                let clock = clock_of(window, observed.observed, run.decisive)?;
+                let Settled {
+                    subjects_verified,
+                    protected_unchanged,
+                    cleanup,
+                    cleanup_record,
+                    clock,
+                } = self.settled(&run, teardown, job_root, applied, window, observed.observed)?;
                 let outcome_record = if complete {
-                    Some(RunOutcome::of(&run, &captures).map_err(|_| Error::Identity)?)
+                    Some(RunOutcome::of(&run, &capture_refs).map_err(|_| Error::Identity)?)
                 } else {
                     None
                 };
@@ -770,52 +890,241 @@ impl<C: CandidateSource, V: Verifier> StoreRuntime<'_, C, V> {
                     observed.observed,
                 );
                 // Publish every record under a fresh identity; the evidence cites each one.
-                let encode = |bytes: Result<Vec<u8>, super::run_records::Refusal>| {
-                    bytes.map_err(|_| Error::Identity)
-                };
-                let published = publish_records(
+                let published = publish_four(
                     store,
                     self.deadline,
                     &record_ids,
-                    [
-                        Some(encode(clock.to_bytes())?),
-                        outcome_record
-                            .as_ref()
-                            .map(|record| encode(record.to_bytes()))
-                            .transpose()?,
-                        Some(encode(cleanup_record.to_bytes())?),
-                        Some(encode(readbacks.to_bytes())?),
-                    ],
+                    (&clock, outcome_record.as_ref(), &cleanup_record, &readbacks),
                 )?;
-                let check = check_of(
-                    &published,
-                    OutcomeName::of(&run.outcome),
-                    failed_at.as_deref(),
-                    derived,
+                let records = store_records(&published)?;
+                // The receipt, when a plan exists and the run was captured whole (R17 round 2,
+                // decision 7 and R16r2.10): compose over a sink holding the shared and per-check
+                // objects; a refused compose keeps the 3c evidence and names the refusal in it.
+                let inputs = outcome_record.as_ref().map(|outcome| ComposeInputs {
+                    clock: &clock,
+                    outcome,
+                    cleanup: &cleanup_record,
+                    records: &published,
+                    captures: &captures,
+                    run: &run,
+                    root_id: &ids[2],
+                    subjects_verified,
+                    protected_unchanged,
+                });
+                let (check, cited, root) = self.evidence(
+                    store,
+                    begun,
+                    inputs,
+                    Fallback {
+                        cited_objects,
+                        published: &published,
+                        run: &run,
+                        failed_at: failed_at.as_deref(),
+                        derived,
+                        root_id: &ids[2],
+                    },
                 )?;
-                let records = published
-                    .iter()
-                    .map(|(kind, id, object)| {
-                        Ok(StoreRunRecord {
-                            kind: *kind,
-                            artifact_id: uuid(id)?,
-                            object,
-                        })
-                    })
-                    .collect::<Result<Vec<_>, Error>>()?;
                 self.commit(
                     store,
                     begun,
                     &check,
                     subject,
-                    &ids,
+                    ids,
                     Committing {
                         records: &records,
-                        cited: &cited_objects,
+                        cited: &cited,
+                        root: root.as_ref(),
                     },
                 )
             })??;
         self.recorded(index, committed)
+    }
+
+    /// The check's own teardown and readbacks: the subjects read back, the job root and everything
+    /// the run retained under it removed (settled only within the teardown share), the cleanup
+    /// and clock records derived.
+    fn settled(
+        &self,
+        run: &Run,
+        teardown: Instant,
+        job_root: &Path,
+        applied: &Snapshot,
+        window: CheckWindow,
+        observed: Instant,
+    ) -> Result<Settled, Error> {
+        let subjects_verified = applied.readback_source(teardown).is_ok();
+        let protected_unchanged = self.protected.readback_source(teardown).is_ok();
+        let removed = fs::remove_dir_all(job_root).is_ok() || !job_root.exists();
+        let retained_removed = removed && Instant::now() < teardown;
+        let (cleanup, cleanup_record) = cleanup_of(run, retained_removed);
+        let clock = clock_of(window, observed, run.decisive)?;
+        Ok(Settled {
+            subjects_verified,
+            protected_unchanged,
+            cleanup,
+            cleanup_record,
+            clock,
+        })
+    }
+
+    /// The per-check plan in a hold of its own (R17 round 2, shape C): the result subject, the
+    /// patch, the limits and cleanup contract, the identity — `prepare_u64` over them.
+    fn plan_check(
+        &self,
+        index: usize,
+        applied: &Snapshot,
+        ids: &[String; 3],
+        obligation_ids: &[String; 4],
+        window: CheckWindow,
+    ) -> Result<Result<plan::Planned, plan::Refusal>, Error> {
+        let begun = self.attempts.get(index).ok_or(Error::Identity)?;
+        let parent_run = index
+            .checked_sub(1)
+            .and_then(|previous| self.attempts.get(previous))
+            .and_then(|previous| previous.receipt_run.clone());
+        let wall_ms = millis(
+            window
+                .teardown_until
+                .saturating_duration_since(window.begun),
+        );
+        let inputs = plan::CheckInputs {
+            shared: &self.shared,
+            profile: self.profile,
+            baseline: &self.baseline,
+            applied,
+            task: self.dispatch.task.as_str(),
+            attempt: &begun.id,
+            run: &ids[2],
+            generation: &begun.generation,
+            parent_run: parent_run.as_deref(),
+            obligation_ids,
+            wall_ms,
+            deadline: window.teardown_until.min(self.deadline),
+        };
+        Ok(self.tasks.with_store(|store| {
+            let mut sink = Sink::new(store, self.deadline);
+            plan::check(&mut sink, &inputs)
+        })?)
+    }
+
+    /// The check's evidence: the receipt when a plan exists and the run was captured whole
+    /// (`inputs` present), else the 3c evidence — see [`evidence_for`].
+    fn evidence(
+        &self,
+        store: &Store,
+        begun: &Begun,
+        inputs: Option<ComposeInputs<'_>>,
+        fallback: Fallback<'_>,
+    ) -> Result<(Check, Vec<Object>, Option<Object>), Error> {
+        let composed = begun
+            .planned
+            .as_ref()
+            .zip(inputs)
+            .map(|(planned, inputs)| self.compose_receipt(store, planned, inputs));
+        evidence_for(composed, fallback)
+    }
+
+    /// Compose the receipt over a sink holding the shared and per-check objects (decision 7),
+    /// with the readbacks derived as N1 states; returns the composed receipt and every object the
+    /// compose sink holds, for the commit's citation.
+    fn compose_receipt(
+        &self,
+        store: &Store,
+        planned: &plan::Planned,
+        inputs: ComposeInputs<'_>,
+    ) -> Composition {
+        let mut sink = Sink::new(store, self.deadline);
+        for (reference, object) in self.shared.objects.iter().chain(&planned.objects) {
+            sink.register(reference.clone(), object.clone())
+                .map_err(|error| u64_receipt::Refusal::Publisher {
+                    stage: "carry-over",
+                    error: collector::Error::Sink(error),
+                })?;
+        }
+        let facts = host::facts().map_err(|_| u64_receipt::Refusal::Publisher {
+            stage: "host facts",
+            error: collector::Error::Bound,
+        })?;
+        let unsettled = inputs
+            .cleanup
+            .obligations()
+            .iter()
+            .filter(|obligation| obligation.state != RecordSettlement::Settled)
+            .count();
+        let obligation_ids: [String; 4] =
+            fresh_ids(self.deadline).map_err(|_| u64_receipt::Refusal::Publisher {
+                stage: "obligation ids",
+                error: collector::Error::Bound,
+            })?;
+        let readbacks = self.readbacks_of(
+            inputs.run,
+            inputs.subjects_verified,
+            inputs.protected_unchanged,
+        );
+        let composed = u64_receipt::compose(
+            &mut sink,
+            &u64_receipt::Composing {
+                prepared: &planned.prepared,
+                clock: inputs.clock,
+                outcome: inputs.outcome,
+                cleanup: inputs.cleanup,
+                records: inputs.records,
+                captures: inputs.captures,
+                evaluation: match &inputs.run.outcome {
+                    WorkloadOutcome::Matched(evaluation)
+                    | WorkloadOutcome::Mismatch(evaluation) => {
+                        Some((evaluation.matched, evaluation.failed))
+                    }
+                    _ => None,
+                },
+                obligation_ids: &obligation_ids[..unsettled.min(4)],
+                root_id: Some(inputs.root_id),
+                host: &facts,
+                readbacks,
+            },
+        )?;
+        Ok((composed, sink.into_registered().into_values().collect()))
+    }
+
+    /// Each readback value from a named observation (R17 round 2, N1): the seed from the
+    /// baseline's readback, the result from the applied's, fixtures/oracle/harness from the
+    /// protected tree's, toolchain and launcher only when every stage LAUNCHED and the pinned
+    /// files still hash to their pins after the run, the profile from a re-read of `profile.toml`.
+    fn readbacks_of(
+        &self,
+        run: &Run,
+        subjects_verified: bool,
+        protected_unchanged: bool,
+    ) -> u64_receipt::Readbacks {
+        let launched = run
+            .steps
+            .iter()
+            .all(|step| matches!(step, Step::Completed { .. }));
+        let pins = launched.then(|| {
+            [
+                (&self.tools.compiler.host, self.tools.compiler.sha256),
+                (&self.tools.shim.host, self.tools.shim.sha256),
+                (&self.tools.bwrap, crate::worker::namespace::BWRAP_SHA256),
+            ]
+            .iter()
+            .all(|(path, pin)| {
+                crate::worker::namespace::sha256(path, self.deadline)
+                    .is_ok_and(|digest| digest == *pin)
+            })
+        });
+        let profile = super::class_profile::read(&self.profile.directory)
+            .ok()
+            .map(|read| read.digest == self.profile.digest);
+        u64_receipt::Readbacks {
+            seed: Some(self.baseline.readback_source(self.deadline).is_ok()),
+            result: Some(subjects_verified),
+            fixtures: Some(protected_unchanged),
+            oracle: Some(protected_unchanged),
+            harness: Some(protected_unchanged),
+            launcher: pins,
+            toolchain: pins,
+            profile,
+        }
     }
 
     /// The runtime's own bookkeeping after a verification committed.
@@ -824,6 +1133,8 @@ impl<C: CandidateSource, V: Verifier> StoreRuntime<'_, C, V> {
         if let Some(begun) = self.attempts.get_mut(index) {
             begun.verified = true;
             begun.check_settled = committed.reconciled;
+            begun.receipt_run = (committed.schema_id == ReceiptV1::SCHEMA_ID)
+                .then(|| committed.artifact_id.clone());
         }
         self.previous = Some(Previous {
             verdict: committed.verdict,
@@ -1047,6 +1358,8 @@ impl<C: CandidateSource, V: Verifier> driver::Runtime for StoreRuntime<'_, C, V>
             settled: false,
             verified: false,
             check_settled: true,
+            planned: None,
+            receipt_run: None,
         });
         Ok(Attempt {
             index: self.attempts.len() - 1,
@@ -1149,6 +1462,36 @@ impl<C: CandidateSource, V: Verifier> driver::Runtime for StoreRuntime<'_, C, V>
                 // records what was observed (R15 round 2).
                 let id = begun.id.clone();
                 let applied = applied.clone();
+                // The per-check plan (R17 round 2, shape C), in a hold of its own, before the
+                // producer runs; its ids are the verification's, the run id the root's.
+                let ids: [String; 3] = fresh_ids(self.deadline)?;
+                let obligation_ids: [String; 4] = fresh_ids(self.deadline)?;
+                let planned = self.plan_check(index, &applied, &ids, &obligation_ids, window)?;
+                let planned = match planned {
+                    Ok(planned) => planned,
+                    Err(refusal) => {
+                        // A refused plan is a check that never ran (N2): recorded under its own
+                        // schema, `Error`, at the cost the plan spent.
+                        let check = Check {
+                            verdict: VerificationVerdict::Error,
+                            criteria: 0,
+                            evidence: serde_json::to_vec(&serde_json::json!({
+                                "kind": "plan_refused",
+                                "refusal": refusal.name(),
+                                "detail": format!("{refusal:?}"),
+                            }))
+                            .map_err(|_| Error::Identity)?,
+                            schema_id: PLAN_REFUSED_SCHEMA.to_owned(),
+                            used_ms: Some(millis(window.begun.elapsed())),
+                            cleanup_settled: true,
+                        };
+                        let recorded = self.record(index, &check, &subject)?;
+                        return Ok(Self::checked(recorded, subject));
+                    }
+                };
+                if let Some(begun) = self.attempts.get_mut(index) {
+                    begun.planned = Some(planned);
+                }
                 let job_root = self.dispatch.attempts.join(format!("{id}.check"));
                 fs::DirBuilder::new()
                     .mode(0o700)
@@ -1158,11 +1501,21 @@ impl<C: CandidateSource, V: Verifier> driver::Runtime for StoreRuntime<'_, C, V>
                     subject: &applied,
                     protected: &self.protected,
                     job_root: &job_root,
+                    tools: &self.tools,
                     window,
                     cancelled: &self.cancelled,
                 });
-                let recorded =
-                    self.record_observed(index, observed, window, &job_root, &applied, &subject)?;
+                let recorded = self.record_observed(
+                    index,
+                    Observation {
+                        observed,
+                        window,
+                        job_root: &job_root,
+                        applied: &applied,
+                        subject: &subject,
+                        ids: &ids,
+                    },
+                )?;
                 return Ok(Self::checked(recorded, subject));
             }
             let check = Check {
@@ -1345,7 +1698,9 @@ fn number(value: &str) -> Result<u64, Error> {
 /// What the runtime captured of a run: one reference per step (`None` for a refused step), the
 /// outputs read back, and whether every publication succeeded.
 struct Captures {
-    steps: Vec<Option<crate::contracts::receipt::Ref>>,
+    /// One capture per step, `None` for a refused step: the composer's producer facts and the
+    /// run-outcome record's references both come from here.
+    steps: Vec<Option<capture::Captured>>,
     outputs: Vec<OutputReadback>,
     /// Every object the captures and readbacks published: the ledger registers them with the
     /// verification, so the inventory bound counts them and a backup copies them.
@@ -1358,6 +1713,17 @@ impl Captures {
     /// Whether every step and output was captured.
     fn complete(&self) -> bool {
         self.failed_at.is_none()
+    }
+
+    /// Each step's producer reference, for the run-outcome record.
+    fn refs(&self) -> Vec<Option<Ref>> {
+        self.steps
+            .iter()
+            .map(|step| {
+                step.as_ref()
+                    .map(|captured| captured.producer_ref.as_ref().clone())
+            })
+            .collect()
     }
 }
 
@@ -1391,7 +1757,7 @@ fn capture_run(
                 failed_at: Some((*label).to_owned()),
             });
         };
-        steps.push(Some(captured.producer_ref.into_inner()));
+        steps.push(Some(captured));
     }
     let mut outputs = Vec::with_capacity(run.outputs.len());
     for output in &run.outputs {
@@ -1455,6 +1821,48 @@ fn cleanup_of(run: &Run, retained_removed: bool) -> (Cleanup, RunCleanup) {
 
 /// Publish the encoded records present, each under its fresh artifact id (`ids[0..4]`) through
 /// its fresh staging id (`ids[4..8]`), in kind order.
+/// The published records as the ledger commits them beside the verification.
+fn store_records(
+    published: &[(RunRecordKind, String, Object)],
+) -> Result<Vec<StoreRunRecord<'_>>, Error> {
+    published
+        .iter()
+        .map(|(kind, id, object)| {
+            Ok(StoreRunRecord {
+                kind: *kind,
+                artifact_id: uuid(id)?,
+                object,
+            })
+        })
+        .collect()
+}
+
+/// The four run records encoded and published under the eight minted ids (the outcome record
+/// absent when the run was not captured whole).
+fn publish_four(
+    store: &Store,
+    deadline: Instant,
+    record_ids: &[String; 8],
+    records: (&RunClock, Option<&RunOutcome>, &RunCleanup, &Readbacks),
+) -> Result<Vec<(RunRecordKind, String, Object)>, Error> {
+    let (clock, outcome, cleanup, readbacks) = records;
+    let encode =
+        |bytes: Result<Vec<u8>, super::run_records::Refusal>| bytes.map_err(|_| Error::Identity);
+    publish_records(
+        store,
+        deadline,
+        record_ids,
+        [
+            Some(encode(clock.to_bytes())?),
+            outcome
+                .map(|record| encode(record.to_bytes()))
+                .transpose()?,
+            Some(encode(cleanup.to_bytes())?),
+            Some(encode(readbacks.to_bytes())?),
+        ],
+    )
+}
+
 fn publish_records(
     store: &Store,
     deadline: Instant,
@@ -1525,11 +1933,74 @@ fn clock_of(
 
 /// The check the runtime records for an observed run: the derived verdict, and evidence under
 /// [`U64_CHECK_SCHEMA`] citing every published record by kind (R15.7).
+/// The check's evidence: the composed receipt with its root object and every carried object cited
+/// when compose succeeded; the 3c evidence naming the refusal when it did not; the 3c evidence as
+/// it was when no receipt was attempted.
+fn evidence_for(
+    composed: Option<Composition>,
+    fallback: Fallback<'_>,
+) -> Result<(Check, Vec<Object>, Option<Object>), Error> {
+    let Fallback {
+        cited_objects,
+        published,
+        run,
+        failed_at,
+        derived,
+        root_id,
+    } = fallback;
+    match composed {
+        Some(Ok((composed, objects))) => {
+            let mut cited = cited_objects;
+            cited.extend(objects.iter().map(|(_, object)| object.clone()));
+            let root = objects
+                .iter()
+                .find(|(reference, _)| reference.artifact_id.as_str() == root_id)
+                .map(|(_, object)| object.clone())
+                .ok_or(Error::Identity)?;
+            Ok((
+                Check {
+                    verdict: derived.verdict,
+                    criteria: derived.criteria,
+                    evidence: composed.bytes,
+                    schema_id: ReceiptV1::SCHEMA_ID.to_owned(),
+                    used_ms: Some(derived.used_ms),
+                    cleanup_settled: derived.cleanup_settled,
+                },
+                cited,
+                Some(root),
+            ))
+        }
+        Some(Err(refusal)) => Ok((
+            check_of(
+                published,
+                OutcomeName::of(&run.outcome),
+                failed_at,
+                derived,
+                Some(&format!("{refusal:?}")),
+            )?,
+            cited_objects,
+            None,
+        )),
+        None => Ok((
+            check_of(
+                published,
+                OutcomeName::of(&run.outcome),
+                failed_at,
+                derived,
+                None,
+            )?,
+            cited_objects,
+            None,
+        )),
+    }
+}
+
 fn check_of(
     published: &[(RunRecordKind, String, Object)],
     outcome: OutcomeName,
     capture_failed_at: Option<&str>,
     derived: super::live_verifier::Checked,
+    compose_refused: Option<&str>,
 ) -> Result<Check, Error> {
     let cited: serde_json::Map<String, serde_json::Value> = published
         .iter()
@@ -1552,6 +2023,7 @@ fn check_of(
             "outcome": outcome,
             "captured": capture_failed_at.is_none(),
             "capture_failed_at": capture_failed_at,
+            "compose_refused": compose_refused,
             "records": cited,
         }))
         .map_err(|_| Error::Identity)?,

@@ -1109,6 +1109,7 @@ mod tests {
             captures: &[],
             evaluation: None,
             obligation_ids: &obligation_ids,
+            root_id: None,
             host: &host_facts,
             readbacks: Readbacks {
                 seed: Some(true),
@@ -1167,6 +1168,9 @@ pub struct Composing<'a> {
     /// Fresh ids for the unsettled-obligation rows, one per obligation the cleanup record left
     /// unsettled (minted by the caller, as every receipt row id is).
     pub obligation_ids: &'a [String],
+    /// The receipt root's artifact id, minted by the runtime before the plan: the verification's
+    /// evidence artifact id and the identity's `run_id` (R17 round 2, decision 3); `None` mints one.
+    pub root_id: Option<&'a str>,
     pub host: &'a host::Facts,
     pub readbacks: Readbacks,
 }
@@ -1318,9 +1322,7 @@ pub fn compose(sink: &mut Evidence<'_>, composing: &Composing<'_>) -> Result<Com
             timing,
         },
     )?;
-    let finalized = publisher
-        .finalize(composing.prepared, &decision, observed)
-        .map_err(at("finalize"))?;
+    let finalized = finalized(&mut publisher, composing, &decision, observed)?;
     Ok(Composed {
         root: finalized.reference,
         bytes: finalized.bytes,
@@ -1440,6 +1442,23 @@ fn host_payload(sink: &mut Evidence<'_>, host: &host::Facts) -> Result<Payload, 
             stage: "host facts",
             error: collector::Error::Sink(error),
         })
+}
+
+/// The root, reserved under the runtime's id when it holds one (R17 round 2, decision 3).
+fn finalized(
+    publisher: &mut Publisher<'_, Evidence<'_>>,
+    composing: &Composing<'_>,
+    decision: &Decision,
+    observed: Observed,
+) -> Result<collector::Finalized, Refusal> {
+    match composing.root_id {
+        Some(root_id) => {
+            let root_id = Id::new(root_id).map_err(Refusal::Encoding)?;
+            publisher.finalize_as(composing.prepared, decision, observed, root_id)
+        }
+        None => publisher.finalize(composing.prepared, decision, observed),
+    }
+    .map_err(at("finalize"))
 }
 
 /// The receipt's observations: the host, the clock's instants as unix and monotonic-relative

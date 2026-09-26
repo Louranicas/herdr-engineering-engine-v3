@@ -199,6 +199,17 @@ impl<'a, S: Sink> Publisher<'a, S> {
     }
 
     fn reserve<T: ReceiptRecord>(&mut self, bytes: &[u8]) -> Result<TypedRef<T>, Error> {
+        self.reserve_with(bytes, None)
+    }
+
+    /// Reserve a reference for `bytes` under `id` when the caller holds one (the receipt root's
+    /// identity is the verification's evidence artifact id — R17 round 2, decision 3), else under
+    /// a fresh id; the `contains_id` and allocation checks hold either way.
+    fn reserve_with<T: ReceiptRecord>(
+        &mut self,
+        bytes: &[u8],
+        id: Option<Id>,
+    ) -> Result<TypedRef<T>, Error> {
         let total = self
             .bytes
             .checked_add(u64::try_from(bytes.len()).map_err(|_| Error::Bound)?)
@@ -206,7 +217,10 @@ impl<'a, S: Sink> Publisher<'a, S> {
         if self.attempted.len() >= MAX_OBJECTS || total > MAX_GRAPH_BYTES {
             return Err(Error::Bound);
         }
-        let id = self.sink.fresh_id()?;
+        let id = match id {
+            Some(id) => id,
+            None => self.sink.fresh_id()?,
+        };
         if self.sink.contains_id(&id)? || !self.allocated.insert(id.as_str().to_owned()) {
             return Err(Error::Identity);
         }
@@ -275,6 +289,31 @@ impl<'a, S: Sink> Publisher<'a, S> {
         decided: &decision::Decision,
         observed: Observed,
     ) -> Result<Finalized, Error> {
+        self.finalize_with(prepared, decided, observed, None)
+    }
+
+    /// [`Self::finalize`] with the root reserved under the caller's `root_id` (R17 round 2,
+    /// decision 3): the receipt's `identity.run_id` is then its own artifact id.
+    ///
+    /// # Errors
+    /// As [`Self::finalize`]; `Identity` when `root_id` is already held by the sink.
+    pub fn finalize_as(
+        &mut self,
+        prepared: &consistency::Prepared,
+        decided: &decision::Decision,
+        observed: Observed,
+        root_id: Id,
+    ) -> Result<Finalized, Error> {
+        self.finalize_with(prepared, decided, observed, Some(root_id))
+    }
+
+    fn finalize_with(
+        &mut self,
+        prepared: &consistency::Prepared,
+        decided: &decision::Decision,
+        observed: Observed,
+        root_id: Option<Id>,
+    ) -> Result<Finalized, Error> {
         let reasons = decided
             .reasons()
             .iter()
@@ -319,7 +358,7 @@ impl<'a, S: Sink> Publisher<'a, S> {
             availability: observed.availability,
         };
         let bytes = receipt::encode(&root)?;
-        let reference = self.reserve::<ReceiptV1>(&bytes)?;
+        let reference = self.reserve_with::<ReceiptV1>(&bytes, root_id)?;
         let view = RootView {
             sink: &*self.sink,
             reference: reference.as_ref(),

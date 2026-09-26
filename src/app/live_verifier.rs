@@ -55,18 +55,15 @@ pub fn tools(declared: &Declared) -> Tools {
 /// The production verifier: the fixed workload under three bounded scopes, run against the applied
 /// candidate inside the check window, returned as observed — nothing is published or decided here.
 pub struct LiveVerifier {
-    tools: Tools,
     scopes: [Scope; 3],
 }
 
 impl LiveVerifier {
-    /// Over the class profile's declaration and the three scopes the dispatcher owns (B14b).
+    /// Over the three scopes the dispatcher owns (B14b); the tools arrive with each check's plan,
+    /// the same value the runtime's own plan described (R17 round 2, decision 2).
     #[must_use]
-    pub fn new(declared: &Declared, scopes: [Scope; 3]) -> Self {
-        Self {
-            tools: tools(declared),
-            scopes,
-        }
+    pub const fn new(scopes: [Scope; 3]) -> Self {
+        Self { scopes }
     }
 }
 
@@ -77,7 +74,7 @@ impl Verifier for LiveVerifier {
                 source: plan.subject,
                 protected: plan.protected,
                 job_root: plan.job_root,
-                tools: &self.tools,
+                tools: plan.tools,
                 deadline: plan.window.until,
                 teardown_deadline: plan.window.teardown_until,
                 cancelled: plan.cancelled,

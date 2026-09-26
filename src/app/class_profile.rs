@@ -46,7 +46,8 @@ pub const MAX_REVIEWED_BYTES: u64 = MAX_PROFILE_BYTES;
 const _: () = assert!(MAX_REVIEWED_BYTES >= 65_533);
 
 const SCHEMA: &str = "hee3.class-profile/1";
-const CLASS: &str = "rust-library-change/1";
+/// The one class this profile schema admits; the plan's `profile_id` is `<class>@<digest>`.
+pub const CLASS: &str = "rust-library-change/1";
 /// Destinations under which the workload mounts and writes its own files.
 const RESERVED_PREFIXES: [&str; 2] = ["/frozen", "/work"];
 
