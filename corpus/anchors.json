@@ -7,7 +7,7 @@
     "codebase": "/var/home/herdr-engineering-engine-v3"
   },
   "source_plan_sha256": "e62091172c60c391bbd5221dd7d3a9bfa398c8a89a1b66c8c5de97c4ddc88d0c",
-  "catalogue_sha256": "ae1262cc26e4c142d4fb1b5e7ae438307cc31bf4f63466d64cf6c288608890aa",
+  "catalogue_sha256": "c819d04e42f8f9ba2e455e7caeb70e48418b7fe6934c729130f651c5836e535e",
   "readiness": {
     "id": "HEE3-READINESS-001",
     "sha256": "f574043487f39db6424c4988bce58e88a6e766f02f974fbcf3fa8dd6e0003548",
@@ -36,7 +36,7 @@
   },
   "learnings": {
     "id": "HEE3-LEARNINGS-001",
-    "sha256": "8b7997fb03daaa8dbdd52ed286bc3f5c8b7896005bf7d9ae48d8cd79811f4e9d",
+    "sha256": "b2188491993eb7c3f6ed84590679923988b4679892f5bc3210f43bb5b4e4fbfa",
     "note": "Learnings/Index.md",
     "sources": 13,
     "lessons": 14
@@ -3690,7 +3690,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "8b7997fb03daaa8dbdd52ed286bc3f5c8b7896005bf7d9ae48d8cd79811f4e9d",
+        "convention_sha256": "b2188491993eb7c3f6ed84590679923988b4679892f5bc3210f43bb5b4e4fbfa",
         "lessons": [
           "LRN01",
           "LRN03",
@@ -6070,6 +6070,16 @@
           "task_id": "T04"
         },
         {
+          "path": "migrations/007.sql",
+          "owner": "store",
+          "modules": [
+            "store",
+            "task"
+          ],
+          "reason": "Seventh migration of the additive chain (B14a-5, design R19): attempt_records is rebuilt under a kind CHECK widened with worker_settle, so the settle that observes a native attempt commits the worker's settle (usage, identity, wall, outcome) as a sixth run record beside the check's five; every row preserved and the by-attempt index recreated. Identity is its own pinned body digest in store::schema. Inventoried by exact bytes, never rewritten by the publisher.",
+          "task_id": "T04"
+        },
+        {
           "path": "src/store/roster/attempts.rs",
           "owner": "store",
           "modules": [
@@ -7032,7 +7042,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "8b7997fb03daaa8dbdd52ed286bc3f5c8b7896005bf7d9ae48d8cd79811f4e9d",
+        "convention_sha256": "b2188491993eb7c3f6ed84590679923988b4679892f5bc3210f43bb5b4e4fbfa",
         "lessons": [
           "LRN01",
           "LRN04",
@@ -8924,6 +8934,16 @@
           "task_id": "T04"
         },
         {
+          "path": "migrations/007.sql",
+          "owner": "store",
+          "modules": [
+            "store",
+            "task"
+          ],
+          "reason": "Seventh migration of the additive chain (B14a-5, design R19): attempt_records is rebuilt under a kind CHECK widened with worker_settle, so the settle that observes a native attempt commits the worker's settle (usage, identity, wall, outcome) as a sixth run record beside the check's five; every row preserved and the by-attempt index recreated. Identity is its own pinned body digest in store::schema. Inventoried by exact bytes, never rewritten by the publisher.",
+          "task_id": "T04"
+        },
+        {
           "path": "src/contracts/roster.rs",
           "owner": "contracts",
           "modules": [
@@ -9996,7 +10016,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "8b7997fb03daaa8dbdd52ed286bc3f5c8b7896005bf7d9ae48d8cd79811f4e9d",
+        "convention_sha256": "b2188491993eb7c3f6ed84590679923988b4679892f5bc3210f43bb5b4e4fbfa",
         "lessons": [
           "LRN04",
           "LRN05",
@@ -11846,7 +11866,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "8b7997fb03daaa8dbdd52ed286bc3f5c8b7896005bf7d9ae48d8cd79811f4e9d",
+        "convention_sha256": "b2188491993eb7c3f6ed84590679923988b4679892f5bc3210f43bb5b4e4fbfa",
         "lessons": [
           "LRN05",
           "LRN08",
@@ -13487,7 +13507,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "8b7997fb03daaa8dbdd52ed286bc3f5c8b7896005bf7d9ae48d8cd79811f4e9d",
+        "convention_sha256": "b2188491993eb7c3f6ed84590679923988b4679892f5bc3210f43bb5b4e4fbfa",
         "lessons": [
           "LRN05",
           "LRN08",
@@ -15295,7 +15315,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "8b7997fb03daaa8dbdd52ed286bc3f5c8b7896005bf7d9ae48d8cd79811f4e9d",
+        "convention_sha256": "b2188491993eb7c3f6ed84590679923988b4679892f5bc3210f43bb5b4e4fbfa",
         "lessons": [
           "LRN08",
           "LRN09",
@@ -20139,7 +20159,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "8b7997fb03daaa8dbdd52ed286bc3f5c8b7896005bf7d9ae48d8cd79811f4e9d",
+        "convention_sha256": "b2188491993eb7c3f6ed84590679923988b4679892f5bc3210f43bb5b4e4fbfa",
         "lessons": [
           "LRN03",
           "LRN05",
@@ -25643,7 +25663,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "8b7997fb03daaa8dbdd52ed286bc3f5c8b7896005bf7d9ae48d8cd79811f4e9d",
+        "convention_sha256": "b2188491993eb7c3f6ed84590679923988b4679892f5bc3210f43bb5b4e4fbfa",
         "lessons": [
           "LRN01",
           "LRN02",
@@ -27169,7 +27189,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "8b7997fb03daaa8dbdd52ed286bc3f5c8b7896005bf7d9ae48d8cd79811f4e9d",
+        "convention_sha256": "b2188491993eb7c3f6ed84590679923988b4679892f5bc3210f43bb5b4e4fbfa",
         "lessons": [
           "LRN05",
           "LRN06",
@@ -28973,7 +28993,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "8b7997fb03daaa8dbdd52ed286bc3f5c8b7896005bf7d9ae48d8cd79811f4e9d",
+        "convention_sha256": "b2188491993eb7c3f6ed84590679923988b4679892f5bc3210f43bb5b4e4fbfa",
         "lessons": [
           "LRN07",
           "LRN08",
@@ -30565,7 +30585,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "8b7997fb03daaa8dbdd52ed286bc3f5c8b7896005bf7d9ae48d8cd79811f4e9d",
+        "convention_sha256": "b2188491993eb7c3f6ed84590679923988b4679892f5bc3210f43bb5b4e4fbfa",
         "lessons": [
           "LRN03",
           "LRN08",
@@ -32121,7 +32141,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "8b7997fb03daaa8dbdd52ed286bc3f5c8b7896005bf7d9ae48d8cd79811f4e9d",
+        "convention_sha256": "b2188491993eb7c3f6ed84590679923988b4679892f5bc3210f43bb5b4e4fbfa",
         "lessons": [
           "LRN01",
           "LRN03",
@@ -33851,7 +33871,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "8b7997fb03daaa8dbdd52ed286bc3f5c8b7896005bf7d9ae48d8cd79811f4e9d",
+        "convention_sha256": "b2188491993eb7c3f6ed84590679923988b4679892f5bc3210f43bb5b4e4fbfa",
         "lessons": [
           "LRN06",
           "LRN07",
@@ -35228,7 +35248,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "8b7997fb03daaa8dbdd52ed286bc3f5c8b7896005bf7d9ae48d8cd79811f4e9d",
+        "convention_sha256": "b2188491993eb7c3f6ed84590679923988b4679892f5bc3210f43bb5b4e4fbfa",
         "lessons": [
           "LRN01",
           "LRN08",
@@ -37230,7 +37250,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "8b7997fb03daaa8dbdd52ed286bc3f5c8b7896005bf7d9ae48d8cd79811f4e9d",
+        "convention_sha256": "b2188491993eb7c3f6ed84590679923988b4679892f5bc3210f43bb5b4e4fbfa",
         "lessons": [
           "LRN03",
           "LRN05",
@@ -39212,7 +39232,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "8b7997fb03daaa8dbdd52ed286bc3f5c8b7896005bf7d9ae48d8cd79811f4e9d",
+        "convention_sha256": "b2188491993eb7c3f6ed84590679923988b4679892f5bc3210f43bb5b4e4fbfa",
         "lessons": [
           "LRN03",
           "LRN05",
@@ -41930,7 +41950,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "8b7997fb03daaa8dbdd52ed286bc3f5c8b7896005bf7d9ae48d8cd79811f4e9d",
+        "convention_sha256": "b2188491993eb7c3f6ed84590679923988b4679892f5bc3210f43bb5b4e4fbfa",
         "lessons": [
           "LRN01",
           "LRN02",
@@ -43800,7 +43820,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "8b7997fb03daaa8dbdd52ed286bc3f5c8b7896005bf7d9ae48d8cd79811f4e9d",
+        "convention_sha256": "b2188491993eb7c3f6ed84590679923988b4679892f5bc3210f43bb5b4e4fbfa",
         "lessons": [
           "LRN01",
           "LRN02",
@@ -45198,7 +45218,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "8b7997fb03daaa8dbdd52ed286bc3f5c8b7896005bf7d9ae48d8cd79811f4e9d",
+        "convention_sha256": "b2188491993eb7c3f6ed84590679923988b4679892f5bc3210f43bb5b4e4fbfa",
         "lessons": [
           "LRN03",
           "LRN04",
@@ -46685,7 +46705,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "8b7997fb03daaa8dbdd52ed286bc3f5c8b7896005bf7d9ae48d8cd79811f4e9d",
+        "convention_sha256": "b2188491993eb7c3f6ed84590679923988b4679892f5bc3210f43bb5b4e4fbfa",
         "lessons": [
           "LRN03",
           "LRN04",
@@ -48177,7 +48197,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "8b7997fb03daaa8dbdd52ed286bc3f5c8b7896005bf7d9ae48d8cd79811f4e9d",
+        "convention_sha256": "b2188491993eb7c3f6ed84590679923988b4679892f5bc3210f43bb5b4e4fbfa",
         "lessons": [
           "LRN04",
           "LRN08",
@@ -49730,7 +49750,7 @@
         }
       },
       "learnings": {
-        "convention_sha256": "8b7997fb03daaa8dbdd52ed286bc3f5c8b7896005bf7d9ae48d8cd79811f4e9d",
+        "convention_sha256": "b2188491993eb7c3f6ed84590679923988b4679892f5bc3210f43bb5b4e4fbfa",
         "lessons": [
           "LRN01",
           "LRN02",
@@ -53185,6 +53205,16 @@
       "task_id": "T04"
     },
     {
+      "path": "migrations/007.sql",
+      "owner": "store",
+      "modules": [
+        "store",
+        "task"
+      ],
+      "reason": "Seventh migration of the additive chain (B14a-5, design R19): attempt_records is rebuilt under a kind CHECK widened with worker_settle, so the settle that observes a native attempt commits the worker's settle (usage, identity, wall, outcome) as a sixth run record beside the check's five; every row preserved and the by-attempt index recreated. Identity is its own pinned body digest in store::schema. Inventoried by exact bytes, never rewritten by the publisher.",
+      "task_id": "T04"
+    },
+    {
       "path": "src/contracts/roster.rs",
       "owner": "contracts",
       "modules": [
@@ -54806,8 +54836,8 @@
       "bytes": 6019
     },
     "tools/check-quality": {
-      "sha256": "d15769a9a76cc7628b26b741691fdd8b52e674a4dd7050d0461279108f596401",
-      "bytes": 98353
+      "sha256": "5136165d0a1b2463cb30e7bc28587260d23fa0bab1b140cbeca8694b0634f8c3",
+      "bytes": 98605
     },
     "tools/development_process.py": {
       "sha256": "e76e3a794193e5df7ee96fabf700113d718527745a0f9a9dba1e04fd5c7baaf3",
@@ -54818,8 +54848,8 @@
       "bytes": 10433
     },
     "tests/t25_quality.py": {
-      "sha256": "4ba37ff863fe4295e51381fa6be6f764bddec804f2fceda46ea72bcde0f13dd6",
-      "bytes": 165968
+      "sha256": "11f508618b976cf3d63ece900d1274ee3d420dbfcb37fc85ce43a650f82f5df4",
+      "bytes": 166023
     },
     "julia/Manifest.toml": {
       "sha256": "097d5028df4e1667a970a8297d41eedb908e0319a0b4154c7ec12548140a9f79",
@@ -55550,16 +55580,16 @@
       "bytes": 9161
     },
     "src/store/schema.rs": {
-      "sha256": "80c2b7664057ec86f1b4922e49504a8213fe497a4fcab690420d0b24a17466e7",
-      "bytes": 25715
+      "sha256": "c52068f0eb7d1379f30fc1d47a8f624ba456f64fbb06e41bae23fa7e48c5a7c5",
+      "bytes": 26211
     },
     "src/store/backup.rs": {
       "sha256": "76fdeb5de58a67c7660a3ed2eea1273c250478cbc5133627c45a5b5bd37b4812",
       "bytes": 14607
     },
     "tests/t04_store.rs": {
-      "sha256": "418f8d89f5765835a4267e798d215a2079a0901dfdd40337fab14c6b54c94e66",
-      "bytes": 166414
+      "sha256": "c951a0a9595bafaa2a7ed86f3963d3c0f5bc092eeeb9d8f47866a5dcadfef6fc",
+      "bytes": 177607
     },
     "docs/store-contract.md": {
       "sha256": "b65ffe744d2abf93c3b0c40345787940213806ade52e9ef010e17f3012a81396",
@@ -55570,8 +55600,8 @@
       "bytes": 10139
     },
     "tools/check-store-mutations": {
-      "sha256": "11f0beed91df1ab9ff0a5db8fd4b7584c9952b4c37d36fba4fba1584906c0fc2",
-      "bytes": 19809
+      "sha256": "c0f2b4c5c96a94031c85189152777df29e76f409603ee778a0ad5cf41a7905a6",
+      "bytes": 19831
     },
     "tools/sqlite-inputs/sqlite-amalgamation-3530400.zip": {
       "sha256": "1e71ddf93849c6a6ecf58b827c0692073d2dd7ee40196158068f7b29f422e87d",
@@ -55688,6 +55718,10 @@
     "migrations/006.sql": {
       "sha256": "e0154801a3c02529428124bb72e129a85a258867eab733df4efb7f0533c19088",
       "bytes": 5451
+    },
+    "migrations/007.sql": {
+      "sha256": "33c9ef2eb45cb6d4b05147a38ddf731d16f2aa6c9843ca5b8ea1d06cceebf14a",
+      "bytes": 1948
     },
     "src/contracts/roster.rs": {
       "sha256": "bdde6efe1ee29cf620b521b8b8ddce051f73cc86dcac05ec46f35193440a4710",
@@ -56006,8 +56040,8 @@
       "bytes": 10484
     },
     "src/store/verification.rs": {
-      "sha256": "7ab792d747bb79374d7551d4f1e449c8deb61943c272a5c247d0b3b1ff47bc4a",
-      "bytes": 15294
+      "sha256": "f503491fc9d5274f5bea1c42d9ef1f6532bd8edc3925119738272a938332afd0",
+      "bytes": 15327
     },
     "src/task/driver.rs": {
       "sha256": "8a45f9cd3bbf6628d767888cce5b422cfaa113f1bd9545edd98562e17cd92eb6",
