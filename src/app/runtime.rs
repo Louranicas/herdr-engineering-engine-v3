@@ -1561,7 +1561,7 @@ impl<C: CandidateSource, V: Verifier> driver::Runtime for StoreRuntime<'_, C, V>
                     uuid(&begun.id)?,
                     self.deadline,
                 )?;
-                let identity = cited(&evidence.schema_id, &evidence.artifact_id, &bytes, |kind| {
+                let lookup = |kind| {
                     committed.record(kind).map(|record| {
                         (
                             record.artifact_id(),
@@ -1569,7 +1569,15 @@ impl<C: CandidateSource, V: Verifier> driver::Runtime for StoreRuntime<'_, C, V>
                             record.object().size(),
                         )
                     })
-                })?;
+                };
+                // A receipt is walked as a graph over the ledger's objects and its run-record
+                // artifact rows compared to the commitment (R16r2.6, R17 2c-iii); the runtime's
+                // own JSON shapes keep their field walk.
+                let identity = if evidence.schema_id == ReceiptV1::SCHEMA_ID {
+                    cited_receipt(store, self.deadline, &evidence, lookup)?
+                } else {
+                    cited(&evidence.schema_id, &evidence.artifact_id, &bytes, lookup)?
+                };
                 let identified = Identified {
                     object: evidence.object.clone(),
                     identity,
@@ -2088,6 +2096,68 @@ fn cited<'a>(
         artifact_id: uuid(artifact_id)?,
         media_type: CHECK_MEDIA_TYPE,
         schema_id,
+    })
+}
+
+/// The identity a receipt is accepted under: its graph resolved from the ledger's objects, every
+/// `run_record:<kind>` artifact row equal to the committed record of that kind and every committed
+/// record cited, the clock present — the receipt form of [`cited`].
+fn cited_receipt<'a>(
+    store: &Store,
+    deadline: Instant,
+    evidence: &'a Evidence,
+    committed: impl Fn(RunRecordKind) -> Option<(&'a str, &'a str, u64)>,
+) -> Result<EvidenceIdentity<'a>, Error> {
+    use crate::contracts::receipt::{ArtifactV1, Id, Name, Sha, decode};
+    let root = Ref {
+        artifact_id: Id::new(evidence.artifact_id.as_str()).map_err(|_| Error::Identity)?,
+        sha256: Sha::new(evidence.object.digest()).map_err(|_| Error::Identity)?,
+        byte_length: u32::try_from(evidence.object.size()).map_err(|_| Error::Identity)?,
+        media_type: Name::new(CHECK_MEDIA_TYPE).map_err(|_| Error::Identity)?,
+        schema_id: Name::new(ReceiptV1::SCHEMA_ID).map_err(|_| Error::Identity)?,
+    };
+    let graph = crate::check::graph::Graph::resolve(
+        &u64_receipt::LedgerObjects::new(store, deadline),
+        &root,
+    )
+    .map_err(|_| Error::Identity)?;
+    let receipt: ReceiptV1 = decode(graph.get(&root).map_err(|_| Error::Identity)?.bytes())
+        .map_err(|_| Error::Identity)?;
+    let mut cited: Vec<(RunRecordKind, String, String, u64)> = Vec::new();
+    for row in graph
+        .rows(receipt.artifacts.inventory.as_ref())
+        .map_err(|_| Error::Identity)?
+    {
+        let artifact: ArtifactV1 =
+            serde_json::from_value(row.clone()).map_err(|_| Error::Identity)?;
+        if let Some(kind) = u64_receipt::cited_kind(artifact.role.as_str()) {
+            if cited.iter().any(|(held, ..)| *held == kind) {
+                return Err(Error::Identity);
+            }
+            cited.push((
+                kind,
+                artifact.object.artifact_id.as_str().to_owned(),
+                artifact.object.sha256.as_str().to_owned(),
+                u64::from(artifact.object.byte_length),
+            ));
+        }
+    }
+    if committed(RunRecordKind::RunClock).is_none() {
+        return Err(Error::Identity);
+    }
+    for kind in RunRecordKind::ALL {
+        let row = cited.iter().find(|(held, ..)| *held == kind);
+        match (row, committed(kind)) {
+            (None, None) => {}
+            (Some((_, id, digest, size)), Some((held_id, held_digest, held_size)))
+                if id == held_id && digest == held_digest && *size == held_size => {}
+            _ => return Err(Error::Identity),
+        }
+    }
+    Ok(EvidenceIdentity {
+        artifact_id: uuid(&evidence.artifact_id)?,
+        media_type: CHECK_MEDIA_TYPE,
+        schema_id: &evidence.schema_id,
     })
 }
 

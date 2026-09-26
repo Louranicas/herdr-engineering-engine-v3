@@ -87,7 +87,7 @@ pub struct Inputs<'a> {
 
 /// The shared part of every plan this dispatch will compose: typed references into the sink that
 /// published them, the objects behind them for the carry-over into each check's sink (R17 round 2,
-/// decision 7), and the count of digests this publication added (decision 9).
+/// decision 7), and the registry entries this publication added (decision 9, graph side).
 #[derive(Clone, Debug)]
 pub struct Shared {
     pub schema: Payload,
@@ -170,8 +170,8 @@ pub enum Refusal {
     CompilerVersion {
         why: &'static str,
     },
-    /// A value had no rendering the receipt admits.
-    Encoding,
+    /// A value had no rendering the receipt admits; the site names which.
+    Encoding(&'static str),
     /// The seed-to-result patch could not be derived (the editable file missing or past its bound).
     Patch(patch::Error),
     /// `prepare_u64` refused the plan (ids not distinct, an empty argv).
@@ -203,7 +203,7 @@ impl Refusal {
             Self::Subject { .. } => "plan_subject",
             Self::Capture { .. } => "plan_capture",
             Self::CompilerVersion { .. } => "plan_compiler_version",
-            Self::Encoding => "plan_encoding",
+            Self::Encoding(_) => "plan_encoding",
             Self::Patch(_) => "plan_patch",
             Self::Plan(_) => "plan_prepare",
         }
@@ -216,15 +216,15 @@ fn at(stage: &'static str) -> impl Fn(collector::Error) -> Refusal {
 }
 
 fn name(value: &str) -> Result<Name, Refusal> {
-    Name::new(value).map_err(|_| Refusal::Encoding)
+    Name::new(value).map_err(|_| Refusal::Encoding("name"))
 }
 
 fn text(value: &str) -> Result<Text, Refusal> {
-    Text::new(value).map_err(|_| Refusal::Encoding)
+    Text::new(value).map_err(|_| Refusal::Encoding("text"))
 }
 
 fn count(value: usize) -> Result<u32, Refusal> {
-    u32::try_from(value).map_err(|_| Refusal::Encoding)
+    u32::try_from(value).map_err(|_| Refusal::Encoding("count"))
 }
 
 /// Publish `bytes` as a raw payload under `media`.
@@ -242,14 +242,14 @@ macro_rules! page {
     ($publisher:expr, $page:ident, $rows:expr, $stage:literal) => {{
         let rows = $rows;
         if rows.len() > 256 {
-            return Err(Refusal::Encoding);
+            return Err(Refusal::Encoding("page rows"));
         }
         let record = $page {
             page_index: 0,
             page_count: 1,
             row_count: count(rows.len())?,
             total_rows: count(rows.len())?,
-            rows: List::new(rows).map_err(|_| Refusal::Encoding)?,
+            rows: List::new(rows).map_err(|_| Refusal::Encoding("page list"))?,
             next: Maybe::unavailable(text("end_of_inventory")?),
         };
         $publisher.record(&record).map_err(at($stage))?
@@ -339,13 +339,15 @@ fn pages(
     compiler: &[u8],
     version: &str,
     version_output: &[u8],
+    declared: &(Vec<u8>, Vec<u8>),
 ) -> Result<Pages, Refusal> {
     let schema = payload(sink, SCHEMA, "application/schema+json")?;
     let compiler_payload = payload(sink, compiler, "application/octet-stream")?;
     let version_payload = payload(sink, version_output, "application/octet-stream")?;
     let isolation = payload(sink, &isolation_profile()?, "application/json")?;
-    let environment_rows = environment_rows().map_err(|_| Refusal::Encoding)?;
-    let (authority, specification) = declared_payloads(sink, inputs)?;
+    let environment_rows = environment_rows().map_err(|_| Refusal::Encoding("environment rows"))?;
+    let authority = payload(sink, &declared.0, "application/json")?;
+    let specification = payload(sink, &declared.1, "application/json")?;
     let mut publisher = Publisher::new(sink);
     let (grants, effects) = authority_pages(&mut publisher, inputs, authority, specification)?;
     let toolchain = page!(
@@ -360,7 +362,7 @@ fn pages(
                     .compiler
                     .host
                     .to_str()
-                    .ok_or(Refusal::Encoding)?
+                    .ok_or(Refusal::Encoding("compiler path"))?
             )?,
             version: text(version)?,
             version_output: version_payload,
@@ -379,14 +381,14 @@ fn pages(
                     .map(|flag| text(flag))
                     .collect::<Result<Vec<_>, _>>()?
             )
-            .map_err(|_| Refusal::Encoding)?,
+            .map_err(|_| Refusal::Encoding("language flags"))?,
         }],
         "language flags"
     );
     let build = publisher
         .record(&BuildProfileV1 {
             target: name(BUILD_TARGET)?,
-            features: List::new(Vec::new()).map_err(|_| Refusal::Encoding)?,
+            features: List::new(Vec::new()).map_err(|_| Refusal::Encoding("features"))?,
             default_features: false,
             build_profile: name(BUILD_PROFILE)?,
             language_flags: flags,
@@ -422,11 +424,9 @@ fn pages(
     })
 }
 
-/// The declared grant and effect files, read as declared (digest-bound, F11) and published.
-fn declared_payloads(
-    sink: &mut Evidence<'_>,
-    inputs: &Inputs<'_>,
-) -> Result<(Payload, Payload), Refusal> {
+/// The declared grant and effect files, read as declared (digest-bound, F11) — beside the pins,
+/// before anything is executed or published (review 2c-ii-c, LOW).
+fn declared_bytes(inputs: &Inputs<'_>) -> Result<(Vec<u8>, Vec<u8>), Refusal> {
     let grant = &inputs.profile.declared.grant;
     let effect = &inputs.profile.declared.effect;
     let authority =
@@ -440,10 +440,7 @@ fn declared_payloads(
             error,
         }
     })?;
-    Ok((
-        payload(sink, &authority, "application/json")?,
-        payload(sink, &specification, "application/json")?,
-    ))
+    Ok((authority, specification))
 }
 
 /// The grant and effect pages: one row each from the profile's declarations, the grant's
@@ -463,7 +460,7 @@ fn authority_pages(
         vec![GrantV1 {
             grant_id: grant.grant_id.clone(),
             scope_sha256: Sha::new(authority.as_ref().sha256.as_str().to_owned())
-                .map_err(|_| Refusal::Encoding)?,
+                .map_err(|_| Refusal::Encoding("scope digest"))?,
             issuer_id: grant.issuer_id.clone(),
             grant: authority,
         }],
@@ -542,11 +539,19 @@ fn subjects(
 fn publish_shared(sink: &mut Evidence<'_>, inputs: &Inputs<'_>) -> Result<Shared, Refusal> {
     // The pins first, before anything is copied, executed or published (F5).
     let pinned = pinned(inputs)?;
+    let declared = declared_bytes(inputs)?;
     let oracle = FrozenOracle::from_bytes(protected_file(inputs.protected, "oracle.json")?)
         .map_err(Refusal::Oracle)?;
     let public_inputs = oracle.public_inputs();
     let (version, version_output) = compiler_version(inputs)?;
-    let pages = pages(sink, inputs, &pinned.compiler, &version, &version_output)?;
+    let pages = pages(
+        sink,
+        inputs,
+        &pinned.compiler,
+        &version,
+        &version_output,
+        &declared,
+    )?;
     let subjects = subjects(sink, inputs, &pinned, &public_inputs)?;
     // The reviewed closures, every node published under its own reference (F3).
     for which in [Which::Expectation, Which::Review] {
@@ -737,7 +742,7 @@ pub fn isolation_profile() -> Result<Vec<u8>, Refusal> {
         "environment": environment.iter().map(|(k, v)| serde_json::json!({"name": k, "value": v})).collect::<Vec<_>>(),
         "launcher": BWRAP,
     });
-    serde_json::to_vec(&value).map_err(|_| Refusal::Encoding)
+    serde_json::to_vec(&value).map_err(|_| Refusal::Encoding("readback specification"))
 }
 
 /// The readback specification the cleanup contract cites: the four obligations the runtime owns
@@ -754,7 +759,7 @@ pub fn readback_specification() -> Result<Vec<u8>, Refusal> {
                  descriptors released, every retained path removed within the teardown share, and \
                  the resource aggregate read back; each obligation settled separately, never inferred",
     });
-    serde_json::to_vec(&value).map_err(|_| Refusal::Encoding)
+    serde_json::to_vec(&value).map_err(|_| Refusal::Encoding("isolation profile"))
 }
 
 /// What the per-check plan needs (R17 round 2, shape C): the shared part, the profile, the seed
@@ -808,7 +813,8 @@ pub fn check(sink: &mut Evidence<'_>, inputs: &CheckInputs<'_>) -> Result<Planne
         error: error.kind,
     })?;
     let editable = Editable {
-        path: RelPath::new(U64_EDITABLE.to_owned()).map_err(|_| Refusal::Encoding)?,
+        path: RelPath::new(U64_EDITABLE.to_owned())
+            .map_err(|_| Refusal::Encoding("editable path"))?,
         bounds: U64_BOUNDS,
     };
     let patch_bytes = derive_patch(
@@ -822,32 +828,33 @@ pub fn check(sink: &mut Evidence<'_>, inputs: &CheckInputs<'_>) -> Result<Planne
     let specification = payload(sink, &readback_specification()?, "application/json")?;
     let mut publisher = Publisher::new(sink);
     let limits_record = publisher
-        .record(&limits(inputs.wall_ms, inputs.wall_ms).map_err(|_| Refusal::Encoding)?)
+        .record(&limits(inputs.wall_ms, inputs.wall_ms).map_err(|_| Refusal::Encoding("limits"))?)
         .map_err(at("limits"))?;
     let rows = obligation_rows(inputs.obligation_ids, specification.as_ref())
-        .map_err(|_| Refusal::Encoding)?;
+        .map_err(|_| Refusal::Encoding("obligation rows"))?;
     let obligations = page!(publisher, ObligationPageV1, rows, "obligations");
     let contract = publisher
         .record(
             &cleanup_contract(inputs.wall_ms, obligations, specification)
-                .map_err(|_| Refusal::Encoding)?,
+                .map_err(|_| Refusal::Encoding("cleanup contract"))?,
         )
         .map_err(at("cleanup contract"))?;
     let shared = inputs.shared;
     let reviewed = &inputs.profile.declared.reviewed;
     let attempt = U64Attempt {
-        schema_sha256: Sha::new(schema_sha256()).map_err(|_| Refusal::Encoding)?,
-        run_id: Id::new(inputs.run).map_err(|_| Refusal::Encoding)?,
-        task_id: Id::new(inputs.task).map_err(|_| Refusal::Encoding)?,
-        attempt_id: Id::new(inputs.attempt).map_err(|_| Refusal::Encoding)?,
-        generation: Generation::new(inputs.generation).map_err(|_| Refusal::Encoding)?,
+        schema_sha256: Sha::new(schema_sha256()).map_err(|_| Refusal::Encoding("schema digest"))?,
+        run_id: Id::new(inputs.run).map_err(|_| Refusal::Encoding("run id"))?,
+        task_id: Id::new(inputs.task).map_err(|_| Refusal::Encoding("task id"))?,
+        attempt_id: Id::new(inputs.attempt).map_err(|_| Refusal::Encoding("attempt id"))?,
+        generation: Generation::new(inputs.generation)
+            .map_err(|_| Refusal::Encoding("generation"))?,
         profile_id: name(&format!(
             "{}@{}",
             super::class_profile::CLASS,
             inputs.profile.digest
         ))?,
         parent_run: match inputs.parent_run {
-            Some(run) => Maybe::present(Id::new(run).map_err(|_| Refusal::Encoding)?),
+            Some(run) => Maybe::present(Id::new(run).map_err(|_| Refusal::Encoding("parent run"))?),
             None => Maybe::unavailable(text(if inputs.generation == "1" {
                 "first_attempt"
             } else {
@@ -869,7 +876,7 @@ pub fn check(sink: &mut Evidence<'_>, inputs: &CheckInputs<'_>) -> Result<Planne
             standards: shared.standards.clone(),
             isolation_profile: shared.isolation.clone(),
         },
-        argv: List::new(vec![text(DRIVER_DESTINATION)?]).map_err(|_| Refusal::Encoding)?,
+        argv: List::new(vec![text(DRIVER_DESTINATION)?]).map_err(|_| Refusal::Encoding("argv"))?,
         environment: shared.environment.clone(),
         grants: shared.grants.clone(),
         limits: limits_record,
@@ -906,8 +913,8 @@ pub fn schema_sha256() -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        COLLECTOR_UNREAD, Inputs, Refusal, SCHEMA, SCHEMA_STANDARD, isolation_profile,
-        schema_sha256, shared,
+        COLLECTOR_UNREAD, CheckInputs, Inputs, Refusal, SCHEMA, SCHEMA_STANDARD, check,
+        isolation_profile, schema_sha256, shared,
     };
     use crate::app::class_profile::{Profile, compose};
     use crate::app::evidence::Evidence;
@@ -934,12 +941,17 @@ mod tests {
     const WRAPPER: &[u8] = include_bytes!("../../evaluation/harnesses/u64-public-wrapper.rs");
     const BASE: &[u8] =
         include_bytes!("../../evaluation/tasks/WL-U64-PARSE-001/v1/base/src/lib.rs");
+    const REFERENCE: &[u8] =
+        include_bytes!("../../evaluation/tasks/WL-U64-PARSE-001/v1/reference/src/lib.rs");
     const AUTHORITY: &[u8] = b"{\"authority\":\"WL-U64 fixed workload\",\"issuer\":\"operator\"}\n";
     const SPECIFICATION: &[u8] = b"{\"isolation\":\"bwrap --unshare-all; no network\"}\n";
     const PAYLOADS: usize = 6;
     const PAGES: usize = 8;
     const SUBJECT_OBJECTS: usize = 3 * 4 + 4 + 2;
     const CLOSURE_NODES: usize = 22;
+    /// coreutils `sha256sum` of `AUTHORITY` and `SPECIFICATION`, the independent source.
+    const AUTH: &str = "sha256:e4b4fcd5d15d45eed7a553536e73027e7aedbd72f466be6dee168986b6fe1234";
+    const SPEC: &str = "sha256:61ac0e7ad368ef48bd6d34e7cd6995ca5ff992693b700b9fccf3f58c8cfc32f1";
     const SCOPE: &str =
         "compile, link and execute the fixed workload in a private bounded scratch; no network";
 
@@ -1017,7 +1029,8 @@ mod tests {
             let entry = entry?;
             write(&reviewed.join(entry.file_name()), &fs::read(entry.path())?);
         }
-        let base = tree(&class, "base", &[("lib.rs", BASE)]);
+        let base = tree(&class, "base", &[]);
+        tree(&base, "src", &[("lib.rs", BASE)]);
         let protected = tree(
             &class,
             "protected",
@@ -1131,6 +1144,10 @@ mod tests {
         // The grant and effect rows, whole: the declaration's ids, the authority's digest as the
         // grant's scope, the effect under the grant and owned by the runtime.
         let grants: GrantPageV1 = resolved(sink, &shared.grants);
+        assert_eq!(
+            (grants.row_count, grants.total_rows, grants.page_count),
+            (1, 1, 1)
+        );
         let grant = &grants.rows.as_slice()[0];
         assert_eq!(
             (
@@ -1142,11 +1159,19 @@ mod tests {
             (
                 "28f90000-0000-4000-8000-000000000001",
                 "operator",
-                crate::app::evidence::digest(AUTHORITY).as_str(),
-                crate::app::evidence::digest(AUTHORITY).as_str()
+                AUTH,
+                AUTH
             )
         );
+        assert_eq!(
+            u64::from(grant.grant.as_ref().byte_length),
+            u64::try_from(AUTHORITY.len())?
+        );
         let effects: EffectPageV1 = resolved(sink, &shared.effects);
+        assert_eq!(
+            (effects.row_count, effects.total_rows, effects.page_count),
+            (1, 1, 1)
+        );
         let effect = &effects.rows.as_slice()[0];
         assert_eq!(
             (
@@ -1161,8 +1186,12 @@ mod tests {
                 "28f90000-0000-4000-8000-000000000001",
                 crate::app::u64_receipt::RUNTIME_OWNER,
                 SCOPE,
-                crate::app::evidence::digest(SPECIFICATION).as_str()
+                SPEC
             )
+        );
+        assert_eq!(
+            u64::from(effect.specification.as_ref().byte_length),
+            u64::try_from(SPECIFICATION.len())?
         );
         assert!(
             serde_json::from_slice::<serde_json::Value>(
@@ -1179,7 +1208,29 @@ mod tests {
         shared: &super::Shared,
         f: &Fixture,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        assert_eq!(shared.objects.len(), sink.registered().len());
+        // Every reference the shared plan names is among the objects it carries over.
+        for reference in [
+            shared.schema.as_ref(),
+            shared.isolation.as_ref(),
+            shared.toolchain.as_ref(),
+            shared.build.as_ref(),
+            shared.locks.as_ref(),
+            shared.standards.as_ref(),
+            shared.environment.as_ref(),
+            shared.grants.as_ref(),
+            shared.effects.as_ref(),
+            shared.seed.as_ref(),
+            shared.fixtures.as_ref(),
+            shared.oracle.as_ref(),
+            shared.harness.as_ref(),
+            shared.launcher.as_ref(),
+            shared.collector.as_ref(),
+        ] {
+            assert!(
+                shared.objects.iter().any(|(held, _)| held == reference),
+                "{reference:?} carried"
+            );
+        }
         // The toolchain row: the pinned compiler, its version as an independent probe reads it.
         let toolchain: ToolPageV1 = resolved(sink, &shared.toolchain);
         let row = &toolchain.rows.as_slice()[0];
@@ -1266,7 +1317,10 @@ mod tests {
             (
                 "seed",
                 &shared.seed,
-                vec![("lib.rs".to_owned(), SubjectFileV1Origin::Authored)],
+                vec![
+                    ("src".to_owned(), SubjectFileV1Origin::Authored),
+                    ("src/lib.rs".to_owned(), SubjectFileV1Origin::Authored),
+                ],
             ),
             (
                 "fixtures",
@@ -1472,16 +1526,30 @@ mod tests {
             );
             assert!(!conflict_root.exists());
         }
-        // A declared file whose bytes are not the declaration's: refused by name, then restored.
-        write(&f.profile.directory.join("authority.json"), SPECIFICATION);
-        assert!(matches!(
-            shared(sink, &base),
-            Err(Refusal::Declared {
-                which: "authority",
-                error: crate::app::class_profile::ReviewedError::Mismatch
-            })
-        ));
-        write(&f.profile.directory.join("authority.json"), AUTHORITY);
+        // A declared file whose bytes are not the declaration's: each refused by name before
+        // anything is published, the plan root removed; then restored.
+        for (file, which, other, original) in [
+            ("authority.json", "authority", SPECIFICATION, AUTHORITY),
+            ("isolation.json", "specification", AUTHORITY, SPECIFICATION),
+        ] {
+            write(&f.profile.directory.join(file), other);
+            let before = sink.registered().len();
+            let refused = shared(sink, &base);
+            assert!(
+                matches!(
+                    &refused,
+                    Err(Refusal::Declared { which: named, error: crate::app::class_profile::ReviewedError::Mismatch }) if *named == which
+                ),
+                "{refused:?}"
+            );
+            assert_eq!(
+                sink.registered().len(),
+                before,
+                "nothing published before the declared read"
+            );
+            assert!(!base.plan_root.exists());
+            write(&f.profile.directory.join(file), original);
+        }
         // A plan root under a symlinked parent is refused before anything is published.
         let alias = f.root.join("alias");
         std::os::unix::fs::symlink(&f.root, &alias)?;
@@ -1624,6 +1692,355 @@ mod tests {
             s_new - CLOSURE_NODES
         );
         assert_refused(&f, &staging, &cancelled)?;
+        fs::remove_dir_all(&f.root)?;
+        Ok(())
+    }
+
+    /// A stand-in compiler whose bytes are its pin, as a shell script with `body`, 0700.
+    fn stand_in(f: &Fixture, name: &str, body: &str) -> Result<Tools, Box<dyn std::error::Error>> {
+        let path = f.root.join(name);
+        write(&path, body.as_bytes());
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o700))?;
+        Ok(Tools {
+            bwrap: f.tools.bwrap.clone(),
+            compiler: ReadOnlyFile {
+                host: path,
+                namespace: f.tools.compiler.namespace.clone(),
+                sha256: sha(body.as_bytes()),
+            },
+            shim: f.tools.shim.clone(),
+            runtime_files: Vec::new(),
+            namespace_directories: Vec::new(),
+        })
+    }
+
+    /// The refusal a compiler pin earns when its bytes are not the pin's, or its path cannot be
+    /// opened as a regular file.
+    fn assert_compiler_digest(refused: &Result<super::Shared, Refusal>) {
+        assert!(
+            matches!(
+                refused,
+                Err(Refusal::Pin {
+                    which: "compiler",
+                    error: crate::worker::namespace::NamespaceError::Digest
+                })
+            ),
+            "{refused:?}"
+        );
+    }
+
+    /// Review 2c-ii-c MED-1/MED-2 · the doors the first proof never reached: a compiler that
+    /// rewrites itself while the probe runs is refused by the post-probe re-hash; one that leaves a
+    /// child behind is settled and refused at `child`; a symlink and a FIFO at the compiler's path
+    /// are refused at the open, before any byte is read, whatever digest they are pinned under.
+    #[test]
+    fn the_probe_and_the_pin_doors_refuse_what_the_first_proof_never_reached()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let f = fixture()?;
+        let staging_root = tree(&f.root, "staging", &[]);
+        let staging =
+            ArtifactStaging::open(&staging_root, true, deadline()).map_err(|e| format!("{e:?}"))?;
+        let cancelled = AtomicBool::new(false);
+        let mut sink = Evidence::staged(&staging, deadline());
+        let plan_root = f.root.join("doors.plan");
+        let base = Inputs {
+            tools: &f.tools,
+            profile: &f.profile,
+            baseline: &f.baseline,
+            protected: &f.protected,
+            plan_root: &plan_root,
+            deadline: deadline(),
+            cancelled: &cancelled,
+        };
+        // Rewrites itself after printing a release: the bytes that ran are no longer the pin's.
+        // `$0` under the probe is a basename in the plan root, so the script names its own path.
+        let self_path = f.root.join("compiler-rewriting");
+        let rewriting = stand_in(
+            &f,
+            "compiler-rewriting",
+            &format!(
+                "#!/bin/sh\nprintf 'rustc 0.0.0\\nrelease: 1.99.0\\n'\nprintf '\\n# changed\\n' >> {}\nexit 0\n",
+                self_path.display()
+            ),
+        )?;
+        let refused = shared(
+            &mut sink,
+            &Inputs {
+                tools: &rewriting,
+                ..base
+            },
+        );
+        assert_compiler_digest(&refused);
+        assert!(!plan_root.exists());
+        // Leaves a child behind in its process group: MEASURED — `process::run` settles the group
+        // itself before it returns (no `pending` child, no interruption), so the probe is a clean
+        // observation and the plan's own settle loop is not what stops a stray child. The loop is
+        // reached only when the process module hands a pending child back; no stand-in reaches it.
+        let leaving = stand_in(
+            &f,
+            "compiler-leaving",
+            "#!/bin/sh\nsleep 30 &\nprintf 'rustc 0.0.0\\nrelease: 1.99.0\\n'\nexit 0\n",
+        )?;
+        let leaving_root = f.root.join("leaving.plan");
+        let settled = shared(
+            &mut sink,
+            &Inputs {
+                tools: &leaving,
+                plan_root: &leaving_root,
+                ..base
+            },
+        );
+        assert!(
+            matches!(&settled, Ok(shared) if shared.compiler_version == "1.99.0"),
+            "{settled:?}"
+        );
+        assert!(!leaving_root.exists());
+        // A symlink to the real compiler, pinned with the real digest: never followed.
+        let link = f.root.join("compiler-link");
+        std::os::unix::fs::symlink(&f.tools.compiler.host, &link)?;
+        let mut linked = stand_in(&f, "compiler-unused", "#!/bin/sh\nexit 0\n")?;
+        linked.compiler.host = link;
+        linked.compiler.sha256 = f.tools.compiler.sha256;
+        let refused = shared(
+            &mut sink,
+            &Inputs {
+                tools: &linked,
+                ..base
+            },
+        );
+        assert_compiler_digest(&refused);
+        // A FIFO at the path: not a regular file, refused at the open without a read.
+        let fifo = f.root.join("compiler-fifo");
+        assert!(
+            std::process::Command::new("mkfifo")
+                .arg(&fifo)
+                .status()?
+                .success()
+        );
+        let mut piped = stand_in(&f, "compiler-unused-2", "#!/bin/sh\nexit 0\n")?;
+        piped.compiler.host = fifo;
+        let refused = shared(
+            &mut sink,
+            &Inputs {
+                tools: &piped,
+                ..base
+            },
+        );
+        assert_compiler_digest(&refused);
+        assert!(!plan_root.exists());
+        fs::remove_dir_all(&f.root)?;
+        Ok(())
+    }
+
+    /// The per-check plan's refusals by name: ids that are not pairwise distinct, and an applied
+    /// tree without the editable file.
+    fn assert_check_refused(
+        sink: &mut Evidence<'_>,
+        shared: &super::Shared,
+        f: &Fixture,
+        applied: &Snapshot,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        // Refusals by name: ids that are not pairwise distinct; an applied tree without the editable.
+        let obligation_ids: [String; 4] =
+            std::array::from_fn(|i| format!("28fa0000-0000-4000-8000-00000000009{i}"));
+        let refused = check(
+            sink,
+            &CheckInputs {
+                shared,
+                profile: &f.profile,
+                baseline: &f.baseline,
+                applied,
+                task: "28fa0000-0000-4000-8000-0000000000a0",
+                attempt: "28fa0000-0000-4000-8000-0000000000a0",
+                run: "28fa0000-0000-4000-8000-0000000000f0",
+                generation: "3",
+                parent_run: None,
+                obligation_ids: &obligation_ids,
+                wall_ms: 250_000,
+                deadline: deadline(),
+            },
+        );
+        assert!(matches!(refused, Err(Refusal::Plan(_))), "{refused:?}");
+        let bare = Snapshot::capture(&tree(&f.root, "bare", &[]), &[], deadline())
+            .map_err(|e| format!("{e:?}"))?;
+        let refused = check(
+            sink,
+            &CheckInputs {
+                shared,
+                profile: &f.profile,
+                baseline: &f.baseline,
+                applied: &bare,
+                task: "28fa0000-0000-4000-8000-0000000000a0",
+                attempt: "28fa0000-0000-4000-8000-0000000000b3",
+                run: "28fa0000-0000-4000-8000-0000000000f3",
+                generation: "3",
+                parent_run: None,
+                obligation_ids: &obligation_ids,
+                wall_ms: 250_000,
+                deadline: deadline(),
+            },
+        );
+        assert!(matches!(refused, Err(Refusal::Patch(_))), "{refused:?}");
+        Ok(())
+    }
+
+    /// One per-check plan asserted whole against its inputs.
+    fn assert_planned(
+        planned: &super::Planned,
+        shared: &super::Shared,
+        f: &Fixture,
+        n: u8,
+        generation: &str,
+        parent: Option<&str>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let identity = &planned.prepared.identity;
+        assert_eq!(
+            (
+                identity.run_id.as_str(),
+                identity.task_id.as_str(),
+                identity.attempt_id.as_str(),
+                identity.generation.as_str(),
+                identity.module_id.as_str(),
+                identity.profile_id.as_str(),
+            ),
+            (
+                format!("28fa0000-0000-4000-8000-00000000001{n}").as_str(),
+                "28fa0000-0000-4000-8000-0000000000a0",
+                format!("28fa0000-0000-4000-8000-0000000000b{n}").as_str(),
+                generation,
+                "check",
+                "rust-library-change/1@",
+            )
+        );
+        assert_eq!(
+            identity
+                .parent_run
+                .value
+                .as_ref()
+                .map(crate::contracts::receipt::Id::as_str),
+            parent
+        );
+        if parent.is_none() {
+            assert_eq!(
+                identity
+                    .parent_run
+                    .unavailable_reason
+                    .as_ref()
+                    .map(crate::contracts::receipt::Text::as_str),
+                Some("first_attempt")
+            );
+        }
+        let invocation = &planned.prepared.invocation;
+        assert_eq!(
+            invocation
+                .argv
+                .as_slice()
+                .iter()
+                .map(crate::contracts::receipt::Text::as_str)
+                .collect::<Vec<_>>(),
+            vec![super::DRIVER_DESTINATION]
+        );
+        assert_eq!(invocation.cwd_logical.as_str(), "work");
+        assert_eq!(
+            &invocation.expected,
+            f.profile.declared.reviewed.expectation()
+        );
+        assert_eq!(invocation.grants, shared.grants);
+        assert_eq!(invocation.allowed_effects, shared.effects);
+        let subjects = &planned.prepared.subjects;
+        assert_eq!(subjects.seed_subject, shared.seed);
+        assert!(subjects.result_subject.value.is_some());
+        let patch = subjects
+            .seed_to_result_patch
+            .value
+            .as_ref()
+            .ok_or("patch present")?;
+        assert!(
+            patch.as_ref().byte_length > 0,
+            "the reference differs from the base"
+        );
+        assert_eq!(subjects.collector, shared.collector);
+        let case = &planned.prepared.cases[0];
+        assert_eq!(
+            case.reviewed_design.as_ref(),
+            Some(f.profile.declared.reviewed.review())
+        );
+        assert_eq!(case.fixture_sha256, shared.fixtures.as_ref().sha256);
+        Ok(())
+    }
+
+    /// R17 round 2 shape C · the per-check plan composes a `Prepared` from the shared part and the
+    /// applied snapshot: two attempts differing in every caller field (F129), the identity and the
+    /// invocation whole, the result subject and a non-empty patch present, the case's expectation
+    /// and review the profile's, the second attempt's parent the first's run; the per-check
+    /// registry adds exactly its eight objects; ids that are not distinct and an applied tree
+    /// without the editable file are refused by name.
+    #[test]
+    fn the_per_check_plan_composes_a_prepared_over_the_shared_part()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let f = fixture()?;
+        let staging_root = tree(&f.root, "staging", &[]);
+        let staging =
+            ArtifactStaging::open(&staging_root, true, deadline()).map_err(|e| format!("{e:?}"))?;
+        let cancelled = AtomicBool::new(false);
+        let mut sink = Evidence::staged(&staging, deadline());
+        let plan_root = f.root.join("shared.plan");
+        let shared = shared(
+            &mut sink,
+            &Inputs {
+                tools: &f.tools,
+                profile: &f.profile,
+                baseline: &f.baseline,
+                protected: &f.protected,
+                plan_root: &plan_root,
+                deadline: deadline(),
+                cancelled: &cancelled,
+            },
+        )
+        .map_err(|e| format!("{e:?}"))?;
+        let applied_root = tree(&f.root, "applied", &[]);
+        let src = tree(&applied_root, "src", &[("lib.rs", REFERENCE)]);
+        let _ = src;
+        let applied =
+            Snapshot::capture(&applied_root, &[], deadline()).map_err(|e| format!("{e:?}"))?;
+        let ids = |n: u8| -> [String; 4] {
+            std::array::from_fn(|i| format!("28fa0000-0000-4000-8000-0000000000{n}{i}"))
+        };
+        let mut runs = Vec::new();
+        for (generation, n, parent) in [
+            ("1", 1_u8, None),
+            ("2", 2_u8, Some("28fa0000-0000-4000-8000-000000000011")),
+        ] {
+            let obligation_ids = ids(n + 2);
+            let before = sink.registered().len();
+            let planned = check(
+                &mut sink,
+                &CheckInputs {
+                    shared: &shared,
+                    profile: &f.profile,
+                    baseline: &f.baseline,
+                    applied: &applied,
+                    task: "28fa0000-0000-4000-8000-0000000000a0",
+                    attempt: &format!("28fa0000-0000-4000-8000-0000000000b{n}"),
+                    run: &format!("28fa0000-0000-4000-8000-00000000001{n}"),
+                    generation,
+                    parent_run: parent,
+                    obligation_ids: &obligation_ids,
+                    wall_ms: 250_000 + u64::from(n),
+                    deadline: deadline(),
+                },
+            )
+            .map_err(|e| format!("{e:?}"))?;
+            assert_eq!(
+                planned.added, 8,
+                "result subject 3, patch, specification, limits, obligations, contract"
+            );
+            assert_eq!(sink.registered().len(), before + 8);
+            assert_planned(&planned, &shared, &f, n, generation, parent)?;
+            runs.push(planned.prepared.identity.run_id.as_str().to_owned());
+        }
+        assert_ne!(runs[0], runs[1]);
+        assert_check_refused(&mut sink, &shared, &f, &applied)?;
         fs::remove_dir_all(&f.root)?;
         Ok(())
     }

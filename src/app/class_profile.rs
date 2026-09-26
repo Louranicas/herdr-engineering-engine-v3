@@ -316,7 +316,7 @@ pub enum DeclaredWhy {
     Text,
     /// Not a `sha256:` digest.
     Digest,
-    /// Not one path component (empty, `.`, `..`, or holding `/`).
+    /// Not one path component (empty, `.`, `..`, or holding `/`, NUL or another control byte).
     FileName,
 }
 
@@ -545,7 +545,9 @@ fn declared_file(table: &toml::Table, at: &str, key: &str) -> Result<DeclaredFil
     let entry = sub_table(table, at, key)?;
     only(entry, &path, &["file", "sha256"])?;
     let file = string(entry, &path, "file")?;
-    if file.is_empty() || file == "." || file == ".." || file.contains('/') {
+    // The one file-name rule this module keeps (`component`): one path component, no control
+    // bytes — the same rule the workspace declarations are held to (review 2c-ii-c, LOW).
+    if !component(&file) {
         return Err(ProfileError::Declared {
             path: key_path(&path, "file"),
             why: DeclaredWhy::FileName,
@@ -2313,6 +2315,29 @@ specification = {{ file = "isolation.json", sha256 = "{SPEC}" }}
                 },
             }
         );
+        Ok(())
+    }
+
+    /// B14a-2c-ii-c · every `[grant]`/`[effect]` field refused at its own key path: an id that is
+    /// not a v4 UUID, an empty name, a file name that is not one component (`..`, `.`, empty, a
+    /// NUL), a digest that is not `sha256:` hex, a scope past the text bound, an unknown key at
+    /// either level.
+    #[test]
+    fn a_grant_or_effect_field_is_refused_at_its_path() {
+        // A file name that is not one component, each spelling refused at the same path.
+        for name in ["../authority.json", "..", ".", ""] {
+            assert_eq!(
+                refused(&with(
+                    "file = \"authority.json\"",
+                    &format!("file = \"{name}\"")
+                )),
+                ProfileError::Declared {
+                    path: "grant.authority.file".into(),
+                    why: DeclaredWhy::FileName,
+                },
+                "{name:?}"
+            );
+        }
         for (old, new, expected) in [
             (
                 format!("grant_id = \"{GRANT_ID}\""),
@@ -2331,11 +2356,27 @@ specification = {{ file = "isolation.json", sha256 = "{SPEC}" }}
                 },
             ),
             (
-                "file = \"authority.json\"".to_owned(),
-                "file = \"../authority.json\"".to_owned(),
+                "file = \"isolation.json\"".to_owned(),
+                "file = \"iso\\u0000lation.json\"".to_owned(),
                 ProfileError::Declared {
-                    path: "grant.authority.file".into(),
+                    path: "effect.specification.file".into(),
                     why: DeclaredWhy::FileName,
+                },
+            ),
+            (
+                format!("sha256 = \"{AUTH}\""),
+                "sha256 = \"x\"".to_owned(),
+                ProfileError::Declared {
+                    path: "grant.authority.sha256".into(),
+                    why: DeclaredWhy::Digest,
+                },
+            ),
+            (
+                "scope = \"compile, link and execute the fixed workload in a private bounded scratch; no network\"".to_owned(),
+                format!("scope = \"{}\"", "s".repeat(4097)),
+                ProfileError::Declared {
+                    path: "effect.scope".into(),
+                    why: DeclaredWhy::Text,
                 },
             ),
             (
@@ -2371,7 +2412,6 @@ specification = {{ file = "isolation.json", sha256 = "{SPEC}" }}
         ] {
             assert_eq!(refused(&with(&old, &new)), expected, "{old} -> {new}");
         }
-        Ok(())
     }
 
     /// B14a-2c-ii-c · a declared file is returned only from the class directory's custody and only

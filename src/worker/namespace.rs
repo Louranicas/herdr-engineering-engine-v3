@@ -380,11 +380,14 @@ pub(crate) fn sha256(path: &Path, deadline: Instant) -> Result<[u8; 32], Namespa
 }
 
 /// Read a pinned file's bytes under `cap` and return them only when they hash to `pin`: the one
-/// door for "the bytes of this pin" (R17 round 2, F5) — a mismatch is `Digest`, a file over the
-/// bound `Bound`, and nothing is copied, executed or published from a file that did not match.
+/// door for "the bytes of this pin" (R17 round 2, F5), opened as [`sha256`] opens it (no symlink
+/// followed, a regular file, stable across the read) — nothing is copied, executed or published
+/// from a file that did not match.
 ///
 /// # Errors
-/// `Io`, `Deadline`, `Bound` from the read; `Digest` when the bytes are not the pin's.
+/// `Digest` when the path cannot be opened as a regular file, is over 256 MiB by its metadata,
+/// changes during the read, or does not hash to `pin`; `Bound` past `cap`; `Io` on a read error;
+/// `Deadline` when the read outlives the caller's deadline.
 pub(crate) fn pinned_bytes(
     path: &Path,
     pin: &[u8; 32],
