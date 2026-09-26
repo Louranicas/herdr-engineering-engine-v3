@@ -83,6 +83,67 @@ fn publishes_exact_subject_and_first_page_digest() {
     assert!(page.rows.as_slice()[0].content.value.is_some());
     assert!(page.rows.as_slice()[1].content.value.is_none());
 }
+/// R17 round 2 Q1 · an unread subject is one `other` row with no content, `excluded` with the
+/// reason given, under a root whose tree digest is its page's; it resolves through the graph like
+/// any subject, and `verify` still refuses to bind an excluded subject to a source.
+#[test]
+fn an_unread_subject_is_one_excluded_row_carrying_its_reason() {
+    let (_a, s, snap) = setup();
+    let mut e = Evidence::new(&s, deadline());
+    let reason = "R16r2.3: the engine does not read its own executable";
+    let root = subjects::unread(&mut e, "collector", reason, deadline()).unwrap();
+    let subject: SubjectV1 = receipt::decode(&read(&e, root.as_ref())).unwrap();
+    let page: SubjectFilePageV1 = receipt::decode(&read(&e, subject.files.as_ref())).unwrap();
+    assert_eq!(
+        subject.tree_sha256.as_str(),
+        subject.files.as_ref().sha256.as_str()
+    );
+    assert_eq!(
+        (
+            page.page_index,
+            page.page_count,
+            page.row_count,
+            page.total_rows
+        ),
+        (0, 1, 1, 1)
+    );
+    let row = &page.rows.as_slice()[0];
+    assert_eq!(row.path.as_str(), "collector");
+    assert_eq!(row.kind, receipt::SubjectFileV1Kind::Other);
+    assert_eq!(row.origin, SubjectFileV1Origin::Excluded);
+    assert!(row.content.value.is_none());
+    assert_eq!(
+        row.content
+            .unavailable_reason
+            .as_ref()
+            .map(receipt::Text::as_str),
+        Some(reason)
+    );
+    assert_eq!(
+        row.exclusion_reason
+            .value
+            .as_ref()
+            .map(receipt::Text::as_str),
+        Some(reason)
+    );
+    assert!(!row.executable);
+    assert!(matches!(
+        subjects::verify(&e, &snap, SubjectFileV1Origin::Excluded, &root, deadline())
+            .unwrap_err()
+            .kind,
+        ErrorKind::ExcludedUnsupported
+    ));
+    // A reason past the receipt's text bound is refused before anything is published.
+    let before = e.registered().len();
+    assert!(matches!(
+        subjects::unread(&mut e, "collector", &"x".repeat(70_000), deadline())
+            .unwrap_err()
+            .kind,
+        ErrorKind::Scalar
+    ));
+    assert_eq!(e.registered().len(), before);
+}
+
 #[test]
 fn excluded_origin_refuses_without_publication() {
     let (_a, s, snap) = setup();

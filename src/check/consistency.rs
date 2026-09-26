@@ -336,25 +336,13 @@ fn patch_binding(graph: &Graph, subjects: &SubjectsV1, editable: &Editable) -> R
     let claimed = graph.get(claimed.as_ref())?.bytes();
     let derived = match changed {
         None => Vec::new(),
-        Some((before, after)) => {
-            let after = graph.get(after)?.bytes();
-            if after.len() > editable.bounds.bytes.min(patch::MAX_TEXT) {
-                return Err(refuse(PatchRefusal::Derivation(patch::Error::Bound)));
-            }
-            let class = editable
-                .bounds
-                .changed_lines
-                .min(patch::MAX_CHANGED_LINES)
-                .saturating_add(2);
-            patch::unified(
-                graph.get(before)?.bytes(),
-                after,
-                editable.path.as_str(),
-                patch::edit_count(claimed).min(class),
-                None,
-            )
-            .map_err(|error| refuse(PatchRefusal::Derivation(error)))?
-        }
+        Some((before, after)) => derive_patch(
+            graph.get(before)?.bytes(),
+            graph.get(after)?.bytes(),
+            editable,
+            patch::edit_count(claimed).min(patch_ceiling(editable)),
+        )
+        .map_err(|error| refuse(PatchRefusal::Derivation(error)))?,
     };
     if derived != claimed {
         return Err(refuse(PatchRefusal::Mismatch));
@@ -363,6 +351,36 @@ fn patch_binding(graph: &Graph, subjects: &SubjectsV1, editable: &Editable) -> R
 }
 
 /// The changed entry's content reference: it must be a regular file with content.
+/// The most changed lines a class patch may carry, plus the two the derivation needs: the ceiling
+/// both `patch_binding` and the runtime's plan bound their `limit` by.
+#[must_use]
+pub fn patch_ceiling(editable: &Editable) -> usize {
+    editable
+        .bounds
+        .changed_lines
+        .min(patch::MAX_CHANGED_LINES)
+        .saturating_add(2)
+}
+
+/// The one derivation of a seed-to-result patch (R17 round 2, N5): `after` bounded by the class's
+/// byte bound, then `patch::unified` over the editable path with the caller's `limit` —
+/// `patch_binding` passes the limit it reads off the claimed patch, the runtime's plan passes
+/// [`patch_ceiling`]; a difference between the two derivations is what `patch_binding` refuses.
+///
+/// # Errors
+/// `patch::Error::Bound` past the byte bound; the derivation's own errors otherwise.
+pub fn derive_patch(
+    before: &[u8],
+    after: &[u8],
+    editable: &Editable,
+    limit: usize,
+) -> Result<Vec<u8>, patch::Error> {
+    if after.len() > editable.bounds.bytes.min(patch::MAX_TEXT) {
+        return Err(patch::Error::Bound);
+    }
+    patch::unified(before, after, editable.path.as_str(), limit, None)
+}
+
 fn changed_text(file: &SubjectFileV1) -> Result<&Ref, Error> {
     match (&file.kind, &file.content.value) {
         (SubjectFileV1Kind::File, Some(content)) => Ok(content.as_ref()),

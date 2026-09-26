@@ -161,6 +161,50 @@ pub fn publish(
     record(&mut publisher, &subject)
 }
 
+/// Publish a subject the runtime did NOT read, as the wire's own form for one (R17 round 2, Q1):
+/// a single `SubjectFileV1` row at `path`, `kind = other`, no content, `origin = excluded` with
+/// `reason` as its `exclusion_reason` — never a fabricated file whose bytes describe the gap. The
+/// one use is the collector subject: the engine does not read its own executable (R16r2.3), and
+/// `decide` scores that identity `Unavailable` on its own. The page and the root are the same
+/// records `publish` emits, through the same `pages` door.
+///
+/// # Errors
+/// Refuses expiry, a `path` or `reason` outside the receipt's scalar bounds, or any publication
+/// failure. Published objects are never claimed rolled back.
+pub fn unread(
+    evidence: &mut Evidence<'_>,
+    path: &str,
+    reason: &str,
+    deadline: Instant,
+) -> Result<TypedRef<SubjectV1>, Error> {
+    if Instant::now() >= deadline {
+        return Err(failure(ErrorKind::Deadline));
+    }
+    let row = SubjectFileV1 {
+        path: RelPath::new(path.to_owned()).map_err(|_| failure(ErrorKind::Scalar))?,
+        kind: SubjectFileV1Kind::Other,
+        content: unavailable(reason)?,
+        executable: false,
+        link_target: unavailable("not_a_symlink")?,
+        origin: SubjectFileV1Origin::Excluded,
+        exclusion_reason: Maybe::present(text(reason)?),
+    };
+    let subject_id: Id = evidence::fresh_id(deadline)
+        .map_err(|error| failure(ErrorKind::Publication(collector::Error::Sink(error))))?;
+    let mut publisher = Publisher::new(evidence);
+    let files = pages(&mut publisher, &[row])?;
+    let subject = SubjectV1 {
+        subject_id,
+        tree_sha256: Sha::new(files.as_ref().sha256.as_str().to_owned()).map_err(|_| Error {
+            kind: ErrorKind::Scalar,
+            attempted: publisher.attempted_refs().to_vec(),
+        })?,
+        files,
+        dirty_patch: unavailable("dirty_patch_unavailable")?,
+    };
+    record(&mut publisher, &subject)
+}
+
 /// Bind a previously published subject to the actual frozen source before dispatch
 /// and after collection. Random publication IDs do not replace file comparisons.
 /// The complete retained graph, path/type/origin/executable fields and exact file

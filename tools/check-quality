@@ -170,7 +170,7 @@ T06_TARGET_COUNTS = {
     "t06_driver": 30, "t06_consistency": 50, "t06_workspace": 36,
     "t06_terminal": 39, "t06_evidence": 26, "t06_collector": 29,
     "t06_availability": 22, "t06_decision": 40, "t06_staging": 20,
-    "t06_subjects": 8, "t06_process_timing": 3, "t06_workspace_export": 9,
+    "t06_subjects": 9, "t06_process_timing": 3, "t06_workspace_export": 9,
     "t06_bounded_preflight": 3, "t06_durable_control": 1, "t06_receipt_import": 9,
 }
 T06_INPUTS = (
