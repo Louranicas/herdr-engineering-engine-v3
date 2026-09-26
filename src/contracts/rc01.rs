@@ -7,6 +7,11 @@ use std::time::Duration;
 pub const TASK_LIMIT: Duration = Duration::from_mins(20);
 /// Final share of [`TASK_LIMIT`] kept for verification and cleanup; no new candidate work starts in it.
 pub const CLEANUP_RESERVE: Duration = Duration::from_mins(5);
+/// How long after a stop intent a run may still be observed before its cleanup is late (RC04's
+/// ten-second cutoff), in milliseconds. One spelling for three doors: `check::decision`'s
+/// `CleanupLate` rule, the process owner's stop budget (`worker::process`) and the runtime's check
+/// teardown share (`app::runtime::CHECK_TEARDOWN`) — R15 round 2, MEDIUM-9.
+pub const CLEANUP_GRACE_MS: u64 = 10_000;
 /// Attempts per task.
 pub const MAX_ATTEMPTS: u8 = 3;
 /// Consecutive attempts without a newly satisfied criterion before the task stops.

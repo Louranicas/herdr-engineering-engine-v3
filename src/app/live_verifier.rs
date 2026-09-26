@@ -3,16 +3,19 @@
 //! the check window, captures every completed step, reads the outputs back and builds the four run
 //! records the ledger commits with the verification (R13 ruling d).
 //!
-//! This file is the compiled skeleton: the two pure functions the design fixes before the live half
-//! is composed — the class profile's declaration read as the workload's [`Tools`], and the one
-//! function that derives a check's verdict, cost and settlement from what the run reported (R15.3).
+//! The verifier OBSERVES and the runtime RECORDS (R15 round 2): [`LiveVerifier`] runs the workload
+//! inside the window it is handed and returns what it saw; `app::runtime` captures, reads back,
+//! derives the check with [`checked`] and commits the records with the verification, inside one
+//! hold. Two pure functions live here beside it: the class profile's declaration read as the
+//! workload's [`Tools`], and the one derivation of a check's verdict, cost and settlement (R15.3).
 
 use super::class_profile::Declared;
 use super::run_records::OutcomeName;
-use super::runtime::declared_criteria;
-use super::workload::{COMPILER_DESTINATION, Tools};
+use super::runtime::{CheckPlan, Observed, Verifier, declared_criteria};
+use super::workload::{COMPILER_DESTINATION, Plan, Tools, collect_bounded};
 use crate::store::VerificationVerdict;
 use crate::worker::namespace::{ReadOnlyFile, SHIM_DESTINATION};
+use crate::worker::resources::Scope;
 use std::time::Instant;
 
 /// bwrap's fixed host path: the namespace door refuses any other
@@ -46,6 +49,45 @@ pub fn tools(declared: &Declared) -> Tools {
             })
             .collect(),
         namespace_directories: declared.namespace_directories.clone(),
+    }
+}
+
+/// The production verifier: the fixed workload under three bounded scopes, run against the applied
+/// candidate inside the check window, returned as observed — nothing is published or decided here.
+pub struct LiveVerifier {
+    tools: Tools,
+    scopes: [Scope; 3],
+}
+
+impl LiveVerifier {
+    /// Over the class profile's declaration and the three scopes the dispatcher owns (B14b).
+    #[must_use]
+    pub fn new(declared: &Declared, scopes: [Scope; 3]) -> Self {
+        Self {
+            tools: tools(declared),
+            scopes,
+        }
+    }
+}
+
+impl Verifier for LiveVerifier {
+    fn check(&mut self, plan: CheckPlan<'_>) -> Observed {
+        let run = collect_bounded(
+            &Plan {
+                source: plan.subject,
+                protected: plan.protected,
+                job_root: plan.job_root,
+                tools: &self.tools,
+                deadline: plan.window.until,
+                teardown_deadline: plan.window.teardown_until,
+                cancelled: plan.cancelled,
+            },
+            &self.scopes,
+        );
+        Observed {
+            run,
+            observed: Instant::now(),
+        }
     }
 }
 
@@ -83,15 +125,18 @@ pub struct Checked {
 /// The verdict, criteria, cost and settlement one run earned. One arm per outcome, so a new
 /// outcome is a compile error here. `PendingCleanup` is an `Error` with the cleanup unsettled: the
 /// workload replaces the steps' outcome when its teardown did not settle, so nothing earned
-/// survives it (R15.3, amended at the skeleton).
+/// survives it (R15.3, amended at the skeleton). A run whose steps could not all be captured
+/// (`captured == false`) earned nothing either: its evidence cannot cite what was not published.
 #[must_use]
 pub fn checked(
     outcome: OutcomeName,
     cleanup: Cleanup,
+    captured: bool,
     begun: Instant,
     observed: Instant,
 ) -> Checked {
     let (verdict, criteria) = match outcome {
+        _ if !captured => (VerificationVerdict::Error, 0),
         OutcomeName::Matched => (VerificationVerdict::Passed, declared_criteria()),
         OutcomeName::Mismatch | OutcomeName::InvalidOutput => (VerificationVerdict::Failed, 0),
         OutcomeName::Timeout => (VerificationVerdict::Timeout, 0),
@@ -234,7 +279,7 @@ mod tests {
         for (outcome, verdict, criteria) in expected {
             let pending = outcome == OutcomeName::PendingCleanup;
             assert_eq!(
-                checked(outcome, settled, begun, at(47_977)),
+                checked(outcome, settled, true, begun, at(47_977)),
                 Checked {
                     verdict,
                     criteria,
@@ -244,7 +289,7 @@ mod tests {
                 "{outcome:?} settled"
             );
             assert_eq!(
-                checked(outcome, scratch_held, begun, at(1_203)),
+                checked(outcome, scratch_held, true, begun, at(1_203)),
                 Checked {
                     verdict,
                     criteria,
@@ -255,5 +300,15 @@ mod tests {
             );
         }
         assert_ne!(declared_criteria(), 0, "a match earns the class's bits");
+        // A step that could not be captured: nothing earned, whatever the outcome said.
+        assert_eq!(
+            checked(OutcomeName::Matched, settled, false, begun, at(31)),
+            Checked {
+                verdict: VerificationVerdict::Error,
+                criteria: 0,
+                used_ms: 31,
+                cleanup_settled: true,
+            }
+        );
     }
 }

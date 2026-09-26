@@ -816,6 +816,7 @@ mod tests {
             subjects_unchanged: false,
             cancellation_observed: true,
             scratch_released: false,
+            decisive: None,
         }
     }
 

@@ -100,6 +100,7 @@ mod actual_store_controls {
             job_root: &root.join("job"),
             tools: &tools,
             deadline,
+            teardown_deadline: deadline + Duration::from_secs(10),
             cancelled: &cancelled,
         };
         let scopes: [Scope; 3] = std::array::from_fn(|index| Scope {
@@ -115,6 +116,7 @@ mod actual_store_controls {
             job_root: &root.join("job"),
             tools: &tools,
             deadline: Instant::now() + Duration::from_secs(1_201),
+            teardown_deadline: Instant::now() + Duration::from_secs(1_211),
             cancelled: &cancelled,
         };
         assert!(matches!(

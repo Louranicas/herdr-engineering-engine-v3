@@ -9,10 +9,17 @@
 //! module is the trusted check owner for one verdict only: a candidate the class refuses is
 //! recorded `Failed` with no criterion satisfied, without a verifier call (B14a-R2.4).
 
+use super::capture;
 use super::class_profile::{Profile, Workspace};
-use super::evidence::{digest, fresh_id};
+use super::evidence::{Evidence as Sink, digest, fresh_id};
+use super::live_verifier::{Cleanup, checked};
 use super::repair::{self, Failure};
+use super::run_records::{
+    Intents, ObligationRecord, OutcomeName, OutputReadback, Readbacks, RunCleanup, RunClock,
+    RunOutcome, RunRecord as _, RuntimeClock, Settlement as RecordSettlement,
+};
 use super::tasks::{Poisoned, StoreTasks};
+use super::workload::{self, Outcome as WorkloadOutcome, Run, Step};
 use crate::check::consistency::{U64_BOUNDS, U64_CRITERIA, U64_EDITABLE};
 use crate::check::decision::CLEANUP_GRACE_MS;
 use crate::contracts::control::criteria_digest;
@@ -21,14 +28,18 @@ use crate::contracts::roster::{MAX_HISTORY, Selection};
 use crate::contracts::{Generation, Sha256Digest, UuidV4};
 use crate::store::{
     self, Binding, Effect, EvidenceIdentity, Expected, Identified, Object, Principal, RosterStart,
-    Settlement, Stop, Store, TaskHead, Verification, VerificationVerdict,
+    RunRecord as StoreRunRecord, RunRecordKind, Settlement, Stop, Store, TaskHead, Verification,
+    VerificationVerdict,
 };
 use crate::task::LoopRefusal;
 use crate::task::driver::{self, Acceptance, Checked as DriverChecked, StopReason, Work};
 use crate::worker::resources::TERM_GRACE;
 use crate::worker::workspace::{self, FileIdentity, Snapshot};
+use std::fs;
+use std::os::unix::fs::DirBuilderExt;
 use std::path::Path;
-use std::time::{Duration, Instant};
+use std::sync::atomic::AtomicBool;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 /// A candidate source's answer: the editable file's next full text, or nothing more to offer.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -75,16 +86,38 @@ const REFUSED_CANDIDATE_SCHEMA: &str = "hee3.refused-candidate/1";
 /// The schema of the runtime's own record of a check it did not run: the verify reservation held
 /// no time past the check's teardown share (B14a-3b, R14.1).
 const CHECK_WINDOW_EMPTY_SCHEMA: &str = "hee3.check-window-empty/1";
+/// The schema of a verifier's check as the runtime records it (B14a-3c, R15.7): the outcome, whether
+/// every step was captured, and the run records it cites — each `{artifact_id, sha256,
+/// byte_length}` under its kind — which `accept` reads back against the ledger's commitment.
+pub const U64_CHECK_SCHEMA: &str = "hee3.u64-check/1";
 /// The schema of a task stop's evidence — the `kind` the stop body names.
 const TASK_STOP_SCHEMA: &str = "hee3.task-stop/1";
 /// The schema of a pre-dispatch refusal's evidence — the `kind` its body names.
 const PRE_DISPATCH_REFUSAL_SCHEMA: &str = "hee3.pre-dispatch-refusal/1";
 
-/// The check of an applied candidate. It receives the frozen snapshot, never a path to mutate,
-/// and the window it may run in (B14a-3b): `until` is its cutoff, `teardown_until` how long its
-/// own teardown may take after it.
+/// What one check is handed (R15 round 2): the frozen applied snapshot (never a path to mutate),
+/// the protected snapshot, a private job root of its own beside the attempt's directory, the window
+/// it may run in (B14a-3b: `until` is its cutoff, `teardown_until` how long its teardown may take)
+/// and the runtime's cancellation flag.
+pub struct CheckPlan<'a> {
+    pub subject: &'a Snapshot,
+    pub protected: &'a Snapshot,
+    pub job_root: &'a Path,
+    pub window: CheckWindow,
+    pub cancelled: &'a AtomicBool,
+}
+
+/// What the verifier saw: the workload's run, or its refusal to launch, and when the observation
+/// was complete. The verifier decides nothing and publishes nothing — the runtime derives the
+/// check from this and records it (R15 round 2).
+pub struct Observed {
+    pub run: Result<Run, workload::Error>,
+    pub observed: Instant,
+}
+
+/// The check of an applied candidate: it observes a run of the workload inside the plan's window.
 pub trait Verifier {
-    fn check(&mut self, subject: &Snapshot, window: CheckWindow) -> Check;
+    fn check(&mut self, plan: CheckPlan<'_>) -> Observed;
 }
 
 /// What the check keeps back for its own teardown after its cutoff — stopping the scope
@@ -280,6 +313,19 @@ struct Begun {
     check_settled: bool,
 }
 
+/// One verification as the ledger committed it, for the runtime's own bookkeeping.
+struct Committed {
+    generation: String,
+    event: String,
+    object: Object,
+    artifact_id: String,
+    verdict: VerificationVerdict,
+    criteria: u64,
+    schema_id: String,
+    reconciled: bool,
+    evidence: Vec<u8>,
+}
+
 /// The attempt lifecycle for one task over the real ledger.
 struct StoreRuntime<'a, C, V> {
     tasks: &'a StoreTasks,
@@ -287,6 +333,10 @@ struct StoreRuntime<'a, C, V> {
     source: C,
     verifier: V,
     baseline: Snapshot,
+    protected: Snapshot,
+    /// The flag a check's workload reads; nothing sets it in B14a-3c (a durable cancel during a
+    /// check is honoured at the driver's next read — B19/B21 own the wake).
+    cancelled: AtomicBool,
     digests: [String; 3],
     origin: Instant,
     deadline: Instant,
@@ -334,6 +384,8 @@ pub fn dispatch<C: CandidateSource, V: Verifier>(
         source,
         verifier,
         baseline: prepared.baseline,
+        protected: prepared.protected,
+        cancelled: AtomicBool::new(false),
         digests: prepared.digests,
         origin,
         deadline,
@@ -359,6 +411,8 @@ pub fn dispatch<C: CandidateSource, V: Verifier>(
 
 struct Prepared {
     baseline: Snapshot,
+    /// The protected snapshot, kept whole: every check runs the workload against it (R15.2).
+    protected: Snapshot,
     digests: [String; 3],
 }
 
@@ -413,6 +467,7 @@ fn prepare(
     }
     Ok(Prepared {
         baseline,
+        protected,
         digests: binding_digests(
             &workspace.baseline_digest,
             &workspace.protected_digest,
@@ -572,70 +627,200 @@ impl<C: CandidateSource, V: Verifier> StoreRuntime<'_, C, V> {
     /// for the next candidate. A cost past what the verify reservation holds is recorded unknown
     /// (B14a-R1.8, review M4c); a `Cancelled` verdict for a task nobody cancelled is the
     /// verifier's error, never a cancellation. Returns the evidence and whether the check settled.
-    fn record(
-        &mut self,
-        index: usize,
+    /// Publish `check`'s evidence and commit the verification with `records`, in the caller's
+    /// hold: one transaction for the verdict, the receipt and the run records (R13.2).
+    fn commit(
+        &self,
+        store: &mut Store,
+        begun: &Begun,
         check: &Check,
         subject: &str,
-    ) -> Result<(Object, String, VerificationVerdict, bool), Error> {
-        let begun = self.attempts.get(index).ok_or(Error::Identity)?;
-        let (staging, event, artifact) = (
-            fresh(self.deadline)?,
-            fresh(self.deadline)?,
-            fresh(self.deadline)?,
-        );
-        let (generation, object, verdict, reconciled) =
-            self.tasks.with_store(|store| -> Result<_, Error> {
-                let head = self.current(store)?;
-                let used_ms = check
-                    .used_ms
-                    .filter(|used| *used <= head.reserved_verify_ms);
-                let verdict = if check.criteria & !declared_criteria() != 0 {
-                    // Bits outside the class's criteria are an invalid check, never a stranded
-                    // task (re-review LOW-3), recorded as such.
-                    VerificationVerdict::Invalid
-                } else if check.verdict == VerificationVerdict::Cancelled && !head.cancellation {
-                    VerificationVerdict::Error
-                } else {
-                    check.verdict
-                };
-                let object = store.publish(&check.evidence, uuid(&staging)?, self.deadline)?;
-                let generation = store.record_verification(
-                    &expected(&head, begun)?,
-                    &Verification {
-                        verdict,
-                        subject: Sha256Digest::parse(subject).map_err(|_| Error::Identity)?,
-                        evidence: object.clone(),
-                        identity: EvidenceIdentity {
-                            artifact_id: uuid(&artifact)?,
-                            media_type: CHECK_MEDIA_TYPE,
-                            schema_id: &check.schema_id,
-                        },
-                        satisfied_criteria: Some(check.criteria),
-                        used_ms,
-                        cleanup_settled: check.cleanup_settled,
-                    },
-                    uuid(&event)?,
-                    self.deadline,
-                )?;
-                Ok((
-                    generation,
-                    object,
-                    verdict,
-                    used_ms.is_some() && check.cleanup_settled,
-                ))
-            })??;
-        self.written(&generation, event)?;
-        if let Some(begun) = self.attempts.get_mut(index) {
-            begun.verified = true;
-            begun.check_settled = reconciled;
-        }
-        self.previous = Some(Previous {
+        ids: &[String; 3],
+        records: &[StoreRunRecord<'_>],
+    ) -> Result<Committed, Error> {
+        let [staging, event, artifact] = ids;
+        let head = self.current(store)?;
+        let used_ms = check
+            .used_ms
+            .filter(|used| *used <= head.reserved_verify_ms);
+        // A `Cancelled` verdict with no cancellation on the task is an error, not a cancellation.
+        // (Criteria outside the class's set — re-review LOW-3 — are no longer representable: every
+        // check's criteria come from `checked()` or are zero.)
+        let verdict = if check.verdict == VerificationVerdict::Cancelled && !head.cancellation {
+            VerificationVerdict::Error
+        } else {
+            check.verdict
+        };
+        let object = store.publish(&check.evidence, uuid(staging)?, self.deadline)?;
+        let generation = store.record_verification_with_records(
+            &expected(&head, begun)?,
+            &Verification {
+                verdict,
+                subject: Sha256Digest::parse(subject).map_err(|_| Error::Identity)?,
+                evidence: object.clone(),
+                identity: EvidenceIdentity {
+                    artifact_id: uuid(artifact)?,
+                    media_type: CHECK_MEDIA_TYPE,
+                    schema_id: &check.schema_id,
+                },
+                satisfied_criteria: Some(check.criteria),
+                used_ms,
+                cleanup_settled: check.cleanup_settled,
+            },
+            records,
+            uuid(event)?,
+            self.deadline,
+        )?;
+        Ok(Committed {
+            generation,
+            event: event.clone(),
+            object,
+            artifact_id: artifact.clone(),
             verdict,
             criteria: check.criteria,
+            schema_id: check.schema_id.clone(),
+            reconciled: used_ms.is_some() && check.cleanup_settled,
             evidence: check.evidence.clone(),
+        })
+    }
+
+    /// Record one of the runtime's own checks (a refused candidate, an empty window): no run, no
+    /// records.
+    fn record(&mut self, index: usize, check: &Check, subject: &str) -> Result<Committed, Error> {
+        let begun = self.attempts.get(index).ok_or(Error::Identity)?;
+        let ids: [String; 3] = fresh_ids(self.deadline)?;
+        let committed = self
+            .tasks
+            .with_store(|store| self.commit(store, begun, check, subject, &ids, &[]))??;
+        self.recorded(index, committed)
+    }
+
+    /// Record what the verifier observed (R15 round 2): inside one hold, capture every completed
+    /// step, read the outputs and the subjects back, tear the job root down, build the four run
+    /// records, publish them, derive the check by the one function and commit it all together.
+    fn record_observed(
+        &mut self,
+        index: usize,
+        observed: Observed,
+        window: CheckWindow,
+        job_root: &Path,
+        applied: &Snapshot,
+        subject: &str,
+    ) -> Result<Committed, Error> {
+        let begun = self.attempts.get(index).ok_or(Error::Identity)?;
+        let ids: [String; 3] = fresh_ids(self.deadline)?;
+        let record_ids: [String; 8] = fresh_ids(self.deadline)?;
+        let committed = self
+            .tasks
+            .with_store(|store| -> Result<Committed, Error> {
+                let run = launched(observed.run)?;
+                let teardown = window.teardown_until.min(self.deadline);
+                let Captures {
+                    steps: captures,
+                    outputs,
+                    complete,
+                } = capture_run(store, &run, teardown, self.deadline)?;
+                let subjects_verified = applied.readback_source(teardown).is_ok();
+                let protected_unchanged = self.protected.readback_source(teardown).is_ok();
+                // The check's own teardown, within its share: the job root and everything the run
+                // retained under it.
+                let retained_removed = Instant::now() < teardown
+                    && (fs::remove_dir_all(job_root).is_ok() || !job_root.exists());
+                let (cleanup, cleanup_record) = cleanup_of(&run, retained_removed);
+                let clock = clock_of(window, observed.observed, run.decisive)?;
+                let outcome_record = if complete {
+                    Some(RunOutcome::of(&run, &captures).map_err(|_| Error::Identity)?)
+                } else {
+                    None
+                };
+                let readbacks = Readbacks::of(
+                    uuid(&begun.id)?,
+                    subjects_verified,
+                    protected_unchanged,
+                    &outputs,
+                );
+                let derived = checked(
+                    OutcomeName::of(&run.outcome),
+                    cleanup,
+                    complete,
+                    window.begun,
+                    observed.observed,
+                );
+                // Publish every record under a fresh identity; the evidence cites each one.
+                let encode = |bytes: Result<Vec<u8>, super::run_records::Refusal>| {
+                    bytes.map_err(|_| Error::Identity)
+                };
+                let published = publish_records(
+                    store,
+                    self.deadline,
+                    &record_ids,
+                    [
+                        Some(encode(clock.to_bytes())?),
+                        outcome_record
+                            .as_ref()
+                            .map(|record| encode(record.to_bytes()))
+                            .transpose()?,
+                        Some(encode(cleanup_record.to_bytes())?),
+                        Some(encode(readbacks.to_bytes())?),
+                    ],
+                )?;
+                let check = check_of(&published, OutcomeName::of(&run.outcome), complete, derived)?;
+                let records = published
+                    .iter()
+                    .map(|(kind, id, object)| {
+                        Ok(StoreRunRecord {
+                            kind: *kind,
+                            artifact_id: uuid(id)?,
+                            object,
+                        })
+                    })
+                    .collect::<Result<Vec<_>, Error>>()?;
+                self.commit(store, begun, &check, subject, &ids, &records)
+            })??;
+        self.recorded(index, committed)
+    }
+
+    /// The runtime's own bookkeeping after a verification committed.
+    fn recorded(&mut self, index: usize, committed: Committed) -> Result<Committed, Error> {
+        self.written(&committed.generation, committed.event.clone())?;
+        if let Some(begun) = self.attempts.get_mut(index) {
+            begun.verified = true;
+            begun.check_settled = committed.reconciled;
+        }
+        self.previous = Some(Previous {
+            verdict: committed.verdict,
+            criteria: committed.criteria,
+            evidence: committed.evidence.clone(),
         });
-        Ok((object, artifact, verdict, reconciled))
+        Ok(committed)
+    }
+
+    /// What the driver is told of a committed verification.
+    fn checked(committed: Committed, subject: String) -> DriverChecked<Evidence> {
+        // An unknown cost or unsettled cleanup is an obligation the stop must keep (review H1).
+        if !committed.reconciled {
+            return DriverChecked::Unsettled;
+        }
+        match committed.verdict {
+            VerificationVerdict::Passed => DriverChecked::Passed {
+                evidence: Evidence {
+                    object: committed.object,
+                    subject,
+                    artifact_id: committed.artifact_id,
+                    schema_id: committed.schema_id,
+                },
+                criteria: committed.criteria,
+            },
+            VerificationVerdict::Failed => DriverChecked::Failed {
+                criteria: committed.criteria,
+            },
+            VerificationVerdict::Invalid => DriverChecked::Invalid,
+            VerificationVerdict::Error => DriverChecked::Error,
+            VerificationVerdict::Timeout => DriverChecked::Timeout,
+            // The task was cancelled (`commit` turned any other `Cancelled` into `Error`): nothing
+            // was satisfied, and the driver's next cancellation read stops it as cancelled.
+            VerificationVerdict::Cancelled => DriverChecked::Failed { criteria: 0 },
+        }
     }
 
     /// Stop the task, deciding and writing in one hold (review M2). (b) An attempt whose work or
@@ -914,51 +1099,46 @@ impl<C: CandidateSource, V: Verifier> driver::Runtime for StoreRuntime<'_, C, V>
             let reserved_verify_ms = self.tasks.with_store(|store| -> Result<u64, Error> {
                 Ok(self.current(store)?.reserved_verify_ms)
             })??;
-            let check = match check_window(Instant::now(), reserved_verify_ms, self.deadline) {
-                Some(window) => self.verifier.check(applied, window),
-                // No time for a check after its teardown share: the runtime records that it did
-                // not run, as a timeout at no cost, so the task fails rather than strands (R14.1).
-                None => Check {
-                    verdict: VerificationVerdict::Timeout,
-                    criteria: 0,
-                    evidence: serde_json::to_vec(&serde_json::json!({
-                        "kind": "check_window_empty",
-                        "reserved_verify_ms": reserved_verify_ms,
-                        "teardown_ms": millis(CHECK_TEARDOWN),
-                    }))
-                    .map_err(|_| Error::Identity)?,
-                    schema_id: CHECK_WINDOW_EMPTY_SCHEMA.to_owned(),
-                    used_ms: Some(0),
-                    cleanup_settled: true,
-                },
+            if let Some(window) = check_window(Instant::now(), reserved_verify_ms, self.deadline) {
+                // The verifier observes inside a job root of its own, a SIBLING of the applied
+                // snapshot's directory (never under it: the workload refuses a root inside its
+                // subject, and creating one would change the subject); the runtime then
+                // records what was observed (R15 round 2).
+                let id = begun.id.clone();
+                let applied = applied.clone();
+                let job_root = self.dispatch.attempts.join(format!("{id}.check"));
+                fs::DirBuilder::new()
+                    .mode(0o700)
+                    .create(&job_root)
+                    .map_err(|_| Error::Identity)?;
+                let observed = self.verifier.check(CheckPlan {
+                    subject: &applied,
+                    protected: &self.protected,
+                    job_root: &job_root,
+                    window,
+                    cancelled: &self.cancelled,
+                });
+                let recorded =
+                    self.record_observed(index, observed, window, &job_root, &applied, &subject)?;
+                return Ok(Self::checked(recorded, subject));
+            }
+            let check = Check {
+                verdict: VerificationVerdict::Timeout,
+                criteria: 0,
+                evidence: serde_json::to_vec(&serde_json::json!({
+                    "kind": "check_window_empty",
+                    "reserved_verify_ms": reserved_verify_ms,
+                    "teardown_ms": millis(CHECK_TEARDOWN),
+                }))
+                .map_err(|_| Error::Identity)?,
+                schema_id: CHECK_WINDOW_EMPTY_SCHEMA.to_owned(),
+                used_ms: Some(0),
+                cleanup_settled: true,
             };
             (check, subject)
         };
-        let (object, artifact_id, verdict, reconciled) = self.record(index, &check, &subject)?;
-        // An unknown cost or unsettled cleanup is an obligation the stop must keep (review H1).
-        if !reconciled {
-            return Ok(DriverChecked::Unsettled);
-        }
-        Ok(match verdict {
-            VerificationVerdict::Passed => DriverChecked::Passed {
-                evidence: Evidence {
-                    object,
-                    subject,
-                    artifact_id,
-                    schema_id: check.schema_id.clone(),
-                },
-                criteria: check.criteria,
-            },
-            VerificationVerdict::Failed => DriverChecked::Failed {
-                criteria: check.criteria,
-            },
-            VerificationVerdict::Invalid => DriverChecked::Invalid,
-            VerificationVerdict::Error => DriverChecked::Error,
-            VerificationVerdict::Timeout => DriverChecked::Timeout,
-            // The task was cancelled (`record` turned any other `Cancelled` into `Error`): nothing
-            // was satisfied, and the driver's next cancellation read stops it as cancelled.
-            VerificationVerdict::Cancelled => DriverChecked::Failed { criteria: 0 },
-        })
+        let recorded = self.record(index, &check, &subject)?;
+        Ok(Self::checked(recorded, subject))
     }
 
     fn accept(
@@ -976,14 +1156,27 @@ impl<C: CandidateSource, V: Verifier> driver::Runtime for StoreRuntime<'_, C, V>
                 let head = self.current(store)?;
                 let expected = expected(&head, begun)?;
                 // The accepted object is the verification's receipt, named as the verification
-                // named it (B09b): one identity per object, wherever it is recorded.
+                // named it (B09b) — and only once the run records it cites are read back against
+                // the ledger's commitment (DS2 §2.6, R15.7): the identified object comes from that
+                // comparison, so acceptance cannot proceed without it.
+                let bytes = store.read_object(&evidence.object, self.deadline)?;
+                let committed = store.committed_check(
+                    self.dispatch.principal,
+                    uuid(&begun.id)?,
+                    self.deadline,
+                )?;
+                let identity = cited(&evidence.schema_id, &evidence.artifact_id, &bytes, |kind| {
+                    committed.record(kind).map(|record| {
+                        (
+                            record.artifact_id(),
+                            record.object().digest(),
+                            record.object().size(),
+                        )
+                    })
+                })?;
                 let identified = Identified {
                     object: evidence.object.clone(),
-                    identity: EvidenceIdentity {
-                        artifact_id: uuid(&evidence.artifact_id)?,
-                        media_type: CHECK_MEDIA_TYPE,
-                        schema_id: &evidence.schema_id,
-                    },
+                    identity,
                 };
                 let result = store
                     .prepare_verified_acceptance(
@@ -1106,6 +1299,255 @@ fn number(value: &str) -> Result<u64, Error> {
     value.parse().map_err(|_| Error::Identity)
 }
 
+/// What the runtime captured of a run: one reference per step (`None` for a refused step), the
+/// outputs read back, and whether every publication succeeded.
+struct Captures {
+    steps: Vec<Option<crate::contracts::receipt::Ref>>,
+    outputs: Vec<OutputReadback>,
+    complete: bool,
+}
+
+/// Capture every completed step through the evidence sink and read every output back against
+/// what the run retained, publishing each output's identity; a publication that fails leaves the
+/// capture incomplete (the check then earns nothing, R15.3), never a fault.
+fn capture_run(
+    store: &Store,
+    run: &Run,
+    teardown: Instant,
+    deadline: Instant,
+) -> Result<Captures, Error> {
+    let mut sink = Sink::new(store, deadline);
+    let mut steps = Vec::with_capacity(run.steps.len());
+    for step in &run.steps {
+        let Step::Completed { report, .. } = step else {
+            steps.push(None);
+            continue;
+        };
+        let Ok(captured) = capture::capture(&mut sink, report) else {
+            return Ok(Captures {
+                steps,
+                outputs: Vec::new(),
+                complete: false,
+            });
+        };
+        steps.push(Some(captured.producer_ref.into_inner()));
+    }
+    let mut outputs = Vec::with_capacity(run.outputs.len());
+    for output in &run.outputs {
+        let matched = output.readback_source(teardown).is_ok();
+        let bytes = serde_json::to_vec(&serde_json::json!({
+            "kind": "output_readback",
+            "root": output.root().display().to_string(),
+            "content_digest": output.content_digest(),
+        }))
+        .map_err(|_| Error::Identity)?;
+        let Ok(payload) = sink.payload(&bytes, CHECK_MEDIA_TYPE) else {
+            return Ok(Captures {
+                steps,
+                outputs,
+                complete: false,
+            });
+        };
+        outputs.push(OutputReadback {
+            output: payload.into_inner(),
+            matched,
+        });
+    }
+    Ok(Captures {
+        steps,
+        outputs,
+        complete: true,
+    })
+}
+
+/// The run's cleanup as the runtime observed it, and the record of it: the process and scratch
+/// predicates the workload reported, the retained paths the runtime removed, and the aggregate —
+/// observed by the dispatcher that owns it (B14b), `Unknown` here.
+fn cleanup_of(run: &Run, retained_removed: bool) -> (Cleanup, RunCleanup) {
+    let cleanup = Cleanup {
+        processes_settled: run.process_cleanup_complete,
+        scratch_released: run.scratch_released,
+        retained_removed,
+    };
+    let state = |settled: bool| {
+        if settled {
+            RecordSettlement::Settled
+        } else {
+            RecordSettlement::Pending
+        }
+    };
+    let obligation = |id: &str, state: RecordSettlement| ObligationRecord {
+        id: id.to_owned(),
+        state,
+    };
+    let obligations = [
+        obligation("process", state(run.process_cleanup_complete)),
+        obligation("scratch", state(run.scratch_released)),
+        obligation("retained_paths", state(retained_removed)),
+        obligation("aggregate", RecordSettlement::Unknown),
+    ];
+    let record = RunCleanup::of(state(cleanup.settled()), &obligations, &[]);
+    (cleanup, record)
+}
+
+/// Publish the encoded records present, each under its fresh artifact id (`ids[0..4]`) through
+/// its fresh staging id (`ids[4..8]`), in kind order.
+fn publish_records(
+    store: &Store,
+    deadline: Instant,
+    ids: &[String; 8],
+    encoded: [Option<Vec<u8>>; 4],
+) -> Result<Vec<(RunRecordKind, String, Object)>, Error> {
+    let kinds = [
+        RunRecordKind::RunClock,
+        RunRecordKind::RunOutcome,
+        RunRecordKind::RunCleanup,
+        RunRecordKind::Readbacks,
+    ];
+    let mut published = Vec::with_capacity(4);
+    for (slot, (kind, bytes)) in kinds.into_iter().zip(encoded).enumerate() {
+        let Some(bytes) = bytes else {
+            continue;
+        };
+        let object = store.publish(&bytes, uuid(&ids[slot + 4])?, deadline)?;
+        published.push((kind, ids[slot].clone(), object));
+    }
+    Ok(published)
+}
+
+/// The run to record: a refusal to launch is still a run with its four records (R15.4), except a
+/// `Layout` refusal, which is the runtime's own fault (the job root or scopes it built).
+fn launched(run: Result<Run, workload::Error>) -> Result<Run, Error> {
+    match run {
+        Ok(run) => Ok(run),
+        Err(workload::Error::Layout) => Err(Error::Identity),
+        Err(workload::Error::Deadline) => Ok(Run::unlaunched(WorkloadOutcome::Timeout)),
+        Err(workload::Error::Subject(_)) => Ok(Run::unlaunched(WorkloadOutcome::InvalidSubject)),
+        Err(workload::Error::Oracle | workload::Error::Io) => {
+            Ok(Run::unlaunched(WorkloadOutcome::SetupFailed))
+        }
+    }
+}
+
+/// The check's clock record over its window: the intent follows the deadline being reached, never
+/// the outcome's name (R15.5); `deadline` carries the observation's cleanup deadline (the second
+/// pinned-field amendment, recorded).
+fn clock_of(
+    window: CheckWindow,
+    observed: Instant,
+    decisive: Option<Instant>,
+) -> Result<RunClock, Error> {
+    let intents = Intents {
+        timeout: (observed >= window.until).then_some(window.until),
+        cancellation: None,
+    };
+    RunClock::observe(
+        &RuntimeClock {
+            origin: window.begun,
+            origin_unix_ms: unix_ms_at(window.begun)?,
+            work_until: window.until,
+            deadline: window.teardown_until,
+        },
+        intents,
+        decisive,
+        observed,
+    )
+    .map_err(|_| Error::Identity)
+}
+
+/// The check the runtime records for an observed run: the derived verdict, and evidence under
+/// [`U64_CHECK_SCHEMA`] citing every published record by kind (R15.7).
+fn check_of(
+    published: &[(RunRecordKind, String, Object)],
+    outcome: OutcomeName,
+    complete: bool,
+    derived: super::live_verifier::Checked,
+) -> Result<Check, Error> {
+    let cited: serde_json::Map<String, serde_json::Value> = published
+        .iter()
+        .map(|(kind, id, object)| {
+            (
+                kind.name().to_owned(),
+                serde_json::json!({
+                    "artifact_id": id,
+                    "sha256": object.digest(),
+                    "byte_length": object.size(),
+                }),
+            )
+        })
+        .collect();
+    Ok(Check {
+        verdict: derived.verdict,
+        criteria: derived.criteria,
+        evidence: serde_json::to_vec(&serde_json::json!({
+            "kind": "u64_check",
+            "outcome": outcome,
+            "captured": complete,
+            "records": cited,
+        }))
+        .map_err(|_| Error::Identity)?,
+        schema_id: U64_CHECK_SCHEMA.to_owned(),
+        used_ms: Some(derived.used_ms),
+        cleanup_settled: derived.cleanup_settled,
+    })
+}
+
+/// The unix time of a monotonic instant, in milliseconds, read from the clock now.
+fn unix_ms_at(at: Instant) -> Result<u64, Error> {
+    let now = SystemTime::now();
+    let then = now.checked_sub(at.elapsed()).ok_or(Error::Identity)?;
+    let since = then
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| Error::Identity)?;
+    u64::try_from(since.as_millis()).map_err(|_| Error::Identity)
+}
+
+/// The accepted object's identity, once the run records its evidence cites equal the ledger's
+/// commitment (DS2 §2.6, R15.7): the evidence must be the runtime's own (`hee3.u64-check/1`), and
+/// for every kind, what it cites and what `committed(kind)` holds must both be absent or equal on
+/// artifact id, digest and size — with a clock always committed. Pure over its inputs (F95);
+/// `accept` can build the accepted object only from what this returns.
+fn cited<'a>(
+    schema_id: &'a str,
+    artifact_id: &'a str,
+    bytes: &[u8],
+    committed: impl Fn(RunRecordKind) -> Option<(&'a str, &'a str, u64)>,
+) -> Result<EvidenceIdentity<'a>, Error> {
+    if schema_id != U64_CHECK_SCHEMA {
+        return Err(Error::Identity);
+    }
+    let body: serde_json::Value = serde_json::from_slice(bytes).map_err(|_| Error::Identity)?;
+    let records = body
+        .get("records")
+        .and_then(serde_json::Value::as_object)
+        .ok_or(Error::Identity)?;
+    if records.len() > RunRecordKind::ALL.len() || committed(RunRecordKind::RunClock).is_none() {
+        return Err(Error::Identity);
+    }
+    for kind in RunRecordKind::ALL {
+        let cited = records.get(kind.name()).map(|entry| {
+            (
+                entry.get("artifact_id").and_then(serde_json::Value::as_str),
+                entry.get("sha256").and_then(serde_json::Value::as_str),
+                entry.get("byte_length").and_then(serde_json::Value::as_u64),
+            )
+        });
+        match (cited, committed(kind)) {
+            (None, None) => {}
+            (
+                Some((Some(id), Some(digest), Some(size))),
+                Some((held_id, held_digest, held_size)),
+            ) if id == held_id && digest == held_digest && size == held_size => {}
+            _ => return Err(Error::Identity),
+        }
+    }
+    Ok(EvidenceIdentity {
+        artifact_id: uuid(artifact_id)?,
+        media_type: CHECK_MEDIA_TYPE,
+        schema_id,
+    })
+}
+
 fn millis(duration: Duration) -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
@@ -1113,8 +1555,10 @@ fn millis(duration: Duration) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        CHECK_TEARDOWN, check_window, declared_criteria, preparation_charge, teardown_deadline,
+        CHECK_MEDIA_TYPE, CHECK_TEARDOWN, Error, U64_CHECK_SCHEMA, check_window, cited,
+        declared_criteria, preparation_charge, teardown_deadline,
     };
+    use crate::store::RunRecordKind;
     use std::time::{Duration, Instant};
 
     /// Review MEDIUM-1 · the charge is the observed time below the reservation and the reservation
@@ -1190,6 +1634,93 @@ mod tests {
             None,
             "deadline inside the teardown"
         );
+        Ok(())
+    }
+
+    /// R15.7 · the cited records against the commitment, off the origin: the matching evidence
+    /// yields the identity; a swapped id, digest or size, a cited kind the ledger did not commit, a
+    /// committed kind the evidence omits, an extra key, another schema, malformed bytes and a set
+    /// with no clock are each refused `Identity`.
+    #[test]
+    fn cited_records_must_equal_the_committed_set() -> Result<(), Box<dyn std::error::Error>> {
+        const ID: &str = "28f30000-0000-4000-8000-0000000000a7";
+        const CLOCK: (&str, &str, u64) = (
+            "28f30000-0000-4000-8000-0000000000c1",
+            "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+            193,
+        );
+        const CLEANUP: (&str, &str, u64) = (
+            "28f30000-0000-4000-8000-0000000000c3",
+            "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+            2_048,
+        );
+        let held = |kind: RunRecordKind| match kind {
+            RunRecordKind::RunClock => Some(CLOCK),
+            RunRecordKind::RunCleanup => Some(CLEANUP),
+            _ => None,
+        };
+        let body = |clock: (&str, &str, u64), cleanup: Option<(&str, &str, u64)>| {
+            let mut records = serde_json::json!({ "run_clock": {
+                "artifact_id": clock.0, "sha256": clock.1, "byte_length": clock.2 } });
+            if let Some(cleanup) = cleanup {
+                records["run_cleanup"] = serde_json::json!({
+                    "artifact_id": cleanup.0, "sha256": cleanup.1, "byte_length": cleanup.2 });
+            }
+            serde_json::to_vec(&serde_json::json!({ "kind": "u64_check", "records": records }))
+        };
+        let sound = body(CLOCK, Some(CLEANUP))?;
+        let identity = cited(U64_CHECK_SCHEMA, ID, &sound, held).map_err(|e| format!("{e:?}"))?;
+        assert_eq!(
+            (
+                identity.artifact_id.as_str(),
+                identity.media_type,
+                identity.schema_id
+            ),
+            (ID, CHECK_MEDIA_TYPE, U64_CHECK_SCHEMA)
+        );
+        let refused: [(&str, Vec<u8>); 6] = [
+            (
+                "id swapped",
+                body((CLEANUP.0, CLOCK.1, CLOCK.2), Some(CLEANUP))?,
+            ),
+            (
+                "digest swapped",
+                body((CLOCK.0, CLEANUP.1, CLOCK.2), Some(CLEANUP))?,
+            ),
+            (
+                "size off by one",
+                body((CLOCK.0, CLOCK.1, CLOCK.2 + 1), Some(CLEANUP))?,
+            ),
+            ("a committed kind not cited", body(CLOCK, None)?),
+            (
+                "a cited kind not committed",
+                body(CLOCK, Some(CLEANUP)).map(|mut bytes| {
+                    bytes.truncate(bytes.len() - 2);
+                    bytes.extend_from_slice(
+                        br#","readbacks":{"artifact_id":"x","sha256":"y","byte_length":1}}}"#,
+                    );
+                    bytes
+                })?,
+            ),
+            ("malformed", b"{".to_vec()),
+        ];
+        for (case, bytes) in &refused {
+            assert!(
+                matches!(
+                    cited(U64_CHECK_SCHEMA, ID, bytes, held),
+                    Err(Error::Identity)
+                ),
+                "{case}"
+            );
+        }
+        assert!(matches!(
+            cited("hee3.scripted-check/1", ID, &sound, held),
+            Err(Error::Identity)
+        ));
+        assert!(matches!(
+            cited(U64_CHECK_SCHEMA, ID, &sound, |_| None),
+            Err(Error::Identity)
+        ));
         Ok(())
     }
 }

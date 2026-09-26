@@ -9,12 +9,16 @@
 
 use habitat_engine::actions::control::{TaskRequest, Tasks};
 use habitat_engine::app::class_profile::{self, Profile};
+use habitat_engine::app::live_verifier::LiveVerifier;
 use habitat_engine::app::runtime::{
-    CHECK_TEARDOWN, Candidate, CandidateSource, Check, CheckWindow, Dispatch,
-    Error as RuntimeError, Outcome, Previous, Refusal, Verifier, dispatch,
+    CHECK_TEARDOWN, Candidate, CandidateSource, CheckPlan, CheckWindow, Dispatch,
+    Error as RuntimeError, Observed, Outcome, Previous, Refusal, U64_CHECK_SCHEMA, Verifier,
+    dispatch,
 };
 use habitat_engine::app::tasks::StoreTasks;
+use habitat_engine::app::workload::{self, Outcome as RunOutcome, Run};
 use habitat_engine::check::consistency::U64_CRITERIA;
+use habitat_engine::check::u64_oracle::Evaluation;
 use habitat_engine::contracts::control::{
     CancelReason, Precondition, ResourceKind, criteria_digest,
 };
@@ -28,6 +32,7 @@ use habitat_engine::store::{
 };
 use habitat_engine::task::control::Cancel;
 use habitat_engine::task::driver::{Outcome as Driven, StopReason};
+use habitat_engine::worker::resources::Scope;
 use habitat_engine::worker::workspace::Snapshot;
 use std::cell::RefCell;
 use std::collections::VecDeque;
@@ -207,6 +212,16 @@ fn installed(root: &Path, shape: &Shape<'_>) -> Result<Profile, Box<dyn Error>> 
     file(&base.join("src/lib.rs"), BASE_LIB)?;
     private(&protected)?;
     file(&protected.join("oracle.txt"), b"frozen oracle\n")?;
+    // The class's real protected tree, so the live verifier's workload passes its preflight (R15):
+    // the frozen oracle and the public wrapper the link stage mounts.
+    file(
+        &protected.join("oracle.json"),
+        include_bytes!("../evaluation/tasks/WL-U64-PARSE-001/v1/oracle/cases.json"),
+    )?;
+    file(
+        &protected.join("public-wrapper.rs"),
+        include_bytes!("../evaluation/harnesses/u64-public-wrapper.rs"),
+    )?;
     let digest_of = |root: &Path| -> Result<String, Box<dyn Error>> {
         Snapshot::capture(root, &[], deadline())
             .map_err(|error| format!("{error:?}"))?
@@ -302,17 +317,26 @@ impl CandidateSource for Script<'_> {
     }
 }
 
-/// A verifier that answers from a script and records the content digest of every snapshot it
-/// was handed, and the editable file's bytes in it.
+/// What the verifier double observes for one check (a model, not a script — F101): the run's
+/// outcome, how long the run took from the window's origin, and whether its cleanup settled.
+struct Answer {
+    run: Result<RunOutcome, workload::Error>,
+    elapsed: Duration,
+    cleanup_pending: bool,
+}
+
+/// A verifier that answers from a script of observations and records the content digest of
+/// every snapshot it was handed, the editable file's bytes in it, the window and when it was called.
 struct Oracle<'h> {
-    answers: VecDeque<Check>,
+    answers: VecDeque<Answer>,
     seen: Handed,
     hook: Option<Box<dyn FnMut() + 'h>>,
 }
 
 impl Verifier for Oracle<'_> {
-    fn check(&mut self, subject: &Snapshot, window: CheckWindow) -> Check {
-        let editable = subject
+    fn check(&mut self, plan: CheckPlan<'_>) -> Observed {
+        let editable = plan
+            .subject
             .entries()
             .find(|entry| entry.path == "src/lib.rs")
             .and_then(|entry| match &entry.content {
@@ -323,33 +347,68 @@ impl Verifier for Oracle<'_> {
             })
             .unwrap_or_default();
         self.seen.borrow_mut().push((
-            subject.content_digest().unwrap_or_default(),
+            plan.subject.content_digest().unwrap_or_default(),
             editable,
-            window,
+            plan.window,
             Instant::now(),
         ));
         if let Some(hook) = self.hook.as_mut() {
             hook();
         }
-        self.answers.pop_front().unwrap_or(Check {
-            verdict: VerificationVerdict::Error,
-            criteria: 0,
-            evidence: b"unscripted".to_vec(),
-            schema_id: "hee3.unscripted/1".to_owned(),
-            used_ms: Some(1),
-            cleanup_settled: true,
-        })
+        let answer = self.answers.pop_front().unwrap_or(Answer {
+            run: Ok(RunOutcome::SetupFailed),
+            elapsed: Duration::from_millis(1),
+            cleanup_pending: false,
+        });
+        let observed = plan.window.begun + answer.elapsed;
+        let run = answer.run.map(|outcome| {
+            let decisive = matches!(
+                outcome,
+                RunOutcome::Matched(_) | RunOutcome::Mismatch(_) | RunOutcome::InvalidOutput(_)
+            )
+            .then(|| observed.checked_sub(Duration::from_millis(1)))
+            .flatten();
+            let mut run = Run::unlaunched(outcome);
+            run.process_cleanup_complete = !answer.cleanup_pending;
+            run.decisive = decisive;
+            run
+        });
+        Observed { run, observed }
     }
 }
 
-fn check(verdict: VerificationVerdict, criteria: u64, evidence: &[u8]) -> Check {
-    Check {
-        verdict,
-        criteria,
-        evidence: evidence.to_vec(),
-        schema_id: "hee3.scripted-check/1".to_owned(),
-        used_ms: Some(7),
-        cleanup_settled: true,
+/// A run the oracle matched in full, observed after `elapsed_ms`.
+fn matched(elapsed_ms: u64) -> Answer {
+    Answer {
+        run: Ok(RunOutcome::Matched(Evaluation {
+            vectors: Vec::new(),
+            matched: 1,
+            failed: 0,
+        })),
+        elapsed: Duration::from_millis(elapsed_ms),
+        cleanup_pending: false,
+    }
+}
+
+/// A run the oracle refused, observed after `elapsed_ms`.
+fn mismatched(elapsed_ms: u64) -> Answer {
+    Answer {
+        run: Ok(RunOutcome::Mismatch(Evaluation {
+            vectors: Vec::new(),
+            matched: 0,
+            failed: 1,
+        })),
+        elapsed: Duration::from_millis(elapsed_ms),
+        cleanup_pending: false,
+    }
+}
+
+/// A run the workload cancelled.
+fn cancelled_run() -> Answer {
+    Answer {
+        run: Ok(RunOutcome::Cancelled),
+        elapsed: Duration::from_millis(7),
+        cleanup_pending: false,
     }
 }
 
@@ -365,7 +424,7 @@ fn script<'h>(answers: Vec<Candidate>) -> (Script<'h>, Asked) {
     )
 }
 
-fn oracle<'h>(answers: Vec<Check>) -> (Oracle<'h>, Handed) {
+fn oracle<'h>(answers: Vec<Answer>) -> (Oracle<'h>, Handed) {
     let seen = Rc::new(RefCell::new(Vec::new()));
     (
         Oracle {
@@ -400,6 +459,76 @@ fn run<C: CandidateSource, V: Verifier>(
         source,
         verifier,
     )
+}
+
+/// The previous check as the candidate source was handed it: its verdict, no criteria, and the
+/// runtime's own evidence (`u64_check`) naming `outcome` and citing four records.
+fn assert_previous(
+    previous: Option<&Option<Previous>>,
+    verdict: VerificationVerdict,
+    outcome: &str,
+) -> Result<(), Box<dyn Error>> {
+    let previous = previous
+        .and_then(Option::as_ref)
+        .ok_or("a previous check")?;
+    assert_eq!((previous.verdict, previous.criteria), (verdict, 0));
+    let evidence: serde_json::Value = serde_json::from_slice(&previous.evidence)?;
+    assert_eq!(evidence["kind"], "u64_check");
+    assert_eq!(evidence["outcome"], outcome);
+    assert_eq!(
+        evidence["records"].as_object().map(serde_json::Map::len),
+        Some(4)
+    );
+    Ok(())
+}
+
+/// A published object's bytes, read from the store's content-addressed directory by digest.
+fn object_bytes(rig: &Rig, digest: &str) -> Result<Vec<u8>, Box<dyn Error>> {
+    let hex = digest.strip_prefix("sha256:").ok_or("a sha256: digest")?;
+    Ok(fs::read(
+        rig.scratch
+            .0
+            .join("state/generations")
+            .join(GENERATION)
+            .join("objects/sha256")
+            .join(&hex[..2])
+            .join(hex),
+    )?)
+}
+
+/// A published JSON object, decoded.
+fn object_json(rig: &Rig, digest: &str) -> Result<serde_json::Value, Box<dyn Error>> {
+    Ok(serde_json::from_slice(&object_bytes(rig, digest)?)?)
+}
+
+/// The run records the ledger committed with the task's verifications, in kind order:
+/// `(kind, artifact_id, digest, size, verdict)`.
+fn committed_records(rig: &Rig) -> Result<Vec<Vec<String>>, Box<dyn Error>> {
+    rows(
+        rig,
+        "SELECT r.kind,r.artifact_id,r.digest,f.size,v.verdict FROM attempt_records r \
+         JOIN artifacts f ON f.digest=r.digest JOIN verifications v ON v.event_id=r.event_id \
+         JOIN attempts a ON a.id=r.attempt_id WHERE a.task_id=? \
+         ORDER BY CAST(a.generation AS INTEGER), r.kind",
+    )
+}
+
+/// Three bounded scopes whose systemd-run pin is wrong, as t06 uses them: the launcher refuses
+/// before any process starts, so a live verifier reaches `LauncherFailed` in the gate.
+const BAD_PIN: &str = "sha256:0000000000000000000000000000000000000000000000000000000000000000";
+fn bad_pin_scopes() -> [Scope; 3] {
+    [
+        "28f10000-0000-4000-8000-0000000000e1",
+        "28f10000-0000-4000-8000-0000000000e2",
+        "28f10000-0000-4000-8000-0000000000e3",
+    ]
+    .map(|id| Scope {
+        systemd_run: "/usr/bin/systemd-run".into(),
+        systemd_run_sha256: BAD_PIN.into(),
+        runtime_dir: format!("/run/user/{}", rustix::process::geteuid().as_raw()).into(),
+        run_id: id.into(),
+        aggregate: "hee3boundedcontrols.slice".into(),
+    })
 }
 
 /// The ledger, read on its own connection.
@@ -501,10 +630,7 @@ fn a_failed_check_is_repaired_and_the_second_attempt_is_accepted() -> Outcome_ {
     source.hook = Some(Box::new(move || {
         requested_at.borrow_mut().push(Instant::now());
     }));
-    let (verifier, handed) = oracle(vec![
-        check(VerificationVerdict::Failed, 0, b"first: wrong"),
-        check(VerificationVerdict::Passed, 1, b"second: exact"),
-    ]);
+    let (verifier, handed) = oracle(vec![mismatched(7), matched(7)]);
     let principal = owner();
     let outcome = run(&rig, &principal, source, verifier, 5_000).map_err(|e| format!("{e:?}"))?;
     assert_eq!(outcome, Outcome::Driven(Driven::Accepted));
@@ -552,7 +678,7 @@ fn a_failed_check_is_repaired_and_the_second_attempt_is_accepted() -> Outcome_ {
                 handed[0].0.clone(),
                 "7".to_owned(),
                 "application/json".to_owned(),
-                "hee3.scripted-check/1".to_owned(),
+                U64_CHECK_SCHEMA.to_owned(),
                 "0000000000000000".to_owned(),
             ],
             vec![
@@ -560,22 +686,16 @@ fn a_failed_check_is_repaired_and_the_second_attempt_is_accepted() -> Outcome_ {
                 handed[1].0.clone(),
                 "7".to_owned(),
                 "application/json".to_owned(),
-                "hee3.scripted-check/1".to_owned(),
+                U64_CHECK_SCHEMA.to_owned(),
                 "0000000000000001".to_owned(),
             ],
         ]
     );
-    assert_eq!(
-        *asked.borrow(),
-        vec![
-            None,
-            Some(Previous {
-                verdict: VerificationVerdict::Failed,
-                criteria: 0,
-                evidence: b"first: wrong".to_vec(),
-            }),
-        ]
-    );
+    // The second request was handed the first check's verdict and its evidence — the runtime's
+    // own record of the mismatched run, citing the four records it committed.
+    let asked = asked.borrow();
+    assert_eq!(asked[0], None);
+    assert_previous(asked.get(1), VerificationVerdict::Failed, "mismatch")?;
     let declared = &rig.profile.declared.workspaces[0];
     let bound = vec![
         declared.baseline_digest.clone(),
@@ -629,7 +749,7 @@ fn a_refused_candidate_is_recorded_failed_without_a_verifier_call() -> Outcome_ 
         Candidate::Replacement(REFUSED.to_vec()),
         Candidate::Replacement(SECOND.to_vec()),
     ]);
-    let (verifier, handed) = oracle(vec![check(VerificationVerdict::Passed, 1, b"exact")]);
+    let (verifier, handed) = oracle(vec![matched(7)]);
     let principal = owner();
     let outcome = run(&rig, &principal, source, verifier, 5_000).map_err(|e| format!("{e:?}"))?;
     assert_eq!(outcome, Outcome::Driven(Driven::Accepted));
@@ -657,7 +777,7 @@ fn a_refused_candidate_is_recorded_failed_without_a_verifier_call() -> Outcome_ 
         recorded[1][3..],
         [
             "application/json".to_owned(),
-            "hee3.scripted-check/1".to_owned(),
+            U64_CHECK_SCHEMA.to_owned(),
             "0000000000000001".to_owned(),
         ]
     );
@@ -673,7 +793,7 @@ fn a_refused_candidate_is_recorded_failed_without_a_verifier_call() -> Outcome_ 
         bound,
         vec![vec![
             "1".to_owned(),
-            "hee3.scripted-check/1".to_owned(),
+            U64_CHECK_SCHEMA.to_owned(),
             "1".to_owned()
         ]]
     );
@@ -848,7 +968,7 @@ fn a_cancel_during_the_check_stops_the_task_cancelled() -> Outcome_ {
     let rig = rig(&Shape::default())?;
     let principal = owner();
     let (source, _) = script(vec![Candidate::Replacement(SECOND.to_vec())]);
-    let (mut verifier, _) = oracle(vec![check(VerificationVerdict::Passed, 1, b"exact")]);
+    let (mut verifier, _) = oracle(vec![matched(7)]);
     verifier.hook = Some(Box::new(|| {
         cancel(&rig, &principal, "28f10000-0000-4000-8000-0000000000c1");
     }));
@@ -884,7 +1004,7 @@ fn a_cancel_during_execute_records_the_check_not_started() -> Outcome_ {
     source.hook = Some(Box::new(|| {
         cancel(&rig, &principal, "28f10000-0000-4000-8000-0000000000c2");
     }));
-    let (verifier, handed) = oracle(vec![check(VerificationVerdict::Passed, 1, b"exact")]);
+    let (verifier, handed) = oracle(vec![matched(7)]);
     let outcome = run(&rig, &principal, source, verifier, 5_000).map_err(|e| format!("{e:?}"))?;
     assert_eq!(
         outcome,
@@ -957,7 +1077,7 @@ fn a_second_writer_is_refused_as_a_concurrent_writer() -> Outcome_ {
         let rig = rig(&Shape::default())?;
         let principal = owner();
         let (source, _) = script(vec![Candidate::Replacement(SECOND.to_vec())]);
-        let (mut verifier, _) = oracle(vec![check(VerificationVerdict::Passed, 1, b"exact")]);
+        let (mut verifier, _) = oracle(vec![matched(7)]);
         let path = rig
             .scratch
             .0
@@ -1022,23 +1142,25 @@ fn an_overrun_is_recorded_as_an_unknown_cost() -> Outcome_ {
     Ok(())
 }
 
-/// B14a-1c review H1 · a check with an unknown cost is an obligation the stop keeps: the task
-/// waits `effect_unknown`, the check's cost is not recorded, and the outcome needs settlement.
+/// B14a-1c review H1 · a check whose cleanup did not settle is an obligation the stop keeps: the
+/// task waits `effect_unknown`, the check's cost is recorded (the runtime measured it), and the
+/// outcome needs settlement. (R15: the cost is never "lost" — the runtime measures it — so the
+/// unsettled shape is the workload's pending cleanup.)
 #[test]
 fn an_unsettled_check_needs_settlement() -> Outcome_ {
     let rig = rig(&Shape::default())?;
     let principal = owner();
     let (source, _) = script(vec![Candidate::Replacement(SECOND.to_vec())]);
-    let mut unknown = check(VerificationVerdict::Passed, 1, b"exact, cost lost");
-    unknown.used_ms = None;
-    let (verifier, _) = oracle(vec![unknown]);
+    let mut pending = matched(7);
+    pending.cleanup_pending = true;
+    let (verifier, _) = oracle(vec![pending]);
     let outcome = run(&rig, &principal, source, verifier, 5_000).map_err(|e| format!("{e:?}"))?;
     assert_eq!(
         outcome,
         Outcome::Driven(Driven::NeedsSettlement(StopReason::Unsettled))
     );
     assert_eq!(state(&rig)?, "effect_unknown");
-    assert_eq!(verifications(&rig)?[0][2], "NULL");
+    assert_eq!(verifications(&rig)?[0][2], "7");
     assert!(rows(&rig, "SELECT reason FROM task_stops WHERE task_id=?")?.is_empty());
     Ok(())
 }
@@ -1050,9 +1172,7 @@ fn a_check_past_the_verify_reservation_is_an_unknown_cost() -> Outcome_ {
     let rig = rig(&Shape::default())?;
     let principal = owner();
     let (source, _) = script(vec![Candidate::Replacement(SECOND.to_vec())]);
-    let mut over = check(VerificationVerdict::Passed, 1, b"exact, too slow");
-    over.used_ms = Some(300_001);
-    let (verifier, _) = oracle(vec![over]);
+    let (verifier, _) = oracle(vec![matched(300_001)]);
     let outcome = run(&rig, &principal, source, verifier, 5_000).map_err(|e| format!("{e:?}"))?;
     assert_eq!(
         outcome,
@@ -1076,9 +1196,7 @@ fn an_empty_check_window_is_recorded_as_a_timeout_at_no_cost() -> Outcome_ {
         Candidate::Replacement(FIRST.to_vec()),
         Candidate::Replacement(SECOND.to_vec()),
     ]);
-    let mut slow = check(VerificationVerdict::Failed, 0, b"first: wrong, slow");
-    slow.used_ms = Some(290_000);
-    let (verifier, handed) = oracle(vec![slow]);
+    let (verifier, handed) = oracle(vec![mismatched(290_000)]);
     let outcome = run(&rig, &principal, source, verifier, 5_000).map_err(|e| format!("{e:?}"))?;
     assert_eq!(
         outcome,
@@ -1100,7 +1218,7 @@ fn an_empty_check_window_is_recorded_as_a_timeout_at_no_cost() -> Outcome_ {
             handed[0].0.clone(),
             "290000".to_owned(),
             "application/json".to_owned(),
-            "hee3.scripted-check/1".to_owned(),
+            U64_CHECK_SCHEMA.to_owned(),
             "0000000000000000".to_owned(),
         ]
     );
@@ -1126,20 +1244,8 @@ fn an_empty_check_window_is_recorded_as_a_timeout_at_no_cost() -> Outcome_ {
          WHERE a.task_id=? AND v.verdict='timeout'",
     )?;
     assert_eq!(evidence.len(), 1);
-    let hex = evidence[0][0]
-        .strip_prefix("sha256:")
-        .ok_or("a sha256: digest")?;
-    let bytes = fs::read(
-        rig.scratch
-            .0
-            .join("state/generations")
-            .join(GENERATION)
-            .join("objects/sha256")
-            .join(&hex[..2])
-            .join(hex),
-    )?;
     assert_eq!(
-        serde_json::from_slice::<serde_json::Value>(&bytes)?,
+        object_json(&rig, &evidence[0][0])?,
         serde_json::json!({
             "kind": "check_window_empty",
             "reserved_verify_ms": 10_000,
@@ -1198,7 +1304,7 @@ fn a_verifier_s_cancelled_is_a_cancellation_only_when_the_task_was_cancelled() -
     let uncancelled = rig(&Shape::default())?;
     let principal = owner();
     let (source, _) = script(vec![Candidate::Replacement(SECOND.to_vec())]);
-    let (verifier, _) = oracle(vec![check(VerificationVerdict::Cancelled, 0, b"stopped")]);
+    let (verifier, _) = oracle(vec![cancelled_run()]);
     let outcome =
         run(&uncancelled, &principal, source, verifier, 5_000).map_err(|e| format!("{e:?}"))?;
     assert_eq!(
@@ -1216,7 +1322,7 @@ fn a_verifier_s_cancelled_is_a_cancellation_only_when_the_task_was_cancelled() -
 
     let cancelled = rig(&Shape::default())?;
     let (source, _) = script(vec![Candidate::Replacement(SECOND.to_vec())]);
-    let (mut verifier, _) = oracle(vec![check(VerificationVerdict::Cancelled, 0, b"stopped")]);
+    let (mut verifier, _) = oracle(vec![cancelled_run()]);
     verifier.hook = Some(Box::new(|| {
         cancel(
             &cancelled,
@@ -1239,28 +1345,196 @@ fn a_verifier_s_cancelled_is_a_cancellation_only_when_the_task_was_cancelled() -
     Ok(())
 }
 
-/// B14a-1c re-review LOW-3 · a check reporting a criterion bit the class does not declare is an
-/// invalid check, recorded `invalid`, and stops the task as one — never a stranded task.
+/// R15 · a passed check commits its four records with the verification and `accept` reads them
+/// back: the evidence (`hee3.u64-check/1`) cites exactly the committed set — kind, artifact id,
+/// digest and size — and the clock record read back from its object carries the window and the
+/// observation the model handed the runtime (cutoff 300,000 − T, observed 7 ms, decisive 6 ms,
+/// no timeout intent), so nothing about the run was re-typed on the way to the ledger.
 #[test]
-fn an_undeclared_criterion_bit_is_an_invalid_check() -> Outcome_ {
+fn a_passed_check_commits_four_records_that_accept_reads_back() -> Outcome_ {
     let rig = rig(&Shape::default())?;
     let principal = owner();
     let (source, _) = script(vec![Candidate::Replacement(SECOND.to_vec())]);
-    let (verifier, _) = oracle(vec![check(
-        VerificationVerdict::Failed,
-        0b10,
-        b"a bit of its own",
-    )]);
+    let (verifier, handed) = oracle(vec![matched(7)]);
+    let outcome = run(&rig, &principal, source, verifier, 5_000).map_err(|e| format!("{e:?}"))?;
+    assert_eq!(outcome, Outcome::Driven(Driven::Accepted));
+    assert_eq!(state(&rig)?, "accepted");
+    let records = committed_records(&rig)?;
+    assert_eq!(
+        records
+            .iter()
+            .map(|row| (row[0].as_str(), row[4].as_str()))
+            .collect::<Vec<_>>(),
+        [
+            ("readbacks", "passed"),
+            ("run_cleanup", "passed"),
+            ("run_clock", "passed"),
+            ("run_outcome", "passed"),
+        ]
+    );
+    let found = verifications(&rig)?;
+    assert_eq!(
+        found[0][2..].to_vec(),
+        vec![
+            "7".to_owned(),
+            "application/json".to_owned(),
+            U64_CHECK_SCHEMA.to_owned(),
+            "0000000000000001".to_owned(),
+        ]
+    );
+    // The evidence cites exactly the committed set.
+    let evidence_digest = rows(
+        &rig,
+        "SELECT v.evidence_digest FROM verifications v JOIN attempts a ON a.id=v.attempt_id \
+         WHERE a.task_id=?",
+    )?;
+    let evidence = object_json(&rig, &evidence_digest[0][0])?;
+    assert_eq!(evidence["kind"], "u64_check");
+    assert_eq!(evidence["outcome"], "matched");
+    assert_eq!(evidence["captured"], true);
+    let cited = evidence["records"].as_object().ok_or("a records map")?;
+    assert_eq!(cited.len(), 4);
+    for row in &records {
+        let entry = &cited[&row[0]];
+        assert_eq!(
+            (
+                entry["artifact_id"].as_str(),
+                entry["sha256"].as_str(),
+                entry["byte_length"].as_u64()
+            ),
+            (
+                Some(row[1].as_str()),
+                Some(row[2].as_str()),
+                row[3].parse().ok()
+            ),
+            "{}",
+            row[0]
+        );
+    }
+    // The clock record, read back from its committed object.
+    let clock_row = records
+        .iter()
+        .find(|row| row[0] == "run_clock")
+        .ok_or("a clock")?;
+    let clock = object_json(&rig, &clock_row[2])?;
+    let handed = handed.borrow();
+    let window = handed[0].2;
+    let teardown_ms = u64::try_from(CHECK_TEARDOWN.as_millis())?;
+    assert_eq!(clock["work_cutoff_ms"], 300_000 - teardown_ms);
+    assert_eq!(clock["task_deadline_ms"], 300_000);
+    assert_eq!(clock["observed_ms"], 7);
+    assert_eq!(clock["decisive_ms"], 6);
+    assert_eq!(clock["timeout_intent_ms"], serde_json::Value::Null);
+    assert!(window.until > window.begun);
+    // The cleanup record: the three predicates the runtime observed, settled, and the aggregate it
+    // does not own, unknown (R15 round 2, MEDIUM-10).
+    let cleanup_row = records
+        .iter()
+        .find(|row| row[0] == "run_cleanup")
+        .ok_or("a cleanup")?;
+    let cleanup = object_json(&rig, &cleanup_row[2])?;
+    assert_eq!(cleanup["aggregate"], "settled");
+    assert_eq!(
+        cleanup["obligations"],
+        serde_json::json!([
+            {"id": "process", "state": "settled"},
+            {"id": "scratch", "state": "settled"},
+            {"id": "retained_paths", "state": "settled"},
+            {"id": "aggregate", "state": "unknown"},
+        ])
+    );
+    Ok(())
+}
+
+/// R15.4 · a workload that refused to launch at its deadline is still a run with four records: the
+/// runtime records `timeout` at the measured cost under its own schema, the clock carries the
+/// timeout intent at the cutoff, and the task fails as `verifier_timeout`.
+#[test]
+fn a_run_that_never_launched_is_recorded_with_four_records() -> Outcome_ {
+    let rig = rig(&Shape::default())?;
+    let principal = owner();
+    let (source, _) = script(vec![Candidate::Replacement(SECOND.to_vec())]);
+    let teardown_ms = u64::try_from(CHECK_TEARDOWN.as_millis())?;
+    let (verifier, _) = oracle(vec![Answer {
+        run: Err(workload::Error::Deadline),
+        elapsed: Duration::from_millis(300_000 - teardown_ms),
+        cleanup_pending: false,
+    }]);
     let outcome = run(&rig, &principal, source, verifier, 5_000).map_err(|e| format!("{e:?}"))?;
     assert_eq!(
         outcome,
-        Outcome::Driven(Driven::Stopped(StopReason::InvalidCheck))
+        Outcome::Driven(Driven::Stopped(StopReason::VerifierTimeout))
     );
     assert_eq!(state(&rig)?, "failed");
-    assert_eq!(verifications(&rig)?[0][0], "invalid");
+    let found = verifications(&rig)?;
+    assert_eq!(
+        found[0][2..].to_vec(),
+        vec![
+            (300_000 - teardown_ms).to_string(),
+            "application/json".to_owned(),
+            U64_CHECK_SCHEMA.to_owned(),
+            "0000000000000000".to_owned(),
+        ]
+    );
+    assert_eq!(found[0][0], "timeout");
+    let records = committed_records(&rig)?;
+    assert_eq!(records.len(), 4);
+    let clock_row = records
+        .iter()
+        .find(|row| row[0] == "run_clock")
+        .ok_or("a clock")?;
+    let clock = object_json(&rig, &clock_row[2])?;
+    assert_eq!(clock["timeout_intent_ms"], 300_000 - teardown_ms);
+    assert_eq!(clock["decisive_ms"], serde_json::Value::Null);
+    let outcome_row = records
+        .iter()
+        .find(|row| row[0] == "run_outcome")
+        .ok_or("an outcome")?;
+    assert_eq!(object_json(&rig, &outcome_row[2])?["outcome"], "timeout");
     assert_eq!(
         rows(&rig, "SELECT reason FROM task_stops WHERE task_id=?")?,
-        vec![vec!["invalid_check".to_owned()]]
+        vec![vec!["verifier_timeout".to_owned()]]
     );
+    Ok(())
+}
+
+/// R15.9(c) · the live verifier in the gate: the fixed workload under scopes whose systemd-run pin
+/// is wrong refuses to launch its first stage (`LauncherFailed`, one refused step, no process), the
+/// runtime records `error` with four records — the outcome record naming the refused step — and
+/// the task stops `verifier_error`; the check's job root is torn down.
+#[test]
+fn the_live_verifier_records_a_launcher_failure_with_four_records() -> Outcome_ {
+    let rig = rig(&Shape::default())?;
+    let principal = owner();
+    let (source, _) = script(vec![Candidate::Replacement(SECOND.to_vec())]);
+    let verifier = LiveVerifier::new(&rig.profile.declared, bad_pin_scopes());
+    let outcome = run(&rig, &principal, source, verifier, 5_000).map_err(|e| format!("{e:?}"))?;
+    assert_eq!(
+        outcome,
+        Outcome::Driven(Driven::Stopped(StopReason::VerifierError))
+    );
+    assert_eq!(state(&rig)?, "failed");
+    let found = verifications(&rig)?;
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0][0], "error");
+    assert_eq!(found[0][4], U64_CHECK_SCHEMA);
+    let records = committed_records(&rig)?;
+    assert_eq!(records.len(), 4, "{records:?}");
+    let outcome_row = records
+        .iter()
+        .find(|row| row[0] == "run_outcome")
+        .ok_or("an outcome")?;
+    let recorded = object_json(&rig, &outcome_row[2])?;
+    assert_eq!(recorded["outcome"], "launcher_failed");
+    assert_eq!(recorded["steps"].as_array().map(Vec::len), Some(1));
+    assert_eq!(
+        rows(&rig, "SELECT reason FROM task_stops WHERE task_id=?")?,
+        vec![vec!["verifier_error".to_owned()]]
+    );
+    let check_roots = fs::read_dir(&rig.attempts)?
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_name().to_string_lossy().ends_with(".check"))
+        .count();
+    assert_eq!(check_roots, 0, "the check's job root was torn down");
     Ok(())
 }

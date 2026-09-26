@@ -56,7 +56,12 @@ pub struct Plan<'a> {
     /// Fresh empty canonical private directory, owned by this invocation.
     pub job_root: &'a Path,
     pub tools: &'a Tools,
+    /// The run's cutoff: no stage starts after it and every stage is stopped at it.
     pub deadline: Instant,
+    /// How long the run's own teardown may take past the cutoff (B14a-3c, R15.8): the scratch
+    /// export and the subject readbacks run to it, so a run stopped at the cutoff can still be
+    /// read back. Never before `deadline`.
+    pub teardown_deadline: Instant,
     pub cancelled: &'a AtomicBool,
 }
 
@@ -103,6 +108,9 @@ pub struct Run {
     pub cancellation_observed: bool,
     /// Retained tmpfs descriptors are separate from terminated process custody.
     pub scratch_released: bool,
+    /// When the oracle's evaluation returned, for the run record's decisive instant (R15.5);
+    /// `None` when no evaluation happened.
+    pub decisive: Option<Instant>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -123,6 +131,26 @@ pub enum Error {
 /// candidate launch. Post-launch failures retain raw reports in the returned Run.
 pub fn collect(plan: &Plan<'_>) -> Result<Run, Error> {
     collect_inner(plan, None)
+}
+
+impl Run {
+    /// A run that never launched: no step, no output, nothing retained, every cleanup predicate
+    /// trivially settled, no evaluation — with the outcome its refusal earned. The runtime records
+    /// a workload refusal through it, so the four run records exist for every check (R15.4).
+    #[must_use]
+    pub fn unlaunched(outcome: Outcome) -> Self {
+        Self {
+            outcome,
+            steps: Vec::new(),
+            outputs: Vec::new(),
+            retained_paths: Vec::new(),
+            process_cleanup_complete: true,
+            subjects_unchanged: true,
+            cancellation_observed: false,
+            scratch_released: true,
+            decisive: None,
+        }
+    }
 }
 
 /// Execute the same fixed workload with three fresh scopes under one owned aggregate.
@@ -150,16 +178,8 @@ fn collect_inner(plan: &Plan<'_>, scopes: Option<&[Scope; 3]>) -> Result<Run, Er
     let oracle = FrozenOracle::from_bytes(file(plan.protected, "oracle.json")?)
         .map_err(|_| Error::Oracle)?;
     let public = plan.job_root.join("public");
-    let mut run = Run {
-        outcome: Outcome::SetupFailed,
-        steps: Vec::new(),
-        outputs: Vec::new(),
-        retained_paths: vec![public.clone()],
-        process_cleanup_complete: true,
-        subjects_unchanged: true,
-        cancellation_observed: false,
-        scratch_released: true,
-    };
+    let mut run = Run::unlaunched(Outcome::SetupFailed);
+    run.retained_paths.push(public.clone());
     let result = (|| {
         private_directory(&public)?;
         write_new(&public.join("inputs.hex"), &oracle.public_inputs())?;
@@ -172,8 +192,13 @@ fn collect_inner(plan: &Plan<'_>, scopes: Option<&[Scope; 3]>) -> Result<Run, Er
             _ => Outcome::SetupFailed,
         };
     }
-    run.subjects_unchanged = !(plan.source.readback_source(plan.deadline).is_err()
-        || plan.protected.readback_source(plan.deadline).is_err());
+    // The readbacks run to the teardown deadline: at the cutoff the run is stopped, not the reading
+    // of what it left (R15.8).
+    run.subjects_unchanged = !(plan.source.readback_source(plan.teardown_deadline).is_err()
+        || plan
+            .protected
+            .readback_source(plan.teardown_deadline)
+            .is_err());
     run.cancellation_observed |= plan.cancelled.load(Ordering::Acquire);
     if !run.process_cleanup_complete || !run.scratch_released {
         run.outcome = Outcome::PendingCleanup;
@@ -317,6 +342,7 @@ fn evaluate(plan: &Plan<'_>, run: &mut Run, oracle: &FrozenOracle) -> Result<(),
         Ok(value) => Outcome::Mismatch(value),
         Err(error) => Outcome::InvalidOutput(error),
     };
+    run.decisive = Some(Instant::now());
     Ok(())
 }
 
@@ -434,7 +460,7 @@ fn complete_stage(
             plan.job_root,
             label,
             &plan.source.source_identities(),
-            plan.deadline,
+            plan.teardown_deadline,
         ) {
             Ok(output) => {
                 run.retained_paths.push(output.path);

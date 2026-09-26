@@ -26,7 +26,8 @@ use std::time::{Duration, Instant};
 
 const MAX_STREAM: usize = 8 * 1024 * 1024;
 const MAX_INPUT: usize = 1024 * 1024;
-const CLEANUP: Duration = Duration::from_secs(10);
+/// The stop budget after TERM: RC04's cleanup grace, one spelling (`contracts::rc01`).
+const CLEANUP: Duration = Duration::from_millis(crate::contracts::rc01::CLEANUP_GRACE_MS);
 const WAIT_FLAGS: WaitIdOptions = WaitIdOptions::EXITED
     .union(WaitIdOptions::NOHANG)
     .union(WaitIdOptions::NOWAIT);

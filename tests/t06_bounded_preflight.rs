@@ -109,6 +109,7 @@ impl Fixture {
                 job_root: &self.root.join("job"),
                 tools: &self.tools,
                 deadline: Instant::now() + Duration::from_secs(5),
+                teardown_deadline: Instant::now() + Duration::from_secs(15),
                 cancelled: &self.cancelled,
             },
             scopes,

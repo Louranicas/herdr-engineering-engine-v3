@@ -8,10 +8,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 pub const MAX_CASES: usize = 4096;
 
-/// How long after a stop intent a run may still be observed before its cleanup is late (RC04's
-/// ten-second cutoff). The runtime's check window keeps this much back for the check's own
-/// teardown (`app::runtime::CHECK_TEARDOWN`), so the two are one number, spelled here.
-pub const CLEANUP_GRACE_MS: u64 = 10_000;
+/// RC04's ten-second cleanup cutoff, spelled once in `contracts::rc01` (the runtime's check
+/// teardown share and the process owner's stop budget are the same number).
+pub use crate::contracts::rc01::CLEANUP_GRACE_MS;
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum Identity {
