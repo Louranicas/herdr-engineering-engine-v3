@@ -46,6 +46,9 @@ pub const MAX_REVIEWED_BYTES: u64 = MAX_PROFILE_BYTES;
 const _: () = assert!(MAX_REVIEWED_BYTES >= 65_533);
 
 const SCHEMA: &str = "hee3.class-profile/1";
+/// The schema that may also declare the class's native model row (`[native]`, R21 N8); without the
+/// table it declares what `/1` does (D1).
+const SCHEMA_V2: &str = "hee3.class-profile/2";
 /// The one class this profile schema admits; the plan's `profile_id` is `<class>@<digest>`.
 pub const CLASS: &str = "rust-library-change/1";
 /// Destinations under which the workload mounts and writes its own files.
@@ -165,6 +168,20 @@ pub struct Declared {
     pub reviewed: Reviewed,
     pub grant: Grant,
     pub effect: Effect,
+    /// The native model row, declared only under `hee3.class-profile/2` (R21 N8); `None` under
+    /// `/1` or when `/2` leaves the table out.
+    pub native: Option<Native>,
+}
+
+/// The model the class's native provider runs (R21 N8): its name as the adapter sends it, the
+/// `sha256:` of its manifest, and the adapter row (`worker::native::ADAPTERS`) it is qualified
+/// for. Shape only: the manifest is compared with the operator's pin, and the model with the
+/// daemon's catalogue, by their own doors.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Native {
+    pub model: String,
+    pub manifest_sha256: String,
+    pub adapter: String,
 }
 
 /// A file beside `profile.toml` the profile declares by name AND digest (B14a-2c-ii-c, R17 round 2
@@ -303,6 +320,23 @@ pub enum ProfileError {
         path: String,
         why: DeclaredWhy,
     },
+    /// A `[native]` field, at its key path: a model name the adapter would not send, a manifest
+    /// digest that is not a `sha256:` spelling, or an adapter row this build does not know.
+    Native {
+        field: &'static str,
+        why: NativeWhy,
+    },
+}
+
+/// Why a `[native]` field is refused.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NativeWhy {
+    /// Not a name the adapter sends (`worker::native::model_name`).
+    Model,
+    /// Not `sha256:` plus 64 lowercase hex.
+    Digest,
+    /// No adapter row of this id (`worker::native::adapter`).
+    Adapter,
 }
 
 /// Why a `[grant]`/`[effect]` field is refused.
@@ -462,11 +496,18 @@ pub fn compose(bytes: &[u8]) -> Result<Declared, ProfileError> {
             "reviewed",
             "grant",
             "effect",
+            "native",
         ],
     )?;
     let schema = string(&table, "", "schema")?;
-    if schema != SCHEMA {
+    if schema != SCHEMA && schema != SCHEMA_V2 {
         return Err(ProfileError::Schema { found: schema });
+    }
+    // `[native]` is `/2`'s alone: under `/1` it is the unknown key it always was.
+    if schema == SCHEMA && table.contains_key("native") {
+        return Err(ProfileError::UnknownKey {
+            path: "native".to_owned(),
+        });
     }
     let class = string(&table, "", "class")?;
     if class != CLASS {
@@ -502,6 +543,7 @@ pub fn compose(bytes: &[u8]) -> Result<Declared, ProfileError> {
         reviewed: reviewed(&table)?,
         grant: grant(&table)?,
         effect: effect(&table)?,
+        native: native(&table)?,
     })
 }
 
@@ -1111,6 +1153,35 @@ fn digest_text(pins: &toml::Table, key: &str) -> Result<String, ProfileError> {
     Ok(value)
 }
 
+/// The optional `[native]` table (`/2` only; `compose` refuses it under `/1`): `model`, as the
+/// adapter would send it; `manifest_sha256`, a `sha256:` spelling; `adapter`, a row this build
+/// knows. Each refused at its field by the adapter's own rule, never a copy of it.
+fn native(table: &toml::Table) -> Result<Option<Native>, ProfileError> {
+    use crate::worker::native as adapter_rows;
+    if !table.contains_key("native") {
+        return Ok(None);
+    }
+    let row = sub_table(table, "", "native")?;
+    only(row, "native", &["model", "manifest_sha256", "adapter"])?;
+    let refuse = |field, why| ProfileError::Native { field, why };
+    let model = string(row, "native", "model")?;
+    if !adapter_rows::model_name(&model) {
+        return Err(refuse("native.model", NativeWhy::Model));
+    }
+    let manifest_sha256 = string(row, "native", "manifest_sha256")?;
+    Sha256Digest::parse(&manifest_sha256)
+        .map_err(|_| refuse("native.manifest_sha256", NativeWhy::Digest))?;
+    let adapter = string(row, "native", "adapter")?;
+    if adapter_rows::adapter(&adapter).is_none() {
+        return Err(refuse("native.adapter", NativeWhy::Adapter));
+    }
+    Ok(Some(Native {
+        model,
+        manifest_sha256,
+        adapter,
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1243,6 +1314,100 @@ specification = {{ file = "isolation.json", sha256 = "{SPEC}" }}
         let text = valid();
         assert_eq!(text.matches(old).count(), 1, "anchor {old:?}");
         text.replacen(old, new, 1)
+    }
+
+    /// The host's own `llama3.2:3b` manifest digest: coreutils `sha256sum` of
+    /// `~/.ollama/models/manifests/registry.ollama.ai/library/llama3.2/3b` (1,005 B), 2026-09-27.
+    const MANIFEST: &str =
+        "sha256:a80c4f17acd55265feec403c7aef86be0c25983ab279d83f3bcd3abbcb5b8b72";
+
+    /// `valid()` under `hee3.class-profile/2`, with `native` appended after its last table.
+    fn v2(native: &str) -> String {
+        with(
+            "schema = \"hee3.class-profile/1\"\n",
+            "schema = \"hee3.class-profile/2\"\n",
+        ) + native
+    }
+
+    /// A `[native]` table of the three fields.
+    fn native_row(model: &str, manifest: &str, adapter: &str) -> String {
+        format!(
+            "\n[native]\nmodel = \"{model}\"\nmanifest_sha256 = \"{manifest}\"\nadapter = \"{adapter}\"\n"
+        )
+    }
+
+    /// Every `[native]` refusal, each named at its field or key path, over the host's row.
+    fn native_refusals() -> Vec<(String, ProfileError)> {
+        let host = native_row("llama3.2:3b", MANIFEST, "ollama-fc44-12ff8654/2");
+        let field = |field, why| ProfileError::Native { field, why };
+        vec![
+            (
+                valid() + &host,
+                ProfileError::UnknownKey {
+                    path: "native".into(),
+                },
+            ),
+            (
+                v2(&native_row("", MANIFEST, "ollama-fc44-12ff8654/2")),
+                field("native.model", NativeWhy::Model),
+            ),
+            (
+                v2(&native_row("llama 3", MANIFEST, "ollama-fc44-12ff8654/2")),
+                field("native.model", NativeWhy::Model),
+            ),
+            (
+                v2(&native_row(
+                    "llama3.2:3b",
+                    "sha256:00",
+                    "ollama-fc44-12ff8654/2",
+                )),
+                field("native.manifest_sha256", NativeWhy::Digest),
+            ),
+            (
+                v2(&native_row(
+                    "llama3.2:3b",
+                    &MANIFEST.to_uppercase(),
+                    "ollama-fc44-12ff8654/2",
+                )),
+                field("native.manifest_sha256", NativeWhy::Digest),
+            ),
+            (
+                v2(&native_row(
+                    "llama3.2:3b",
+                    MANIFEST,
+                    "ollama-fc44-12ff8654/3",
+                )),
+                field("native.adapter", NativeWhy::Adapter),
+            ),
+            (
+                v2(&(host.clone() + "extra = 1\n")),
+                ProfileError::UnknownKey {
+                    path: "native.extra".into(),
+                },
+            ),
+            (
+                v2(&host.replace("adapter = \"ollama-fc44-12ff8654/2\"\n", "")),
+                ProfileError::MissingKey {
+                    path: "native.adapter".into(),
+                },
+            ),
+            (
+                v2(&host.replace("model = \"llama3.2:3b\"", "model = 3")),
+                ProfileError::WrongType {
+                    path: "native.model".into(),
+                },
+            ),
+            (
+                v2("").replacen(
+                    "class = \"rust-library-change/1\"\n",
+                    "class = \"rust-library-change/1\"\nnative = 1\n",
+                    1,
+                ),
+                ProfileError::WrongType {
+                    path: "native".into(),
+                },
+            ),
+        ]
     }
 
     /// B14-P2b · a valid declaration composes into exactly what it declares, digests as bytes.
@@ -1429,10 +1594,10 @@ specification = {{ file = "isolation.json", sha256 = "{SPEC}" }}
             (
                 with(
                     "schema = \"hee3.class-profile/1\"",
-                    "schema = \"hee3.class-profile/2\"",
+                    "schema = \"hee3.class-profile/3\"",
                 ),
                 ProfileError::Schema {
-                    found: path("hee3.class-profile/2"),
+                    found: path("hee3.class-profile/3"),
                 },
             ),
             (
@@ -1447,6 +1612,49 @@ specification = {{ file = "isolation.json", sha256 = "{SPEC}" }}
         ] {
             assert_eq!(refused(&text), expected, "{text}");
         }
+    }
+
+    /// R21 N8 · `/2` declares the native model row whole — two rows differing in every field, the
+    /// first the host's own (`llama3.2:3b`, its manifest's coreutils `sha256sum` on this machine,
+    /// 2026-09-27) — and otherwise what `/1` declares; `/2` without the table and `/1` declare no
+    /// row; `/1` never takes the table, and each `[native]` field is refused at its name.
+    #[test]
+    fn a_v2_profile_declares_its_native_row_and_v1_declares_none() -> Result<(), ProfileError> {
+        let host = native_row("llama3.2:3b", MANIFEST, "ollama-fc44-12ff8654/2");
+        let other = native_row("qwen2.5-coder_1.5b", HEX2, "ollama-fc44-12ff8654/1");
+        let first = compose(v2(&host).as_bytes())?;
+        assert_eq!(
+            first.native,
+            Some(Native {
+                model: "llama3.2:3b".into(),
+                manifest_sha256: MANIFEST.into(),
+                adapter: "ollama-fc44-12ff8654/2".into(),
+            })
+        );
+        assert_eq!(
+            compose(v2(&other).as_bytes())?.native,
+            Some(Native {
+                model: "qwen2.5-coder_1.5b".into(),
+                manifest_sha256: HEX2.into(),
+                adapter: "ollama-fc44-12ff8654/1".into(),
+            })
+        );
+        let v1 = compose(valid().as_bytes())?;
+        assert_eq!(v1.native, None);
+        assert_eq!(compose(v2("").as_bytes())?, v1);
+        assert_eq!(
+            Declared {
+                native: None,
+                ..first
+            },
+            v1
+        );
+        let cases = native_refusals();
+        assert_eq!(cases.len(), 10);
+        for (text, expected) in cases {
+            assert_eq!(refused(&text), expected, "{text}");
+        }
+        Ok(())
     }
 
     /// Every workspace refusal names its row, id, field and reason.

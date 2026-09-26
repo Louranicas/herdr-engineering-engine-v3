@@ -1160,8 +1160,10 @@ fn identity(
     catalogue(exchanges, profile, deadline, cancelled)?;
     resident(exchanges, profile, adapter, deadline, cancelled)
 }
-/// A model name the adapter sends: 1..=256 bytes of ASCII alphanumerics and `-_:./`.
-fn model_name(model: &str) -> bool {
+/// A model name the adapter sends: 1..=256 bytes of ASCII alphanumerics and `-_:./`. The one rule:
+/// the class profile's `[native]` row is refused by it at compose (R21 N8), a run at its door.
+#[must_use]
+pub fn model_name(model: &str) -> bool {
     !model.is_empty()
         && model.len() <= 256
         && model

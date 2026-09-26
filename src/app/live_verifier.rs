@@ -220,6 +220,7 @@ mod tests {
                     sha256: Sha::new(format!("sha256:{}", "b".repeat(64)))?,
                 },
             },
+            native: None,
         })
     }
 
