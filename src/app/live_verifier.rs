@@ -181,7 +181,7 @@ mod tests {
         })
     }
 
-    fn declared() -> Result<Declared, receipt::Error> {
+    fn declared() -> Result<Declared, Box<dyn std::error::Error>> {
         Ok(Declared {
             workspaces: Vec::new(),
             compiler: HostPin {
@@ -200,17 +200,18 @@ mod tests {
             namespace_directories: vec!["/lib64".into(), "/usr/lib64".into()],
             busctl_sha256: format!("sha256:{}", "d".repeat(64)),
             systemd_run_sha256: format!("sha256:{}", "e".repeat(64)),
-            reviewed: Reviewed {
-                expectation: reference("28f70000-0000-4000-8000-00000000000e", 0xf4)?,
-                review: reference("28f70000-0000-4000-8000-00000000000f", 0x05)?,
-            },
+            reviewed: Reviewed::new(
+                reference("28f70000-0000-4000-8000-00000000000e", 0xf4)?,
+                reference("28f70000-0000-4000-8000-00000000000f", 0x05)?,
+            )
+            .map_err(|e| format!("{e:?}"))?,
         })
     }
 
     /// R15 · the declaration read as tools, whole: every pin's host and digest, the two fixed
     /// destinations the profile does not declare, bwrap's fixed path, the directories in order.
     #[test]
-    fn tools_carry_every_pin_to_its_fixed_destination() -> Result<(), receipt::Error> {
+    fn tools_carry_every_pin_to_its_fixed_destination() -> Result<(), Box<dyn std::error::Error>> {
         let declared = declared()?;
         let tools = tools(&declared);
         assert_eq!(tools.bwrap.as_os_str(), BWRAP);

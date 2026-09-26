@@ -10,7 +10,9 @@
 
 use super::custody::{DirectoryError, FileError, PrivateDirectory};
 use super::workload::FIXED_DESTINATIONS;
-use crate::contracts::receipt::{Address, ExpectationV1, Id, Name, Ref, ReviewV1, Sha, TypedRef};
+use crate::contracts::receipt::{
+    Address, ExpectationV1, Id, Name, RECORD_MEDIA_TYPE, Ref, ReviewV1, Sha, TypedRef,
+};
 use crate::contracts::{Sha256Digest, UuidV4};
 use crate::worker::namespace::{self, MAX_MOUNTS, SHIM_DESTINATION};
 use std::collections::BTreeSet;
@@ -34,11 +36,14 @@ pub const MAX_RUNTIME_FILES: usize = MAX_MOUNTS - WORKLOAD_MOUNTS;
 /// never carries the answer to its own review; the profile names each record by its full reference
 /// and the file carries the digest's hex.
 pub const REVIEWED_DIRECTORY: &str = "reviewed";
-/// A reviewed record's acquisition bound: the profile's own. The class records it holds measured
-/// 794 B (the expectation) and 8,888 B (its review provenance) in `fixed-task-execution-003`.
+/// A reviewed record's acquisition bound: the profile's own. Measured against the closure of
+/// `fixed-task-execution-003` (the repo's fixture `tests/fixtures/reviewed-003/`): 21 files from
+/// 87 B to 65,533 B — the expectation's raw specification, three bytes under this bound. A lane
+/// whose specification is larger is refused `Bound` until that decision is taken and recorded
+/// beside it (F122: a bound sits next to the record it was fitted to, never quietly widened).
 pub const MAX_REVIEWED_BYTES: u64 = MAX_PROFILE_BYTES;
-// The bound holds the largest record it was measured against, at compile time.
-const _: () = assert!(MAX_REVIEWED_BYTES >= 8_888);
+// The bound holds the largest member it was measured against, at compile time.
+const _: () = assert!(MAX_REVIEWED_BYTES >= 65_533);
 
 const SCHEMA: &str = "hee3.class-profile/1";
 const CLASS: &str = "rust-library-change/1";
@@ -78,11 +83,71 @@ pub struct RuntimeFile {
 /// citation are one spelling (B14a-2c-ii). The objects are in [`REVIEWED_DIRECTORY`] and are read
 /// through [`read_reviewed`], which returns only bytes of the declared length hashing to the
 /// declared digest, or whole through [`read_reviewed_closure`]. The schema each is fixed to is the
-/// type's: a `Reviewed` holding a reference under another schema cannot be built.
+/// type's, and [`Reviewed::new`] is the one door for the rest: a `Reviewed` holding a reference
+/// under another schema, another media type, no bytes, or one record twice cannot be built.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Reviewed {
-    pub expectation: TypedRef<ExpectationV1>,
-    pub review: TypedRef<ReviewV1>,
+    expectation: TypedRef<ExpectationV1>,
+    review: TypedRef<ReviewV1>,
+}
+
+/// Why two typed references are not a [`Reviewed`], and which of the two.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ReviewedRefusal {
+    pub which: Which,
+    pub why: ReviewedWhy,
+}
+
+impl Reviewed {
+    /// The two records a class binds, as the receipt will cite them: each of `application/json`
+    /// bytes of non-zero length, naming different records by digest and by id.
+    ///
+    /// # Errors
+    /// [`ReviewedRefusal`] naming the reference and the rule (`MediaType`, `Empty`, `Same`).
+    pub fn new(
+        expectation: TypedRef<ExpectationV1>,
+        review: TypedRef<ReviewV1>,
+    ) -> Result<Self, ReviewedRefusal> {
+        for (which, reference) in [
+            (Which::Expectation, expectation.as_ref()),
+            (Which::Review, review.as_ref()),
+        ] {
+            if reference.media_type.as_str() != RECORD_MEDIA_TYPE {
+                return Err(ReviewedRefusal {
+                    which,
+                    why: ReviewedWhy::MediaType,
+                });
+            }
+            if reference.byte_length == 0 {
+                return Err(ReviewedRefusal {
+                    which,
+                    why: ReviewedWhy::Empty,
+                });
+            }
+        }
+        if review.as_ref().sha256 == expectation.as_ref().sha256
+            || review.as_ref().artifact_id == expectation.as_ref().artifact_id
+        {
+            return Err(ReviewedRefusal {
+                which: Which::Review,
+                why: ReviewedWhy::Same,
+            });
+        }
+        Ok(Self {
+            expectation,
+            review,
+        })
+    }
+
+    #[must_use]
+    pub const fn expectation(&self) -> &TypedRef<ExpectationV1> {
+        &self.expectation
+    }
+
+    #[must_use]
+    pub const fn review(&self) -> &TypedRef<ReviewV1> {
+        &self.review
+    }
 }
 
 /// What a profile declares, typed and shape-checked, before any of it is used.
@@ -685,28 +750,34 @@ fn derived(files: &[RuntimeFile], declared: &[PathBuf]) -> Result<(), ProfileErr
 }
 
 /// The `[reviewed]` table: the expectation's and the review's full references, each under its
-/// type's schema, naming two records.
+/// type's schema, made a [`Reviewed`] by its one door — a refusal there is named at the field it
+/// concerns.
 fn reviewed(table: &toml::Table) -> Result<Reviewed, ProfileError> {
     let reviewed = sub_table(table, "", "reviewed")?;
     only(reviewed, "reviewed", &["expectation", "review"])?;
-    let expectation: TypedRef<ExpectationV1> = reference(reviewed, "expectation")?;
-    let review: TypedRef<ReviewV1> = reference(reviewed, "review")?;
-    if review.as_ref().sha256 == expectation.as_ref().sha256
-        || review.as_ref().artifact_id == expectation.as_ref().artifact_id
-    {
-        return Err(ProfileError::Reviewed {
-            path: key_path("reviewed", "review"),
-            why: ReviewedWhy::Same,
-        });
-    }
-    Ok(Reviewed {
-        expectation,
-        review,
+    let expectation = reference(reviewed, "expectation")?;
+    let review = reference(reviewed, "review")?;
+    Reviewed::new(expectation, review).map_err(|ReviewedRefusal { which, why }| {
+        let at = key_path(
+            "reviewed",
+            match which {
+                Which::Expectation => "expectation",
+                Which::Review => "review",
+            },
+        );
+        ProfileError::Reviewed {
+            path: match why {
+                ReviewedWhy::MediaType => key_path(&at, "media_type"),
+                ReviewedWhy::Empty => key_path(&at, "byte_length"),
+                ReviewedWhy::Digest
+                | ReviewedWhy::Reference
+                | ReviewedWhy::Schema
+                | ReviewedWhy::Same => at,
+            },
+            why,
+        }
     })
 }
-
-/// The one media type a receipt cites a record under (`receipt::codec::reference_for`).
-const RECORD_MEDIA_TYPE: &str = "application/json";
 
 /// One reviewed reference under `reviewed.<key>`: the five fields of a receipt reference, each
 /// refused at its path, typed to `T`'s schema by the receipt's own `TypedRef` door.
@@ -738,21 +809,15 @@ fn reference<T: Address>(reviewed: &toml::Table, key: &str) -> Result<TypedRef<T
         }
         _ => return Err(wrong(&at, "byte_length")),
     };
-    if byte_length == 0 {
-        return Err(refuse("byte_length", ReviewedWhy::Empty));
-    }
-    let media_type = string(table, &at, "media_type")?;
-    if media_type != RECORD_MEDIA_TYPE {
-        return Err(refuse("media_type", ReviewedWhy::MediaType));
-    }
+    let media_type = Name::new(string(table, &at, "media_type")?)
+        .map_err(|_| refuse("media_type", ReviewedWhy::MediaType))?;
     let schema_id = Name::new(string(table, &at, "schema_id")?)
         .map_err(|_| refuse("schema_id", ReviewedWhy::Schema))?;
     TypedRef::new(Ref {
         artifact_id,
         sha256,
         byte_length,
-        media_type: Name::new(media_type)
-            .map_err(|_| refuse("media_type", ReviewedWhy::MediaType))?,
+        media_type,
         schema_id,
     })
     .map_err(|_| refuse("schema_id", ReviewedWhy::Schema))
@@ -778,7 +843,7 @@ pub enum ReviewedError {
     Mismatch,
     Io,
     /// A member of the record's closure is absent, of another size or digest, over the bound, or
-    /// unreadable — named at the reference its parent cited.
+    /// unreadable, as the walker reports it (`Missing` names the kind of absence, not the member).
     Closure(crate::check::graph::Error),
 }
 
@@ -818,7 +883,8 @@ pub fn read_reviewed(profile: &Profile, which: Which) -> Result<Vec<u8>, Reviewe
 /// file named by its sha256 hex, read under [`MAX_REVIEWED_BYTES`]; the walker itself refuses bytes
 /// that are not the reference's length and digest — so the one graph walker that exists walks a
 /// reviewed record's whole closure (its specification, assumption, finding and obligation pages)
-/// and names the member it cannot find at the reference its parent cited.
+/// and refuses a member it cannot find (`Missing`), one that is not its reference (`Identity`) or
+/// one over the bound (`Bound`).
 pub struct ReviewedObjects {
     held: PrivateDirectory,
 }
@@ -885,8 +951,8 @@ pub fn read_reviewed_closure(
 /// The reference the profile declares for `which`, untyped for comparison with what a caller cites.
 fn declared(profile: &Profile, which: Which) -> &Ref {
     match which {
-        Which::Expectation => profile.declared.reviewed.expectation.as_ref(),
-        Which::Review => profile.declared.reviewed.review.as_ref(),
+        Which::Expectation => profile.declared.reviewed.expectation().as_ref(),
+        Which::Review => profile.declared.reviewed.review().as_ref(),
     }
 }
 
@@ -1719,10 +1785,11 @@ review = {{ artifact_id = "{REV_ID}", sha256 = "{REV}", byte_length = {REV_LEN},
         let declared = compose(valid().as_bytes()).map_err(|e| format!("{e:?}"))?;
         assert_eq!(
             declared.reviewed,
-            Reviewed {
-                expectation: declared_reference(EXP_ID, EXP, EXPECTATION)?,
-                review: declared_reference(REV_ID, REV, REVIEW)?,
-            }
+            Reviewed::new(
+                declared_reference(EXP_ID, EXP, EXPECTATION)?,
+                declared_reference(REV_ID, REV, REVIEW)?,
+            )
+            .map_err(|e| format!("{e:?}"))?
         );
         let review_schema = format!("schema_id = \"{}\"", ReviewV1::SCHEMA_ID);
         let review_line_start = format!("review = {{ artifact_id = \"{REV_ID}\"");
@@ -1800,7 +1867,10 @@ review = {{ artifact_id = "{REV_ID}", sha256 = "{REV}", byte_length = {REV_LEN},
             ),
             (
                 format!("sha256 = \"{EXP}\""),
-                format!("sha256 = \"{}\"", EXP.to_uppercase()),
+                format!(
+                    "sha256 = \"sha256:{}\"",
+                    EXP.trim_start_matches("sha256:").to_uppercase()
+                ),
                 "reviewed.expectation.sha256",
                 ReviewedWhy::Digest,
             ),
@@ -1825,6 +1895,12 @@ review = {{ artifact_id = "{REV_ID}", sha256 = "{REV}", byte_length = {REV_LEN},
             (
                 format!("media_type = \"application/json\", {review_schema}"),
                 format!("media_type = \"text/plain\", {review_schema}"),
+                "reviewed.review.media_type",
+                ReviewedWhy::MediaType,
+            ),
+            (
+                format!("media_type = \"application/json\", {review_schema}"),
+                format!("media_type = \"\", {review_schema}"),
                 "reviewed.review.media_type",
                 ReviewedWhy::MediaType,
             ),
@@ -1889,8 +1965,8 @@ review = {{ artifact_id = "{REV_ID}", sha256 = "{REV}", byte_length = {REV_LEN},
             directory: root.clone(),
             digest: String::new(),
         };
-        let review = profile.declared.reviewed.review.as_ref().clone();
-        let expectation = profile.declared.reviewed.expectation.as_ref().clone();
+        let review = profile.declared.reviewed.review().as_ref().clone();
+        let expectation = profile.declared.reviewed.expectation().as_ref().clone();
         assert!(matches!(
             read_reviewed_closure(&profile, Which::Review, &review),
             Err(ReviewedError::NotInstalled)
@@ -1920,7 +1996,7 @@ review = {{ artifact_id = "{REV_ID}", sha256 = "{REV}", byte_length = {REV_LEN},
                 "{other:?}"
             );
         }
-        // A member removed: named at its reference.
+        // A member removed: `Missing`.
         let member = store.join(REVIEW_ASSUMPTIONS);
         let bytes = fs::read(&member)?;
         fs::remove_file(&member)?;
@@ -1949,7 +2025,11 @@ review = {{ artifact_id = "{REV_ID}", sha256 = "{REV}", byte_length = {REV_LEN},
         // check alone sees it, at the root the profile names.
         let mut longer = review.clone();
         longer.byte_length += 1;
-        profile.declared.reviewed.review = TypedRef::new(longer.clone())?;
+        profile.declared.reviewed = Reviewed::new(
+            profile.declared.reviewed.expectation().clone(),
+            TypedRef::new(longer.clone())?,
+        )
+        .map_err(|e| format!("{e:?}"))?;
         assert!(matches!(
             read_reviewed_closure(&profile, Which::Review, &longer),
             Err(ReviewedError::Closure(Error::Identity))
@@ -1987,15 +2067,17 @@ review = {{ artifact_id = "{REV_ID}", sha256 = "{REV}", byte_length = {REV_LEN},
         );
         assert_eq!(read_reviewed(&profile, Which::Review), Ok(REVIEW.to_vec()));
         // The declared length is not the file's: not the named record, whatever its digest.
-        let declared = profile.declared.reviewed.review.clone();
-        let mut longer = declared.as_ref().clone();
+        let declared = profile.declared.reviewed.clone();
+        let mut longer = declared.review().as_ref().clone();
         longer.byte_length += 1;
-        profile.declared.reviewed.review = TypedRef::new(longer)?;
+        profile.declared.reviewed =
+            Reviewed::new(declared.expectation().clone(), TypedRef::new(longer)?)
+                .map_err(|e| format!("{e:?}"))?;
         assert_eq!(
             read_reviewed(&profile, Which::Review),
             Err(ReviewedError::Mismatch)
         );
-        profile.declared.reviewed.review = declared;
+        profile.declared.reviewed = declared;
         // The review's bytes under the expectation's name: substituted, not the named record.
         write(&store.join(name(EXP)), REVIEW, 0o600);
         assert_eq!(
@@ -2043,7 +2125,7 @@ review = {{ artifact_id = "{REV_ID}", sha256 = "{REV}", byte_length = {REV_LEN},
     }
 
     /// The reviewed bound is the reviewed decision's value (F122: pinned beside its reason, the
-    /// 794 B and 8,888 B records it must hold), not merely whatever the profile's bound becomes.
+    /// 65,533 B specification it must hold), not merely whatever the profile's bound becomes.
     #[test]
     fn the_reviewed_bound_is_sixty_four_kibibytes() {
         assert_eq!(MAX_REVIEWED_BYTES, 65_536);

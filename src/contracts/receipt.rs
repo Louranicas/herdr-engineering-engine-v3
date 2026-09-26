@@ -7,7 +7,7 @@ mod codec;
 mod primitives;
 mod records;
 
-pub use codec::{decode, decode_record, encode, reference_for};
+pub use codec::{RECORD_MEDIA_TYPE, decode, decode_record, encode, reference_for};
 pub use primitives::*;
 pub use records::*;
 

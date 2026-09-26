@@ -69,6 +69,10 @@ pub fn encode<T: ReceiptRecord>(record: &T) -> Result<Vec<u8>, Error> {
     serde_json::to_writer(&mut output, record).map_err(|_| Error::Bound)?;
     Ok(output.0)
 }
+
+/// The one media type a receipt cites a record under.
+pub const RECORD_MEDIA_TYPE: &str = "application/json";
+
 /// Validate and hash the supplied exact bytes; never reserialize before hashing.
 /// This returns descriptive metadata and does not publish or establish custody.
 /// # Errors
@@ -88,7 +92,7 @@ pub fn reference_for<T: ReceiptRecord>(
         artifact_id,
         sha256: Sha::new(spelling)?,
         byte_length: u32::try_from(bytes.len()).map_err(|_| Error::Bound)?,
-        media_type: Name::new("application/json")?,
+        media_type: Name::new(RECORD_MEDIA_TYPE)?,
         schema_id: Name::new(T::SCHEMA_ID)?,
     })
 }
