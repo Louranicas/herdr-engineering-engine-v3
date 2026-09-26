@@ -599,7 +599,8 @@ fn bad_pin_scopes() -> [Scope; 3] {
     })
 }
 
-/// Every distinct object the store's CAS holds — the inventory `OBJECT_INVENTORY_BOUND` counts.
+/// Every object the ledger's registry holds — the table `OBJECT_INVENTORY_BOUND` and the backup count
+/// (a refused plan's orphans sit in the CAS and are not in it).
 fn artifact_count(rig: &Rig) -> Result<i64, Box<dyn Error>> {
     Ok(ledger(rig)?.query_row("SELECT count(*) FROM artifacts", [], |row| row.get(0))?)
 }
@@ -785,7 +786,8 @@ fn a_failed_check_is_repaired_and_the_second_attempt_is_accepted() -> Outcome_ {
         vec![bound.clone(), bound],
         "both attempts are bound to what they were dispatched on"
     );
-    // N4, store side: two checks leave 89 distinct objects against the one-check rig's 72.
+    // N4, store side: a failed attempt and then a passed one leave 89 objects against the one-check
+    // rig's 72 — a further attempt costs 17 (DS17).
     assert_eq!(artifact_count(&rig)?, 89);
     Ok(())
 }
@@ -1612,8 +1614,10 @@ fn a_passed_check_commits_four_records_that_accept_reads_back() -> Outcome_ {
     assert_eq!(root["protocol"], "hee3.receipt");
     assert_eq!(root["identity"]["run_id"], evidence[0][1].as_str());
     assert_receipt_decision(&rig, &root)?;
-    // N4, store side: one dispatch and one check leave 72 distinct objects in the CAS (the two-check
-    // rig leaves 89, so a check adds 17 and the dispatch 55).
+    // N4, store side: a one-check task leaves 72 objects in the ledger's registry — the roster and
+    // the acceptance manifest inside the count (the rig with a failed attempt before the passed one
+    // leaves 89: a further attempt costs 17). A fresh store admits about 4096 / 72 = 56 such tasks
+    // (DS17).
     assert_eq!(artifact_count(&rig)?, 72);
     let cited = receipt_run_records(&rig, &root)?;
     assert_eq!(
