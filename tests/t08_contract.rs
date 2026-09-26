@@ -27,6 +27,10 @@ use std::sync::{
 };
 use std::time::{Duration, Instant};
 
+/// B14a-4 · the native candidate source through this Rig (R18 proofs (b) and (c)).
+#[path = "t08_candidates.rs"]
+mod candidates;
+
 static NEXT: AtomicU64 = AtomicU64::new(0);
 const MODEL: &str = "hee3-t08-contract:qualification";
 /// The loaded row deliberately carries a name distinct from the request so a
