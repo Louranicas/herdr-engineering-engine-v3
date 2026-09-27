@@ -778,6 +778,50 @@ fn a_main_pid_reply_is_one_u32_and_zero_is_no_process() {
     );
 }
 
+/// R21 closure C6 (M3, F2, FT2-09) · the user manager's refusal of `MainPID` keeps its own name:
+/// the window's deadline and cancellation are the adapter's, every other kind is carried whole, so a
+/// busctl pin refusal, an absent unit and a process-less one are never all `Identity`. The table
+/// is every kind the manager has, and it is asserted whole.
+#[test]
+fn every_manager_refusal_of_main_pid_keeps_its_name() {
+    use habitat_engine::worker::aggregate::Error as ManagerError;
+    let kinds = [
+        ManagerError::Invalid,
+        ManagerError::Bound,
+        ManagerError::Deadline,
+        ManagerError::Cancelled,
+        ManagerError::Identity,
+        ManagerError::Io,
+        ManagerError::State,
+        ManagerError::Manager,
+        ManagerError::Process,
+        ManagerError::Limits,
+        ManagerError::Busy,
+    ];
+    let said: Vec<_> = kinds
+        .iter()
+        .map(|kind| (*kind, native::daemon_refusal(*kind)))
+        .collect();
+    let expected = vec![
+        (ManagerError::Invalid, Error::Manager(ManagerError::Invalid)),
+        (ManagerError::Bound, Error::Manager(ManagerError::Bound)),
+        (ManagerError::Deadline, Error::Deadline),
+        (ManagerError::Cancelled, Error::Cancelled),
+        (
+            ManagerError::Identity,
+            Error::Manager(ManagerError::Identity),
+        ),
+        (ManagerError::Io, Error::Manager(ManagerError::Io)),
+        (ManagerError::State, Error::Manager(ManagerError::State)),
+        (ManagerError::Manager, Error::Manager(ManagerError::Manager)),
+        (ManagerError::Process, Error::Manager(ManagerError::Process)),
+        (ManagerError::Limits, Error::Manager(ManagerError::Limits)),
+        (ManagerError::Busy, Error::Manager(ManagerError::Busy)),
+    ];
+    assert_eq!(said, expected);
+    assert_eq!(Error::Manager(ManagerError::State).name(), "manager");
+}
+
 /// The `MainPid` seam's double (F101): it records every unit, deadline and cancellation reading it
 /// was handed, and answers one scripted pid or refusal.
 struct MainPidDouble {

@@ -81,6 +81,7 @@ impl Unavailable {
     #[must_use]
     pub const fn name(self) -> &'static str {
         use super::candidates::ClassPromptError as Input;
+        use crate::worker::aggregate::Error as Manager;
         use crate::worker::native::Error as Native;
         match self {
             Self::NoNativeProvider => "unavailable: no native provider (B14b-2)",
@@ -101,6 +102,29 @@ impl Unavailable {
             Self::Daemon(Native::Contract(_)) => "unavailable: daemon contract",
             Self::Daemon(Native::Census(_)) => "unavailable: daemon census",
             Self::Daemon(Native::Candidates(_)) => "unavailable: daemon candidates",
+            Self::Daemon(Native::Manager(Manager::Invalid)) => {
+                "unavailable: daemon manager invalid"
+            }
+            Self::Daemon(Native::Manager(Manager::Bound)) => "unavailable: daemon manager bound",
+            Self::Daemon(Native::Manager(Manager::Deadline)) => {
+                "unavailable: daemon manager deadline"
+            }
+            Self::Daemon(Native::Manager(Manager::Cancelled)) => {
+                "unavailable: daemon manager cancelled"
+            }
+            Self::Daemon(Native::Manager(Manager::Identity)) => {
+                "unavailable: daemon manager identity"
+            }
+            Self::Daemon(Native::Manager(Manager::Io)) => "unavailable: daemon manager io",
+            Self::Daemon(Native::Manager(Manager::State)) => "unavailable: daemon manager state",
+            Self::Daemon(Native::Manager(Manager::Manager)) => {
+                "unavailable: daemon manager manager"
+            }
+            Self::Daemon(Native::Manager(Manager::Process)) => {
+                "unavailable: daemon manager process"
+            }
+            Self::Daemon(Native::Manager(Manager::Limits)) => "unavailable: daemon manager limits",
+            Self::Daemon(Native::Manager(Manager::Busy)) => "unavailable: daemon manager busy",
             Self::Closure => "unavailable: reviewed closure",
             Self::Prompt(Input::Task) => "unavailable: prompt task",
             Self::Prompt(Input::Cargo) => "unavailable: prompt cargo",
@@ -418,6 +442,7 @@ mod tests {
     use crate::store::{Error as StoreError, ResolveRefusal};
     use crate::task::LoopRefusal;
     use crate::task::driver::{self, StopReason};
+    use crate::worker::aggregate::Error as Manager;
     use crate::worker::native::Error as Native;
 
     /// Every result the classification is pinned over, with its step.
@@ -595,6 +620,22 @@ mod tests {
         ];
         for (state, name) in names {
             assert_eq!(state.name(), name, "{state:?}");
+        }
+        // R21 closure C6 · the user manager's refusal, every kind by its whole name.
+        for (kind, name) in [
+            (Manager::Invalid, "unavailable: daemon manager invalid"),
+            (Manager::Bound, "unavailable: daemon manager bound"),
+            (Manager::Deadline, "unavailable: daemon manager deadline"),
+            (Manager::Cancelled, "unavailable: daemon manager cancelled"),
+            (Manager::Identity, "unavailable: daemon manager identity"),
+            (Manager::Io, "unavailable: daemon manager io"),
+            (Manager::State, "unavailable: daemon manager state"),
+            (Manager::Manager, "unavailable: daemon manager manager"),
+            (Manager::Process, "unavailable: daemon manager process"),
+            (Manager::Limits, "unavailable: daemon manager limits"),
+            (Manager::Busy, "unavailable: daemon manager busy"),
+        ] {
+            assert_eq!(native(Native::Manager(kind)).name(), name, "{kind:?}");
         }
     }
 }

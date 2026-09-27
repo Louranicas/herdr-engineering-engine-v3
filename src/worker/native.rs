@@ -454,6 +454,9 @@ pub enum Error {
     Census(process::CensusError),
     /// More descendants of `MainPID` than [`MAX_DAEMON_CANDIDATES`]: found, and the bound.
     Candidates(process::DescendantBound),
+    /// The user manager's door refused `MainPID` (R21 closure C6), by the manager's own name: a
+    /// busctl pin refusal, an absent or inactive unit and a process-less one are told apart.
+    Manager(aggregate::Error),
 }
 impl Error {
     /// The adapter's refusal by name, as a stop body records it.
@@ -472,6 +475,7 @@ impl Error {
             Self::Contract(_) => "contract",
             Self::Census(_) => "census",
             Self::Candidates(_) => "candidates",
+            Self::Manager(_) => "manager",
         }
     }
 }
@@ -771,19 +775,26 @@ pub trait MainPid {
 pub struct Systemd(pub aggregate::Config);
 
 impl MainPid for Systemd {
-    /// The manager's deadline and cancellation keep their names; every other refusal (an absent,
-    /// inactive or process-less unit, the door's own checks) is `Identity`: no daemon to resolve.
+    /// The manager's refusal, by [`daemon_refusal`].
     fn main_pid(
         &mut self,
         unit: &str,
         deadline: Instant,
         cancelled: &AtomicBool,
     ) -> Result<u32, Error> {
-        aggregate::main_pid(&self.0, unit, deadline, cancelled).map_err(|error| match error {
-            aggregate::Error::Deadline => Error::Deadline,
-            aggregate::Error::Cancelled => Error::Cancelled,
-            _ => Error::Identity,
-        })
+        aggregate::main_pid(&self.0, unit, deadline, cancelled).map_err(daemon_refusal)
+    }
+}
+
+/// The user manager's refusal of `MainPID`, as the resolver says it (R21 closure C6): the window's
+/// deadline and cancellation keep the adapter's own names; every other refusal is carried whole as
+/// [`Error::Manager`].
+#[must_use]
+pub const fn daemon_refusal(error: aggregate::Error) -> Error {
+    match error {
+        aggregate::Error::Deadline => Error::Deadline,
+        aggregate::Error::Cancelled => Error::Cancelled,
+        other => Error::Manager(other),
     }
 }
 

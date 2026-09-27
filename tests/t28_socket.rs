@@ -1586,13 +1586,16 @@ fn serve_dispatches_an_admitted_task_and_stops_it_by_name_through_main() -> Outc
 }
 
 /// R21 S21 (N3, N12), through `main` · with the operator's native file installed beside a `/2`
-/// class, `serve` installs the native agent record and dispatches over the native provider: the
-/// file names a unit no manager has (`hee3-t28-absent.service`, independent of the host), so the
-/// provider's `open` refuses at the daemon, the dispatcher says its named state once, and the task
-/// stays `admitted` for the operator to fix — never stopped for the operator's configuration.
+/// class, `serve` installs the native agent record and dispatches over the native provider. The
+/// rig's runtime directory is a scratch one, not `/run/user/<euid>`, so the user manager's busctl
+/// pin refuses `Invalid` before any unit is listed (R21 closure C6, M3): the provider's `open`
+/// refuses at the daemon by the manager's own name, the dispatcher says that state once, and the
+/// task stays `admitted` for the operator to fix — never stopped for the operator's configuration.
+/// The file's absent unit (`hee3-t28-absent.service`) is never reached here; that rule needs
+/// `/run/user/<euid>` and a real busctl, and is a Tier-3 row.
 #[test]
-fn with_an_operator_file_naming_an_absent_unit_the_engine_says_so_and_the_task_stays_admitted()
--> Outcome {
+fn with_a_scratch_runtime_directory_the_busctl_pin_refuses_and_the_task_stays_admitted() -> Outcome
+{
     const KEY: &str = "28c00000-0000-4000-8000-0000000000d2";
     let manifest = format!("sha256:{}", "7".repeat(64));
     let world = World::granting(&["task"], &["read", "durable admission"])?;
@@ -1642,7 +1645,7 @@ fn with_an_operator_file_naming_an_absent_unit_the_engine_says_so_and_the_task_s
         .ok_or("task id")?
         .to_owned();
     // Poll the artifact with a budget (F102/F137): the dispatcher's named state in the log.
-    let said = "habitat-engine: dispatcher: unavailable: daemon identity";
+    let said = "habitat-engine: dispatcher: unavailable: daemon manager invalid";
     let started = Instant::now();
     let stderr = loop {
         let stderr = fs::read_to_string(&log)?;
@@ -1673,7 +1676,7 @@ fn with_an_operator_file_naming_an_absent_unit_the_engine_says_so_and_the_task_s
                 .lines()
                 .filter(|line| line.starts_with(&installed))
                 .count(),
-            stderr.contains("Unavailable(Daemon(Identity))"),
+            stderr.contains("Unavailable(Daemon(Manager(Invalid)))"),
         ),
         (1, 1, true),
         "{stderr}"
