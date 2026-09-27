@@ -10,10 +10,12 @@
 //! record installed once at start) and records each attempt's root in the ledger at begin. The
 //! drain does not reach an in-flight exchange or check — one waits for it under the attempt's own
 //! deadline (R21 D8, reversing R20 round 2 D5: the wake is B19/B21's, the engine unit's stop
-//! timeout APP-22's). With no provider installed the
-//! dispatcher enters the named state `unavailable: no native provider`, reports it once, stops
-//! picking and leaves the task `admitted` — P2c-R1.5's "stop it `dispatch_unavailable`" revisited:
-//! the task is the owner's and the missing configuration the operator's.
+//! timeout APP-22's). With no provider composed the
+//! dispatcher enters a named state that carries why (`unavailable: no native provider (not
+//! installed)`, or the compose refusal `serve` said at start — R21 round-1 LOW F8), reports it
+//! once, stops picking and leaves the task `admitted` — P2c-R1.5's "stop it
+//! `dispatch_unavailable`" revisited: the task is the owner's and the missing configuration the
+//! operator's.
 
 use super::runtime::{
     Admission, Admitted, CandidateSource, Dispatch, Error as RuntimeError, Outcome, Verifier,
@@ -48,8 +50,9 @@ pub trait Provider {
 /// Why the dispatcher cannot dispatch: a named dispatcher state, never a task's failure.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Unavailable {
-    /// No native provider is configured (B14b-2).
-    NoNativeProvider,
+    /// No native provider was composed at `serve` start, by the compose refusal that said so once
+    /// (R21 round-1 LOW F8): absent, or refused.
+    NoNativeProvider(NoNative),
     /// The task owner has no class profile (not installed, or refused at read).
     NoClassProfile,
     /// The class declares no native model row (R21 D1): the native provider does not serve it.
@@ -75,6 +78,27 @@ pub enum NativeWhy {
     Directory,
 }
 
+/// Why `serve` composed no native provider (R21 round-1 LOW F8): the kind of the compose refusal
+/// its startup line names once, kept so the dispatcher's own state tells an absent file from a
+/// refused one.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NoNative {
+    /// No operator file (nor its directory): nothing is configured.
+    NotInstalled,
+    /// No class profile could be read at start, so no adapter row was known.
+    ClassProfile,
+    /// The custody door refused the operator's directory or file, or it could not be read.
+    Read,
+    /// The operator's file was read but did not decode as `hee3.native/1`.
+    Decode,
+    /// The class's adapter row is not one this build knows.
+    Adapter,
+    /// The engine's own operator principal was refused.
+    Principal,
+    /// The store refused the agent record's install.
+    Install,
+}
+
 impl Unavailable {
     /// The state's name, whole: one literal per variant and payload, so a new one is a compile
     /// error here.
@@ -84,7 +108,27 @@ impl Unavailable {
         use crate::worker::aggregate::Error as Manager;
         use crate::worker::native::Error as Native;
         match self {
-            Self::NoNativeProvider => "unavailable: no native provider (B14b-2)",
+            Self::NoNativeProvider(NoNative::NotInstalled) => {
+                "unavailable: no native provider (not installed)"
+            }
+            Self::NoNativeProvider(NoNative::ClassProfile) => {
+                "unavailable: no native provider (no class profile at start)"
+            }
+            Self::NoNativeProvider(NoNative::Read) => {
+                "unavailable: native provider refused (file read)"
+            }
+            Self::NoNativeProvider(NoNative::Decode) => {
+                "unavailable: native provider refused (file decode)"
+            }
+            Self::NoNativeProvider(NoNative::Adapter) => {
+                "unavailable: native provider refused (adapter unknown)"
+            }
+            Self::NoNativeProvider(NoNative::Principal) => {
+                "unavailable: native provider refused (principal)"
+            }
+            Self::NoNativeProvider(NoNative::Install) => {
+                "unavailable: native provider refused (install)"
+            }
             Self::NoClassProfile => "unavailable: no class profile",
             Self::ClassNotNative => "unavailable: class declares no native model",
             Self::Native(NativeWhy::Manifest) => "unavailable: native manifest",
@@ -102,6 +146,7 @@ impl Unavailable {
             Self::Daemon(Native::Contract(_)) => "unavailable: daemon contract",
             Self::Daemon(Native::Census(_)) => "unavailable: daemon census",
             Self::Daemon(Native::Candidates(_)) => "unavailable: daemon candidates",
+            Self::Daemon(Native::Matches(_)) => "unavailable: daemon matches",
             Self::Daemon(Native::Manager(Manager::Invalid)) => {
                 "unavailable: daemon manager invalid"
             }
@@ -133,8 +178,9 @@ impl Unavailable {
     }
 }
 
-/// The production provider until B14b-2 lands: none.
-pub struct NoProvider;
+/// The provider when `serve` composed none: every `open` refuses by the compose refusal it holds
+/// (R21 round-1 LOW F8).
+pub struct NoProvider(pub NoNative);
 
 /// A source that can never be asked: `NoProvider::open` refuses before one is built.
 pub struct Never;
@@ -180,7 +226,7 @@ impl Provider for NoProvider {
         _next: &Dispatchable,
         _admitted: &Admitted<'_>,
     ) -> Result<(Never, Never), Unavailable> {
-        Err(Unavailable::NoNativeProvider)
+        Err(Unavailable::NoNativeProvider(self.0))
     }
 }
 
@@ -289,7 +335,7 @@ fn store_step(error: &StoreError) -> Step {
 /// Why the dispatcher stopped.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Exit {
-    /// The drain ended the wait.
+    /// The drain ended the wait, or cancelled a provider's `open` (R21 round-1 LOW F6).
     Drained,
     /// A provider could not be opened.
     Unavailable(Unavailable),
@@ -305,6 +351,27 @@ pub enum Exit {
 #[must_use]
 pub fn teardown_share() -> u64 {
     u64::try_from(super::runtime::CHECK_TEARDOWN.as_millis()).unwrap_or(u64::MAX)
+}
+
+/// What an `open` refusal ends the dispatcher as, and the line that says so (R21 round-1 LOW F6):
+/// `open` is handed the drain as its resolve's cancel flag, so `Daemon(Cancelled)` with the drain
+/// raised is the drain's exit, `Drained` — never a provider's unavailability. The drain decides it,
+/// not the name: the same refusal with no drain raised, and any other refusal, stay the named
+/// unavailable state.
+fn open_refused(why: Unavailable, drained: bool) -> (Exit, String) {
+    match (why, drained) {
+        (Unavailable::Daemon(crate::worker::native::Error::Cancelled), true) => (
+            Exit::Drained,
+            format!(
+                "dispatcher: drained while opening the provider ({})",
+                why.name()
+            ),
+        ),
+        _ => (
+            Exit::Unavailable(why),
+            format!("dispatcher: {}", why.name()),
+        ),
+    }
 }
 
 /// One dispatcher over one task owner: what every dispatch is handed, held together so the loop
@@ -401,8 +468,9 @@ fn run<P: Provider>(dispatcher: Dispatcher<'_, P>, report: &(dyn Fn(&str) + Sync
             Ok(Admission::Refused(refusal)) => (Ok(Outcome::Refused(refusal)), None),
             Ok(Admission::Ready(ready)) => match provider.open(&next, &ready) {
                 Err(why) => {
-                    report(&format!("dispatcher: {}", why.name()));
-                    return Exit::Unavailable(why);
+                    let (exit, line) = open_refused(why, stopped());
+                    report(&line);
+                    return exit;
                 }
                 Ok((mut source, mut verifier)) => {
                     match drive(tasks, *ready, &mut source, &mut verifier) {
@@ -442,7 +510,7 @@ fn run<P: Provider>(dispatcher: Dispatcher<'_, P>, report: &(dyn Fn(&str) + Sync
 
 #[cfg(test)]
 mod tests {
-    use super::{NativeWhy, Step, Unavailable, classify, teardown_share};
+    use super::{NativeWhy, NoNative, Step, Unavailable, classify, teardown_share};
     use crate::app::candidates::ClassPromptError;
     use crate::app::runtime::{Error as RuntimeError, Outcome, Refusal};
     use crate::store::{Error as StoreError, ResolveRefusal};
@@ -560,10 +628,6 @@ mod tests {
         for (result, expected) in &cases {
             assert_eq!(classify(result), *expected, "{result:?}");
         }
-        assert_eq!(
-            Unavailable::NoNativeProvider.name(),
-            "unavailable: no native provider (B14b-2)"
-        );
         // The teardown share is the check's grace, derived; the capture share is not fixed here.
         assert_eq!(
             u128::from(teardown_share()),
@@ -620,6 +684,13 @@ mod tests {
                 )),
                 "unavailable: daemon candidates",
             ),
+            (
+                native(Native::Matches(crate::worker::native::DaemonMatches {
+                    matched: 2,
+                    candidates: 3,
+                })),
+                "unavailable: daemon matches",
+            ),
             (Unavailable::Closure, "unavailable: reviewed closure"),
             (
                 Unavailable::Prompt(ClassPromptError::Task),
@@ -652,6 +723,44 @@ mod tests {
             (Manager::Busy, "unavailable: daemon manager busy"),
         ] {
             assert_eq!(native(Native::Manager(kind)).name(), name, "{kind:?}");
+        }
+    }
+
+    /// R21 round-1 LOW F8 · no provider composed, by the compose refusal's kind, each name whole:
+    /// an absent file is told apart from every refusal, and each refusal from the others.
+    #[test]
+    fn each_no_native_kind_has_its_whole_name() {
+        for (kind, name) in [
+            (
+                NoNative::NotInstalled,
+                "unavailable: no native provider (not installed)",
+            ),
+            (
+                NoNative::ClassProfile,
+                "unavailable: no native provider (no class profile at start)",
+            ),
+            (
+                NoNative::Read,
+                "unavailable: native provider refused (file read)",
+            ),
+            (
+                NoNative::Decode,
+                "unavailable: native provider refused (file decode)",
+            ),
+            (
+                NoNative::Adapter,
+                "unavailable: native provider refused (adapter unknown)",
+            ),
+            (
+                NoNative::Principal,
+                "unavailable: native provider refused (principal)",
+            ),
+            (
+                NoNative::Install,
+                "unavailable: native provider refused (install)",
+            ),
+        ] {
+            assert_eq!(Unavailable::NoNativeProvider(kind).name(), name, "{kind:?}");
         }
     }
 }

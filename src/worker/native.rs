@@ -457,6 +457,9 @@ pub enum Error {
     /// The user manager's door refused `MainPID` (R21 closure C6), by the manager's own name: a
     /// busctl pin refusal, an absent or inactive unit and a process-less one are told apart.
     Manager(aggregate::Error),
+    /// Not exactly one candidate's executable matched the pin (R21 round-1 LOW L7): how many did,
+    /// of how many candidates — none and several are told apart.
+    Matches(DaemonMatches),
 }
 impl Error {
     /// The adapter's refusal by name, as a stop body records it.
@@ -476,8 +479,17 @@ impl Error {
             Self::Census(_) => "census",
             Self::Candidates(_) => "candidates",
             Self::Manager(_) => "manager",
+            Self::Matches(_) => "matches",
         }
     }
+}
+
+/// How many of the resolver's candidates matched the executable pin, of how many (R21 round-1 LOW
+/// L7): the selection's refusal, with both numbers.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DaemonMatches {
+    pub matched: usize,
+    pub candidates: usize,
 }
 
 /// This is provider observation, distinct from the HTTP client's process custody.
@@ -804,16 +816,22 @@ pub const fn daemon_refusal(error: aggregate::Error) -> Error {
 pub const MAX_DAEMON_CANDIDATES: usize = 64;
 
 /// The one candidate whose executable matched (R21 N7), pure over the candidate list and the matched
-/// set: zero or several matching candidates are `Identity`, and a matched pid outside the candidates
-/// is not one.
+/// set: zero or several matching candidates are refused with how many matched of how many (R21
+/// round-1 LOW L7), and a matched pid outside the candidates is not one.
 ///
 /// # Errors
-/// `Identity` unless exactly one candidate matched.
+/// [`Error::Matches`] unless exactly one candidate matched.
 pub fn select_daemon(candidates: &[u32], matched: &BTreeSet<u32>) -> Result<u32, Error> {
     let mut hits = candidates.iter().filter(|pid| matched.contains(pid));
     match (hits.next(), hits.next()) {
         (Some(pid), None) => Ok(*pid),
-        _ => Err(Error::Identity),
+        _ => Err(Error::Matches(DaemonMatches {
+            matched: candidates
+                .iter()
+                .filter(|pid| matched.contains(pid))
+                .count(),
+            candidates: candidates.len(),
+        })),
     }
 }
 

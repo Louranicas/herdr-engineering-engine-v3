@@ -2602,6 +2602,95 @@ specification = {{ file = "isolation.json", sha256 = "{SPEC}" }}
         Ok(())
     }
 
+    /// R21 round-1 LOW L1 · the workload record is the ONE raw member naming the candidate inputs.
+    /// The review's own `shared_assumptions` page, rooted alone, with one raw evidence member
+    /// swapped for a copy of the workload record (its bytes plus a newline: another digest, the same
+    /// decoded fields). Swapped for an unrelated member, the closure holds the record and its copy —
+    /// refused `Record`, although either alone yields the closure's pins. Swapped for the record
+    /// itself, the closure holds the copy alone — the pins and the task text, so the copy is a
+    /// record the rule accepts and the refusal is the count's.
+    #[test]
+    fn two_workload_records_in_one_closure_are_refused_by_name()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use super::super::candidates::FilePins;
+        const TASK: &str = "7e7e5d422ff4b486180de35efa4241cdc5d282a2a8d8bff87c3aec21338ce339";
+        const RECORD: &str = "a87e5ba9f699168556ef0859c0690113f0e1186592109dd797745593aff99121";
+        const RECORD_ID: &str = "cef9a198-8b4c-47d0-96f4-76baeb827eb3";
+        const SPARE: &str = "43dba444d7abf4de3f2da1f5ff97e3879b7238e978477bda93481c81a81839b0";
+        const SPARE_ID: &str = "721f058c-c34f-4589-a188-03dd1055719f";
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/reviewed-003");
+        let mut objects = std::collections::BTreeMap::new();
+        for entry in fs::read_dir(&fixture)? {
+            let entry = entry?;
+            objects.insert(
+                format!("sha256:{}", entry.file_name().to_string_lossy()),
+                fs::read(entry.path())?,
+            );
+        }
+        let record = fs::read(fixture.join(RECORD))?;
+        let mut copy = record.clone();
+        copy.push(b'\n');
+        let copy_sha = super::super::evidence::digest(&copy);
+        objects.insert(copy_sha.clone(), copy.clone());
+        let raw = |id: &str, bytes: usize, sha256: &str| {
+            format!(
+                "{{\"artifact_id\":\"{id}\",\"byte_length\":{bytes},\"media_type\":\
+                 \"application/octet-stream\",\"schema_id\":\"hee3.raw/1\",\"sha256\":\"{sha256}\"}}"
+            )
+        };
+        let copied = raw(
+            "28e00000-0000-4000-8000-00000000000b",
+            copy.len(),
+            &copy_sha,
+        );
+        let page = String::from_utf8(fs::read(fixture.join(REVIEW_ASSUMPTIONS))?)?;
+        let closure = |swapped: &str| -> Result<_, Box<dyn std::error::Error>> {
+            assert_eq!(page.matches(swapped).count(), 1, "{swapped}");
+            let bytes = page.replace(swapped, &copied).into_bytes();
+            let sha256 = super::super::evidence::digest(&bytes);
+            let root = Ref {
+                artifact_id: Id::new("28e00000-0000-4000-8000-00000000000c")?,
+                sha256: Sha::new(sha256.clone())?,
+                byte_length: u32::try_from(bytes.len())?,
+                media_type: Name::new("application/json")?,
+                schema_id: Name::new("hee3.receipt/1:AssumptionPageV1")?,
+            };
+            let mut store = objects.clone();
+            store.insert(sha256, bytes);
+            crate::check::graph::Graph::resolve(&Memory(store), &root)
+                .map_err(|e| format!("{e:?}").into())
+        };
+        let records = |graph: &crate::check::graph::Graph| {
+            graph
+                .nodes()
+                .filter(|node| node.bytes() == record.as_slice() || node.bytes() == copy.as_slice())
+                .count()
+        };
+        let two = closure(&raw(SPARE_ID, 3005, &format!("sha256:{SPARE}")))?;
+        assert_eq!(records(&two), 2);
+        assert_eq!(
+            workload_inputs(&two),
+            Err(ReviewedError::Workload(WorkloadWhy::Record))
+        );
+        let one = closure(&raw(RECORD_ID, record.len(), &format!("sha256:{RECORD}")))?;
+        assert_eq!(records(&one), 1);
+        assert_eq!(
+            workload_inputs(&one),
+            Ok((
+                FilePins {
+                    task: format!("sha256:{TASK}"),
+                    cargo:
+                        "sha256:b0e12aac7ebf609e0be87029a4881d1b67c91780679b6495c0bf06b313db5da7"
+                            .into(),
+                    base: "sha256:6fd50c63a83a1a9cae3b88bcc11ebad723cb5b86c443148d112567cc002cb5df"
+                        .into(),
+                },
+                fs::read(fixture.join(TASK))?
+            ))
+        );
+        Ok(())
+    }
+
     /// B14a-2a · a reviewed record is returned only when its bytes hash to the digest the profile
     /// names; absence, custody, size and a substituted record are each refused by name.
     #[test]

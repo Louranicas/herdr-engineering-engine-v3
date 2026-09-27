@@ -853,7 +853,9 @@ impl dispatcher::Provider for ScriptedProvider {
         }
         self.pairs
             .pop_front()
-            .ok_or(dispatcher::Unavailable::NoNativeProvider)
+            .ok_or(dispatcher::Unavailable::NoNativeProvider(
+                dispatcher::NoNative::NotInstalled,
+            ))
     }
 }
 
@@ -982,7 +984,9 @@ impl dispatcher::Provider for Sleeper {
     ) -> Result<(Script<'static>, Oracle<'static>), dispatcher::Unavailable> {
         std::thread::sleep(self.nap);
         let _ = self.woke.send(next.task.clone());
-        Err(dispatcher::Unavailable::NoNativeProvider)
+        Err(dispatcher::Unavailable::NoNativeProvider(
+            dispatcher::NoNative::NotInstalled,
+        ))
     }
 }
 
@@ -1138,19 +1142,108 @@ fn a_task_cancelled_before_dispatch_is_stopped_by_name_and_never_picked_again() 
 fn no_provider_is_a_named_dispatcher_state_and_leaves_the_task_admitted() -> Outcome_ {
     let rig = Arc::new(rig(&Shape::default())?);
     let stop = Arc::new(AtomicBool::new(false));
-    let (exit, lines) = run_dispatcher(&rig, dispatcher::NoProvider, &stop)?;
+    let (exit, lines) = run_dispatcher(
+        &rig,
+        dispatcher::NoProvider(dispatcher::NoNative::NotInstalled),
+        &stop,
+    )?;
     assert_eq!(
         exit,
-        dispatcher::Exit::Unavailable(dispatcher::Unavailable::NoNativeProvider),
+        dispatcher::Exit::Unavailable(dispatcher::Unavailable::NoNativeProvider(
+            dispatcher::NoNative::NotInstalled
+        )),
         "{lines:?}"
     );
     assert_eq!(state(&rig)?, "admitted");
     assert!(
         lines
             .iter()
-            .any(|line| line.contains("unavailable: no native provider (B14b-2)")),
+            .any(|line| line.contains("unavailable: no native provider (not installed)")),
         "{lines:?}"
     );
+    Ok(())
+}
+
+/// A provider whose `open` refuses with `why`, first raising the drain it was handed when `raise`
+/// is set — the shape of a resolve cancelled by a SIGTERM that landed during `open`. It records the
+/// task it was handed and whether the drain it raised is the dispatcher's own.
+struct RefusingOpen {
+    why: dispatcher::Unavailable,
+    raise: bool,
+    engine: Arc<AtomicBool>,
+    handed: Arc<Mutex<Vec<(String, bool)>>>,
+}
+
+impl dispatcher::Provider for RefusingOpen {
+    type Source = Script<'static>;
+    type Verifier = Oracle<'static>;
+    fn open(
+        &mut self,
+        next: &habitat_engine::store::Dispatchable,
+        admitted: &habitat_engine::app::runtime::Admitted<'_>,
+    ) -> Result<(Script<'static>, Oracle<'static>), dispatcher::Unavailable> {
+        record(
+            &self.handed,
+            (
+                next.task.clone(),
+                std::ptr::eq(admitted.drain(), Arc::as_ptr(&self.engine)),
+            ),
+        );
+        if self.raise {
+            admitted.drain().store(true, Ordering::SeqCst);
+        }
+        Err(self.why)
+    }
+}
+
+/// R21 round-1 LOW F6 · `open` is handed the drain as its resolve's cancel flag, so a SIGTERM that
+/// lands during `open` comes back as `Daemon(Cancelled)`: that is the drain's exit, `Drained`, and
+/// is said as a drain — never a provider unavailability. The drain decides it, not the name: the
+/// same refusal with no drain raised stays the named unavailable state, and another refusal under a
+/// raised drain stays its own name. The task stays `admitted` in all three.
+#[test]
+fn a_drain_that_cancels_open_ends_the_dispatcher_drained_not_unavailable() -> Outcome_ {
+    use habitat_engine::worker::native::Error as Native;
+    let cancelled = dispatcher::Unavailable::Daemon(Native::Cancelled);
+    let deadline = dispatcher::Unavailable::Daemon(Native::Deadline);
+    for (why, raise, exit, said) in [
+        (
+            cancelled,
+            true,
+            dispatcher::Exit::Drained,
+            "dispatcher: drained while opening the provider (unavailable: daemon cancelled)",
+        ),
+        (
+            cancelled,
+            false,
+            dispatcher::Exit::Unavailable(cancelled),
+            "dispatcher: unavailable: daemon cancelled",
+        ),
+        (
+            deadline,
+            true,
+            dispatcher::Exit::Unavailable(deadline),
+            "dispatcher: unavailable: daemon deadline",
+        ),
+    ] {
+        let rig = Arc::new(rig(&Shape::default())?);
+        let stop = Arc::new(AtomicBool::new(false));
+        let handed = Arc::new(Mutex::new(Vec::new()));
+        let provider = RefusingOpen {
+            why,
+            raise,
+            engine: Arc::clone(&stop),
+            handed: Arc::clone(&handed),
+        };
+        let (got, lines) = run_dispatcher(&rig, provider, &stop)?;
+        assert_eq!(
+            (got, lines),
+            (exit, vec![said.to_owned()]),
+            "{why:?} {raise}"
+        );
+        assert_eq!(taken(&handed), vec![(TASK.to_owned(), true)]);
+        assert_eq!(state(&rig)?, "admitted");
+    }
     Ok(())
 }
 
@@ -1366,7 +1459,9 @@ fn a_submit_wakes_the_waiting_dispatcher_and_it_picks_the_new_task() -> Outcome_
     })?;
     assert_eq!(
         exit,
-        dispatcher::Exit::Unavailable(dispatcher::Unavailable::NoNativeProvider)
+        dispatcher::Exit::Unavailable(dispatcher::Unavailable::NoNativeProvider(
+            dispatcher::NoNative::NotInstalled
+        ))
     );
     let submitted = submitted
         .lock()
@@ -4456,6 +4551,64 @@ fn the_native_provider_opens_over_the_stand_in_and_names_each_refusal() -> Outco
             opened_name(dispatcher::Provider::open(&mut provider, &next, &admitted)),
             expected
         );
+    }
+    Ok(())
+}
+
+/// R21 round-1 LOW L2 (N11) · `open` refuses a client working directory that is not canonical, the
+/// engine's and 0700 as `unavailable: native directory`, after the daemon is resolved (the seam's
+/// log holds the one ask, as the dispatch asks it): a 0755 directory and an absent one. The
+/// fixture's own 0700 directory, handed the same way, opens.
+#[test]
+fn a_client_directory_that_is_not_private_is_refused_at_open_by_name() -> Outcome_ {
+    use std::os::unix::fs::PermissionsExt;
+    let principal = owner();
+    let next = habitat_engine::store::Dispatchable {
+        task: TASK.to_owned(),
+        generation: "1".to_owned(),
+        owner: owner(),
+        cancellation: false,
+    };
+    let stand_in = DaemonStandIn::spawn();
+    let pid = stand_in.daemon().pid;
+    let bench = rig(&Shape {
+        base_cargo: true,
+        ..Shape::default()
+    })?;
+    let fixture = native_fixture(&bench, &stand_in, &[(REFERENCE_LIB, "stop")], 4096)?;
+    let manifest = fixture.manifest.sha256.clone();
+    let class = native_class(&bench, &manifest);
+    let drain = AtomicBool::new(false);
+    let admitted = admitted_with(&bench, &principal, &drain, &class)?;
+    let (_, until) = admitted.window();
+    let flag = std::ptr::from_ref(admitted.drain()) as usize;
+    let shared = bench.scratch.0.join("client-0755");
+    DirBuilder::new().mode(0o700).create(&shared)?;
+    fs::set_permissions(&shared, fs::Permissions::from_mode(0o755))?;
+    for (directory, expected) in [
+        (shared, "unavailable: native directory"),
+        (
+            bench.scratch.0.join("client-absent"),
+            "unavailable: native directory",
+        ),
+        (fixture.directory.clone(), "opened"),
+    ] {
+        let file = operator_file(
+            &habitat_engine::worker::native::Profile {
+                directory: directory.clone(),
+                ..fixture.clone()
+            },
+            &manifest,
+        )?;
+        assert_eq!(file.directory, directory);
+        let (mut provider, seen) = native_provider(file, Ok(pid));
+        assert_eq!(
+            opened_name(dispatcher::Provider::open(&mut provider, &next, &admitted)),
+            expected,
+            "{}",
+            directory.display()
+        );
+        assert_eq!(taken(&seen), vec![(STAND_IN_UNIT.to_owned(), until, flag)]);
     }
     Ok(())
 }

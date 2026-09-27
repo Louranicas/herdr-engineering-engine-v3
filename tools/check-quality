@@ -224,12 +224,12 @@ T06_UNIT_COUNTS = {
     "store::staging_tests::": 13, "check::u64_oracle::tests::": 22,
     "app::capture::tests::": 6, "app::durable_control::tests::": 6,
     "app::repair::tests::": 7, "worker::namespace::": 8,
-    "check::patch::tests::": 6, "app::class_profile::tests::": 20,
+    "check::patch::tests::": 6, "app::class_profile::tests::": 21,
     "worker::resources::limit_tests::": 3, "worker::workspace::manifest_tests::": 2,
     "app::runtime::tests::": 10, "app::run_records::tests::": 10,
     "app::live_verifier::tests::": 3, "app::plan::tests::": 5, "app::u64_receipt::tests::": 9, "worker::host::tests::": 1,
-    "app::candidates::tests::": 5, "app::dispatcher::tests::": 1,
-    "app::native_provider::tests::": 2,
+    "app::candidates::tests::": 5, "app::dispatcher::tests::": 2,
+    "app::native_provider::tests::": 3,
 }
 
 
@@ -250,7 +250,7 @@ T07_INPUTS = ("src/store/recovery.rs", "tests/t07_inventory.rs")
 # interpreter is an evidence pin (see native_client_interpreter), never a
 # candidate input; the other files under tests/fixtures/native are not read by
 # any registered Rust test and earn no input status here.
-T08_TARGET_COUNTS = {"t08_native": 27}
+T08_TARGET_COUNTS = {"t08_native": 28}
 T08_INPUTS = ("src/worker/native.rs", "tests/t08_native.rs", "tests/fixtures/native/client.py")
 NATIVE_CLIENT_FIXTURE = "tests/fixtures/native/client.py"
 # Reviewed T07 engine reconciliation policy target: 58 controls. tests/recovery.rs
@@ -265,7 +265,7 @@ RECOVERY_INPUTS = ("src/recovery.rs", "tests/recovery.rs")
 # reads/writes. The pure policy src/recovery.rs stays pinned by RECOVERY_INPUTS and
 # the inventory reader src/store/recovery.rs by T07_INPUTS; both are read by this
 # battery too, and a file is pinned once by the battery that owns it.
-T07_STARTUP_TARGET_COUNTS = {"t07_startup": 114}
+T07_STARTUP_TARGET_COUNTS = {"t07_startup": 115}
 T07_STARTUP_INPUTS = ("src/app/startup.rs", "src/store/reconciliation.rs", "tests/t07_startup.rs")
 # Reviewed T08 contract battery (the count is the pin below), no library-unit
 # namespace. The inputs are what tests/t08_contract.rs and its child module
@@ -317,7 +317,7 @@ CONTEXT_INPUTS = ("src/context.rs",)
 COHORT_TARGET_COUNTS = {"t22_cohort": 67}
 COHORT_INPUTS = ("src/cohort.rs", "evaluation/cohorts/claim-overlap-v1.json",
                  "tests/fixtures/t22/C01.json", "tests/fixtures/t22/C02.json")
-ACTIONS_TARGET_COUNTS = {"t28_actions": 261}
+ACTIONS_TARGET_COUNTS = {"t28_actions": 264}
 # The control receiver (review coordinator step 1) is served from the catalogue: its wire half in
 # contracts, its catalogue half in actions, and the independent Python oracle its cases run.
 ACTIONS_INPUTS = ("src/actions.rs", "src/worker/tools.rs", "src/actions/control.rs",

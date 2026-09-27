@@ -963,13 +963,14 @@ fn resolves_below_a_shell(
 /// process itself) and over a shell whose descendant is the pinned executable (the host's shape),
 /// the resolved daemon equals what the stand-in reader (`DaemonStandIn::daemon`, a separate reader of
 /// `/proc`) reports, field by field. The seam's double saw the unit, the deadline and the
-/// cancellation the caller passed. A pin nothing matches is `Identity`; a pin that is not a pin is
-/// `Profile` before the seam is asked; the seam's refusal passes through; the selection is pure.
+/// cancellation the caller passed. A pin nothing matches is `Matches` with none of the one
+/// candidate matched (R21 round-1 LOW L7: the stand-in `sleep` has no descendants); a pin that is
+/// not a pin is `Profile` before the seam is asked; the seam's refusal passes through. The pure
+/// selection is `the_daemon_selection_refuses_with_how_many_matched_of_how_many`'s.
 #[test]
 fn the_resolver_selects_the_one_candidate_whose_executable_is_the_pin()
 -> Result<(), Box<dyn std::error::Error>> {
-    use native::{DaemonPin, resolve, select_daemon};
-    use std::collections::BTreeSet;
+    use native::{DaemonPin, resolve};
     let stand_in = DaemonStandIn::spawn();
     let expected = stand_in.daemon();
     let pin = DaemonPin {
@@ -992,7 +993,7 @@ fn the_resolver_selects_the_one_candidate_whose_executable_is_the_pin()
     );
     assert_eq!(seam.asked, asked_once);
     resolves_below_a_shell(&pin, &expected)?;
-    // A pin no candidate's executable matches: zero matches.
+    // A pin no candidate's executable matches: zero matches, of the one candidate.
     let mut seam = MainPidDouble {
         answer: Ok(expected.pid),
         asked: vec![],
@@ -1003,7 +1004,10 @@ fn the_resolver_selects_the_one_candidate_whose_executable_is_the_pin()
     };
     assert!(matches!(
         resolve(&foreign, &mut seam, deadline, &running),
-        Err(Error::Identity)
+        Err(Error::Matches(native::DaemonMatches {
+            matched: 0,
+            candidates: 1
+        }))
     ));
     // A pin that is not a pin is refused before the seam is asked.
     for broken in [
@@ -1037,20 +1041,32 @@ fn the_resolver_selects_the_one_candidate_whose_executable_is_the_pin()
         Err(Error::Identity)
     ));
     assert_eq!(seam.asked, asked_once);
-    // The selection, pure: exactly one candidate in the matched set.
+    Ok(())
+}
+
+/// R21 round-1 LOW L7 · the selection's refusal carries its count: exactly one candidate in the
+/// matched set is selected; none and several are refused `Matches`, with how many matched of how
+/// many candidates — fixtures that differ in both numbers — and a matched pid outside the
+/// candidates is neither selected nor counted.
+#[test]
+fn the_daemon_selection_refuses_with_how_many_matched_of_how_many() {
+    use native::{DaemonMatches, select_daemon};
+    use std::collections::BTreeSet;
+    let refused = |matched, candidates| {
+        Err(Error::Matches(DaemonMatches {
+            matched,
+            candidates,
+        }))
+    };
+    assert_eq!(select_daemon(&[1, 2], &BTreeSet::new()), refused(0, 2));
     assert_eq!(
-        select_daemon(&[1, 2], &BTreeSet::new()),
-        Err(Error::Identity)
-    );
-    assert_eq!(
-        select_daemon(&[1, 2], &BTreeSet::from([1, 2])),
-        Err(Error::Identity)
+        select_daemon(&[4, 5, 6], &BTreeSet::from([4, 6])),
+        refused(2, 3)
     );
     assert_eq!(select_daemon(&[1, 2], &BTreeSet::from([2])), Ok(2));
+    assert_eq!(select_daemon(&[7, 8, 9], &BTreeSet::from([3, 9])), Ok(9));
     assert_eq!(
-        select_daemon(&[1, 2], &BTreeSet::from([3])),
-        Err(Error::Identity),
-        "a match outside the candidates is not a candidate"
+        select_daemon(&[1, 2, 5, 6], &BTreeSet::from([3])),
+        refused(0, 4)
     );
-    Ok(())
 }

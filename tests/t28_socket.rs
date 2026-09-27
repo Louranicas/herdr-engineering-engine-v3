@@ -1684,6 +1684,96 @@ fn with_a_scratch_runtime_directory_the_busctl_pin_refuses_and_the_task_stays_ad
     Ok(())
 }
 
+/// R21 round-1 LOW F8, through `main` · a native file `serve` refused at start is not "no native
+/// provider": the operator's file is present beside a `/2` class but group- and world-readable, so
+/// the custody door refuses it; the startup line says why once, nothing is installed, and the
+/// dispatcher's own named state carries the compose refusal's kind — told apart from a file that
+/// is not installed at all. The task stays `admitted`.
+#[test]
+fn a_native_file_refused_at_start_is_named_by_its_refusal_not_as_absent() -> Outcome {
+    const KEY: &str = "28c00000-0000-4000-8000-0000000000d3";
+    let manifest = format!("sha256:{}", "7".repeat(64));
+    let world = World::granting(&["task"], &["read", "durable admission"])?;
+    let (run, scope) = (&world.run, &world.scope);
+    commission(&world.home)?;
+    let config = world.home.join(".config/herdr-engineering-engine-v3");
+    let classes = config.join("classes");
+    DirBuilder::new()
+        .mode(0o700)
+        .recursive(true)
+        .create(&classes)?;
+    let class = classes.join("rust-library-change-1");
+    let text = super::runtime::native_class_text(&class, &manifest)?;
+    write_grant(&class, "profile.toml", text.as_bytes(), 0o600)?;
+    let native = config.join("native");
+    DirBuilder::new().mode(0o700).create(&native)?;
+    write_grant(
+        &native,
+        "native.toml",
+        b"schema = \"hee3.native/1\"\n",
+        0o644,
+    )?;
+    let log = world.home.join("engine.log");
+    let engine = Engine::start_logged(run, &world.home, &log)?;
+    let mut spec = super::tasks::spec();
+    spec["workspace_id"] = json!(super::runtime::CLASS_WORKSPACE);
+    spec["criteria"] = json!(habitat_engine::check::consistency::U64_CRITERIA);
+    let submitted = reply_of(&wrapper(
+        run,
+        scope,
+        &strs(&[
+            "task.submit".to_owned(),
+            format!("@idempotency_key={KEY}"),
+            format!("spec:={spec}"),
+        ]),
+    )?)?;
+    assert_eq!(submitted["kind"], json!("result"), "{submitted}");
+    let task = submitted["body"]["task"]["task_id"]
+        .as_str()
+        .ok_or("task id")?
+        .to_owned();
+    // Poll the artifact with a budget (F102/F137): the dispatcher's first named state in the log.
+    let prefix = "habitat-engine: dispatcher: unavailable";
+    let started = Instant::now();
+    let stderr = loop {
+        let stderr = fs::read_to_string(&log)?;
+        if stderr.lines().any(|line| line.starts_with(prefix)) {
+            break stderr;
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(20),
+            "no {prefix:?} within 20 s:\n{stderr}"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    let got = reply_of(&wrapper(
+        run,
+        scope,
+        &strs(&getting(&json!({"task_id": task}))),
+    )?)?;
+    assert_eq!(got["body"]["task"]["state"], json!("admitted"), "{got}");
+    let _output = engine.terminate(Duration::from_secs(20))?;
+    let started_line = format!(
+        "habitat-engine: native provider unavailable: refused: Read {{ what: \"file custody\" }} ({})",
+        native.display()
+    );
+    let named: Vec<&str> = stderr
+        .lines()
+        .filter(|line| {
+            line.starts_with(prefix) || line.starts_with("habitat-engine: native provider")
+        })
+        .collect();
+    assert_eq!(
+        named,
+        [
+            started_line.as_str(),
+            "habitat-engine: dispatcher: unavailable: native provider refused (file read)",
+        ],
+        "{stderr}"
+    );
+    Ok(())
+}
+
 #[test]
 fn an_unwritable_ledger_leaves_task_actions_unavailable() -> Outcome {
     let world = World::granting(&["app", "task"], &["read", "durable admission"])?;

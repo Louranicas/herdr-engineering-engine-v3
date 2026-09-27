@@ -196,6 +196,7 @@ use habitat_engine::app::control_socket::{
     self, Drain, IDLE_TIMEOUT, RUNTIME_DIRECTORY, SOCKET_NAME, WRITE_TIMEOUT,
 };
 use habitat_engine::app::coordinator;
+use habitat_engine::app::dispatcher::NoNative;
 use habitat_engine::app::grants::{self, FileGrants};
 use habitat_engine::app::native_provider::{self, Installed, NativeFileError, NativeProvider};
 use habitat_engine::app::tasks::StoreTasks;
@@ -342,13 +343,14 @@ fn attempts_root(state_root: &Path) -> Option<PathBuf> {
 /// The native provider (B14b-2; R21 N3, N12): the operator's file read under custody, the class's
 /// adapter row, the agent record installed as the operator inside the startup window, and the
 /// provider over the user manager's pinned busctl door and the engine's runtime root. Every absence
-/// or refusal is said once; the dispatcher then runs over `NoProvider`.
+/// or refusal is said once; the dispatcher then runs over `NoProvider`, holding the refusal's kind
+/// so its own named state says it again (R21 round-1 LOW F8).
 fn compose_native(
     home: &Path,
     tasks: &StoreTasks,
     runtime_root: &Path,
     deadline: std::time::Instant,
-) -> Option<(NativeProvider<Systemd>, Installed)> {
+) -> Composed {
     let directory = coordinator::config_path(home, native_provider::NATIVE_DIRECTORY);
     let unavailable = |why: &str| {
         eprintln!(
@@ -360,15 +362,15 @@ fn compose_native(
         Ok(read) => read,
         Err(NativeFileError::NotInstalled) => {
             unavailable("not installed");
-            return None;
+            return Err(NoNative::NotInstalled);
         }
         Err(error) => {
             unavailable(&format!("refused: {error:?}"));
-            return None;
+            return Err(native_provider::no_native(&error));
         }
     };
     // No class profile: the dispatcher says so itself (`unavailable: no class profile`).
-    let profile = tasks.class_profile().ok()?;
+    let profile = tasks.class_profile().map_err(|_| NoNative::ClassProfile)?;
     // A class with no native row installs nothing: `open` names it for every task it would serve.
     let adapter = match &profile.declared.native {
         None => None,
@@ -378,7 +380,7 @@ fn compose_native(
                     "the class's adapter row {} is unknown",
                     row.adapter
                 ));
-                return None;
+                return Err(NoNative::Adapter);
             };
             Some(adapter)
         }
@@ -401,7 +403,7 @@ fn compose_native(
                 Ok(principal) => principal,
                 Err(why) => {
                     unavailable(&why);
-                    return None;
+                    return Err(NoNative::Principal);
                 }
             };
             match native_provider::install(tasks, &principal, &file, &bytes, adapter, deadline) {
@@ -419,7 +421,7 @@ fn compose_native(
                 }
                 Err(error) => {
                     unavailable(&format!("install refused: {error:?}"));
-                    return None;
+                    return Err(NoNative::Install);
                 }
             }
         }
@@ -431,11 +433,14 @@ fn compose_native(
         // Read only by `Aggregate::prepare`; the MainPID door never parses it.
         run_id: String::new(),
     });
-    Some((
+    Ok((
         NativeProvider::new(file, systemd, runtime_root.to_path_buf()),
         installed,
     ))
 }
+
+/// What `compose_native` came to: the provider and its install, or the refusal's kind.
+type Composed = Result<(NativeProvider<Systemd>, Installed), NoNative>;
 
 /// `habitat-engine serve`: take single-instance custody of IPC01, reconcile the active
 /// generation, compose the task owner over the ledger startup left open, and only then bind and
@@ -516,10 +521,10 @@ fn serve() -> ExitCode {
         }
     };
     // The native provider (B14b-2): read the operator's file, install its agent record, and compose
-    // the provider the dispatcher opens per dispatch — or say once why there is none.
+    // the provider the dispatcher opens per dispatch — or say once why there is none (LOW F8).
     let native = tasks
         .as_ref()
-        .and_then(|tasks| compose_native(&home, tasks, &runtime_root, startup_deadline));
+        .map(|tasks| compose_native(&home, tasks, &runtime_root, startup_deadline));
     let listener = match control_socket::bind(&prepared) {
         Ok(listener) => listener,
         Err(error) => {
@@ -547,8 +552,7 @@ fn serve() -> ExitCode {
         shared,
         &drain,
         &prepared,
-        tasks.as_ref().zip(attempts.as_deref()),
-        native,
+        tasks.as_ref().zip(attempts.as_deref()).zip(native),
     ) {
         eprintln!("habitat-engine: accept failed: {error}");
         return ExitCode::from(EXIT_CONTRACT);
@@ -568,10 +572,9 @@ fn serve_until_signalled(
     shared: control_socket::Shared<'_>,
     drain: &Drain,
     prepared: &control_socket::Prepared,
-    dispatching: Option<(&StoreTasks, &Path)>,
-    native: Option<(NativeProvider<Systemd>, Installed)>,
+    dispatching: Option<((&StoreTasks, &Path), Composed)>,
 ) -> io::Result<()> {
-    let tasks = dispatching.map(|(tasks, _)| tasks);
+    let tasks = dispatching.as_ref().map(|((tasks, _), _)| *tasks);
     let report = |line: &str| eprintln!("habitat-engine: {line}");
     let handle = signals.handle();
     std::thread::scope(|scope| {
@@ -591,10 +594,10 @@ fn serve_until_signalled(
         // The dispatcher runs over the task owner (the one class profile is read inside it);
         // without one, its absence is said once, like the other unavailable doors.
         match dispatching {
-            Some((tasks, attempts)) => {
+            Some(((tasks, attempts), native)) => {
                 scope.spawn(move || {
                     let exit = match native {
-                        Some((mut provider, installed)) => dispatcher::Dispatcher {
+                        Ok((mut provider, installed)) => dispatcher::Dispatcher {
                             tasks,
                             attempts,
                             provider: &mut provider,
@@ -603,10 +606,10 @@ fn serve_until_signalled(
                             drain: drain.flag(),
                         }
                         .run(&report),
-                        None => dispatcher::Dispatcher {
+                        Err(why) => dispatcher::Dispatcher {
                             tasks,
                             attempts,
-                            provider: &mut dispatcher::NoProvider,
+                            provider: &mut dispatcher::NoProvider(why),
                             agent_record_id: "",
                             selections: &[],
                             drain: drain.flag(),

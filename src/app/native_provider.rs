@@ -22,7 +22,7 @@
 use super::candidates::{ClassPrompt, NativeCandidates};
 use super::class_profile;
 use super::custody::{DirectoryError, FileError, PrivateDirectory};
-use super::dispatcher::{NativeWhy, Provider, Unavailable};
+use super::dispatcher::{NativeWhy, NoNative, Provider, Unavailable};
 use super::evidence::fresh_id;
 use super::live_verifier::{LiveVerifier, Manager};
 use super::runtime::Admitted;
@@ -232,6 +232,21 @@ pub fn read(directory: &Path) -> Result<(NativeFile, Vec<u8>), NativeFileError> 
         Err(FileError::Io(_)) => return Err(refused("file io")),
     };
     Ok((compose(&bytes)?, bytes))
+}
+
+/// The dispatcher's kind for a refusal of the operator's file (R21 round-1 LOW F8): absent, not
+/// read under custody, or read and not decoded. One arm per refusal, so a new one is a compile
+/// error here.
+#[must_use]
+pub const fn no_native(error: &NativeFileError) -> NoNative {
+    match error {
+        NativeFileError::NotInstalled => NoNative::NotInstalled,
+        NativeFileError::Read { .. } => NoNative::Read,
+        NativeFileError::Encoding
+        | NativeFileError::Decode { .. }
+        | NativeFileError::Schema { .. }
+        | NativeFileError::Field { .. } => NoNative::Decode,
+    }
 }
 
 /// What the install established (R21 N3, N12): the agent record every begin names, and the one
@@ -768,6 +783,49 @@ endpoint_ref = "5a000000-0000-4000-9000-00000000000b"
                 }),
                 "{message}"
             );
+        }
+    }
+
+    /// R21 round-1 LOW F8 · every refusal of the operator's file has the dispatcher's kind for it:
+    /// absent is `NotInstalled`, a custody door's refusal `Read`, and every refusal the compose
+    /// door itself produces — its fourteen named rules, a non-UTF-8 file, toml's own position —
+    /// `Decode`. The decode refusals are the door's own outputs, not values typed beside it.
+    #[test]
+    fn each_file_refusal_has_its_no_provider_kind() {
+        let mut table = vec![
+            (NativeFileError::NotInstalled, NoNative::NotInstalled),
+            (
+                NativeFileError::Read {
+                    what: "file custody",
+                },
+                NoNative::Read,
+            ),
+            (
+                NativeFileError::Read {
+                    what: "directory io",
+                },
+                NoNative::Read,
+            ),
+        ];
+        let decoded = refusals()
+            .into_iter()
+            .map(|(text, _)| text.into_bytes())
+            .chain([b"\xff".to_vec(), format!("{HOST}\n[tools]\n").into_bytes()])
+            .filter_map(|bytes| compose(&bytes).err());
+        table.extend(decoded.map(|error| (error, NoNative::Decode)));
+        assert_eq!(table.len(), 3 + 14 + 2);
+        assert!(
+            table
+                .iter()
+                .any(|(error, _)| *error == NativeFileError::Encoding)
+        );
+        assert!(
+            table
+                .iter()
+                .any(|(error, _)| matches!(error, NativeFileError::Decode { .. }))
+        );
+        for (error, kind) in table {
+            assert_eq!(no_native(&error), kind, "{error:?}");
         }
     }
 }

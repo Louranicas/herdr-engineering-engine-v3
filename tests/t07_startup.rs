@@ -4071,6 +4071,85 @@ fn the_host_reads_three_states_from_the_root_and_its_two_leaves() {
     );
 }
 
+/// R21 round-1 LOW FT3-08 · `Host::record_paths` maps each attempt to ITS OWN recorded root, beyond
+/// the one-root identity case: two attempts under two real roots, handed out of id order, whose
+/// leaves differ in every state — and each root holds a decoy of the other attempt's leaves, so
+/// reading an attempt under the other root, or under the first root handed, reads the decoy. Both
+/// readbacks are asserted whole; cleaning one attempt's job root touches only its own root.
+#[test]
+fn the_host_reads_each_attempt_under_its_own_recorded_root()
+-> Result<(), Box<dyn std::error::Error>> {
+    let area = Area::new("two-roots");
+    let (first, second) = (area.path.join("first"), area.path.join("second"));
+    let private = |path: &Path| DirBuilder::new().mode(0o700).create(path);
+    for root in [&first, &second] {
+        private(root)?;
+    }
+    // ATTEMPT under `first`: both leaves present, three bytes written.
+    private(&first.join(ATTEMPT))?;
+    private(&first.join(format!("{ATTEMPT}.check")))?;
+    fs::write(first.join(ATTEMPT).join("output"), b"abc")?;
+    // OTHER under `second`: its workspace released, its job root remaining.
+    private(&second.join(format!("{OTHER}.check")))?;
+    // The decoys: each root holds a workspace of the other attempt's id, of its own size.
+    private(&first.join(OTHER))?;
+    fs::write(first.join(OTHER).join("decoy"), b"decoy!")?;
+    private(&second.join(ATTEMPT))?;
+    fs::write(second.join(ATTEMPT).join("decoy"), b"decoy")?;
+    let recorded =
+        |attempt: &str, root: &Path| -> Result<AttemptRoot, Box<dyn std::error::Error>> {
+            let (dev, ino) = root_identity(root);
+            Ok(AttemptRoot {
+                attempt: attempt.into(),
+                root: root.to_str().ok_or("a UTF-8 root")?.into(),
+                dev,
+                ino,
+            })
+        };
+    let subject = |attempt| Subject {
+        task: TASK,
+        attempt,
+        generation: 1,
+        workspace_ref: None,
+        session: None,
+    };
+    let (attempt, other) = (subject(ATTEMPT), subject(OTHER));
+    let mut host = Host::new(deadline());
+    host.record_paths(&[recorded(OTHER, &second)?, recorded(ATTEMPT, &first)?]);
+    let read =
+        |host: &mut Host, subject: &Subject<'_>| (host.cleanup(subject), host.workspace(subject));
+    let remaining = |names: &[&str]| CleanupReadback::Partial {
+        remaining: names.iter().map(|name| (*name).to_owned()).collect(),
+    };
+    assert_eq!(
+        read(&mut host, &attempt),
+        (
+            remaining(&["workspace", "job_root"]),
+            WorkspaceReadback::Writable { bytes: 3 }
+        )
+    );
+    assert_eq!(
+        read(&mut host, &other),
+        (remaining(&["job_root"]), WorkspaceReadback::Released)
+    );
+    assert_eq!(host.clean(&other, "job_root"), Ok(()));
+    assert_eq!(
+        read(&mut host, &other),
+        (CleanupReadback::Complete, WorkspaceReadback::Released)
+    );
+    assert_eq!(
+        read(&mut host, &attempt),
+        (
+            remaining(&["workspace", "job_root"]),
+            WorkspaceReadback::Writable { bytes: 3 }
+        )
+    );
+    assert!(
+        first.join(OTHER).join("decoy").exists() && second.join(ATTEMPT).join("decoy").exists()
+    );
+    Ok(())
+}
+
 /// R21 closure C9 (M7) · the private-directory rule has one door, reachable by argument: the
 /// custody door, the startup workspace readback and `main`'s attempts root all route through it.
 /// The table is whole; `mode` is a raw `st_mode`, so the directory type bits are masked away, and
