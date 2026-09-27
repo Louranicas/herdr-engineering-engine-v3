@@ -36,7 +36,12 @@ FLOWS = {
     "F04": {"reason": "roster facts reach route in the preview; no dispatcher refuses a disabled record",
             "lands_with": "C01c"},
     "F05": {"reason": "budget is not composed into settle_attempt (DS3 ruled the overrun rule)", "lands_with": "B18"},
-    "F06": {"reason": "no production dispatcher runs a worker from the binary", "lands_with": "B14b + B14a-4"},
+    "F06": {"reason": "serve dispatches admitted tasks through main; in the gate it stops one at a pre-dispatch "
+                      "refusal (criteria_not_class) and, over the native provider, is refused at the busctl pin "
+                      "with the task left admitted — no worker launches in the gate; launch, LauncherFailed "
+                      "and ACCEPTED are Tier-3", "lands_with": "B14c-T3 + Q4",
+            "partial": SOCKET
+            + "::with_a_scratch_runtime_directory_the_busctl_pin_refuses_and_the_task_stays_admitted"},
     "F07": {"reason": "check is not composed behind dispatch", "lands_with": "B16"},
     "F08": {"reason": "cohort has no durable owner (DS7) and thread.* is unserved", "lands_with": "C06"},
     "F09": {"reason": "cohort and context meet only in the library", "lands_with": "C07"},
