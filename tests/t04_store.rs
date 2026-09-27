@@ -859,7 +859,7 @@ type ClosureCase = (&'static str, Option<(RecordKind, String)>, bool);
 
 /// The closure cases, hand-shaped after the engine's writer (`app::startup`); the real-writer
 /// check is `t07_startup`, whose pins close attempts only through records the pass itself wrote.
-fn closure_cases() -> [ClosureCase; 13] {
+fn closure_cases() -> [ClosureCase; 14] {
     let decided = |decision: &str, cleanup: &str, workspace: &str, custody: &str| {
         format!(
             r#"{{"kind":"hee3-reconciliation-decided/1","attempt":"{ATTEMPT}","task":"{TASK}","decision":{{"decision":"{decision}"}},"handed":{{"cleanup":{{"cleanup_readback":"{cleanup}"}},"workspace":{{"workspace":"{workspace}"}},"process":{{"custody":"{custody}"}}}}}}"#
@@ -919,6 +919,14 @@ fn closure_cases() -> [ClosureCase; 13] {
             true,
         ),
         (
+            "workspace reuse refused, workspace retained, pid reused",
+            Some((
+                RecordKind::Decided,
+                standing("workspace_reuse_refused", "writable", "pid_reused"),
+            )),
+            true,
+        ),
+        (
             "not a standing decision, workspace retained",
             Some((
                 RecordKind::Decided,
@@ -957,7 +965,8 @@ fn closure_cases() -> [ClosureCase; 13] {
 /// engine's own readback in a startup record, never from a worker's cleanup claim. Each record
 /// kind and each liveness classification is pinned: only a positively non-live holder with a
 /// complete cleanup readback closes an attempt, and unknown liveness never does. The one other
-/// closure, "workspace retained", is pinned conjunct by conjunct: a STANDING decision, a workspace
+/// closure, "workspace retained", is pinned conjunct by conjunct: a STANDING decision (or, since
+/// B14b-2 closure D6, a refused reuse: R09 keeps a terminal task's writable workspace), a workspace
 /// read back still writable, and the same non-live custody -- each case below drops exactly one.
 #[test]
 fn an_attempt_is_closed_only_by_the_engines_own_complete_readback() {

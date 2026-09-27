@@ -5393,3 +5393,68 @@ fn retained_standing_workspaces_do_not_starve_a_cleanable_one() {
          retained workspace was deleted"
     );
 }
+
+/// B14b-2 closure D6 (FT-3a, trace:recovery) · a refused-reuse decision whose workspace is retained
+/// does not starve the cleanup tail. Since R21 closure C11 a partial readback beside a writable
+/// workspace goes to the task's state, and for a failed task that is R09 `workspace_reuse_refused`:
+/// the workspace is kept, never cleaned, so without its closure clause `CLEANUP_BATCH + 1` such
+/// attempts, older than a cleanable one, fill every boot's batch and the cleanable one is never
+/// reached. Here the retained attempts are closed as "workspace retained" by the engine's own
+/// no-holder readback, exactly as the standing decisions are, and the cleanable one behind them is
+/// cleaned within bounded boots.
+#[test]
+fn retained_refused_workspaces_do_not_starve_a_cleanable_one()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut r = Rig::admitted();
+    let batch = u32::try_from(startup::CLEANUP_BATCH)?;
+    fail_tasks(&mut r, batch + 2);
+    let cleanable = nth(0x28b4, batch + 1);
+    let mut world = (0..=batch).fold(World::new(), |world, index| {
+        world.with_leaves_for(&nth(0x28b4, index), Leaf::Walked(4096), Presence::Absent)
+    });
+    world = world.with_leaves_for(&cleanable, Leaf::Guarded, Presence::Absent);
+    let budget = 3;
+    for boot in 0..budget {
+        let pass = r.pass(&mut world);
+        assert!(
+            pass.attempts.is_empty(),
+            "boot {boot}: the tail is not effect-bearing"
+        );
+        if boot == 0 {
+            assert!(
+                pass.cleanup
+                    .iter()
+                    .all(|entry| entry.decision.rule == Rule::R09WorkspaceReuse),
+                "boot 0: the oldest batch is the refused-reuse attempts: {:?}",
+                pass.cleanup
+                    .iter()
+                    .map(|entry| entry.decision.rule)
+                    .collect::<Vec<_>>()
+            );
+        }
+        if pass.cleanup.is_empty() && pass.cleanup_backlog == 0 {
+            break;
+        }
+        assert!(
+            boot + 1 < budget,
+            "boot {boot}: the tail did not drain within {budget} boots: cleanup={} backlog={}",
+            pass.cleanup.len(),
+            pass.cleanup_backlog
+        );
+    }
+    let cleaned: Vec<&str> = world
+        .calls
+        .iter()
+        .filter_map(|call| match call {
+            Call::Clean { subject, .. } => Some(subject.attempt.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        cleaned,
+        vec![cleanable.as_str()],
+        "the cleanable workspace behind the refused ones was cleaned, once; no refused-reuse \
+         workspace was deleted"
+    );
+    Ok(())
+}

@@ -784,12 +784,14 @@ pub(super) fn read_view(
 ///   another process: not ours, R07), `unobserved` (a settled attempt's observation was never a
 ///   local process, RC-24). `live_same_identity`, `unreadable` and any other or future spelling
 ///   keep the attempt open: unknown is never closed. ALSO closed, with the disposition "workspace
-///   retained", when the decision is a standing one (`acceptance_stands` / `cancellation_stands`),
-///   custody is in the same allow-list and the workspace readback shows it still `writable`:
-///   startup never deletes a standing task's workspace (it may be the retained evidence), so
-///   without this clause such attempts refill every batch and starve the cleanable ones behind
-///   them. Their retention and collection belong to T18 (route: "retained-workspace
-///   retention/GC"), not to startup.
+///   retained", when the decision is a standing one (`acceptance_stands` / `cancellation_stands`)
+///   or a refused reuse (`workspace_reuse_refused`, R09), custody is in the same allow-list and
+///   the workspace readback shows it still `writable`: startup never deletes a standing task's
+///   workspace (it may be the retained evidence), nor a terminal task's writable one (R09 keeps
+///   it; since R21 closure C11 that is also what a partial readback beside a writable workspace
+///   reaches), so without this clause such attempts refill every batch and starve the cleanable
+///   ones behind them (B14b-2 closure D6). Their retention and collection belong to T18 (route:
+///   "retained-workspace retention/GC"), not to startup.
 /// * `reconciliation_readback` of the `cleanup` effect whose readback is `complete`.
 ///
 /// The bodies are the engine's own serialized records (`app::startup`), an owned contract; a
@@ -801,7 +803,7 @@ const CLOSED_BY_ENGINE_READBACK: &str = "EXISTS (SELECT 1 FROM events e WHERE e.
      AND json_extract(CAST(e.body AS TEXT),'$.handed.cleanup.cleanup_readback')='complete' \
      AND json_extract(CAST(e.body AS TEXT),'$.handed.process.custody') IN ('absent','pid_reused','unobserved')) \
     OR (e.kind='reconciliation_decided' \
-     AND json_extract(CAST(e.body AS TEXT),'$.decision.decision') IN ('acceptance_stands','cancellation_stands') \
+     AND json_extract(CAST(e.body AS TEXT),'$.decision.decision') IN ('acceptance_stands','cancellation_stands','workspace_reuse_refused') \
      AND json_extract(CAST(e.body AS TEXT),'$.handed.workspace.workspace')='writable' \
      AND json_extract(CAST(e.body AS TEXT),'$.handed.process.custody') IN ('absent','pid_reused','unobserved')) \
     OR (e.kind='reconciliation_readback' \
@@ -910,7 +912,11 @@ fn tail_predicate() -> String {
 /// The terminal tail's one batch (R22 C16): at most `batch` tail attempts, rooted attempts first,
 /// then by age. Both the selected set and the cleanup list read it, so they cannot disagree, and a
 /// rootless attempt (one begun before migration 8, which reads `NotRead` forever) can never take a
-/// batch slot ahead of a rooted one.
+/// batch slot ahead of a rooted one. Rootless attempts are not the only ones that read `NotRead`
+/// forever: a rooted attempt whose root was removed and recreated reads a different root id and
+/// is never closed, and it keeps its rooted place in this order (B14b-2 D6(b), owner T18 /
+/// R22-4; operator precondition: never remove the attempts root while tail attempts reference
+/// it).
 fn tail_batch(batch: u64) -> String {
     format!(
         "SELECT a.id AS id FROM attempts a JOIN tasks t ON t.id=a.task_id WHERE {} \
