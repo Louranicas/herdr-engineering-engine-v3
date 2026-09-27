@@ -11,7 +11,6 @@
 //! already exists is found rather than written again.
 
 use crate::app::coordinator::{self, RootIdError};
-use crate::app::custody::private_directory_verdict;
 use crate::contracts::UuidV4;
 use crate::contracts::roster::{Instance, ReceiptTime};
 use crate::recovery::{
@@ -47,7 +46,6 @@ use std::collections::BTreeMap;
 use std::fs::{self, File};
 use std::io::{self, BufRead, Read, Write};
 use std::os::fd::OwnedFd;
-use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 use std::time::Instant;
 
@@ -404,50 +402,9 @@ impl Host {
     }
 }
 
-const WALK_ENTRY_LIMIT: usize = 4096;
-const WALK_DEPTH_LIMIT: usize = 16;
-
 /// How long one workspace removal may walk. The owner's entry and depth bounds cap the work;
 /// this caps the wall time of one removal, inside the host's own startup deadline (closure C14).
 const WORKSPACE_REMOVAL_BUDGET: std::time::Duration = std::time::Duration::from_secs(30);
-
-/// The private-directory rule through its one door ([`private_directory_verdict`], R21 closure C9).
-fn owned_private_dir(path: &Path) -> Result<fs::Metadata, String> {
-    let meta = fs::symlink_metadata(path).map_err(|e| format!("metadata: {e}"))?;
-    private_directory_verdict(
-        meta.is_dir(),
-        meta.uid(),
-        rustix::process::geteuid().as_raw(),
-        meta.mode(),
-    )
-    .map_err(|why| format!("{why:?}"))?;
-    Ok(meta)
-}
-
-fn walk_bytes(path: &Path, depth: usize, entries: &mut usize) -> Result<u64, String> {
-    if depth > WALK_DEPTH_LIMIT {
-        return Err("depth bound".into());
-    }
-    let mut total = 0_u64;
-    for entry in fs::read_dir(path).map_err(|e| format!("read_dir: {e}"))? {
-        let entry = entry.map_err(|e| format!("entry: {e}"))?;
-        *entries += 1;
-        if *entries > WALK_ENTRY_LIMIT {
-            return Err("entry bound".into());
-        }
-        let meta = entry
-            .metadata()
-            .map_err(|e| format!("entry metadata: {e}"))?;
-        if meta.file_type().is_dir() {
-            total = total
-                .checked_add(walk_bytes(&entry.path(), depth + 1, entries)?)
-                .ok_or("byte bound")?;
-        } else if meta.file_type().is_file() {
-            total = total.checked_add(meta.len()).ok_or("byte bound")?;
-        }
-    }
-    Ok(total)
-}
 
 fn read_frame(link: &mut PiLink) -> Result<Frame, String> {
     let mut bytes = Vec::new();
@@ -527,13 +484,11 @@ impl Physical for Host {
         match workspace {
             Presence::Absent => WorkspaceReadback::Released,
             Presence::Unreadable => WorkspaceReadback::NotRead,
+            // Sized by the workspace owner's own census, under the bounds and custody rule its
+            // removal keeps (B14b-2 closure D2): a workspace this reads as writable is one
+            // `clean` can remove, and one the removal would refuse reads `NotRead` here.
             Presence::Present => {
-                let path = paths.workspace();
-                if owned_private_dir(&path).is_err() {
-                    return WorkspaceReadback::NotRead;
-                }
-                let mut entries = 0;
-                match walk_bytes(&path, 0, &mut entries) {
+                match crate::worker::workspace::census_owned(&paths.workspace(), self.deadline) {
                     Ok(bytes) => WorkspaceReadback::Writable { bytes },
                     Err(_) => WorkspaceReadback::NotRead,
                 }

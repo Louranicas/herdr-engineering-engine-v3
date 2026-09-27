@@ -3308,6 +3308,71 @@ fn host_workspace_guards_refuse_links_modes_and_unknown_targets() {
     fs::set_permissions(&open, fs::Permissions::from_mode(0o700)).unwrap();
 }
 
+/// B14b-2 closure D2 (FT-1, trace:recovery) · the host sizes a workspace by the SAME census that
+/// removes it, so the two cannot disagree. Before D2 the sizing walk refused past depth 16 while the
+/// removal admitted depth 32: a workspace 17 to 32 levels deep read `NotRead`, a partial cleanup
+/// beside it went to `CleanupCandidate` (T07-AP-28), and a Verifying task's workspace was deleted.
+/// Depths are counted as the workspace owner counts them: the workspace itself at 0, its `n`-th
+/// nested directory at `n`. So 17 is the first depth the old sizing refused, 32 the deepest the
+/// removal admits, 33 the first it refuses. Each fixture's file holds a different byte count.
+#[test]
+fn host_sizes_and_removes_a_workspace_under_one_bound() -> Result<(), Box<dyn std::error::Error>> {
+    let area = Area::new("one-bound");
+    let nest = |attempt: &str, depth: usize, bytes: usize| -> std::io::Result<PathBuf> {
+        let workspace = area.path.join(attempt);
+        let mut bottom = workspace.clone();
+        DirBuilder::new().mode(0o700).create(&bottom)?;
+        for _ in 0..depth {
+            bottom.push("d");
+            DirBuilder::new().mode(0o700).create(&bottom)?;
+        }
+        fs::write(bottom.join("leaf"), vec![b'x'; bytes])?;
+        Ok(workspace)
+    };
+    let deep = nest("deep", 17, 5)?;
+    let bound = nest("bound", 32, 6)?;
+    let deeper = nest("deeper", 33, 7)?;
+    let root = area
+        .path
+        .to_str()
+        .ok_or("area path is not UTF-8")?
+        .to_owned();
+    let root_id = root_id(&area.path);
+    let mut host = Host::new(deadline());
+    host.record_paths(&["deep", "bound", "deeper"].map(|attempt| AttemptRoot {
+        attempt: attempt.into(),
+        root: root.clone(),
+        root_id: root_id.clone(),
+    }));
+    let subject = |attempt: &'static str| Subject {
+        task: TASK,
+        attempt,
+        generation: 1,
+        workspace_ref: None,
+        session: None,
+    };
+    assert_eq!(
+        ["deep", "bound", "deeper"].map(|attempt| host.workspace(&subject(attempt))),
+        [
+            WorkspaceReadback::Writable { bytes: 5 },
+            WorkspaceReadback::Writable { bytes: 6 },
+            WorkspaceReadback::NotRead,
+        ]
+    );
+    assert_eq!(
+        host.clean(&subject("deeper"), "workspace"),
+        Err("remove: Bound".to_owned())
+    );
+    assert!(
+        deeper.join("d").is_dir(),
+        "a refused removal leaves the workspace whole"
+    );
+    assert_eq!(host.clean(&subject("deep"), "workspace"), Ok(()));
+    assert_eq!(host.clean(&subject("bound"), "workspace"), Ok(()));
+    assert!(!deep.exists() && !bound.exists());
+    Ok(())
+}
+
 /// `T07-AP-68` · the shared classifier and `/proc` reader: this process is live
 /// with its own namespace, an impossible PID is absent, a passed deadline is
 /// unreadable, and the stat parser counts fields after the last parenthesis.
@@ -3658,10 +3723,13 @@ fn host_attach_refuses_a_pid_whose_identity_moved_in_either_dimension() {
 }
 
 /// `T07-AP-77` · the workspace walk's DEPTH bound is a bound on the recursion,
-/// and it is reached by descending: sixteen levels — the bound exactly — are
-/// read back as writable, eighteen are refused. The two fixtures differ only in
+/// and it is reached by descending: thirty-two levels — the bound exactly — are
+/// read back as writable, thirty-three are refused. The two fixtures differ only in
 /// depth, and the shallow one sits ON the bound so that the comparison itself
-/// is what separates them.
+/// is what separates them. Since B14b-2 closure D2 the walk is the workspace
+/// owner's census, whose bound (32) is the removal's; before D2 this pinned the
+/// sizing walk's own bound of 16, which let a 17-to-32-deep workspace read
+/// `NotRead` and then be removed.
 #[test]
 fn workspace_walk_refuses_past_its_depth_bound() {
     let area = Area::new("depth");
@@ -3691,21 +3759,21 @@ fn workspace_walk_refuses_past_its_depth_bound() {
         session: None,
     };
     let mut host = Host::new(deadline());
-    // Sixteen nested levels put the deepest read at depth 16 — exactly ON the
+    // Thirty-two nested levels put the deepest read at depth 32 — exactly ON the
     // bound, which is the only place a `>` and a `>=` differ. A shallower
     // fixture passes under both and pins nothing (found by planting `>=`).
-    host.record_paths(&build("shallow", 16));
+    host.record_paths(&build("shallow", 32));
     assert_eq!(
         host.workspace(&subject),
         WorkspaceReadback::Writable { bytes: 4 },
-        "sixteen nested levels are exactly on the bound and must still read back"
+        "thirty-two nested levels are exactly on the bound and must still read back"
     );
     let mut host = Host::new(deadline());
-    host.record_paths(&build("deep", 18));
+    host.record_paths(&build("deep", 33));
     assert_eq!(
         host.workspace(&subject),
         WorkspaceReadback::NotRead,
-        "eighteen nested levels must refuse, not report a size"
+        "thirty-three nested levels must refuse, not report a size"
     );
 }
 

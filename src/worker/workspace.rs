@@ -112,6 +112,52 @@ pub enum Error {
 /// not ours or not 0700; [`Error::Changed`] when the name no longer names the opened directory;
 /// [`Error::Bound`] past `MAX_ENTRIES` or `MAX_DEPTH`; [`Error::Deadline`]; [`Error::Io`].
 pub fn remove_owned(path: &Path, deadline: Instant) -> Result<(), Error> {
+    let (parent, name, directory, held) = held_directory(path)?;
+    // A census first: every bound is enforced before anything is unlinked, so a refused removal
+    // leaves the workspace whole rather than half-deleted.
+    walk(&directory, 0, &mut 0, deadline, Walk::Census)?;
+    walk(&directory, 0, &mut 0, deadline, Walk::Remove)?;
+    let named = statat(&parent, name, AtFlags::SYMLINK_NOFOLLOW).map_err(|_| Error::Changed)?;
+    if (named.st_dev, named.st_ino) != (held.st_dev, held.st_ino) {
+        return Err(Error::Changed);
+    }
+    unlinkat(&parent, name, AtFlags::REMOVEDIR).map_err(|_| Error::Io)
+}
+
+/// The bytes of the regular files under a workspace directory this process's user owns, read by
+/// the census [`remove_owned`] runs before it unlinks anything (B14b-2 closure D2).
+///
+/// One census, one set of bounds: a workspace this sizes is one [`remove_owned`] can remove, and
+/// one it refuses is one the removal refuses. Startup used to size a workspace by a walk of its
+/// own whose depth bound (16) was not the removal's (32), so a workspace 17 to 32 levels deep read
+/// "not read" and was then removed as a cleanup candidate. The directory is opened and its custody
+/// judged exactly as the removal does; nothing is written.
+///
+/// # Errors
+///
+/// As [`remove_owned`] before its first unlink: [`Error::Path`], [`Error::Type`],
+/// [`Error::Custody`], [`Error::Bound`] (past `MAX_ENTRIES` or `MAX_DEPTH`, or a byte total past
+/// `u64`), [`Error::Changed`], [`Error::Deadline`], [`Error::Io`].
+pub(crate) fn census_owned(path: &Path, deadline: Instant) -> Result<u64, Error> {
+    let (_, _, directory, _) = held_directory(path)?;
+    walk(&directory, 0, &mut 0, deadline, Walk::Census)
+}
+
+/// The workspace owner's custody prefix, shared by [`remove_owned`] and [`census_owned`]: `path`
+/// absolute with a parent and a final name, the final component opened as a directory without
+/// following a link, and that descriptor's owner and mode judged (this user, 0700). Returns the
+/// parent descriptor, the final name, the held directory and its `fstat`.
+fn held_directory(
+    path: &Path,
+) -> Result<
+    (
+        rustix::fd::OwnedFd,
+        &std::ffi::OsStr,
+        rustix::fd::OwnedFd,
+        rustix::fs::Stat,
+    ),
+    Error,
+> {
     let (Some(parent), Some(name)) = (path.parent(), path.file_name()) else {
         return Err(Error::Path);
     };
@@ -126,15 +172,7 @@ pub fn remove_owned(path: &Path, deadline: Instant) -> Result<(), Error> {
     if held.st_uid != rustix::process::geteuid().as_raw() || held.st_mode & 0o777 != 0o700 {
         return Err(Error::Custody);
     }
-    // A census first: every bound is enforced before anything is unlinked, so a refused removal
-    // leaves the workspace whole rather than half-deleted.
-    walk(&directory, 0, &mut 0, deadline, Walk::Census)?;
-    walk(&directory, 0, &mut 0, deadline, Walk::Remove)?;
-    let named = statat(&parent, name, AtFlags::SYMLINK_NOFOLLOW).map_err(|_| Error::Changed)?;
-    if (named.st_dev, named.st_ino) != (held.st_dev, held.st_ino) {
-        return Err(Error::Changed);
-    }
-    unlinkat(&parent, name, AtFlags::REMOVEDIR).map_err(|_| Error::Io)
+    Ok((parent, name, directory, held))
 }
 
 /// Whether a walk only counts, or also removes.
@@ -144,18 +182,21 @@ enum Walk {
     Remove,
 }
 
-/// Visit every entry under `directory`, enforcing [`MAX_DEPTH`], [`MAX_ENTRIES`] and the deadline.
+/// Visit every entry under `directory`, enforcing [`MAX_DEPTH`], [`MAX_ENTRIES`] and the deadline,
+/// and return the bytes of the regular files a [`Walk::Census`] visited (a [`Walk::Remove`] counts
+/// nothing and returns 0: its census has already run).
 ///
 /// Each entry is opened as a directory without following a link; `ENOTDIR` or `ELOOP` means it is
 /// not one (a file, a link, a device), and it is unlinked as itself. There is no separate type
-/// check to race: the open that decides is the open that is used.
+/// check to race: the open that decides is the open that is used. A census reads a non-directory's
+/// size in the arm that decided it ([`regular_bytes`]).
 fn walk(
     directory: &rustix::fd::OwnedFd,
     depth: usize,
     entries: &mut usize,
     deadline: Instant,
     mode: Walk,
-) -> Result<(), Error> {
+) -> Result<u64, Error> {
     if depth > MAX_DEPTH {
         return Err(Error::Bound);
     }
@@ -172,32 +213,56 @@ fn walk(
         }
         names.push(name);
     }
+    let mut bytes = 0_u64;
     for name in names {
         if Instant::now() >= deadline {
             return Err(Error::Deadline);
         }
-        match openat(
+        let size = match openat(
             directory,
             &name,
             READ_FLAGS | OFlags::DIRECTORY,
             Mode::empty(),
         ) {
             Ok(child) => {
-                walk(&child, depth + 1, entries, deadline, mode)?;
+                let size = walk(&child, depth + 1, entries, deadline, mode)?;
                 if mode == Walk::Remove {
                     unlinkat(directory, &name, AtFlags::REMOVEDIR).map_err(|_| Error::Io)?;
                 }
+                size
             }
-            Err(rustix::io::Errno::NOTDIR | rustix::io::Errno::LOOP) => {
-                if mode == Walk::Remove {
+            Err(rustix::io::Errno::NOTDIR | rustix::io::Errno::LOOP) => match mode {
+                Walk::Remove => {
                     unlinkat(directory, &name, AtFlags::empty()).map_err(|_| Error::Io)?;
+                    0
                 }
-            }
+                Walk::Census => regular_bytes(directory, &name)?,
+            },
             Err(rustix::io::Errno::NOENT) => return Err(Error::Changed),
             Err(_) => return Err(Error::Io),
-        }
+        };
+        bytes = bytes.checked_add(size).ok_or(Error::Bound)?;
     }
-    Ok(())
+    Ok(bytes)
+}
+
+/// The bytes a census counts for the non-directory `name` under `directory`: its size if it is a
+/// regular file, read without following a link, and 0 for anything else (a link, a device, a
+/// socket), as startup's sizing always counted. A name gone since the directory was read is
+/// [`Error::Changed`].
+fn regular_bytes(directory: &rustix::fd::OwnedFd, name: &std::ffi::CStr) -> Result<u64, Error> {
+    let stat = statat(directory, name, AtFlags::SYMLINK_NOFOLLOW).map_err(|error| {
+        if error == rustix::io::Errno::NOENT {
+            Error::Changed
+        } else {
+            Error::Io
+        }
+    })?;
+    if rustix::fs::FileType::from_raw_mode(stat.st_mode) == rustix::fs::FileType::RegularFile {
+        u64::try_from(stat.st_size).map_err(|_| Error::Io)
+    } else {
+        Ok(0)
+    }
 }
 
 /// An incomplete copy is retained at its owned path for explicit reconciliation.
