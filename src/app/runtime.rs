@@ -1147,6 +1147,37 @@ impl<C: CandidateSource, V: Verifier> StoreRuntime<'_, C, V> {
         self.attempts.get(attempt.index).ok_or(Error::Identity)
     }
 
+    /// The source made ready before an attempt charged from `charged_from`, outside any hold (R21
+    /// N4, amended by closure C3). The head is read once first: a cancellation or a spent work
+    /// window is a stop decided before any provider I/O, in the begin's hold's own order. Then the
+    /// provider's own readback, and a load when its model is not resident, under the attempt's work
+    /// window and the engine's drain, charged to the attempt it precedes (A15); the drain is read
+    /// again when it returns ([`after_ready`]). A refusal writes nothing and ends the dispatch.
+    fn made_ready(&mut self, charged_from: Instant) -> Result<Readiness, Fault> {
+        let head = self.tasks.with_store(|store| self.current(store))??;
+        if head.cancellation {
+            return Err(Fault::Stop(StopReason::Cancelled));
+        }
+        let work_until = work_window(
+            head.reserved_work_ms,
+            self.dispatch.teardown_ms,
+            charged_from,
+            self.deadline,
+        );
+        if lease_ms(work_until) == 0 {
+            return Err(Fault::Stop(StopReason::Policy(LoopRefusal::Deadline)));
+        }
+        let ready = self.source.ready(work_until, self.dispatch.drain);
+        after_ready(
+            ready,
+            self.dispatch
+                .drain
+                .load(std::sync::atomic::Ordering::SeqCst),
+            Instant::now(),
+            work_until,
+        )
+    }
+
     /// The provider-response observation one begin reads (R21 N4), in the caller's hold: `ready`
     /// bound to the agent record's head as read here (one door, map Q1), no instance, its bytes
     /// published under `staging`, which is the evidence ref. Freshness is checked per begin against
@@ -1878,6 +1909,14 @@ impl<C: CandidateSource, V: Verifier> driver::Runtime for StoreRuntime<'_, C, V>
             fresh(self.deadline)?,
             fresh(self.deadline)?,
         );
+        // The first attempt's settle charges the preparation too (B14a-R2.5).
+        let charged_from = if self.attempts.is_empty() {
+            self.origin
+        } else {
+            Instant::now()
+        };
+        // The source made ready before the attempt, outside any hold (R21 N4, amended by closure C3).
+        let ready = self.made_ready(charged_from)?;
         let [baseline, protected, profile] = &self.digests;
         let binding = Binding {
             baseline: Sha256Digest::parse(baseline).map_err(|_| Error::Identity)?,
@@ -1885,19 +1924,6 @@ impl<C: CandidateSource, V: Verifier> driver::Runtime for StoreRuntime<'_, C, V>
             profile: Sha256Digest::parse(profile).map_err(|_| Error::Identity)?,
             root: self.dispatch.attempts,
         };
-        // The first attempt's settle charges the preparation too (B14a-R2.5).
-        let charged_from = if self.attempts.is_empty() {
-            self.origin
-        } else {
-            Instant::now()
-        };
-        // The source made ready before the attempt, outside any hold (R21 N4): the provider's own
-        // readback, and a load when its model is not resident, under the dispatch deadline and
-        // charged to the attempt it precedes (A15). A refusal writes nothing and ends the dispatch.
-        let ready = self
-            .source
-            .ready(self.deadline, &self.cancelled)
-            .map_err(Fault::NotReady)?;
         // The id the readiness's bytes are published under, and the observation's evidence ref.
         let staging = fresh(self.deadline)?;
         let begun = self.tasks.with_store(|store| -> Result<_, Error> {
@@ -1907,14 +1933,15 @@ impl<C: CandidateSource, V: Verifier> driver::Runtime for StoreRuntime<'_, C, V>
                 return Ok(Err(StopReason::Cancelled));
             }
             // The work window re-reads the reservation at every begin (R1.8); a spent one cannot
-            // begin, and the task stops by policy rather than failing with a zero lease.
-            let window = head
-                .reserved_work_ms
-                .saturating_sub(self.dispatch.teardown_ms);
-            let work_until = self
-                .deadline
-                .min(charged_from + Duration::from_millis(window));
-            let lease_ms = millis(work_until.saturating_duration_since(Instant::now()));
+            // begin, and the task stops by policy rather than failing with a zero lease — checked
+            // again here, since the time `ready` took is the attempt's (closure C3).
+            let work_until = work_window(
+                head.reserved_work_ms,
+                self.dispatch.teardown_ms,
+                charged_from,
+                self.deadline,
+            );
+            let lease_ms = lease_ms(work_until);
             if lease_ms == 0 {
                 return Ok(Err(StopReason::Policy(LoopRefusal::Deadline)));
             }
@@ -2280,6 +2307,45 @@ const fn preparation_charge(observed_ms: u64, reserved_ms: u64) -> u64 {
 /// held back for exactly this, never past the task's deadline (review MEDIUM-2).
 fn teardown_deadline(work_until: Instant, teardown_ms: u64, task_deadline: Instant) -> Instant {
     task_deadline.min(work_until + Duration::from_millis(teardown_ms))
+}
+
+/// The instant an attempt's work window closes (B14a-R1.8): its charge start plus the work
+/// reservation the head holds less the teardown share, never past the dispatch deadline — one door
+/// for the begin's read before the provider is asked and its re-check in the hold (closure C3).
+fn work_window(
+    reserved_work_ms: u64,
+    teardown_ms: u64,
+    charged_from: Instant,
+    deadline: Instant,
+) -> Instant {
+    deadline.min(charged_from + Duration::from_millis(reserved_work_ms.saturating_sub(teardown_ms)))
+}
+
+/// The lease a begin can grant now: what is left of the work window, in whole milliseconds.
+fn lease_ms(work_until: Instant) -> u64 {
+    millis(work_until.saturating_duration_since(Instant::now()))
+}
+
+/// What `begin` does with the source's answer to `ready` (closure C3, amending R21 N4), pure so every
+/// arm is reached by argument (F95): the engine's drain, read again when `ready` returns, ends the
+/// dispatch `Drained` whatever the answer — nothing is written (B14b-1 D5); a `deadline` refusal at
+/// or after the work window's end is the policy stop a spent window is; any other refusal is the
+/// provider's, by name.
+fn after_ready(
+    ready: Result<Readiness, crate::worker::native::Error>,
+    drained: bool,
+    now: Instant,
+    work_until: Instant,
+) -> Result<Readiness, Fault> {
+    if drained {
+        return Err(Fault::Drained);
+    }
+    match ready {
+        Err(crate::worker::native::Error::Deadline) if now >= work_until => {
+            Err(Fault::Stop(StopReason::Policy(LoopRefusal::Deadline)))
+        }
+        other => other.map_err(Fault::NotReady),
+    }
 }
 
 /// Every criterion bit the class declares.
@@ -2857,10 +2923,12 @@ fn millis(duration: Duration) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        CHECK_MEDIA_TYPE, CHECK_TEARDOWN, Error, Refusal, U64_CHECK_SCHEMA, capture_share,
-        check_window, cited, declared_criteria, preparation_charge, teardown_deadline,
+        CHECK_MEDIA_TYPE, CHECK_TEARDOWN, Error, Readiness, Refusal, U64_CHECK_SCHEMA, after_ready,
+        capture_share, check_window, cited, declared_criteria, preparation_charge,
+        teardown_deadline,
     };
     use crate::store::RunRecordKind;
+    use crate::worker::native::Error as Native;
     use std::time::{Duration, Instant};
 
     /// Review MEDIUM-1 · the charge is the observed time below the reservation and the reservation
@@ -2888,6 +2956,55 @@ mod tests {
             teardown_deadline(work_until, 250, now + Duration::from_millis(600)),
             now + Duration::from_millis(600)
         );
+    }
+
+    /// Closure C3 (FT2-03, M1) · what `begin` does with the source's answer to `ready`, whole: the
+    /// drain, read again when `ready` returns, ends the dispatch `Drained` whatever the answer; a
+    /// `deadline` refusal at or after the work window's end is the policy stop a spent window is,
+    /// and before it the provider's own refusal; every other answer passes through, by name.
+    #[test]
+    fn a_ready_answer_is_drained_spent_or_passed_through_by_name() {
+        let before = Instant::now() + Duration::from_secs(60);
+        let work_until = before + Duration::from_nanos(1);
+        let after = work_until + Duration::from_secs(1);
+        let ready = Readiness {
+            actual_identity: "5a0c:4242:31337".to_owned(),
+            immutable_revision: None,
+            capabilities: vec!["text".to_owned()],
+            evidence: b"{}".to_vec(),
+        };
+        let cases = [
+            (Ok(ready.clone()), false, before, "Ready(5a0c:4242:31337)"),
+            (Ok(ready), true, before, "Drained"),
+            (Err(Native::Cancelled), true, before, "Drained"),
+            (Err(Native::Identity), true, after, "Drained"),
+            (
+                Err(Native::Deadline),
+                false,
+                work_until,
+                "Stop(Policy(Deadline))",
+            ),
+            (
+                Err(Native::Deadline),
+                false,
+                after,
+                "Stop(Policy(Deadline))",
+            ),
+            (Err(Native::Deadline), false, before, "NotReady(Deadline)"),
+            (Err(Native::Identity), false, after, "NotReady(Identity)"),
+            (Err(Native::Cancelled), false, before, "NotReady(Cancelled)"),
+        ];
+        let expected: Vec<&str> = cases.iter().map(|case| case.3).collect();
+        let shown: Vec<String> = cases
+            .into_iter()
+            .map(
+                |(answer, drained, now, _)| match after_ready(answer, drained, now, work_until) {
+                    Ok(ready) => format!("Ready({})", ready.actual_identity),
+                    Err(fault) => format!("{fault:?}"),
+                },
+            )
+            .collect();
+        assert_eq!(shown, expected);
     }
 
     /// The class declares one criterion: bit 0 alone.

@@ -440,10 +440,16 @@ struct Script<'h> {
     /// Every `ready` and `settle_retained` call: which, the deadline and the cancellation it was
     /// handed (F101). The runtime asks `ready` before each attempt's begin (R21 N4).
     readied: Readied,
+    /// Run inside every `ready`, after its call is recorded, with the flag `ready` was handed (closure
+    /// C3): a proof raises the engine's drain here, and records which flag the source was handed.
+    ready_hook: Option<ReadyHook<'h>>,
 }
 
 /// What a source's `ready`/`settle_retained` were handed, per call: which, the deadline, the flag.
 type Readied = Arc<Mutex<Vec<(&'static str, Instant, bool)>>>;
+
+/// What a proof runs inside a source's `ready`, handed the flag `ready` was handed (closure C3).
+type ReadyHook<'h> = Box<dyn FnMut(&AtomicBool) + Send + 'h>;
 
 impl CandidateSource for Script<'_> {
     fn next(&mut self, ask: &habitat_engine::app::runtime::Ask<'_>) -> SourceAnswer {
@@ -478,6 +484,9 @@ impl CandidateSource for Script<'_> {
             &self.readied,
             ("ready", deadline, cancelled.load(Ordering::Acquire)),
         );
+        if let Some(hook) = self.ready_hook.as_mut() {
+            hook(cancelled);
+        }
         self.readiness.clone()
     }
     fn settle_retained(&mut self, deadline: Instant, cancelled: &AtomicBool) -> Custody {
@@ -611,6 +620,7 @@ fn script<'h>(answers: Vec<Candidate>) -> (Script<'h>, Asked) {
             }),
             custody: Custody::default(),
             readied: Arc::new(Mutex::new(Vec::new())),
+            ready_hook: None,
         },
         seen,
     )
@@ -1017,7 +1027,8 @@ fn a_dispatcher_that_ignores_its_stop_fails_the_proof_by_name() -> Outcome_ {
 /// pair, notifies, and ends `Drained` when the drain is set; the provider was opened once, for that
 /// task. R21 N1 · `open` was handed the admitted state: a window `TASK_LIMIT` wide, the baseline the
 /// rig installed (its digest read here by a capture of its own), the rig's class profile and the
-/// dispatcher's own drain; and the source was asked ready under that window's deadline (N4).
+/// dispatcher's own drain; and the source was asked ready under the attempt's work window (N4, as
+/// closure C3 amends it).
 #[test]
 fn the_dispatcher_picks_the_admitted_task_and_drives_it_to_acceptance() -> Outcome_ {
     let rig = Arc::new(rig(&Shape::default())?);
@@ -1060,9 +1071,20 @@ fn the_dispatcher_picks_the_admitted_task_and_drives_it_to_acceptance() -> Outco
             drain_is_the_dispatcher_s: true,
         }
     );
+    // Closure C3: ready is handed the attempt's work window, which closes before the dispatch.
+    let work_until = window_end(
+        origin,
+        Shape::default().work_ms,
+        u64::try_from(CHECK_TEARDOWN.as_millis())?,
+        until,
+    );
+    assert!(work_until < until);
     assert_eq!(
         taken(&readied),
-        vec![("ready", until, false), ("settle_retained", until, false)]
+        vec![
+            ("ready", work_until, false),
+            ("settle_retained", until, false)
+        ]
     );
     Ok(())
 }
@@ -1775,7 +1797,7 @@ fn count(rig: &Rig, sql: &str) -> Result<i64, Box<dyn Error>> {
 /// R21 N4, proof (b) · a source not ready before attempt 1 ends the dispatch `NotReady` by the
 /// refusal's name with nothing written: the task stays `admitted`, no attempt row and no roster
 /// observation exist, no candidate was asked and no check run; the source was asked ready once,
-/// under the dispatch's own deadline and an unraised cancellation.
+/// under the attempt's work window (closure C3) and an unraised drain.
 #[test]
 fn a_provider_not_ready_at_attempt_one_leaves_the_task_admitted_and_writes_nothing() -> Outcome_ {
     let rig = rig(&Shape::default())?;
@@ -1786,7 +1808,7 @@ fn a_provider_not_ready_at_attempt_one_leaves_the_task_admitted_and_writes_nothi
     let principal = owner();
     let drain = AtomicBool::new(false);
     let admitted = admitted(&rig, &principal, &drain)?;
-    let (_, until) = admitted.window();
+    let (origin, until) = admitted.window();
     let outcome = drive(&rig.tasks, *admitted, &mut source, &mut verifier)
         .map_err(|e| format!("{e:?}"))?
         .outcome;
@@ -1799,7 +1821,10 @@ fn a_provider_not_ready_at_attempt_one_leaves_the_task_admitted_and_writes_nothi
     assert_eq!(count(&rig, "SELECT count(*) FROM roster_observations")?, 0);
     assert!(taken(&asked).is_empty(), "no candidate was asked");
     assert!(taken(&handed).is_empty(), "no check ran");
-    assert_eq!(taken(&readied), vec![("ready", until, false)]);
+    // Closure C3: under the attempt's work window, which closes before the dispatch.
+    let work_until = window_end(origin, Shape::default().work_ms, rig.teardown_ms, until);
+    assert!(work_until < until);
+    assert_eq!(taken(&readied), vec![("ready", work_until, false)]);
     Ok(())
 }
 
@@ -1833,13 +1858,41 @@ fn attempt_starts(rig: &Rig) -> Result<Vec<i64>, Box<dyn Error>> {
 /// renders one — published by the runtime as the observation's evidence.
 const READY_EVIDENCE: &[u8] = b"{\"models\":[{\"name\":\"hee3-t28-ready:qualification\"}]}\n";
 
+/// Closure C3 · the work windows of a two-attempt dispatch under the default shape, by the design's
+/// rule: attempt 1's charged from the origin over the whole reservation, attempt 2's from its own
+/// charge start over what attempt 1 left of it, as the ledger recorded attempt 1's use. Both close
+/// before the dispatch, the second after the first.
+fn two_windows(
+    rig: &Rig,
+    (origin, second): (Instant, Instant),
+    until: Instant,
+) -> Result<[Instant; 2], Box<dyn Error>> {
+    let used = rows(
+        rig,
+        "SELECT used_ms FROM attempts WHERE task_id=? ORDER BY CAST(generation AS INTEGER)",
+    )?;
+    let first_used: u64 = used
+        .first()
+        .and_then(|row| row.first())
+        .ok_or("a used_ms")?
+        .parse()?;
+    let reserved = Shape::default().work_ms;
+    let windows = [
+        window_end(origin, reserved, rig.teardown_ms, until),
+        window_end(second, reserved - first_used, rig.teardown_ms, until),
+    ];
+    assert!(windows[1] < until && windows[0] < windows[1], "{windows:?}");
+    Ok(windows)
+}
+
 /// R21 N4 · each attempt is preceded by its own provider-response observation, written by the runtime
 /// from the source's readiness in the hold of that attempt's begin: two attempts (a mismatch, then a
 /// match), two observations — each confirmed `provider_response`, its input the readiness whole bound
 /// to the roster head (record, revision, owner, endpoint), its evidence ref the fresh id the
 /// readiness's bytes were published under — each written after the previous attempt began and
 /// before its own attempt began, and each attempt's roster pin carries the observation that
-/// preceded it. The source was asked ready twice, under the dispatch deadline.
+/// preceded it. The source was asked ready twice, each under its own attempt's work window (closure
+/// C3).
 #[test]
 fn each_attempt_is_preceded_by_its_own_provider_response_observation() -> Outcome_ {
     let rig = rig(&Shape::default())?;
@@ -1860,15 +1913,22 @@ fn each_attempt_is_preceded_by_its_own_provider_response_observation() -> Outcom
     let principal = owner();
     let drain = AtomicBool::new(false);
     let admitted = admitted(&rig, &principal, &drain)?;
-    let (_, until) = admitted.window();
+    let (origin, until) = admitted.window();
     let outcome = drive(&rig.tasks, *admitted, &mut source, &mut verifier)
         .map_err(|e| format!("{e:?}"))?
         .outcome;
     assert_eq!(outcome, Outcome::Driven(Driven::Accepted));
-    assert_eq!(taken(&asked).len(), 2);
+    let asked = taken(&asked);
+    assert_eq!(asked.len(), 2);
+    let windows = two_windows(&rig, (origin, asked[1].charged_from), until)?;
     assert_eq!(
         taken(&readied),
-        [("ready", until, false), ("settle_retained", until, false)].repeat(2)
+        vec![
+            ("ready", windows[0], false),
+            ("settle_retained", until, false),
+            ("ready", windows[1], false),
+            ("settle_retained", until, false),
+        ]
     );
     let (observed, started) = (observations(&rig)?, attempt_starts(&rig)?);
     assert_eq!((observed.len(), started.len()), (2, 2));
@@ -1934,11 +1994,11 @@ fn each_attempt_is_preceded_by_its_own_provider_response_observation() -> Outcom
 }
 
 /// What one custody dispatch came to: the dispatcher's lines, the source's ready/settle log, the
-/// dispatch deadline `open` was handed, and the rig.
+/// dispatch window `open` was handed, and the rig.
 type CustodyRun = (
     Vec<String>,
     Vec<(&'static str, Instant, bool)>,
-    Instant,
+    (Instant, Instant),
     Arc<Rig>,
 );
 
@@ -1959,8 +2019,8 @@ fn custody_run(answer: Candidate, custody: Custody) -> Result<CustodyRun, Box<dy
     let opened = Arc::clone(&provider.admitted);
     let (exit, lines) = run_dispatcher(&rig, provider, &stop)?;
     assert_eq!(exit, dispatcher::Exit::Drained, "{lines:?}");
-    let (_, until) = taken(&opened).first().ok_or("an open")?.window;
-    Ok((lines, taken(&readied), until, rig))
+    let window = taken(&opened).first().ok_or("an open")?.window;
+    Ok((lines, taken(&readied), window, rig))
 }
 
 /// R21 N18, K5 · the source's retained children are settled inside `drive` after EVERY answer,
@@ -2011,12 +2071,23 @@ fn a_retained_child_is_settled_inside_drive_before_the_attempt_s_settle() -> Out
         ),
     ];
     for (answer, custody, step, (unsettled, stops)) in fixtures {
-        let (lines, readied, until, rig) = custody_run(answer, custody)?;
+        let (lines, readied, (origin, until), rig) = custody_run(answer, custody)?;
         let line = format!("dispatcher: task {TASK} -> {step}");
         assert!(lines.contains(&line), "{line} in {lines:?}");
+        // Closure C3: ready under the attempt's work window, which closes before the dispatch.
+        let work_until = window_end(
+            origin,
+            Shape::default().work_ms,
+            u64::try_from(CHECK_TEARDOWN.as_millis())?,
+            until,
+        );
+        assert!(work_until < until, "{step}");
         assert_eq!(
             readied,
-            vec![("ready", until, false), ("settle_retained", until, false)],
+            vec![
+                ("ready", work_until, false),
+                ("settle_retained", until, false)
+            ],
             "{step}"
         );
         assert_eq!(
@@ -2806,6 +2877,96 @@ fn a_spent_work_reservation_stops_the_task_by_policy() -> Outcome_ {
         rows(&rig, "SELECT reason FROM task_stops WHERE task_id=?")?,
         vec![vec!["task_policy_stop".to_owned()]]
     );
+    Ok(())
+}
+
+/// The instant an attempt's work window closes, by the design's rule (B14a-R1.8, R2.5), not the
+/// runtime's code: its charge start plus the work reservation the ledger holds less the teardown
+/// share, never past the dispatch deadline.
+fn window_end(
+    charged_from: Instant,
+    reserved_ms: u64,
+    teardown_ms: u64,
+    until: Instant,
+) -> Instant {
+    until.min(charged_from + Duration::from_millis(reserved_ms.saturating_sub(teardown_ms)))
+}
+
+/// Closure C3 (FT2-03) · a work reservation spent before the next attempt is refused before the
+/// provider is asked: the second begin reads the head before `ready`, finds no work window past the
+/// teardown share, and stops the task by policy — the source was asked ready once, for attempt 1.
+#[test]
+fn a_spent_reservation_is_refused_before_the_provider_is_asked() -> Outcome_ {
+    let rig = rig(&Shape {
+        work_ms: 1_500,
+        ..Shape::default()
+    })?;
+    let principal = owner();
+    let (mut source, asked) = script(vec![
+        Candidate::Replacement(FIRST.to_vec()),
+        Candidate::Replacement(SECOND.to_vec()),
+    ]);
+    source.hook = Some(Box::new(|| std::thread::sleep(Duration::from_millis(700))));
+    let readied = Arc::clone(&source.readied);
+    let (verifier, handed) = oracle(vec![]);
+    let outcome = run(&rig, &principal, source, verifier, 10).map_err(|e| format!("{e:?}"))?;
+    assert_eq!(
+        outcome,
+        Outcome::Driven(Driven::Stopped(StopReason::Policy(
+            habitat_engine::task::LoopRefusal::Deadline
+        )))
+    );
+    assert_eq!(taken(&asked).len(), 1, "no second attempt began");
+    assert!(taken(&handed).is_empty());
+    let readied = taken(&readied);
+    assert_eq!(
+        readied.iter().filter(|call| call.0 == "ready").count(),
+        1,
+        "{readied:?}"
+    );
+    Ok(())
+}
+
+/// Closure C3 (M1; B14b-1 D5) · a drain raised while the source is made ready ends the dispatch
+/// `Drained` with nothing written: `ready` is handed the engine's drain as its cancellation and the
+/// attempt's work window as its deadline, the drain is read again when `ready` returns, and no
+/// attempt row, roster observation, candidate or check exists — the task stays `admitted`.
+#[test]
+fn a_drain_raised_inside_ready_ends_drained_with_no_attempt_row() -> Outcome_ {
+    let rig = rig(&Shape::default())?;
+    let drain = AtomicBool::new(false);
+    let handed_the_drain = Arc::new(Mutex::new(Vec::new()));
+    let (mut source, asked) = script(vec![Candidate::Replacement(SECOND.to_vec())]);
+    let (log, raised) = (Arc::clone(&handed_the_drain), &drain);
+    source.ready_hook = Some(Box::new(move |handed: &AtomicBool| {
+        raised.store(true, Ordering::SeqCst);
+        record(&log, std::ptr::eq(handed, raised));
+    }));
+    let readied = Arc::clone(&source.readied);
+    let (mut verifier, handed) = oracle(vec![matched(7)]);
+    let principal = owner();
+    let admitted = admitted(&rig, &principal, &drain)?;
+    let (origin, until) = admitted.window();
+    let outcome = drive(&rig.tasks, *admitted, &mut source, &mut verifier)
+        .map_err(|e| format!("{e:?}"))?
+        .outcome;
+    assert_eq!(outcome, Outcome::Drained);
+    assert_eq!(count(&rig, "SELECT count(*) FROM attempts")?, 0);
+    assert_eq!(count(&rig, "SELECT count(*) FROM roster_observations")?, 0);
+    assert_eq!(state(&rig)?, "admitted");
+    assert!(taken(&asked).is_empty(), "no candidate was asked");
+    assert!(taken(&handed).is_empty(), "no check ran");
+    assert_eq!(
+        taken(&handed_the_drain),
+        vec![true],
+        "ready was handed the engine's drain"
+    );
+    let work_until = window_end(origin, Shape::default().work_ms, rig.teardown_ms, until);
+    assert!(
+        work_until < until,
+        "the work window closes before the dispatch"
+    );
+    assert_eq!(taken(&readied), vec![("ready", work_until, false)]);
     Ok(())
 }
 
