@@ -3,19 +3,30 @@
 //! unit and executable, the client's working directory, and the two keys the roster install is
 //! keyed by. Read once under the class profile's custody, from `<config root>/`[`NATIVE_DIRECTORY`].
 //!
-//! Declaration only. [`compose`] is pure: it refuses by name what the file's own bytes decide — the
+//! [`compose`] is pure: it refuses by name what the file's own bytes decide — the
 //! schema, a path that is not clean and absolute (the namespace's `host_shape`, N9), a digest that
 //! is not `sha256:` plus 64 lowercase hex, a pin of zero bytes, a scope other than the user's, a
 //! roster key that is not a v4 UUID. Nothing here hashes a file, canonicalises a path or reaches
 //! the daemon: canonicality and the working directory's 0700/euid check are `worker::native`'s
 //! doors at use (N9, N11), and the daemon is resolved from `[daemon]` per dispatch (N6). There is
 //! no `[tools]` table: busctl and systemd-run are fixed host paths pinned by the class (N6).
+//!
+//! [`install`] is the one roster write the file drives (N12): the native agent record, created once
+//! under the file's request key and revised in place when the file changes, once per `serve` start.
 
 use super::custody::{DirectoryError, FileError, PrivateDirectory};
-use crate::contracts::{Sha256Digest, UuidV4};
+use super::evidence::fresh_id;
+use super::tasks::StoreTasks;
+use crate::contracts::roster::{
+    Kind, Locality, MAX_TTL_MS, RosterDefinitionV1, RosterHeadV1, Selection, Update,
+};
+use crate::contracts::{OPERATOR_ROLE, Sha256Digest, UuidV4};
+use crate::store::{Error as StoreError, Principal, RequestSource, Store};
 use crate::worker::namespace;
+use crate::worker::native::AdapterProfile;
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 /// The provider's own directory under the configuration root (`coordinator::config_path`): 0700,
 /// holding [`NATIVE_FILE`].
@@ -210,6 +221,132 @@ pub fn read(directory: &Path) -> Result<(NativeFile, Vec<u8>), NativeFileError> 
         Err(FileError::Io(_)) => return Err(refused("file io")),
     };
     Ok((compose(&bytes)?, bytes))
+}
+
+/// What the install established (R21 N3, N12): the agent record every begin names, and the one
+/// selection it is begun under, pinned to the head the install read or wrote. Fixed at `serve`
+/// start and handed to the dispatcher through its existing fields: one door.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Installed {
+    pub record_id: String,
+    pub selections: Vec<Selection>,
+}
+
+/// Why the install refused.
+#[derive(Debug)]
+pub enum InstallError {
+    /// The ledger's owner panicked.
+    Poisoned,
+    /// No entropy for an update's fresh request key, within the deadline.
+    Entropy,
+    /// The roster's own refusal: the operator door, the deadline, a stale head (`Conflict`), a bound.
+    Store(StoreError),
+}
+
+/// The action every install is recorded under: the roster's own write.
+const ROSTER_UPDATE: &str = "roster.update";
+
+/// The record the operator file and the class's adapter row declare (R21 D5): the native agent,
+/// local, versioned by the adapter row it runs under, evidencing text, at the file's endpoint.
+fn definition(file: &NativeFile, adapter: &AdapterProfile) -> RosterDefinitionV1 {
+    RosterDefinitionV1 {
+        kind: Kind::Agent,
+        display_name: "native".to_owned(),
+        owner_id: OPERATOR_ROLE.to_owned(),
+        version: adapter.id.to_owned(),
+        capabilities: vec![TEXT.to_owned()],
+        locality: Locality::Local,
+        endpoint_ref: Some(file.roster.endpoint_ref.clone()),
+        limitations: format!(
+            "adapter {}: num_ctx {}, num_predict {}, {}",
+            adapter.id,
+            adapter.num_ctx,
+            adapter.num_predict,
+            if adapter.templated {
+                "templated"
+            } else {
+                "raw"
+            }
+        ),
+    }
+}
+
+/// The one capability the native agent evidences.
+const TEXT: &str = "text";
+
+/// Install the operator file's agent record (R21 N12), once per `serve` start, in one hold:
+/// 1. the create's recorded outcome, read by the file's request key (`roster_by_key`);
+/// 2. none: create the record under that key, the file's bytes the request's source;
+/// 3. found: read the record's current head; a definition equal to the file's applies nothing;
+/// 4. different: one UPDATE of that record under a fresh request key, expecting the head's revision
+///    — compare-and-swap, so a replay after a crash is equal or `Conflict`, never a second revision.
+///
+/// The file key is never reused for an edit: its request digest covers the whole file, so the
+/// store would refuse the edited bytes under it as `Conflict`.
+///
+/// # Errors
+/// [`InstallError::Poisoned`]; `Entropy` for an update's key; `Store` with the roster's refusal.
+pub fn install(
+    tasks: &StoreTasks,
+    principal: &Principal,
+    file: &NativeFile,
+    bytes: &[u8],
+    adapter: &AdapterProfile,
+    deadline: Instant,
+) -> Result<Installed, InstallError> {
+    let declared = definition(file, adapter);
+    let key = UuidV4::parse(&file.roster.idempotency_key)
+        .map_err(|_| InstallError::Store(StoreError::Invalid))?;
+    let update = |idempotency_key: String, head: Option<&RosterHeadV1>| Update {
+        idempotency_key,
+        record_id: head.map(|head| head.record_id.clone()),
+        expected_revision: head.map(|head| head.record_version.clone()),
+        definition: declared.clone(),
+        audit_reason: "native provider install from the operator file".to_owned(),
+    };
+    let head = tasks
+        .with_store(|store| -> Result<RosterHeadV1, InstallError> {
+            let apply = |store: &mut Store, update: Update| {
+                store
+                    .roster_apply(principal, &[update], RequestSource::Native(bytes), deadline)?
+                    .pop()
+                    .map(|outcome| outcome.head)
+                    .ok_or(StoreError::Runtime)
+            };
+            match store.roster_by_key(principal, ROSTER_UPDATE, key, deadline) {
+                Err(StoreError::NotFound) => {
+                    apply(store, update(file.roster.idempotency_key.clone(), None))
+                        .map_err(InstallError::Store)
+                }
+                Err(error) => Err(InstallError::Store(error)),
+                Ok(created) => {
+                    let id = UuidV4::parse(&created.head.record_id)
+                        .map_err(|_| InstallError::Store(StoreError::Corrupt))?;
+                    let head = store
+                        .roster_get(principal, id, deadline)
+                        .map_err(InstallError::Store)?
+                        .head;
+                    if head.definition == declared {
+                        return Ok(head);
+                    }
+                    let fresh = fresh_id(deadline).map_err(|_| InstallError::Entropy)?;
+                    apply(store, update(fresh.as_str().to_owned(), Some(&head)))
+                        .map_err(InstallError::Store)
+                }
+            }
+        })
+        .map_err(|_| InstallError::Poisoned)??;
+    Ok(Installed {
+        selections: vec![Selection {
+            record_id: head.record_id.clone(),
+            expected_revision: head.record_version,
+            capabilities: vec![TEXT.to_owned()],
+            local_only: true,
+            version: Some(adapter.id.to_owned()),
+            ttl_ms: MAX_TTL_MS,
+        }],
+        record_id: head.record_id,
+    })
 }
 
 #[cfg(test)]

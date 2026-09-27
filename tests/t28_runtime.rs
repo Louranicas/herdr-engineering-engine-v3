@@ -15,6 +15,7 @@ use habitat_engine::app::candidates::{
 use habitat_engine::app::class_profile::{self, Profile};
 use habitat_engine::app::dispatcher;
 use habitat_engine::app::live_verifier::LiveVerifier;
+use habitat_engine::app::native_provider::{self, Installed};
 use habitat_engine::app::runtime::{
     Admission, Admitted, Answer as SourceAnswer, CHECK_TEARDOWN, Candidate, CandidateSource,
     CheckPlan, CheckWindow, Custody, Dispatch, Error as RuntimeError, Observed, Outcome, Previous,
@@ -3443,5 +3444,134 @@ fn a_work_reservation_past_the_adapter_cap_is_refused_by_name() -> Outcome_ {
             "replacement_bytes": null,
         })
     );
+    Ok(())
+}
+
+/// The operator's native-provider file the install proofs read (R21 D1): the rig's own values are
+/// not needed to install, only the roster keys and the bytes the request publishes.
+const OPERATOR_FILE: &str = r#"schema = "hee3.native/1"
+directory = "/srv/hee/native"
+
+[client]
+path = "/usr/bin/curl"
+sha256 = "sha256:a57a75f1b0c309eb4a21cc82efd24645be868c3a2689912b26fa4b7e940dcdd6"
+bytes = 218440
+
+[install]
+manifest = { path = "/srv/models/manifests/llama3.2/3b", sha256 = "sha256:a80c4f17acd55265feec403c7aef86be0c25983ab279d83f3bcd3abbcb5b8b72", bytes = 1005 }
+blobs = "/srv/models/blobs"
+
+[daemon]
+unit = "ollama.service"
+scope = "user"
+executable = { sha256 = "sha256:12ff8654a500a29048e2a40ff297e778f98c31742ecbd354dc948dbab3cea1aa", bytes = 32276424 }
+
+[roster]
+idempotency_key = "28f10000-0000-4000-8000-0000000000a1"
+endpoint_ref = "28f10000-0000-4000-8000-0000000000a2"
+"#;
+
+/// The native record's stored definition and revision, read on the ledger's own connection.
+fn native_record(rig: &Rig, id: &str) -> Result<(String, serde_json::Value), Box<dyn Error>> {
+    let (revision, definition): (String, Vec<u8>) = ledger(rig)?.query_row(
+        "SELECT revision,definition FROM roster_records WHERE id=?",
+        [id],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    Ok((revision, serde_json::from_slice(&definition)?))
+}
+
+/// R21 N12 · the install is keyed by the operator file's request key: a repeat applies nothing and
+/// returns the same record; an edited file is ONE revision of that record under a fresh key (never a
+/// second record, never a `Conflict`), and installing the edited file again applies nothing. Each
+/// install returns the one selection the dispatcher begins under, pinned to the head it read.
+#[test]
+fn the_install_is_idempotent_and_an_edit_is_one_revision() -> Outcome_ {
+    let rig = rig(&Shape::default())?;
+    let principal = owner();
+    let install = |text: &str| -> Result<Installed, Box<dyn Error>> {
+        let file = native_provider::compose(text.as_bytes()).map_err(|e| format!("{e:?}"))?;
+        Ok(native_provider::install(
+            &rig.tasks,
+            &principal,
+            &file,
+            text.as_bytes(),
+            FULL_FILE,
+            deadline(),
+        )
+        .map_err(|e| format!("{e:?}"))?)
+    };
+    let operations = || count(&rig, "SELECT count(*) FROM operations");
+    let selection = |record_id: &str, revision: &str| Selection {
+        record_id: record_id.to_owned(),
+        expected_revision: revision.to_owned(),
+        capabilities: vec!["text".to_owned()],
+        local_only: true,
+        version: Some("ollama-fc44-12ff8654/2".to_owned()),
+        ttl_ms: 60_000,
+    };
+    let before = operations()?;
+    let first = install(OPERATOR_FILE)?;
+    assert_eq!(operations()?, before + 1, "the create is one operation");
+    assert_ne!(first.record_id, rig.agent, "a record of its own");
+    assert_eq!(
+        first,
+        Installed {
+            record_id: first.record_id.clone(),
+            selections: vec![selection(&first.record_id, "1")],
+        }
+    );
+    let definition = |endpoint: &str| {
+        serde_json::json!({
+            "kind": "agent",
+            "display_name": "native",
+            "owner_id": "operator",
+            "version": "ollama-fc44-12ff8654/2",
+            "capabilities": ["text"],
+            "locality": "local",
+            "endpoint_ref": endpoint,
+            "limitations": "adapter ollama-fc44-12ff8654/2: num_ctx 4096, num_predict 1024, templated",
+        })
+    };
+    assert_eq!(
+        native_record(&rig, &first.record_id)?,
+        (
+            "1".to_owned(),
+            definition("28f10000-0000-4000-8000-0000000000a2")
+        )
+    );
+    // The same file again: the same record at the same revision, nothing applied.
+    assert_eq!(install(OPERATOR_FILE)?, first);
+    assert_eq!(operations()?, before + 1, "a repeat applies nothing");
+    // An edited endpoint: one revision of the same record, under a key of its own.
+    let edited = OPERATOR_FILE.replace(
+        "endpoint_ref = \"28f10000-0000-4000-8000-0000000000a2\"",
+        "endpoint_ref = \"28f10000-0000-4000-9000-0000000000b7\"",
+    );
+    assert_ne!(edited, OPERATOR_FILE);
+    let second = install(&edited)?;
+    assert_eq!(
+        second,
+        Installed {
+            record_id: first.record_id.clone(),
+            selections: vec![selection(&first.record_id, "2")],
+        }
+    );
+    assert_eq!(operations()?, before + 2, "the edit is one operation");
+    assert_eq!(
+        native_record(&rig, &first.record_id)?,
+        (
+            "2".to_owned(),
+            definition("28f10000-0000-4000-9000-0000000000b7")
+        )
+    );
+    // The edited file again: the head already says it, so nothing is applied.
+    assert_eq!(install(&edited)?, second);
+    assert_eq!(
+        operations()?,
+        before + 2,
+        "a repeat of the edit applies nothing"
+    );
+    assert_eq!(count(&rig, "SELECT count(*) FROM roster_records")?, 2);
     Ok(())
 }
