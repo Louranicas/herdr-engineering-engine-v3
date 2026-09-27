@@ -4,16 +4,20 @@
 
 use super::{LOADED, MODEL, Rig, digest, rendered};
 use habitat_engine::app::candidates::{
-    ClassPrompt, ClassPromptError, FilePins, NativeCandidates, Outcome, Refusal, Settle, render,
+    ClassPrompt, ClassPromptError, FilePins, NativeCandidates, Outcome, Poll, Refusal, Settle,
+    render, settle_children,
 };
 use habitat_engine::app::runtime::{Ask, Candidate, CandidateSource, Custody, Previous, Readiness};
 use habitat_engine::contracts::{Sha256Digest, UuidV4};
 use habitat_engine::store::VerificationVerdict;
 use habitat_engine::worker::Finish;
 use habitat_engine::worker::native::{self, FULL_FILE, MAX_RUN, ProviderState};
+use habitat_engine::worker::process::{CleanupPoll, GroupState, WaitOwnership};
 use serde_json::json;
+use std::cell::Cell;
 use std::fs;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 const TASK: &[u8] = include_bytes!("../evaluation/tasks/WL-U64-PARSE-001/v1/TASK.md");
@@ -378,7 +382,8 @@ fn readiness(rig: &Rig) -> Readiness {
 /// deadline and cancellation stop it before any exchange. The two ready rigs differ in the daemon
 /// incarnation and the catalogue row, so each readiness is pinned whole against its own fixture.
 /// Nothing in the fake leaves a child pending, so `settle_retained` settles nothing (a real
-/// retained child is Tier-3, F95).
+/// retained child is Tier-3, F95; the loop itself is pinned by argument, closure C5 —
+/// `the_settle_loop_counts_settled_and_pending_children_by_argument`).
 #[test]
 fn ready_loads_an_absent_model_and_names_the_catalogue_as_its_evidence() {
     let running = AtomicBool::new(false);
@@ -455,4 +460,142 @@ fn ready_loads_an_absent_model_and_names_the_catalogue_as_its_evidence() {
         Err(native::Error::Identity)
     );
     assert!(stopped.calls().is_empty(), "{:?}", stopped.calls());
+}
+
+/// Past this many polls a model child reports its wait lost, so a settle loop that never ends
+/// fails the poll-count assertions by name instead of hanging the proof (F102).
+const POLL_BUDGET: usize = 1_000;
+
+/// Every poll a model child was handed: its id and the deadline (F101).
+type Polls = Arc<Mutex<Vec<(usize, Instant)>>>;
+
+/// A retained child as a model (F101, closure C5): the turn it settles on (`None`: never), whether
+/// its wait is lost, a cancel flag it raises when polled, and the shared log of every poll.
+struct Child {
+    id: usize,
+    settles_on: Option<usize>,
+    lost: bool,
+    raises: Option<Arc<AtomicBool>>,
+    polls: Polls,
+    turns: usize,
+}
+
+impl Poll for Child {
+    fn poll_cleanup(&mut self, deadline: Instant) -> CleanupPoll {
+        self.turns += 1;
+        self.polls
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push((self.id, deadline));
+        if let Some(flag) = &self.raises {
+            flag.store(true, Ordering::SeqCst);
+        }
+        let settled = self.settles_on.is_some_and(|turn| self.turns >= turn);
+        CleanupPoll {
+            ownership: if self.lost || self.turns > POLL_BUDGET {
+                WaitOwnership::Lost
+            } else {
+                WaitOwnership::Waitable
+            },
+            leader_terminal: settled,
+            exit_code: settled.then_some(0),
+            signal: None,
+            group: if settled {
+                GroupState::Empty
+            } else {
+                GroupState::Live
+            },
+        }
+    }
+}
+
+/// Closure C5 (M5, F129) · the settle loop over retained children, reached by argument: each child
+/// polled in order under the caller's deadline, a stepping clock read once per turn, and a pause
+/// between turns. Two fixtures differing in every count. (A) three children: one settles on its
+/// second turn, one's wait is lost, one never settles and is refused when the clock reaches the
+/// deadline (clock 3..=10 ms against a 10 ms deadline: 8 polls) — settled 1, pending 2, kept
+/// `[1, 2]`, polls `[2, 1, 8]`, 8 pauses, every poll handed the deadline. (B) four children that each
+/// settle on their first turn, the third raising the cancellation as it is polled — settled 3,
+/// pending 1, kept `[3]`, the fourth never polled, no pause.
+#[test]
+fn the_settle_loop_counts_settled_and_pending_children_by_argument() {
+    let base = Instant::now();
+    let child = |id, settles_on, lost, raises, polls: &Polls| Child {
+        id,
+        settles_on,
+        lost,
+        raises,
+        polls: Arc::clone(polls),
+        turns: 0,
+    };
+    let per_child = |polls: &Polls, children: usize| {
+        let polls = polls.lock().unwrap_or_else(PoisonError::into_inner);
+        (0..children)
+            .map(|id| polls.iter().filter(|poll| poll.0 == id).count())
+            .collect::<Vec<_>>()
+    };
+    // (A) the stepping clock: 1 ms per read, from `base`.
+    let polls: Polls = Arc::new(Mutex::new(Vec::new()));
+    let deadline = base + Duration::from_millis(10);
+    let tick = Cell::new(0_u64);
+    let pauses = Cell::new(0_usize);
+    let (custody, kept) = settle_children(
+        vec![
+            child(0, Some(2), false, None, &polls),
+            child(1, None, true, None, &polls),
+            child(2, None, false, None, &polls),
+        ],
+        deadline,
+        &AtomicBool::new(false),
+        || {
+            let now = base + Duration::from_millis(tick.get());
+            tick.set(tick.get() + 1);
+            now
+        },
+        || pauses.set(pauses.get() + 1),
+    );
+    assert_eq!(
+        custody,
+        Custody {
+            settled: 1,
+            pending: 2
+        }
+    );
+    assert_eq!(kept.iter().map(|c| c.id).collect::<Vec<_>>(), [1, 2]);
+    assert_eq!(per_child(&polls, 3), [2, 1, 8]);
+    assert_eq!(pauses.get(), 8);
+    assert!(
+        polls
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .all(|poll| poll.1 == deadline),
+        "every poll handed the caller's deadline"
+    );
+    // (B) a cancellation raised by the third child as it is polled.
+    let polls: Polls = Arc::new(Mutex::new(Vec::new()));
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let pauses = Cell::new(0_usize);
+    let (custody, kept) = settle_children(
+        vec![
+            child(0, Some(1), false, None, &polls),
+            child(1, Some(1), false, None, &polls),
+            child(2, Some(1), false, Some(Arc::clone(&cancelled)), &polls),
+            child(3, Some(1), false, None, &polls),
+        ],
+        base + Duration::from_secs(60),
+        &cancelled,
+        || base,
+        || pauses.set(pauses.get() + 1),
+    );
+    assert_eq!(
+        custody,
+        Custody {
+            settled: 3,
+            pending: 1
+        }
+    );
+    assert_eq!(kept.iter().map(|c| c.id).collect::<Vec<_>>(), [3]);
+    assert_eq!(per_child(&polls, 4), [1, 1, 1, 0]);
+    assert_eq!(pauses.get(), 0);
 }

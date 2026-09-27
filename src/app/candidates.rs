@@ -17,7 +17,7 @@ use super::runtime::{
 use crate::check::consistency::U64_EDITABLE;
 use crate::store::VerificationVerdict;
 use crate::worker::native::{self, AdapterProfile, ProviderState};
-use crate::worker::process::{self, PendingChild, SettleStep};
+use crate::worker::process::{self, CleanupPoll, PendingChild, SettleStep};
 use crate::worker::{
     Capabilities, Feature, Finish, Invocation, MAX_PROMPT_BYTES, Request, Selection, Usage,
 };
@@ -457,6 +457,57 @@ const fn custody_settled(pending: bool, leader_reaped: bool, group_settled: bool
     !pending && leader_reaped && group_settled
 }
 
+/// One cleanup poll of a retained child (R21 N18, closure C5): the seam that makes the settle loop
+/// reachable by argument — a [`PendingChild`] in production, a model in the proofs.
+pub trait Poll {
+    /// One bounded reconciliation turn under `deadline`; no sleeping or blocking wait.
+    fn poll_cleanup(&mut self, deadline: Instant) -> CleanupPoll;
+}
+
+impl Poll for PendingChild {
+    fn poll_cleanup(&mut self, deadline: Instant) -> CleanupPoll {
+        PendingChild::poll_cleanup(self, deadline)
+    }
+}
+
+/// Settle `children` in order under the caller's `deadline` and `cancelled` (R21 N18, closure C5):
+/// each child is polled to its end, `now` read once per turn after the poll and
+/// [`process::settle_step`] deciding the turn, `pause` between turns. A settled child is released;
+/// a refused one (wait ownership lost, or the deadline) and every child not reached before a raised
+/// cancellation are handed back, counted pending. The clock and the pause are arguments so every
+/// branch is reached by argument (F95); production passes `Instant::now` and a
+/// [`process::SETTLE_PAUSE`] sleep.
+pub fn settle_children<C: Poll>(
+    children: Vec<C>,
+    deadline: Instant,
+    cancelled: &AtomicBool,
+    mut now: impl FnMut() -> Instant,
+    mut pause: impl FnMut(),
+) -> (Custody, Vec<C>) {
+    let mut custody = Custody::default();
+    let mut kept = Vec::new();
+    for mut child in children {
+        let settled = loop {
+            if cancelled.load(Ordering::Acquire) {
+                break false;
+            }
+            let poll = child.poll_cleanup(deadline);
+            match process::settle_step(&poll, now(), deadline) {
+                SettleStep::Settled => break true,
+                SettleStep::Refused => break false,
+                SettleStep::Wait => pause(),
+            }
+        };
+        if settled {
+            custody.settled += 1;
+        } else {
+            kept.push(child);
+        }
+    }
+    custody.pending = kept.len();
+    (custody, kept)
+}
+
 impl CandidateSource for NativeCandidates {
     fn next(&mut self, ask: &Ask<'_>) -> Answer {
         self.ask(ask)
@@ -491,32 +542,18 @@ impl CandidateSource for NativeCandidates {
         })
     }
 
-    /// Each retained child polled to its end under the caller's deadline, paced by
-    /// [`process::SETTLE_PAUSE`]; one [`process::settle_step`] decides every turn (R21 N18). A
-    /// settled child is released; a refused one (wait ownership lost, or the deadline) and every
-    /// child not reached before a raised cancellation stay retained, counted pending.
+    /// Each retained child polled to its end under the caller's deadline, through
+    /// [`settle_children`] over the monotonic clock, paced by [`process::SETTLE_PAUSE`] (R21 N18,
+    /// closure C5). A settled child is released; a refused one and every child not reached before a
+    /// raised cancellation stay retained, counted pending.
     fn settle_retained(&mut self, deadline: Instant, cancelled: &AtomicBool) -> Custody {
-        let mut custody = Custody::default();
-        let mut kept = Vec::new();
-        for mut child in std::mem::take(&mut self.retained) {
-            let settled = loop {
-                if cancelled.load(Ordering::Acquire) {
-                    break false;
-                }
-                let poll = child.poll_cleanup(deadline);
-                match process::settle_step(&poll, Instant::now(), deadline) {
-                    SettleStep::Settled => break true,
-                    SettleStep::Refused => break false,
-                    SettleStep::Wait => std::thread::sleep(process::SETTLE_PAUSE),
-                }
-            };
-            if settled {
-                custody.settled += 1;
-            } else {
-                kept.push(child);
-            }
-        }
-        custody.pending = kept.len();
+        let (custody, kept) = settle_children(
+            std::mem::take(&mut self.retained),
+            deadline,
+            cancelled,
+            Instant::now,
+            || std::thread::sleep(process::SETTLE_PAUSE),
+        );
         self.retained = kept;
         custody
     }
