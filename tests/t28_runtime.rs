@@ -2343,8 +2343,12 @@ fn pending_to_its_bound(deadline: Instant) -> Custody {
 /// never an entropy failure after the whole dispatch window was spent polling.
 #[test]
 fn a_child_pending_to_its_bound_leaves_the_task_needs_settlement_not_entropy() -> Outcome_ {
+    // The work window is the reservation less the 1 000 ms teardown share, measured from the
+    // dispatch origin, which includes preparation: 3 500 ms leaves 2 500 ms, so a loaded run's
+    // preparation is not read as a spent window (B14b-2 review round 2, D8; 1 500 left 500 ms).
+    // The bound it yields is still inside `SETTLE_MODEL_BUDGET`.
     let rig = rig(&Shape {
-        work_ms: 1_500,
+        work_ms: 3_500,
         ..Shape::default()
     })?;
     let (mut source, asked) = script(vec![Candidate::Provider {
@@ -2368,18 +2372,23 @@ fn a_child_pending_to_its_bound_leaves_the_task_needs_settlement_not_entropy() -
             attempts: &rig.attempts,
             forbidden: &[],
             teardown_ms: rig.teardown_ms,
-            capture_ms: Some(10),
+            // The captures run under the owner's reservation less the teardown share, as `serve`
+            // runs them: a fixed 10 ms share was refused `ProtectedCapture` under load (D8).
+            capture_ms: None,
             drain: &drain,
         },
     )
     .map_err(|e| format!("{e:?}"))?;
-    let Admission::Ready(admitted) = admission else {
-        return Err("refused at admission".into());
+    let admitted = match admission {
+        Admission::Ready(admitted) => admitted,
+        Admission::Refused(refusal) => {
+            return Err(format!("refused at admission: {refusal:?}").into());
+        }
     };
     let (origin, until) = admitted.window();
     let dispatched =
         drive(&rig.tasks, *admitted, &mut source, &mut verifier).map_err(|e| format!("{e:?}"))?;
-    let work_until = window_end(origin, 1_500, rig.teardown_ms, until);
+    let work_until = window_end(origin, 3_500, rig.teardown_ms, until);
     let bound = teardown_bound(work_until, rig.teardown_ms, until);
     assert!(bound < until);
     assert_eq!(
@@ -3387,8 +3396,6 @@ fn a_stop_exit_writes_the_stop_before_its_custody_turn() -> Outcome_ {
     let readied = Arc::clone(&source.readied);
     let (mut verifier, handed) = oracle(vec![]);
     let drain = AtomicBool::new(false);
-    // The capture's own share is fixed small, as C4's proof fixes it: the default share would not
-    // fit this reservation.
     let admission = admit(
         &rig.tasks,
         &rig.profile,
@@ -3400,13 +3407,18 @@ fn a_stop_exit_writes_the_stop_before_its_custody_turn() -> Outcome_ {
             attempts: &rig.attempts,
             forbidden: &[],
             teardown_ms: rig.teardown_ms,
-            capture_ms: Some(10),
+            // The captures run under the owner's reservation less the teardown share, as `serve`
+            // runs them: a fixed 10 ms share was refused `ProtectedCapture` under load (D8).
+            capture_ms: None,
             drain: &drain,
         },
     )
     .map_err(|e| format!("{e:?}"))?;
-    let Admission::Ready(admitted) = admission else {
-        return Err("refused at admission".into());
+    let admitted = match admission {
+        Admission::Ready(admitted) => admitted,
+        Admission::Refused(refusal) => {
+            return Err(format!("refused at admission: {refusal:?}").into());
+        }
     };
     let (origin, until) = admitted.window();
     let dispatched =
