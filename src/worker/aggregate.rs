@@ -129,15 +129,19 @@ impl Slice {
     /// The door's pin refusal.
     pub fn prepare(config: Config, attempt: UuidV4<'_>, deadline: Instant) -> Result<Self, Error> {
         io::pin(&config, deadline)?;
-        let unit = aggregate_unit(attempt);
-        Ok(Self {
+        Ok(Self::named(config, attempt))
+    }
+    /// The policy half of [`Slice::prepare`], split from the pin so a test can reach it (F95): a
+    /// `Prepared` slice named after exactly the attempt it is handed, with no call recorded.
+    fn named(config: Config, attempt: UuidV4<'_>) -> Self {
+        Self {
             config,
             phase: SlicePhase::Prepared,
-            unit,
+            unit: aggregate_unit(attempt),
             cgroup: None,
             calls: vec![],
             created: CreateOutcome::Refused,
-        })
+        }
     }
     /// Create the slice, from `Prepared` only: its name proved absent, the create asked (its
     /// outcome recorded by `create_outcome` before any error returns), then its cgroup captured
@@ -760,7 +764,7 @@ fn resolve(
 #[cfg(test)]
 mod tests {
     use super::{
-        Call, CreateOutcome, Error, Resolved, SlicePhase, StopStep, UnitObservation,
+        Call, Config, CreateOutcome, Error, Resolved, Slice, SlicePhase, StopStep, UnitObservation,
         aggregate_unit, create_arguments, create_outcome, resolve, settled, slice_path, stop_step,
         unit_reply,
     };
@@ -1023,6 +1027,34 @@ mod tests {
                 "hee3aggregate0123456789ab4cde8f0123456789abcd.slice",
                 "hee3aggregatefedcba9876544321b0fedcba98765432.slice",
             ]
+        );
+        Ok(())
+    }
+
+    /// The slice is named after the attempt `prepare` is handed, not one it derives (P7 plant A:
+    /// a constant attempt passed every test while the name sat behind the pin). Two attempts
+    /// differing in every digit, each asserted as its whole unit name.
+    #[test]
+    fn a_prepared_slice_is_named_after_the_handed_attempt() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let config = || Config {
+            busctl: "/nonexistent/busctl".into(),
+            busctl_sha256: String::new(),
+            runtime_dir: "/nonexistent".into(),
+        };
+        let first = Slice::named(config(), attempt(A1)?);
+        let second = Slice::named(config(), attempt(A2)?);
+        assert_eq!(
+            [first.unit(), second.unit()],
+            [
+                "hee3aggregate0123456789ab4cde8f0123456789abcd.slice",
+                "hee3aggregatefedcba9876544321b0fedcba98765432.slice",
+            ]
+        );
+        assert!(first.calls().is_empty() && second.calls().is_empty());
+        assert_eq!(
+            [first.phase, second.phase],
+            [SlicePhase::Prepared, SlicePhase::Prepared]
         );
         Ok(())
     }

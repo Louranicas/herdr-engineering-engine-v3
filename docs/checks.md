@@ -3072,7 +3072,7 @@ Neither mode admits a module or qualifies protected collection.
 | --- | --- |
 | Rust 1.98.0 formatting | `cargo fmt --all -- --check` succeeds |
 | Rust lint | Pedantic Clippy and all warnings denied, all declared targets |
-| Rust tests | Default/no-default features, debug/release; 36 fixed summaries totaling 1123 ordinary controls, plus five separate actual-pipe transport controls; exact multiplicity and nine library namespaces (161 library-unit controls) |
+| Rust tests | Default/no-default features, debug/release; 36 fixed summaries totaling 1123 ordinary controls, plus five separate actual-pipe transport controls; exact multiplicity and nine library namespaces (161 library-unit controls); these totals predate B14c-1, whose delta is stated at the end of the T07/T08 composition section |
 | Rust documentation | Two meaningful doctests in each feature/profile configuration |
 | Rust lint sensitivity | The missing `must_use` fixture fails at that lint; its corrected neighbor passes |
 | Julia 1.12.7 tests | Locked local package, bounds checks on, deprecations as errors, startup disabled, one Julia/BLAS thread |
@@ -3309,8 +3309,8 @@ TMPDIR is the copied source workspace. The process suite remains 17 controls.
 
 The two app development packages T06 kept beside the root engine, a task
 runtime and a fixed frontend in independent Cargo workspaces, were retired at
-B14c-1 (2026-09-28): the engine has one composer, and the census above requires
-it. Their source stays reachable at commit aaea637. The retirement record names
+B14c-1 (2026-09-28): the engine has one composer. That rule has no detector at
+this commit: the census built for it was split out as B14c-E (decision R23-R2). Their source stays reachable at commit aaea637. The retirement record names
 the lane tree, its file list, the per-file test counts, what stays UNMEASURED,
 and the deferred port of the real-process recovery cases (owner recovery/T07).
 It is the section "B14c-1 D12 retirement record (2026-09-28)" of the B14c-1
@@ -3385,7 +3385,7 @@ worker-owned `src/worker/native.rs` source and the finite fixture client
 that a registered Rust test reads). The adapter adds no library-unit namespace.
 The combined root-engine expectation is therefore 34 summary groups totaling
 1042 ordinary controls (161 library, two empty binary groups, 24, 27, 60, 34,
-29, 12, the eighteen T06 groups, 51 inventory, 21 native, 50, 18, 16, 74 and
+29, 12, the eighteen T06 groups (seventeen since B14c-1), 51 inventory, 21 native, 50, 18, 16, 74 and
 16) plus the five separate transport controls, with the unchanged 161
 library-unit controls. A subject with the 51-control inventory and no native
 target is expected at 33 groups and 1021 controls. These are finite recipe
@@ -3414,7 +3414,7 @@ tmpfs, as that earlier run's recorded workspace shows. The split keeps the
 Store-heavy suites out of the main command; the scratch location is the
 runner's responsibility and is recorded in every run. The main command keeps
 the library, the two binaries and the T01–T05, T13 and T21 analysis targets
-(14 groups); the T06 command holds exactly the `t06_` targets (18 groups, 449
+(14 groups); the T06 command holds exactly the `t06_` targets (18 groups before B14c-1, 449
 controls). All five raw outputs (main, T06, numerical process, inventory,
 native) must pass the single complete census/namespace/transport oracle
 together; every target runs exactly once. The 180-second per-command bound,
@@ -3496,7 +3496,8 @@ deployment.
 **B14c-1 delta (2026-09-28).** Removing `app::durable_control` and its
 `t06_durable_control` target takes one summary group and its one control out of
 the T06 command (seventeen `t06_` targets in `Cargo.toml`, 41 `[[test]]` in all)
-and six library-unit controls out of the library group. The totals above are
+and six library-unit controls out of the library group; the split of
+`Slice::prepare` adds one `worker::aggregate` unit control (six to seven). The totals above are
 earlier dated snapshots and were not re-derived here; the pins in
 `tools/check-quality` (`T06_TARGET_COUNTS`, the library-unit namespace table)
 are the current expectation.
