@@ -205,7 +205,7 @@ use habitat_engine::contracts::control::{FrameReader, MAX_FRAME_BYTES, ReadError
 use habitat_engine::worker::aggregate;
 use habitat_engine::worker::namespace_shim::{self, NamespaceExec};
 use habitat_engine::worker::native::{self, Systemd};
-use signal_hook::consts::SIGTERM;
+use signal_hook::consts::{SIGHUP, SIGINT, SIGTERM};
 use signal_hook::iterator::Signals;
 use std::io::{self, Read, Write};
 use std::os::unix::net::UnixStream;
@@ -449,9 +449,11 @@ type Composed = Result<(NativeProvider<Systemd>, Installed), NoNative>;
 /// generation, compose the task owner over the ledger startup left open, and only then bind and
 /// serve until SIGTERM (IPC01: acquire custody before recovery; bind after ready). SIGTERM drains
 /// (APP-01): nothing more is admitted, each open connection finishes the frame it is serving, the
-/// ledger's writer lock is released, the socket is removed and the engine exits 0. A stale socket
-/// left by a killed engine is cleared at the next start; a live or starting one refuses the start.
-/// With `--until-stdin-closes` the end of standard input raises that same SIGTERM (`watch_stdin`).
+/// ledger's writer lock is released, the socket is removed and the engine exits 0. SIGHUP (a closed
+/// terminal tab or pane) and SIGINT (Ctrl-C) drain the same way, through the same door
+/// (`drain_signals`). A stale socket left by a killed engine is cleared at the next start; a live
+/// or starting one refuses the start. With `--until-stdin-closes` the end of standard input raises
+/// that same SIGTERM (`watch_stdin`).
 fn serve(lifetime: Lifetime) -> ExitCode {
     let mut signals = match drain_signals(lifetime) {
         Ok(signals) => signals,
@@ -563,13 +565,15 @@ fn serve(lifetime: Lifetime) -> ExitCode {
     finish_drained(prepared)
 }
 
-/// The one drain door, taken before anything else (APP-01): SIGTERM is held from here, so one that
-/// arrives during startup drains the engine once it serves rather than killing it mid-
-/// reconciliation. Under `--until-stdin-closes` the parent-death watcher starts right behind it,
-/// raising through it.
+/// The one drain door, taken before anything else (APP-01): SIGTERM, SIGHUP and SIGINT are held
+/// from here, in one set, so one that arrives during startup drains the engine once it serves
+/// rather than killing it mid-reconciliation. SIGHUP is what closing a Ghostty tab or a herdr pane
+/// sends and SIGINT is Ctrl-C (Kinoite vault, measured 2026-09-27); without them a pane-started
+/// engine died undrained. Under `--until-stdin-closes` the parent-death watcher starts right
+/// behind it, raising through it.
 fn drain_signals(lifetime: Lifetime) -> Result<Signals, ExitCode> {
-    let signals = Signals::new([SIGTERM]).map_err(|error| {
-        eprintln!("habitat-engine: SIGTERM could not be taken ({error})");
+    let signals = Signals::new([SIGTERM, SIGHUP, SIGINT]).map_err(|error| {
+        eprintln!("habitat-engine: SIGTERM, SIGHUP and SIGINT could not be taken ({error})");
         ExitCode::from(EXIT_CONTRACT)
     })?;
     if let Lifetime::UntilStdinCloses = lifetime {
@@ -629,8 +633,9 @@ fn watch_stdin() -> Result<(), ExitCode> {
     }
 }
 
-/// Serve until the first SIGTERM has drained every connection (APP-01). A watcher thread waits on
-/// `signals` and begins the drain; closing the handle once `run` returns ends its wait unsignalled.
+/// Serve until the first drain signal has drained every connection (APP-01). A watcher thread
+/// waits on `signals` and begins the drain, naming the signal it received; closing the handle once
+/// `run` returns ends its wait unsignalled.
 fn serve_until_signalled(
     signals: &mut Signals,
     listener: &std::os::unix::net::UnixListener,
@@ -644,10 +649,16 @@ fn serve_until_signalled(
     let handle = signals.handle();
     std::thread::scope(|scope| {
         scope.spawn(|| {
-            if signals.forever().next().is_some() {
-                eprintln!("habitat-engine: SIGTERM: draining");
+            if let Some(signal) = signals.forever().next() {
+                // Written, never `eprintln!`: a closed pane or a dead parent may have taken
+                // standard error's reader, and a panic here would leave the drain unbegun.
+                let name = signal_hook::low_level::signal_name(signal).unwrap_or("signal");
+                let _ = writeln!(io::stderr(), "habitat-engine: {name}: draining");
                 if let Err(error) = drain.begin(prepared.socket()) {
-                    eprintln!("habitat-engine: drain wake-up failed ({error})");
+                    let _ = writeln!(
+                        io::stderr(),
+                        "habitat-engine: drain wake-up failed ({error})"
+                    );
                 }
                 // The drain reaches the dispatcher's wait through the owner of both (B14b-1, D2),
                 // under the store's guard so no wait window can swallow it (closure H5).

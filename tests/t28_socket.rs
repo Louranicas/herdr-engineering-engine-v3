@@ -22,6 +22,7 @@ use std::fs::{self, DirBuilder};
 use std::io::Write;
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt, symlink};
 use std::os::unix::net::UnixStream;
+use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -619,12 +620,18 @@ impl Engine {
     }
 
     /// Send the engine SIGTERM and return its output once it exits, within `budget` (APP-01).
-    fn terminate(mut self, budget: Duration) -> Result<Output, Box<dyn Error>> {
+    fn terminate(self, budget: Duration) -> Result<Output, Box<dyn Error>> {
+        self.signalled(rustix::process::Signal::TERM, budget)
+    }
+
+    /// Send the engine `signal` by its pid and return its output once it exits, within `budget`.
+    fn signalled(
+        mut self,
+        signal: rustix::process::Signal,
+        budget: Duration,
+    ) -> Result<Output, Box<dyn Error>> {
         let child = self.child.take().ok_or("the engine was already taken")?;
-        rustix::process::kill_process(
-            rustix::process::Pid::from_child(&child),
-            rustix::process::Signal::TERM,
-        )?;
+        rustix::process::kill_process(rustix::process::Pid::from_child(&child), signal)?;
         exits_within(child, budget)
     }
 }
@@ -3283,6 +3290,40 @@ fn sigterm_drains_releases_the_ledger_unlinks_the_socket_and_exits_zero() -> Out
             )),
         "{stderr}"
     );
+    Ok(())
+}
+
+/// Closing a Ghostty tab or a herdr pane sends SIGHUP, and Ctrl-C sends SIGINT (Kinoite vault,
+/// `Toolbox Development Guide`, measured 2026-09-27). Both drain through the one door SIGTERM
+/// uses: exit 0 (never death by the signal), the drain's lines naming the signal received, the
+/// socket removed.
+#[test]
+fn serve_drains_on_sighup_like_sigterm() -> Outcome {
+    for (signal, name) in [
+        (rustix::process::Signal::HUP, "SIGHUP"),
+        (rustix::process::Signal::INT, "SIGINT"),
+    ] {
+        let world = World::seeing(&["app"])?;
+        let log = world.home.join("engine.log");
+        let engine = Engine::start_logged(&world.run, &world.home, &log)?;
+        let output = engine.signalled(signal, START_BUDGET)?;
+        let stderr = read_or_absent(&log);
+        assert_eq!(
+            (output.status.code(), output.status.signal()),
+            (Some(0), None),
+            "{name}: the engine did not drain:\n{stderr}"
+        );
+        let socket = world.run.join(RUNTIME_DIRECTORY).join(SOCKET_NAME);
+        in_order(&stderr, &drain_lines(name, &socket))?;
+        assert!(
+            !stderr.contains("SIGTERM"),
+            "{name}: the drain names the signal received:\n{stderr}"
+        );
+        assert!(
+            fs::symlink_metadata(&socket).is_err(),
+            "{name}: the socket file is removed"
+        );
+    }
     Ok(())
 }
 
