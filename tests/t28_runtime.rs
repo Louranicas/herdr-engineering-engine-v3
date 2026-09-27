@@ -39,7 +39,7 @@ use habitat_engine::task::control::Cancel;
 use habitat_engine::task::control::Spec;
 use habitat_engine::task::driver::{Outcome as Driven, StopReason};
 use habitat_engine::worker::native::FULL_FILE;
-use habitat_engine::worker::workspace::Snapshot;
+use habitat_engine::worker::workspace::{Error as WorkspaceError, Snapshot};
 use std::collections::VecDeque;
 use std::error::Error;
 use std::fs::{self, DirBuilder};
@@ -2480,6 +2480,52 @@ fn the_ledger_root_names_the_directories_the_runtime_materialised() -> Outcome_ 
     let mut during_second = vec![first.clone(), second.clone(), format!("{second}.check")];
     during_second.sort();
     assert_eq!(taken(&seen), vec![during_first, during_second]);
+    Ok(())
+}
+
+/// R21 closure C13 (OC3, FT3-03, L11) · a `.plan` root left by a dispatch killed inside the shared
+/// plan (created, never removed; the task still admitted, no attempt row) is the engine's own
+/// leftover, not the owner's refusal: the next dispatch removes it through the workspace owner and
+/// drives the task. At `b5f309b` the outcome was `Refused(Plan("plan_root_exists"))` and the task
+/// was stopped by name.
+#[test]
+fn a_plan_root_left_by_a_killed_dispatch_is_removed_and_the_task_is_driven() -> Outcome_ {
+    let rig = rig(&Shape::default())?;
+    let leftover = rig.attempts.join(format!("{TASK}.plan"));
+    fs::DirBuilder::new().mode(0o700).create(&leftover)?;
+    fs::write(leftover.join("x"), b"left by a killed dispatch")?;
+    let (source, _) = script(vec![Candidate::Replacement(SECOND.to_vec())]);
+    let (verifier, _) = oracle(vec![matched(7)]);
+    let principal = owner();
+    let outcome = run(&rig, &principal, source, verifier, 5_000).map_err(|e| format!("{e:?}"))?;
+    assert_eq!(outcome, Outcome::Driven(Driven::Accepted));
+    assert!(!leftover.exists(), "the leftover plan root is removed");
+    assert!(rows(&rig, "SELECT reason FROM task_stops WHERE task_id=?")?.is_empty());
+    assert_eq!(state(&rig)?, "accepted");
+    // A leftover the owner refuses (not 0700) is left whole, and the refusal is the dispatcher's:
+    // no stop is written, the task stays admitted, nothing was asked.
+    let refusing = self::rig(&Shape::default())?;
+    let leftover = refusing.attempts.join(format!("{TASK}.plan"));
+    fs::DirBuilder::new().mode(0o755).create(&leftover)?;
+    fs::write(leftover.join("x"), b"left by a killed dispatch")?;
+    let (source, asked) = script(vec![Candidate::Replacement(SECOND.to_vec())]);
+    let (verifier, _) = oracle(vec![matched(7)]);
+    let refused = run(&refusing, &principal, source, verifier, 5_000);
+    assert!(
+        matches!(
+            &refused,
+            Err(RuntimeError::PreDispatch(inner))
+                if matches!(**inner, RuntimeError::PlanRoot(WorkspaceError::Custody))
+        ),
+        "{refused:?}"
+    );
+    assert!(
+        leftover.join("x").exists(),
+        "a refused leftover is left whole"
+    );
+    assert!(rows(&refusing, "SELECT reason FROM task_stops WHERE task_id=?")?.is_empty());
+    assert_eq!(state(&refusing)?, "admitted");
+    assert!(taken(&asked).is_empty(), "no provider was asked");
     Ok(())
 }
 

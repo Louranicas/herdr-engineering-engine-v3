@@ -462,6 +462,10 @@ pub enum Error {
     /// The attempts root could not be read at a begin (R21 closure C10): its (device, inode) is
     /// recorded with every bound attempt, so no attempt begins without it.
     AttemptsRoot,
+    /// A `.plan` root left by an earlier dispatch could not be removed (R21 closure C13), by the
+    /// workspace owner's refusal. Only ever raised in `admit`, so always the dispatcher's
+    /// ([`Error::PreDispatch`]), never a stop of the task.
+    PlanRoot(workspace::Error),
 }
 
 impl From<store::Error> for Error {
@@ -816,6 +820,9 @@ pub fn admit<'a>(
     let plan_root = dispatch
         .attempts
         .join(format!("{}.plan", dispatch.task.as_str()));
+    // A root the shared plan left behind is the engine's own (a dispatch killed inside it), never
+    // the owner's refusal: removed first, and a removal that fails is the dispatcher's (closure C13).
+    pre(clear_leftover_plan(&plan_root, deadline))?;
     let shared = pre(tasks
         .with_store(|store| {
             let mut sink = Sink::new(store, deadline);
@@ -862,6 +869,23 @@ fn pre<T>(result: Result<T, Error>) -> Result<T, Error> {
         Error::Poisoned => Error::Poisoned,
         other => Error::PreDispatch(Box::new(other)),
     })
+}
+
+/// Remove a task's `.plan` root left by an earlier dispatch (R21 closure C13, OC3/FT3-03). The
+/// shared plan creates `<attempts>/<task>.plan` and removes it before it returns, so a root found
+/// here was left by a dispatch killed inside it: the task is still admitted, no attempt row names
+/// it, and `plan::shared` would refuse it as `plan_root_exists` and stop the owner's task. It is
+/// removed through the workspace owner (descriptor-relative, 0700 and owned, bounded) under the
+/// dispatch's own deadline; an absent root is nothing to do.
+///
+/// # Errors
+/// [`Error::PlanRoot`] with the owner's refusal, or `Io` for a root that could not be read.
+fn clear_leftover_plan(plan_root: &Path, deadline: Instant) -> Result<(), Error> {
+    match fs::symlink_metadata(plan_root) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(_) => Err(Error::PlanRoot(workspace::Error::Io)),
+        Ok(_) => workspace::remove_owned(plan_root, deadline).map_err(Error::PlanRoot),
+    }
 }
 
 /// The capture share of a dispatch (closure M1, re-check item 11): a caller-fixed share must leave
