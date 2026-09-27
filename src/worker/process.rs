@@ -917,7 +917,7 @@ impl From<ScanError> for CensusError {
 }
 
 /// Every process `/proc` lists, with its stat (R21 N7): the resolver's census, read entry by entry
-/// the group census's way ([`census_entry`]) under the caller's deadline and cancellation, and
+/// the group census's way (the private `census_entry`) under the caller's deadline and cancellation, and
 /// refused past [`MAX_CENSUS_ENTRIES`] listed entries by both numbers.
 ///
 /// # Errors
