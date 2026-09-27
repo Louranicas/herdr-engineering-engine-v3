@@ -16,8 +16,9 @@ use super::live_verifier::{Cleanup, checked};
 use super::plan;
 use super::repair::{self, Failure};
 use super::run_records::{
-    Intents, ObligationRecord, OutcomeName, OutputReadback, Readbacks, RunCleanup, RunClock,
-    RunOutcome, RunRecord as _, RuntimeClock, Settlement as RecordSettlement, WorkerSettle,
+    AggregateRefusal, Intents, ObligationRecord, OutcomeName, OutputReadback, Readbacks,
+    RunCleanup, RunClock, RunOutcome, RunRecord as _, RuntimeClock, Settlement as RecordSettlement,
+    WorkerSettle,
 };
 use super::tasks::{Poisoned, StoreTasks};
 use super::u64_receipt;
@@ -39,6 +40,7 @@ use crate::store::{
 };
 use crate::task::LoopRefusal;
 use crate::task::driver::{self, Acceptance, Checked as DriverChecked, StopReason, Work};
+use crate::worker::aggregate;
 use crate::worker::host;
 use crate::worker::resources::TERM_GRACE;
 use crate::worker::workspace::{self, FileIdentity, Snapshot};
@@ -225,7 +227,7 @@ pub struct CheckPlan<'a> {
 /// was complete. The verifier decides nothing and publishes nothing — the runtime derives the
 /// check from this and records it (R15 round 2).
 pub struct Observed {
-    pub run: Result<Run, workload::Error>,
+    pub run: Result<Run, Unlaunched>,
     pub observed: Instant,
     /// What the check's aggregate came to (R21 S20a): the check that holds one observes it.
     pub resources: Resources,
@@ -238,10 +240,19 @@ pub struct Observed {
 pub enum Resources {
     /// The verifier holds no aggregate (a double, or no verifier): the record says `unknown`.
     NotHeld,
-    /// Restored and stopped inside the check's teardown.
+    /// Stopped, or never created, inside the check's teardown.
     Settled,
-    /// Held, and not torn down by the teardown deadline: the check's cleanup is unsettled.
-    Pending,
+    /// Held, and not torn down by the teardown deadline: the check's cleanup is unsettled, and the
+    /// teardown's refusal is named in the cleanup record (R22-2).
+    Pending(aggregate::Error),
+}
+
+/// Why a check's run never launched (R22-2): the workload's own refusal, or the check's aggregate
+/// slice refused before the workload ran — each recorded by name.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Unlaunched {
+    Workload(workload::Error),
+    Aggregate(aggregate::Error),
 }
 
 /// The check of an applied candidate: it observes a run of the workload inside the plan's window.
@@ -1518,7 +1529,7 @@ impl<C: CandidateSource, V: Verifier> StoreRuntime<'_, C, V> {
             .tasks
             .with_store(|store| -> Result<Committed, Error> {
                 let seen = (observed.observed, observed.resources);
-                let run = launched(observed.run)?;
+                let (run, refusal) = launched(observed.run)?;
                 let teardown = window.teardown_until.min(self.deadline);
                 let capture = capture_run(store, &run, teardown, self.deadline)?;
                 let complete = capture.complete();
@@ -1538,7 +1549,10 @@ impl<C: CandidateSource, V: Verifier> StoreRuntime<'_, C, V> {
                     clock,
                 } = self.settled(&run, teardown, job_root, applied, window, seen)?;
                 let outcome_record = if complete {
-                    Some(RunOutcome::of(&run, &capture_refs).map_err(|_| Error::Identity)?)
+                    Some(
+                        RunOutcome::of(&run, &capture_refs, refusal)
+                            .map_err(|_| Error::Identity)?,
+                    )
                 } else {
                     None
                 };
@@ -2621,20 +2635,23 @@ fn cleanup_of(run: &Run, retained_removed: bool, resources: Resources) -> (Clean
             RecordSettlement::Pending
         }
     };
-    let obligation = |id: &str, state: RecordSettlement| ObligationRecord {
+    let obligation = |id: &str, (state, refusal): (RecordSettlement, _)| ObligationRecord {
         id: id.to_owned(),
         state,
+        refusal,
     };
     let obligations = [
-        obligation("process", state(run.process_cleanup_complete)),
-        obligation("scratch", state(run.scratch_released)),
-        obligation("retained_paths", state(retained_removed)),
+        obligation("process", (state(run.process_cleanup_complete), None)),
+        obligation("scratch", (state(run.scratch_released), None)),
+        obligation("retained_paths", (state(retained_removed), None)),
         obligation(
             "resources",
             match resources {
-                Resources::NotHeld => RecordSettlement::Unknown,
-                Resources::Settled => RecordSettlement::Settled,
-                Resources::Pending => RecordSettlement::Pending,
+                Resources::NotHeld => (RecordSettlement::Unknown, None),
+                Resources::Settled => (RecordSettlement::Settled, None),
+                Resources::Pending(error) => {
+                    (RecordSettlement::Pending, Some(AggregateRefusal::of(error)))
+                }
             },
         ),
     ];
@@ -2709,23 +2726,42 @@ fn publish_records(
     Ok(published)
 }
 
-/// The run to record: a refusal to launch is still a run with its four records (R15.4), except a
-/// `Layout` refusal, which is the runtime's own fault (the job root or scopes it built).
-fn launched(run: Result<Run, workload::Error>) -> Result<Run, Error> {
-    match run {
-        Ok(run) => Ok(run),
-        Err(workload::Error::Layout) => Err(Error::Identity),
-        Err(workload::Error::Deadline) => Ok(Run::unlaunched(WorkloadOutcome::Timeout)),
+/// The run to record, and the aggregate refusal it carries by name (R22-2): a refusal to launch is
+/// still a run with its four records (R15.4), except a `Layout` refusal, which is the runtime's own
+/// fault (the job root or scopes it built). One table: the aggregate's deadline is a timeout, its
+/// cancellation a cancellation observed (as the workload maps one it observes), every other
+/// aggregate refusal a setup failure — each naming the refusal.
+fn launched(run: Result<Run, Unlaunched>) -> Result<(Run, Option<AggregateRefusal>), Error> {
+    let error = match run {
+        Ok(run) => return Ok((run, None)),
+        Err(Unlaunched::Workload(error)) => error,
+        Err(Unlaunched::Aggregate(error)) => {
+            let run = match error {
+                aggregate::Error::Deadline => Run::unlaunched(WorkloadOutcome::Timeout),
+                aggregate::Error::Cancelled => {
+                    let mut run = Run::unlaunched(WorkloadOutcome::Cancelled);
+                    run.cancellation_observed = true;
+                    run
+                }
+                _ => Run::unlaunched(WorkloadOutcome::SetupFailed),
+            };
+            return Ok((run, Some(AggregateRefusal::of(error))));
+        }
+    };
+    let run = match error {
+        workload::Error::Layout => return Err(Error::Identity),
+        workload::Error::Deadline => Run::unlaunched(WorkloadOutcome::Timeout),
         // The refusal's cause IS a failed subject readback: the record must not say "unchanged".
-        Err(workload::Error::Subject(_)) => {
+        workload::Error::Subject(_) => {
             let mut run = Run::unlaunched(WorkloadOutcome::InvalidSubject);
             run.subjects_unchanged = false;
-            Ok(run)
+            run
         }
-        Err(workload::Error::Oracle | workload::Error::Io) => {
-            Ok(Run::unlaunched(WorkloadOutcome::SetupFailed))
+        workload::Error::Oracle | workload::Error::Io => {
+            Run::unlaunched(WorkloadOutcome::SetupFailed)
         }
-    }
+    };
+    Ok((run, None))
 }
 
 /// The check's clock record over its window: the intent follows the deadline being reached, never
@@ -3683,5 +3719,67 @@ mod tests {
                 "reserved={reserved} teardown={teardown} fixed={fixed:?}"
             );
         }
+    }
+
+    /// R22-2 · `launched` is one table: the workload's arms unchanged, and every aggregate refusal
+    /// named — its deadline a timeout, its cancellation a cancellation observed, the rest a setup
+    /// failure. Asserted whole as `(outcome, cancellation observed, refusal)`, `Layout` the
+    /// runtime's own fault.
+    #[test]
+    fn launched_names_every_aggregate_refusal_and_keeps_the_workload_table() {
+        use super::{Unlaunched, launched};
+        use crate::app::run_records::{AggregateRefusal, OutcomeName};
+        use crate::app::workload;
+        use crate::worker::aggregate;
+        let row = |input| {
+            launched(Err(input))
+                .map(|(run, refusal)| {
+                    (
+                        OutcomeName::of(&run.outcome),
+                        run.cancellation_observed,
+                        refusal,
+                    )
+                })
+                .map_err(|error| format!("{error:?}"))
+        };
+        assert_eq!(
+            [
+                Unlaunched::Workload(workload::Error::Deadline),
+                Unlaunched::Workload(workload::Error::Io),
+                Unlaunched::Workload(workload::Error::Oracle),
+                Unlaunched::Workload(workload::Error::Layout),
+                Unlaunched::Aggregate(aggregate::Error::Deadline),
+                Unlaunched::Aggregate(aggregate::Error::Cancelled),
+                Unlaunched::Aggregate(aggregate::Error::Limits),
+                Unlaunched::Aggregate(aggregate::Error::Manager),
+            ]
+            .map(row),
+            [
+                Ok((OutcomeName::Timeout, false, None)),
+                Ok((OutcomeName::SetupFailed, false, None)),
+                Ok((OutcomeName::SetupFailed, false, None)),
+                Err(format!("{:?}", Error::Identity)),
+                Ok((
+                    OutcomeName::Timeout,
+                    false,
+                    Some(AggregateRefusal::Deadline)
+                )),
+                Ok((
+                    OutcomeName::Cancelled,
+                    true,
+                    Some(AggregateRefusal::Cancelled)
+                )),
+                Ok((
+                    OutcomeName::SetupFailed,
+                    false,
+                    Some(AggregateRefusal::Limits)
+                )),
+                Ok((
+                    OutcomeName::SetupFailed,
+                    false,
+                    Some(AggregateRefusal::Manager)
+                )),
+            ]
+        );
     }
 }

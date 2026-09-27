@@ -446,23 +446,27 @@ pub(crate) mod fixtures {
         )
         .map_err(|e| format!("{e:?}"))?;
         let run = Run::unlaunched(RunOutcomeKind::SetupFailed);
-        let outcome = RunOutcome::of(&run, &[]).map_err(|e| format!("{e:?}"))?;
+        let outcome = RunOutcome::of(&run, &[], None).map_err(|e| format!("{e:?}"))?;
         let obligations = [
             ObligationRecord {
                 id: "process".to_owned(),
                 state: Settlement::Settled,
+                refusal: None,
             },
             ObligationRecord {
                 id: "scratch".to_owned(),
                 state: Settlement::Settled,
+                refusal: None,
             },
             ObligationRecord {
                 id: "retained_paths".to_owned(),
                 state: Settlement::Settled,
+                refusal: None,
             },
             ObligationRecord {
                 id: "resources".to_owned(),
                 state: Settlement::Unknown,
+                refusal: None,
             },
         ];
         let cleanup = RunCleanup::of(Settlement::Settled, &obligations, &[]);
@@ -918,10 +922,12 @@ mod tests {
                 ObligationRecord {
                     id: "scratch".to_owned(),
                     state: Settlement::Pending,
+                    refusal: None,
                 },
                 ObligationRecord {
                     id: "resources".to_owned(),
                     state: Settlement::Unknown,
+                    refusal: None,
                 },
             ],
             &[],
@@ -997,6 +1003,7 @@ mod tests {
                     failed: 0,
                 })),
                 &[],
+                None,
             )
             .expect("an unlaunched run pairs zero steps with zero captures");
             assert_eq!(

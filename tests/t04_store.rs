@@ -4917,6 +4917,7 @@ fn run_records_read_back_only_through_the_commitment() {
         &[ObligationRecord {
             id: "resources".to_owned(),
             state: Settlement::Settled,
+            refusal: None,
         }],
         &[],
     );

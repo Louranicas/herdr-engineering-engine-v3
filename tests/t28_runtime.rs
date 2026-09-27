@@ -19,7 +19,7 @@ use habitat_engine::app::native_provider::{self, Installed};
 use habitat_engine::app::runtime::{
     Admission, Admitted, Answer as SourceAnswer, CHECK_TEARDOWN, Candidate, CandidateSource,
     CheckPlan, CheckWindow, Custody, Dispatch, Error as RuntimeError, Observed, Outcome, Previous,
-    Readiness, Refusal, Resources, Verifier, admit, dispatch, drive,
+    Readiness, Refusal, Resources, Unlaunched, Verifier, admit, dispatch, drive,
 };
 use habitat_engine::app::tasks::StoreTasks;
 use habitat_engine::app::workload::{self, Outcome as RunOutcome, Run};
@@ -559,18 +559,21 @@ impl Verifier for Oracle<'_> {
             cleanup_pending: false,
         });
         let observed = plan.window.begun + answer.elapsed;
-        let run = answer.run.map(|outcome| {
-            let decisive = matches!(
-                outcome,
-                RunOutcome::Matched(_) | RunOutcome::Mismatch(_) | RunOutcome::InvalidOutput(_)
-            )
-            .then(|| observed.checked_sub(Duration::from_millis(1)))
-            .flatten();
-            let mut run = Run::unlaunched(outcome);
-            run.process_cleanup_complete = !answer.cleanup_pending;
-            run.decisive = decisive;
-            run
-        });
+        let run = answer
+            .run
+            .map(|outcome| {
+                let decisive = matches!(
+                    outcome,
+                    RunOutcome::Matched(_) | RunOutcome::Mismatch(_) | RunOutcome::InvalidOutput(_)
+                )
+                .then(|| observed.checked_sub(Duration::from_millis(1)))
+                .flatten();
+                let mut run = Run::unlaunched(outcome);
+                run.process_cleanup_complete = !answer.cleanup_pending;
+                run.decisive = decisive;
+                run
+            })
+            .map_err(Unlaunched::Workload);
         Observed {
             run,
             observed,
@@ -1642,21 +1645,27 @@ fn committed_records(rig: &Rig) -> Result<Vec<Vec<String>>, Box<dyn Error>> {
 /// starts in the gate (as t06 uses it).
 const BAD_PIN: &str = "sha256:0000000000000000000000000000000000000000000000000000000000000000";
 
-/// What the aggregate double was handed, per call (F101): the run id and the deadline `start` was
-/// given, with the address of the cancellation flag; the deadline `finish` was given.
+/// What the aggregate double was handed, per call (F101): the attempt `prepare` was given and its
+/// deadline; the held attempt `create` was given, its deadline and the address of the cancellation
+/// flag; the held attempt `finish` was handed by value and its deadline — so a finish of anything
+/// but what was prepared is visible.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Held {
-    Start(String, Instant, usize),
-    Finish(Instant),
+    Prepare(String, Instant),
+    Create(String, Instant, usize),
+    Finish(String, Instant),
 }
 
-/// The check's aggregate lifecycle as a model (R21 S20a): `start` answers with the slice its run id
-/// names (`hee3aggregate<id without dashes>.slice`, the shape the production aggregate derives) unless
-/// scripted otherwise, `finish` with its scripted result; every call is recorded.
+/// The check's aggregate lifecycle as a model (R22-1): `prepare` holds the attempt it was given
+/// unless scripted to refuse, `create` answers with the slice the held attempt names
+/// (`hee3aggregate<id without dashes>.slice`, the shape the production slice derives) unless
+/// scripted otherwise, and `finish` pops its scripted results in call order (`Ok` once they run
+/// out); every call is recorded with what it was handed.
 struct Slices {
     log: Arc<Mutex<Vec<Held>>>,
-    start: Option<Result<String, habitat_engine::worker::aggregate::Error>>,
-    finish: Result<(), habitat_engine::worker::aggregate::Error>,
+    prepare: Option<habitat_engine::worker::aggregate::Error>,
+    create: Option<Result<String, habitat_engine::worker::aggregate::Error>>,
+    finish: VecDeque<Result<(), habitat_engine::worker::aggregate::Error>>,
 }
 
 impl Slices {
@@ -1665,8 +1674,9 @@ impl Slices {
         (
             Self {
                 log: Arc::clone(&log),
-                start: None,
-                finish: Ok(()),
+                prepare: None,
+                create: None,
+                finish: VecDeque::new(),
             },
             log,
         )
@@ -1674,30 +1684,44 @@ impl Slices {
 }
 
 impl Aggregates for Slices {
-    fn start(
+    type Held = String;
+    fn prepare(
         &mut self,
-        run_id: &str,
+        attempt: UuidV4<'_>,
+        deadline: Instant,
+    ) -> Result<String, habitat_engine::worker::aggregate::Error> {
+        record(
+            &self.log,
+            Held::Prepare(attempt.as_str().to_owned(), deadline),
+        );
+        self.prepare
+            .map_or_else(|| Ok(attempt.as_str().to_owned()), Err)
+    }
+    fn create(
+        &mut self,
+        held: &mut String,
         deadline: Instant,
         cancelled: &AtomicBool,
     ) -> Result<String, habitat_engine::worker::aggregate::Error> {
         record(
             &self.log,
-            Held::Start(
-                run_id.to_owned(),
+            Held::Create(
+                held.clone(),
                 deadline,
                 std::ptr::from_ref(cancelled) as usize,
             ),
         );
-        self.start
+        self.create
             .clone()
-            .unwrap_or_else(|| Ok(format!("hee3aggregate{}.slice", run_id.replace('-', ""))))
+            .unwrap_or_else(|| Ok(format!("hee3aggregate{}.slice", held.replace('-', ""))))
     }
     fn finish(
         &mut self,
+        held: String,
         deadline: Instant,
     ) -> Result<(), habitat_engine::worker::aggregate::Error> {
-        record(&self.log, Held::Finish(deadline));
-        self.finish
+        record(&self.log, Held::Finish(held, deadline));
+        self.finish.pop_front().unwrap_or(Ok(()))
     }
 }
 
@@ -3696,11 +3720,12 @@ fn the_live_verifier_records_a_refused_launch_with_four_records() -> Outcome_ {
         taken(&held)
             .iter()
             .map(|call| match call {
-                Held::Start(..) => "start",
-                Held::Finish(_) => "finish",
+                Held::Prepare(..) => "prepare",
+                Held::Create(..) => "create",
+                Held::Finish(..) => "finish",
             })
             .collect::<Vec<_>>(),
-        vec!["start", "finish"]
+        vec!["prepare", "create", "finish"]
     );
     assert_eq!(
         cleanup_object(&rig)?["obligations"],
@@ -3724,12 +3749,12 @@ fn cleanup_object(rig: &Rig) -> Result<serde_json::Value, Box<dyn Error>> {
     object_json(rig, &row[2])
 }
 
-/// The ids the aggregate double was started with, in call order.
-fn started(log: Vec<Held>) -> Vec<String> {
+/// The attempts the aggregate double prepared, in call order.
+fn prepared(log: Vec<Held>) -> Vec<String> {
     log.into_iter()
         .filter_map(|call| match call {
-            Held::Start(id, ..) => Some(id),
-            Held::Finish(_) => None,
+            Held::Prepare(id, _) => Some(id),
+            Held::Create(..) | Held::Finish(..) => None,
         })
         .collect()
 }
@@ -3774,14 +3799,19 @@ fn live_check(
     }))
 }
 
-/// R21 S20a · the check owns its aggregate: each `check` starts ONE aggregate named after the
-/// plan's attempt (R22 C1a) under the check's cutoff and the plan's own cancellation, builds its
-/// three scopes on the unit `start` returned (the scopes' only source), and finishes the aggregate
-/// under the teardown deadline on every path — so two checks over windows differing in every field hold two different aggregates,
-/// each torn down inside its own window. A refused start still finishes and never launches; a
-/// refused finish is observed `Pending`, and through the runtime the check's cleanup is unsettled.
+/// R22-1 · the check owns its slice: each `check` prepares ONE slice named after the plan's
+/// attempt (R22 C1a) under the check's cutoff, creates it under the cutoff and the plan's own
+/// cancellation, builds its three scopes on the unit `create` returned (the scopes' only source),
+/// and hands the slice it prepared to `finish` under the teardown deadline — so two checks over
+/// windows differing in every field prepare, create and finish two different slices, each inside
+/// its own window. A refused prepare holds nothing and finishes nothing; a refused create still
+/// finishes what it prepared; neither launches, and each is named. A refused finish is observed
+/// `Pending` with its refusal, does not refuse the next check, and through the runtime is named in
+/// the cleanup record's `resources` obligation.
 #[test]
-fn the_live_verifier_holds_one_fresh_aggregate_per_check_inside_the_check_s_window() -> Outcome_ {
+fn the_live_verifier_names_each_check_s_slice_after_its_attempt_and_finishes_what_it_created()
+-> Outcome_ {
+    use habitat_engine::worker::aggregate::Error as Refused;
     // Two ledger attempts differing in every hex digit but the version digit (R22 §5).
     const A1: &str = "01234567-89ab-4cde-8f01-23456789abcd";
     const A2: &str = "fedcba98-7654-4321-b0fe-dcba98765432";
@@ -3797,74 +3827,121 @@ fn the_live_verifier_holds_one_fresh_aggregate_per_check_inside_the_check_s_wind
     let cancelled = AtomicBool::new(false);
     let flag = std::ptr::from_ref(&cancelled) as usize;
     let root = |name: &str| rig.scratch.0.join(name);
-    // (A) two checks: two aggregates, each started under its cutoff and finished under its teardown.
+    let launcher_failed = |observed: &Observed| {
+        observed
+            .run
+            .as_ref()
+            .is_ok_and(|run| matches!(run.outcome, RunOutcome::LauncherFailed))
+    };
+    // (A) two checks: two slices, each prepared and created under its cutoff and finished — the
+    // one it prepared — under its teardown.
     let (slices, held) = Slices::new();
     let mut verifier = live_verifier(slices);
     let first = live_check(&rig, &mut verifier, w1, A1, &root("check-a1"), &cancelled)?;
     let second = live_check(&rig, &mut verifier, w2, A2, &root("check-a2"), &cancelled)?;
-    // Each check's aggregate is its attempt's (R22 C1a), never a fresh draw.
     assert_eq!(
         taken(&held),
         vec![
-            Held::Start(A1.to_owned(), w1.until, flag),
-            Held::Finish(w1.teardown_until),
-            Held::Start(A2.to_owned(), w2.until, flag),
-            Held::Finish(w2.teardown_until),
+            Held::Prepare(A1.to_owned(), w1.until),
+            Held::Create(A1.to_owned(), w1.until, flag),
+            Held::Finish(A1.to_owned(), w1.teardown_until),
+            Held::Prepare(A2.to_owned(), w2.until),
+            Held::Create(A2.to_owned(), w2.until, flag),
+            Held::Finish(A2.to_owned(), w2.teardown_until),
         ]
     );
     // The launcher refused at the class's pins: three distinct scopes on a valid slice reached it
     // (a reused id or a malformed slice is `Layout` before any launch), and nothing started.
     for observed in [&first, &second] {
         assert!(
-            matches!(&observed.run, Ok(run) if matches!(run.outcome, RunOutcome::LauncherFailed)),
+            launcher_failed(observed),
             "{:?}",
-            observed
-                .run
-                .as_ref()
-                .map(|run| format!("{:?}", run.outcome))
-                .map_err(|error| format!("{error:?}"))
+            observed.run.as_ref().err()
         );
         assert_eq!(observed.resources, Resources::Settled);
     }
-    // (B) a refused start: no launch (the job root stays empty), still finished.
+    // (B) a refused prepare: nothing held, nothing finished, no launch, named, settled.
     let (mut slices, held) = Slices::new();
-    slices.start = Some(Err(habitat_engine::worker::aggregate::Error::Busy));
+    slices.prepare = Some(Refused::Invalid);
     let mut verifier = live_verifier(slices);
     let job_root = root("check-b");
     let refused = live_check(&rig, &mut verifier, w1, A1, &job_root, &cancelled)?;
-    assert!(matches!(refused.run, Err(workload::Error::Io)));
-    assert_eq!(fs::read_dir(&job_root)?.count(), 0, "nothing launched");
-    assert_eq!(
-        taken(&held).last(),
-        Some(&Held::Finish(w1.teardown_until)),
-        "a refused start is still finished"
+    assert_eq!(taken(&held), vec![Held::Prepare(A1.to_owned(), w1.until)]);
+    assert!(
+        matches!(refused.run, Err(Unlaunched::Aggregate(Refused::Invalid))),
+        "{:?}",
+        refused.run.as_ref().err()
     );
+    assert_eq!(fs::read_dir(&job_root)?.count(), 0, "nothing launched");
     assert_eq!(refused.resources, Resources::Settled);
-    // (C) the unit `start` returned is the scopes' only source: a name no slice has is `Layout`.
-    let (mut slices, _) = Slices::new();
-    slices.start = Some(Ok("not-a-slice".to_owned()));
+    // (C) a refused create: what was prepared is finished, and the refusal is named.
+    let (mut slices, held) = Slices::new();
+    slices.create = Some(Err(Refused::Limits));
     let mut verifier = live_verifier(slices);
-    let malformed = live_check(&rig, &mut verifier, w2, A2, &root("check-c"), &cancelled)?;
-    assert!(matches!(malformed.run, Err(workload::Error::Layout)));
-    // (D) a refused finish is observed pending.
+    let job_root = root("check-c");
+    let limits = live_check(&rig, &mut verifier, w2, A2, &job_root, &cancelled)?;
+    assert_eq!(
+        taken(&held),
+        vec![
+            Held::Prepare(A2.to_owned(), w2.until),
+            Held::Create(A2.to_owned(), w2.until, flag),
+            Held::Finish(A2.to_owned(), w2.teardown_until),
+        ]
+    );
+    assert!(
+        matches!(limits.run, Err(Unlaunched::Aggregate(Refused::Limits))),
+        "{:?}",
+        limits.run.as_ref().err()
+    );
+    assert_eq!(fs::read_dir(&job_root)?.count(), 0, "nothing launched");
+    // (D) the unit `create` returned is the scopes' only source: a name no slice has is `Layout`.
     let (mut slices, _) = Slices::new();
-    slices.finish = Err(habitat_engine::worker::aggregate::Error::Busy);
+    slices.create = Some(Ok("not-a-slice".to_owned()));
     let mut verifier = live_verifier(slices);
-    let unfinished = live_check(&rig, &mut verifier, w1, A1, &root("check-d"), &cancelled)?;
-    assert_eq!(unfinished.resources, Resources::Pending);
-    // (E) through the runtime: the pending aggregate is the cleanup record's, and the check's
-    // cleanup is unsettled, so the task needs settlement (B14a-1c review H1).
+    let malformed = live_check(&rig, &mut verifier, w2, A2, &root("check-d"), &cancelled)?;
+    assert!(
+        matches!(
+            malformed.run,
+            Err(Unlaunched::Workload(workload::Error::Layout))
+        ),
+        "{:?}",
+        malformed.run.as_ref().err()
+    );
+    // (E) a refused finish is observed pending with its refusal, and does not refuse the next
+    // check on the same verifier: the next slice is prepared, created and finished, and settles.
+    let (mut slices, held) = Slices::new();
+    slices.finish = VecDeque::from([Err(Refused::Busy), Ok(())]);
+    let mut verifier = live_verifier(slices);
+    let busy = live_check(&rig, &mut verifier, w1, A1, &root("check-e1"), &cancelled)?;
+    let next = live_check(&rig, &mut verifier, w2, A2, &root("check-e2"), &cancelled)?;
+    assert_eq!(
+        [busy.resources, next.resources],
+        [Resources::Pending(Refused::Busy), Resources::Settled]
+    );
+    assert!(launcher_failed(&next), "the next check ran");
+    assert_eq!(prepared(taken(&held)), [A1, A2]);
+    // (F) through the runtime.
+    a_refused_finish_is_named_through_the_runtime(&rig)
+}
+
+/// Fixture (F) of the test above, through the runtime: every slice prepared is the ledger's own
+/// attempt id, in the ledger's order (R22 C1a); the pending slice is the cleanup record's, named,
+/// and the check's cleanup is unsettled, so the task needs settlement (B14a-1c review H1).
+fn a_refused_finish_is_named_through_the_runtime(rig: &Rig) -> Outcome_ {
     let principal = owner();
     let (source, _) = script(vec![Candidate::Replacement(SECOND.to_vec())]);
     let (mut slices, through_runtime) = Slices::new();
-    slices.finish = Err(habitat_engine::worker::aggregate::Error::Busy);
-    let outcome = run(&rig, &principal, source, live_verifier(slices), 5_000)
-        .map_err(|e| format!("{e:?}"))?;
+    slices.finish = VecDeque::from([Err(habitat_engine::worker::aggregate::Error::Busy)]);
+    let outcome =
+        run(rig, &principal, source, live_verifier(slices), 5_000).map_err(|e| format!("{e:?}"))?;
     assert_eq!(
         outcome,
         Outcome::Driven(Driven::NeedsSettlement(StopReason::Unsettled))
     );
-    let cleanup = cleanup_object(&rig)?;
+    let attempts = attempt_ids(rig)?;
+    assert!(!attempts.is_empty(), "the run began an attempt");
+    assert_eq!(prepared(taken(&through_runtime)), attempts);
+    let cleanup = cleanup_object(rig)?;
     assert_eq!(
         (&cleanup["aggregate"], &cleanup["obligations"]),
         (
@@ -3873,15 +3950,53 @@ fn the_live_verifier_holds_one_fresh_aggregate_per_check_inside_the_check_s_wind
                 {"id": "process", "state": "settled"},
                 {"id": "scratch", "state": "settled"},
                 {"id": "retained_paths", "state": "settled"},
-                {"id": "resources", "state": "pending"},
+                {"id": "resources", "state": "pending", "refusal": "busy"},
             ])
         )
     );
-    // (F) the slice is named after the attempt (R22 C1a): through the runtime, every aggregate
-    // started is the ledger's own attempt id, in the ledger's order — never a fresh draw.
-    let attempts = attempt_ids(&rig)?;
-    assert!(!attempts.is_empty(), "the run began an attempt");
-    assert_eq!(started(taken(&through_runtime)), attempts);
+    Ok(())
+}
+
+/// R22-2 · a slice that refused before the workload ran is named in the run's outcome record, and
+/// the one table decides the outcome: through the runtime, a create refused `Limits` is a setup
+/// failure naming `limits`; one refused `Deadline` is a timeout naming `deadline`. Each committed
+/// outcome object is decoded whole — no steps, the four observations, the refusal.
+#[test]
+fn an_aggregate_start_refusal_is_named_in_the_outcome_record() -> Outcome_ {
+    use habitat_engine::worker::aggregate::Error as Refused;
+    let observations = serde_json::json!({
+        "process_cleanup": "complete",
+        "subjects": "unchanged",
+        "cancellation": "not_observed",
+        "scratch": "released",
+    });
+    for (refusal, outcome, name) in [
+        (Refused::Limits, "setup_failed", "limits"),
+        (Refused::Deadline, "timeout", "deadline"),
+    ] {
+        let rig = rig(&Shape::default())?;
+        let principal = owner();
+        let (source, _) = script(vec![Candidate::Replacement(SECOND.to_vec())]);
+        let (mut slices, _) = Slices::new();
+        slices.create = Some(Err(refusal));
+        run(&rig, &principal, source, live_verifier(slices), 5_000)
+            .map_err(|e| format!("{e:?}"))?;
+        let recorded = committed_records(&rig)?
+            .iter()
+            .filter(|row| row[0] == "run_outcome")
+            .map(|row| object_json(&rig, &row[2]))
+            .collect::<Result<Vec<_>, _>>()?;
+        assert_eq!(
+            recorded,
+            vec![serde_json::json!({
+                "outcome": outcome,
+                "steps": [],
+                "observations": observations,
+                "aggregate_refusal": name,
+            })],
+            "{refusal:?}"
+        );
+    }
     Ok(())
 }
 

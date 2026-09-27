@@ -16,6 +16,7 @@ use crate::contracts::UuidV4;
 use crate::contracts::receipt::Ref;
 use crate::store::{Committed, Error as StoreError, RunRecordKind, Store};
 use crate::worker::Finish;
+use crate::worker::aggregate;
 use serde::{Deserialize, Serialize};
 use std::time::Instant;
 
@@ -217,6 +218,45 @@ impl OutcomeName {
     }
 }
 
+/// The name of a check's aggregate refusal (R22-2): what a run outcome states about a slice that
+/// refused before the workload ran, and what the `resources` obligation states about a teardown
+/// that did not settle.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AggregateRefusal {
+    Invalid,
+    Bound,
+    Deadline,
+    Cancelled,
+    Identity,
+    Io,
+    State,
+    Manager,
+    Process,
+    Limits,
+    Busy,
+}
+
+impl AggregateRefusal {
+    /// The name of `error`: one arm per variant, so a new refusal is a compile error here.
+    #[must_use]
+    pub const fn of(error: aggregate::Error) -> Self {
+        match error {
+            aggregate::Error::Invalid => Self::Invalid,
+            aggregate::Error::Bound => Self::Bound,
+            aggregate::Error::Deadline => Self::Deadline,
+            aggregate::Error::Cancelled => Self::Cancelled,
+            aggregate::Error::Identity => Self::Identity,
+            aggregate::Error::Io => Self::Io,
+            aggregate::Error::State => Self::State,
+            aggregate::Error::Manager => Self::Manager,
+            aggregate::Error::Process => Self::Process,
+            aggregate::Error::Limits => Self::Limits,
+            aggregate::Error::Busy => Self::Busy,
+        }
+    }
+}
+
 /// Why a step was refused before it ran.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
@@ -336,13 +376,16 @@ impl Observations {
     }
 }
 
-/// How the run ended: its outcome by name, each step's capture or refusal, and the four run
-/// observations.
+/// How the run ended: its outcome by name, each step's capture or refusal, the four run
+/// observations, and — only when the check's aggregate refused before the workload ran — that
+/// refusal's name (R22-2; absent otherwise, so a record without one encodes as before).
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct RunOutcome {
     outcome: OutcomeName,
     steps: Vec<StepRecord>,
     observations: Observations,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    aggregate_refusal: Option<AggregateRefusal>,
 }
 
 #[derive(Deserialize)]
@@ -351,16 +394,23 @@ struct RunOutcomeFields {
     outcome: OutcomeName,
     steps: Vec<StepRecord>,
     observations: Observations,
+    #[serde(default)]
+    aggregate_refusal: Option<AggregateRefusal>,
 }
 
 impl RunOutcome {
-    /// The one production constructor: the run as `workload` returned it, and the capture the
-    /// live half published for each completed step (`None` for a refused one), one per step.
+    /// The one production constructor: the run as `workload` returned it, the capture the live
+    /// half published for each completed step (`None` for a refused one), one per step, and the
+    /// check's aggregate refusal, if the aggregate refused before the workload ran.
     ///
     /// # Errors
     /// [`Refusal::Steps`] when `captures` does not pair `run.steps` one to one — a completed step
     /// with no capture, a refused step with one, or a different count.
-    pub fn of(run: &Run, captures: &[Option<Ref>]) -> Result<Self, Refusal> {
+    pub fn of(
+        run: &Run,
+        captures: &[Option<Ref>],
+        aggregate_refusal: Option<AggregateRefusal>,
+    ) -> Result<Self, Refusal> {
         if captures.len() != run.steps.len() {
             return Err(Refusal::Steps);
         }
@@ -395,6 +445,7 @@ impl RunOutcome {
             outcome: OutcomeName::of(&run.outcome),
             steps,
             observations: Observations::of(run),
+            aggregate_refusal,
         })
     }
 
@@ -428,6 +479,7 @@ impl RunOutcome {
             outcome: fields.outcome,
             steps: fields.steps,
             observations: fields.observations,
+            aggregate_refusal: fields.aggregate_refusal,
         })
     }
 }
@@ -451,6 +503,10 @@ pub struct ObligationRecord {
     pub id: String,
     /// How it stands.
     pub state: Settlement,
+    /// The refusal that left it unsettled, where one is named (R22-2: the `resources` obligation
+    /// carries its teardown's refusal); absent otherwise, so a record without one encodes as before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refusal: Option<AggregateRefusal>,
 }
 
 /// What the teardown settled and what it could not.
@@ -904,9 +960,9 @@ impl RunRecord for WorkerSettle {
 mod tests {
     use super::sealed::Decode as _;
     use super::{
-        Cancellation, FinishName, Intents, ObligationRecord, Observations, OutcomeName,
-        OutputReadback, ProcessCleanup, Readbacks, Refusal, RefusedKind, RunCleanup, RunClock,
-        RunOutcome, RunRecord, RuntimeClock, Scratch, Settlement, Subjects, WorkerSettle,
+        AggregateRefusal, Cancellation, FinishName, Intents, ObligationRecord, Observations,
+        OutcomeName, OutputReadback, ProcessCleanup, Readbacks, Refusal, RefusedKind, RunCleanup,
+        RunClock, RunOutcome, RunRecord, RuntimeClock, Scratch, Settlement, Subjects, WorkerSettle,
     };
     use crate::app::candidates::{
         Outcome as CandidateOutcome, Refusal as CandidateRefusal, Settle,
@@ -1053,7 +1109,7 @@ mod tests {
             Outcome::Timeout,
             vec![refused("compile", true), refused("link", false)],
         );
-        let record = RunOutcome::of(&run, &[None, None])?;
+        let record = RunOutcome::of(&run, &[None, None], None)?;
         assert_eq!(record.outcome(), OutcomeName::Timeout);
         assert_eq!(
             record
@@ -1088,6 +1144,18 @@ mod tests {
             }
         );
         assert_eq!(RunOutcome::decode_bytes(&record.to_bytes()?)?, record);
+        // R22-2 · no refusal: no key, so today's encoding is unchanged; a refusal is carried by
+        // name and round-trips whole.
+        let json = |bytes: Vec<u8>| {
+            serde_json::from_slice::<serde_json::Value>(&bytes).map_err(|_| Refusal::Encoding)
+        };
+        assert_eq!(json(record.to_bytes()?)?.get("aggregate_refusal"), None);
+        let refused = RunOutcome::of(&run, &[None, None], Some(AggregateRefusal::Limits))?;
+        assert_eq!(
+            json(refused.to_bytes()?)?.get("aggregate_refusal"),
+            Some(&json!("limits"))
+        );
+        assert_eq!(RunOutcome::decode_bytes(&refused.to_bytes()?)?, refused);
         Ok(())
     }
 
@@ -1097,11 +1165,11 @@ mod tests {
     fn a_run_outcome_refuses_captures_that_do_not_pair_its_steps() {
         let run = run(Outcome::SetupFailed, vec![refused("compile", true)]);
         assert!(matches!(
-            RunOutcome::of(&run, &[]).err(),
+            RunOutcome::of(&run, &[], None).err(),
             Some(Refusal::Steps)
         ));
         assert!(matches!(
-            RunOutcome::of(&run, &[Some(reference(1))]).err(),
+            RunOutcome::of(&run, &[Some(reference(1))], None).err(),
             Some(Refusal::Steps)
         ));
         let both = br#"{"outcome":"timeout","steps":[{"label":"compile","capture":{"artifact_id":"28f00000-0000-4000-8000-000000000001","sha256":"sha256:0101010101010101010101010101010101010101010101010101010101010101","byte_length":2,"media_type":"application/json","schema_id":"hee3.raw/1"},"refused":"prepare"}],"observations":{"process_cleanup":"complete","subjects":"unchanged","cancellation":"not_observed","scratch":"released"}}"#;
@@ -1146,6 +1214,72 @@ mod tests {
         );
     }
 
+    /// R22-2 · every aggregate refusal has a name, and the names are the wire's spellings: the whole
+    /// table over all eleven refusals. An obligation carrying one round-trips whole through the
+    /// cleanup record; one without carries no key.
+    #[test]
+    fn aggregate_refusals_are_named_on_the_wire() -> Result<(), Refusal> {
+        use crate::worker::aggregate::Error;
+        let names = [
+            Error::Invalid,
+            Error::Bound,
+            Error::Deadline,
+            Error::Cancelled,
+            Error::Identity,
+            Error::Io,
+            Error::State,
+            Error::Manager,
+            Error::Process,
+            Error::Limits,
+            Error::Busy,
+        ]
+        .map(|error| {
+            serde_json::to_value(AggregateRefusal::of(error)).map_err(|_| Refusal::Encoding)
+        });
+        assert_eq!(
+            names.into_iter().collect::<Result<Vec<_>, _>>()?,
+            [
+                "invalid",
+                "bound",
+                "deadline",
+                "cancelled",
+                "identity",
+                "io",
+                "state",
+                "manager",
+                "process",
+                "limits",
+                "busy"
+            ]
+            .map(|name| json!(name))
+        );
+        let obligations = [
+            ObligationRecord {
+                id: "scratch".to_owned(),
+                state: Settlement::Settled,
+                refusal: None,
+            },
+            ObligationRecord {
+                id: "resources".to_owned(),
+                state: Settlement::Pending,
+                refusal: Some(AggregateRefusal::Busy),
+            },
+        ];
+        let record = RunCleanup::of(Settlement::Pending, &obligations, &[]);
+        let bytes = record.to_bytes()?;
+        let wire: serde_json::Value =
+            serde_json::from_slice(&bytes).map_err(|_| Refusal::Encoding)?;
+        assert_eq!(
+            wire["obligations"],
+            json!([
+                {"id": "scratch", "state": "settled"},
+                {"id": "resources", "state": "pending", "refusal": "busy"},
+            ])
+        );
+        assert_eq!(RunCleanup::decode_bytes(&bytes)?, record);
+        Ok(())
+    }
+
     /// The unresolved count is derived from the obligations, and bytes that disagree are refused.
     #[test]
     fn a_run_cleanup_derives_its_unresolved_count_and_refuses_bytes_that_disagree()
@@ -1154,14 +1288,17 @@ mod tests {
             ObligationRecord {
                 id: "process".to_owned(),
                 state: Settlement::Settled,
+                refusal: None,
             },
             ObligationRecord {
                 id: "scratch".to_owned(),
                 state: Settlement::Pending,
+                refusal: None,
             },
             ObligationRecord {
                 id: "fifo".to_owned(),
                 state: Settlement::Unknown,
+                refusal: None,
             },
         ];
         let record = RunCleanup::of(Settlement::Failed, &obligations, &[reference(3)]);

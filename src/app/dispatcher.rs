@@ -211,7 +211,9 @@ impl CandidateSource for Never {
 impl Verifier for Never {
     fn check(&mut self, plan: super::runtime::CheckPlan<'_>) -> super::runtime::Observed {
         super::runtime::Observed {
-            run: Err(super::workload::Error::Layout),
+            run: Err(super::runtime::Unlaunched::Workload(
+                super::workload::Error::Layout,
+            )),
             observed: plan.window.begun,
             resources: super::runtime::Resources::NotHeld,
         }

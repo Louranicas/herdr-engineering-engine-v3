@@ -57,6 +57,31 @@ enum CreateOutcome {
     Refused,
     Unknown(Error),
 }
+/// Where one check's [`Slice`] stands (R22-2): nothing sent, the create asked, the slice created
+/// with its cgroup held, the stop asked, or stopped.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SlicePhase {
+    Prepared,
+    CreateRequested,
+    Created,
+    StopRequested,
+    Stopped,
+}
+/// What [`Slice::stop`] does from a phase ([`stop_step`]): there is no wedged step.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum StopStep {
+    Nothing,
+    Resolve,
+    StopIfEmpty,
+    AwaitSettled,
+}
+/// What the manager's own row says of a slice whose create was asked ([`resolve`]).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Resolved {
+    Gone,
+    StopUnrealised,
+    CheckEmpty,
+}
 #[derive(Debug)]
 pub struct Call {
     pub argv: Vec<OsString>,
@@ -99,6 +124,19 @@ pub struct Aggregate {
     calls: Vec<Call>,
     empty_at: Option<Instant>,
     attach_refused: bool,
+}
+/// One check's aggregate slice (R22-1): named after the ledger attempt, created with the aggregate
+/// limits and stopped — never holding a process of its own. It has no attach: the only manager
+/// requests it can make are the slice's create (`create_arguments`) and `StopUnit`, so the
+/// caller is never moved, and a caller that consumes it on finish cannot hold one across checks.
+#[derive(Debug)]
+pub struct Slice {
+    config: Config,
+    phase: SlicePhase,
+    unit: String,
+    cgroup: Option<File>,
+    calls: Vec<Call>,
+    created: CreateOutcome,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -168,11 +206,7 @@ impl Aggregate {
         std::mem::take(&mut self.calls)
     }
     fn aggregate_path(&self) -> String {
-        let uid = geteuid().as_raw();
-        format!(
-            "/user.slice/user-{uid}.slice/user@{uid}.service/{}",
-            self.unit
-        )
+        slice_path(&self.unit)
     }
     fn coordinator_path(&self) -> String {
         format!("{}/{}", self.aggregate_path(), self.coordinator)
@@ -416,6 +450,123 @@ impl Aggregate {
                 Duration::from_millis(2).min(deadline.saturating_duration_since(Instant::now())),
             );
         }
+    }
+}
+impl Slice {
+    /// Pin the manager's door and name the slice after the attempt (`config.run_id`, the ledger
+    /// attempt: R22 C1a) through `aggregate_unit`; no manager call, no mutation.
+    /// # Errors
+    /// The door's pin refusal; `Invalid` for a run id that is not a `UUIDv4`.
+    pub fn prepare(config: Config, deadline: Instant) -> Result<Self, Error> {
+        io::pin(&config, deadline)?;
+        let unit = aggregate_unit(UuidV4::parse(&config.run_id).map_err(|_| Error::Invalid)?);
+        Ok(Self {
+            config,
+            phase: SlicePhase::Prepared,
+            unit,
+            cgroup: None,
+            calls: vec![],
+            created: CreateOutcome::Refused,
+        })
+    }
+    /// Create the slice, from `Prepared` only: its name proved absent, the create asked (its
+    /// outcome recorded by `create_outcome` before any error returns), then its cgroup captured
+    /// with the aggregate limits read back.
+    /// # Errors
+    /// `State` from any other phase; the door's, the manager's or the readback's refusal — the
+    /// phase then says what [`Slice::stop`] must undo.
+    pub fn create(&mut self, deadline: Instant, cancelled: &AtomicBool) -> Result<(), Error> {
+        if self.phase != SlicePhase::Prepared {
+            return Err(Error::State);
+        }
+        absent(
+            &self.config,
+            &mut self.calls,
+            self.unit.clone(),
+            deadline,
+            cancelled,
+        )?;
+        self.phase = SlicePhase::CreateRequested;
+        let recorded = self.calls.len();
+        let result = create_slice(
+            &self.config,
+            &mut self.calls,
+            &self.unit,
+            deadline,
+            cancelled,
+        );
+        self.created = create_outcome(self.calls.get(recorded), result);
+        result?;
+        self.cgroup = Some(capture(&slice_path(&self.unit), deadline, cancelled)?);
+        self.phase = SlicePhase::Created;
+        Ok(())
+    }
+    /// Undo whatever the phase says was done, step by step through `stop_step` and `resolve`,
+    /// under `deadline`; never cancelled. Each step either returns or moves the phase forward, so
+    /// it ends at `Stopped` or at a named refusal.
+    /// # Errors
+    /// The manager's, the door's or the readback's refusal; `Busy` for a slice that is not empty;
+    /// a create whose outcome is unknown and whose unit is not found is its own error (R22-2 row 2).
+    pub fn stop(&mut self, deadline: Instant) -> Result<(), Error> {
+        let uncancelled = AtomicBool::new(false);
+        let path = slice_path(&self.unit);
+        loop {
+            match stop_step(self.phase) {
+                StopStep::Nothing => return Ok(()),
+                StopStep::Resolve => {
+                    let row = query(
+                        &self.config,
+                        &mut self.calls,
+                        &self.unit,
+                        deadline,
+                        &uncancelled,
+                    )?;
+                    match resolve(&row, &path, self.created)? {
+                        Resolved::Gone => self.phase = SlicePhase::Stopped,
+                        Resolved::StopUnrealised => {
+                            self.phase = SlicePhase::StopRequested;
+                            job(&method(
+                                &self.config,
+                                &mut self.calls,
+                                "StopUnit",
+                                vec!["ss".into(), self.unit.clone(), "fail".into()],
+                                deadline,
+                                &uncancelled,
+                            )?)?;
+                        }
+                        Resolved::CheckEmpty => {
+                            self.cgroup = Some(io::cgroup(&path, deadline)?);
+                            self.phase = SlicePhase::Created;
+                        }
+                    }
+                }
+                StopStep::StopIfEmpty => {
+                    let fd = self.cgroup.as_ref().ok_or(Error::State)?;
+                    let phase = &mut self.phase;
+                    stop_empty(
+                        &self.config,
+                        &mut self.calls,
+                        fd,
+                        &path,
+                        &self.unit,
+                        deadline,
+                        |_| *phase = SlicePhase::StopRequested,
+                    )?;
+                }
+                StopStep::AwaitSettled => {
+                    await_settled(&self.config, &mut self.calls, &self.unit, deadline)?;
+                    self.phase = SlicePhase::Stopped;
+                }
+            }
+        }
+    }
+    #[must_use]
+    pub fn unit(&self) -> &str {
+        &self.unit
+    }
+    #[must_use]
+    pub fn calls(&self) -> &[Call] {
+        &self.calls
     }
 }
 /// The one busctl door (R21 N6): the pinned `/usr/bin/busctl` (`io::pin`, re-checked per call)
@@ -896,10 +1047,62 @@ fn create_arguments(unit: &str) -> Vec<String> {
     args.push("0".into());
     args
 }
+/// A unit's cgroup path under this user's manager.
+fn slice_path(unit: &str) -> String {
+    let uid = geteuid().as_raw();
+    format!("/user.slice/user-{uid}.slice/user@{uid}.service/{unit}")
+}
+/// The one door from each phase to what [`Slice::stop`] does (R22-2): nothing sent or already
+/// stopped is nothing; an asked create is resolved against the manager's row; a created slice is
+/// stopped only when empty; an asked stop is awaited.
+const fn stop_step(phase: SlicePhase) -> StopStep {
+    match phase {
+        SlicePhase::Prepared | SlicePhase::Stopped => StopStep::Nothing,
+        SlicePhase::CreateRequested => StopStep::Resolve,
+        SlicePhase::Created => StopStep::StopIfEmpty,
+        SlicePhase::StopRequested => StopStep::AwaitSettled,
+    }
+}
+/// What the manager's own row `o` says of a slice whose create was asked (R22-2), rows in order:
+/// settled with a create refused or answered is gone; not found after a create whose outcome is
+/// unknown is that create's error (a lost reply may still land: never recorded settled); loaded,
+/// inactive, holding no control group is gone; any other load state is `Manager`; no control group
+/// while active or activating is an unrealised slice to stop; its own path is a slice to check
+/// empty; any other path is `Identity`.
+fn resolve(
+    o: &UnitObservation,
+    expected_path: &str,
+    created: CreateOutcome,
+) -> Result<Resolved, Error> {
+    if settled(o) && matches!(created, CreateOutcome::Refused | CreateOutcome::Answered) {
+        return Ok(Resolved::Gone);
+    }
+    if let (true, CreateOutcome::Unknown(error)) = (o.load_state == "not-found", created) {
+        return Err(error);
+    }
+    let group = o.control_group.as_deref();
+    if o.load_state == "loaded" && o.active_state == "inactive" && group == Some("") {
+        return Ok(Resolved::Gone);
+    }
+    if o.load_state != "loaded" {
+        return Err(Error::Manager);
+    }
+    if group == Some("") && matches!(o.active_state.as_str(), "active" | "activating") {
+        return Ok(Resolved::StopUnrealised);
+    }
+    if group == Some(expected_path) {
+        Ok(Resolved::CheckEmpty)
+    } else {
+        Err(Error::Identity)
+    }
+}
 
 #[cfg(test)]
 mod tests {
-    use super::{Call, CreateOutcome, Error, aggregate_unit, create_arguments, create_outcome};
+    use super::{
+        Call, CreateOutcome, Error, Resolved, SlicePhase, StopStep, UnitObservation,
+        aggregate_unit, create_arguments, create_outcome, resolve, slice_path, stop_step,
+    };
     use crate::contracts::UuidV4;
     use crate::worker::process::{Interruption, ProcessReport, Refusal, SignalFacts, Stream};
     use std::time::{Duration, Instant};
@@ -941,6 +1144,86 @@ mod tests {
                 pending: None,
             }),
         }
+    }
+
+    /// R22-2 · the teardown's table, whole: every phase has a step, nothing sent and already
+    /// stopped do nothing, and there is no wedged step.
+    #[test]
+    fn stop_step_has_a_door_for_every_slice_phase() {
+        assert_eq!(
+            [
+                SlicePhase::Prepared,
+                SlicePhase::CreateRequested,
+                SlicePhase::Created,
+                SlicePhase::StopRequested,
+                SlicePhase::Stopped,
+            ]
+            .map(|phase| (phase, stop_step(phase))),
+            [
+                (SlicePhase::Prepared, StopStep::Nothing),
+                (SlicePhase::CreateRequested, StopStep::Resolve),
+                (SlicePhase::Created, StopStep::StopIfEmpty),
+                (SlicePhase::StopRequested, StopStep::AwaitSettled),
+                (SlicePhase::Stopped, StopStep::Nothing),
+            ]
+        );
+    }
+
+    /// One manager row: load, active and sub state, and the `ControlGroup` read (`None` when the
+    /// unit is not found and none was read).
+    fn row(load: &str, active: &str, sub: &str, group: Option<&str>) -> UnitObservation {
+        UnitObservation {
+            name: "hee3probe4817.slice".to_owned(),
+            load_state: load.to_owned(),
+            active_state: active.to_owned(),
+            sub_state: sub.to_owned(),
+            control_group: group.map(str::to_owned),
+            observed_at: Instant::now(),
+        }
+    }
+
+    /// R22-2 · `resolve` over the manager's own rows. From the host (F113): the T06 stopped slice
+    /// (`loaded/inactive/dead`, `ControlGroup ""`), the probe's collected scope (`not-found`), and
+    /// the probe's live slice at its own path. Hand-typed, self-consistent only (labelled so): an
+    /// activating and an active unrealised slice, and a load state that is not `loaded`. A
+    /// not-found unit after an unknown create is that create's error, never gone; the stopped
+    /// slice is gone whatever the create came to (row 3 decides a row of its own).
+    #[test]
+    fn resolve_reads_the_manager_s_own_rows() -> Result<(), Box<dyn std::error::Error>> {
+        const P: &str = "/user.slice/user-1000.slice/user@1000.service/hee3probe4817.slice";
+        let a1_path = slice_path(&aggregate_unit(attempt(A1)?));
+        let stopped = row("loaded", "inactive", "dead", Some(""));
+        let collected = row("not-found", "inactive", "dead", None);
+        let live = row("loaded", "active", "active", Some(P));
+        // Hand-typed rows: self-consistent, not recorded from a host.
+        let activating = row("loaded", "activating", "start", Some(""));
+        let unrealised = row("loaded", "active", "active", Some(""));
+        let errored = row("error", "active", "running", Some(P));
+        assert_eq!(
+            [
+                resolve(&stopped, P, CreateOutcome::Answered),
+                resolve(&stopped, P, CreateOutcome::Unknown(Error::Process)),
+                resolve(&collected, P, CreateOutcome::Refused),
+                resolve(&collected, P, CreateOutcome::Unknown(Error::Deadline)),
+                resolve(&live, P, CreateOutcome::Answered),
+                resolve(&live, &a1_path, CreateOutcome::Answered),
+                resolve(&activating, P, CreateOutcome::Answered),
+                resolve(&unrealised, P, CreateOutcome::Unknown(Error::Process)),
+                resolve(&errored, P, CreateOutcome::Answered),
+            ],
+            [
+                Ok(Resolved::Gone),
+                Ok(Resolved::Gone),
+                Ok(Resolved::Gone),
+                Err(Error::Deadline),
+                Ok(Resolved::CheckEmpty),
+                Err(Error::Identity),
+                Ok(Resolved::StopUnrealised),
+                Ok(Resolved::StopUnrealised),
+                Err(Error::Manager),
+            ]
+        );
+        Ok(())
     }
 
     /// R22-2 · only a manager answer (or nothing reaching it) counts as refused; a call that may
