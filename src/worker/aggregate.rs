@@ -1,7 +1,9 @@
-//! One coordinator's transient aggregate; raw manager facts are not acceptance.
+//! One check's transient aggregate slice ([`Slice`]), named after the ledger attempt its caller
+//! holds, and a service's main process id ([`main_pid`]), both over the one pinned busctl door;
+//! raw manager facts are not acceptance.
 use super::{process, resources};
 use crate::contracts::UuidV4;
-use rustix::process::{geteuid, getpgrp, getppid, getsid};
+use rustix::process::geteuid;
 use serde::Deserialize;
 use std::ffi::OsString;
 use std::fs::File;
@@ -19,7 +21,6 @@ pub struct Config {
     pub busctl: PathBuf,
     pub busctl_sha256: String,
     pub runtime_dir: PathBuf,
-    pub run_id: String,
 }
 /// busctl's fixed host path: the one the door pins (`aggregate_io::pin`) and every caller names.
 pub const BUSCTL: &str = "/usr/bin/busctl";
@@ -36,18 +37,6 @@ pub enum Error {
     Process,
     Limits,
     Busy,
-}
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Phase {
-    Prepared,
-    CreateRequested,
-    SliceCreated,
-    AttachRequested,
-    Attached,
-    RestoreRequested,
-    Restored,
-    StopRequested,
-    Stopped,
 }
 /// What a create request came to (R22-2): a job path came back, nothing reached the manager (or it
 /// answered with an error), or a failure after which the manager may still act on the request.
@@ -100,35 +89,6 @@ pub struct UnitObservation {
     pub job: u32,
     pub observed_at: Instant,
 }
-#[derive(Debug)]
-pub struct Live {
-    pub coordinator_pid: u32,
-    pub before: String,
-    pub after: String,
-    pub aggregate: String,
-    pub limits: resources::Limits,
-}
-#[derive(Debug)]
-pub struct Stopped {
-    pub direct_empty_observed_at: Instant,
-    pub manager: UnitObservation,
-}
-#[derive(Debug)]
-pub struct Aggregate {
-    config: Config,
-    phase: Phase,
-    unit: String,
-    coordinator: String,
-    origin: String,
-    origin_unit: String,
-    origin_subgroup: String,
-    origin_fd: File,
-    slice_fd: Option<File>,
-    identity: [u32; 4],
-    calls: Vec<Call>,
-    empty_at: Option<Instant>,
-    attach_refused: bool,
-}
 /// One check's aggregate slice (R22-1): named after the ledger attempt, created with the aggregate
 /// limits and stopped — never holding a process of its own. It has no attach: the only manager
 /// requests it can make are the slice's create (`create_arguments`) and `StopUnit`, so the
@@ -162,308 +122,14 @@ type UnitRow = (
     String,
 );
 
-impl Aggregate {
-    /// Capture the current coordinator and pin trusted manager inputs; no mutation.
-    /// # Errors
-    /// Refuses untrusted paths, source changes or an unsupported origin.
-    pub fn prepare(config: Config, deadline: Instant) -> Result<Self, Error> {
-        io::pin(&config, deadline)?;
-        let attempt = UuidV4::parse(&config.run_id).map_err(|_| Error::Invalid)?;
-        let unit = aggregate_unit(attempt);
-        let stem = config.run_id.replace('-', "");
-        let origin = io::membership(deadline)?;
-        let (origin_unit, origin_subgroup) = origin_parts(&origin)?;
-        let origin_fd = io::cgroup(&origin, deadline)?;
-        Ok(Self {
-            config,
-            phase: Phase::Prepared,
-            unit,
-            coordinator: format!("hee3coordinator{stem}.scope"),
-            origin,
-            origin_unit,
-            origin_subgroup,
-            origin_fd,
-            slice_fd: None,
-            identity: identity()?,
-            calls: vec![],
-            empty_at: None,
-            attach_refused: false,
-        })
-    }
-    #[must_use]
-    pub fn unit(&self) -> &str {
-        &self.unit
-    }
-    #[must_use]
-    pub fn coordinator_unit(&self) -> &str {
-        &self.coordinator
-    }
-    #[must_use]
-    pub const fn phase(&self) -> Phase {
-        self.phase
-    }
-    #[must_use]
-    pub fn calls(&self) -> &[Call] {
-        &self.calls
-    }
-    pub fn take_calls(&mut self) -> Vec<Call> {
-        std::mem::take(&mut self.calls)
-    }
-    fn aggregate_path(&self) -> String {
-        slice_path(&self.unit)
-    }
-    fn coordinator_path(&self) -> String {
-        format!("{}/{}", self.aggregate_path(), self.coordinator)
-    }
-    fn same_owner(&self) -> Result<(), Error> {
-        if identity()? == self.identity {
-            Ok(())
-        } else {
-            Err(Error::Identity)
-        }
-    }
-    /// Apply aggregate limits and attach this same process before candidate work.
-    /// # Errors
-    /// Any refusal leaves phase and raw calls available for reconciliation.
-    pub fn start(&mut self, deadline: Instant, cancelled: &AtomicBool) -> Result<Live, Error> {
-        if self.phase != Phase::Prepared {
-            return Err(Error::State);
-        }
-        self.same_owner()?;
-        if io::membership(deadline)? != self.origin {
-            return Err(Error::Identity);
-        }
-        for name in [self.unit.clone(), self.coordinator.clone()] {
-            absent(&self.config, &mut self.calls, name, deadline, cancelled)?;
-        }
-        self.phase = Phase::CreateRequested;
-        create_slice(
-            &self.config,
-            &mut self.calls,
-            &self.unit,
-            deadline,
-            cancelled,
-        )?;
-        self.phase = Phase::SliceCreated;
-        self.slice_fd = Some(capture(&self.aggregate_path(), deadline, cancelled)?);
-        self.phase = Phase::AttachRequested;
-        let args = vec![
-            "ssa(sv)a(sa(sv))".into(),
-            self.coordinator.clone(),
-            "fail".into(),
-            "3".into(),
-            "Slice".into(),
-            "s".into(),
-            self.unit.clone(),
-            "PIDs".into(),
-            "au".into(),
-            "1".into(),
-            self.identity[0].to_string(),
-            "CollectMode".into(),
-            "s".into(),
-            "inactive-or-failed".into(),
-            "0".into(),
-        ];
-        self.request_attach(args, deadline, cancelled)?;
-        self.wait_membership(&self.coordinator_path(), deadline, cancelled)?;
-        let after = io::membership(deadline)?;
-        let aggregate = self.slice_fd.as_ref().ok_or(Error::State)?;
-        let limits = aggregate_limits(aggregate, deadline)?;
-        io::stable(aggregate, &self.aggregate_path(), deadline)?;
-        self.same_owner()?;
-        if io::membership(deadline)? != after {
-            return Err(Error::Identity);
-        }
-        self.phase = Phase::Attached;
-        Ok(Live {
-            coordinator_pid: self.identity[0],
-            before: self.origin.clone(),
-            after,
-            aggregate: self.unit.clone(),
-            limits,
-        })
-    }
-    /// Observe manager state separately from direct cgroup/namespace cleanup.
-    /// # Errors
-    /// Refuses a foreign aggregate, failed query or raced property disappearance.
-    pub fn observe_candidate(
-        &mut self,
-        scope: &resources::Scope,
-        deadline: Instant,
-        cancelled: &AtomicBool,
-    ) -> Result<UnitObservation, Error> {
-        if scope.aggregate != self.unit {
-            return Err(Error::Identity);
-        }
-        let name = scope.unit().map_err(|_| Error::Invalid)?;
-        query(&self.config, &mut self.calls, &name, deadline, cancelled)
-    }
-    /// Restore only this current coordinator; never stop a unit containing it.
-    /// # Errors
-    /// Preserves pending phases on failed or incomplete migration.
-    pub fn restore_origin(&mut self, deadline: Instant) -> Result<(), Error> {
-        self.same_owner()?;
-        let uncancelled = AtomicBool::new(false);
-        if self.phase == Phase::AttachRequested
-            && self.attach_refused
-            && io::membership(deadline)? == self.origin
-        {
-            io::stable(&self.origin_fd, &self.origin, deadline)?;
-            io::stable(
-                self.slice_fd.as_ref().ok_or(Error::State)?,
-                &self.aggregate_path(),
-                deadline,
-            )?;
-            let coordinator = query(
-                &self.config,
-                &mut self.calls,
-                &self.coordinator,
-                deadline,
-                &uncancelled,
-            )?;
-            if coordinator.load_state != "not-found"
-                || coordinator.active_state != "inactive"
-                || coordinator.sub_state != "dead"
-            {
-                return Err(Error::Busy);
-            }
-            io::stable(
-                self.slice_fd.as_ref().ok_or(Error::State)?,
-                &self.aggregate_path(),
-                deadline,
-            )?;
-            io::stable(&self.origin_fd, &self.origin, deadline)?;
-            if io::membership(deadline)? != self.origin {
-                return Err(Error::Identity);
-            }
-            self.phase = Phase::Restored;
-            return Ok(());
-        }
-        match self.phase {
-            Phase::Attached | Phase::AttachRequested => {
-                self.wait_membership(&self.coordinator_path(), deadline, &uncancelled)?;
-                io::stable(&self.origin_fd, &self.origin, deadline)?;
-                self.phase = Phase::RestoreRequested;
-                let args = vec![
-                    "ssau".into(),
-                    self.origin_unit.clone(),
-                    self.origin_subgroup.clone(),
-                    "1".into(),
-                    self.identity[0].to_string(),
-                ];
-                if !method(
-                    &self.config,
-                    &mut self.calls,
-                    "AttachProcessesToUnit",
-                    args,
-                    deadline,
-                    &uncancelled,
-                )?
-                .is_empty()
-                {
-                    return Err(Error::Manager);
-                }
-            }
-            Phase::RestoreRequested | Phase::SliceCreated | Phase::Restored => {}
-            _ => return Err(Error::State),
-        }
-        self.wait_membership(&self.origin, deadline, &uncancelled)?;
-        io::stable(&self.origin_fd, &self.origin, deadline)?;
-        self.phase = Phase::Restored;
-        Ok(())
-    }
-    /// Requires direct aggregate populated0 after restoring this coordinator.
-    /// # Errors
-    /// Missing cgroup, live descendants or manager failure remain unresolved.
-    pub fn stop_if_empty(&mut self, deadline: Instant) -> Result<Stopped, Error> {
-        self.same_owner()?;
-        if !matches!(self.phase, Phase::Restored | Phase::StopRequested)
-            || io::membership(deadline)? != self.origin
-        {
-            return Err(Error::State);
-        }
-        io::stable(&self.origin_fd, &self.origin, deadline)?;
-        if self.phase == Phase::Restored {
-            if self.slice_fd.is_none() {
-                self.slice_fd = Some(io::cgroup(&self.aggregate_path(), deadline)?);
-            }
-            let path = self.aggregate_path();
-            let fd = self.slice_fd.as_ref().ok_or(Error::State)?;
-            let (phase, empty_at) = (&mut self.phase, &mut self.empty_at);
-            stop_empty(
-                &self.config,
-                &mut self.calls,
-                fd,
-                &path,
-                &self.unit,
-                deadline,
-                |at| {
-                    *empty_at = Some(at);
-                    *phase = Phase::StopRequested;
-                },
-            )?;
-        }
-        let observation = await_settled(&self.config, &mut self.calls, &self.unit, deadline)?;
-        self.phase = Phase::Stopped;
-        Ok(Stopped {
-            direct_empty_observed_at: self.empty_at.ok_or(Error::State)?,
-            manager: observation,
-        })
-    }
-    fn request_attach(
-        &mut self,
-        args: Vec<String>,
-        deadline: Instant,
-        cancelled: &AtomicBool,
-    ) -> Result<(), Error> {
-        let recorded = self.calls.len();
-        let result = method(
-            &self.config,
-            &mut self.calls,
-            "StartTransientUnit",
-            args,
-            deadline,
-            cancelled,
-        )
-        .and_then(|bytes| job(&bytes));
-        match create_outcome(self.calls.get(recorded), result) {
-            CreateOutcome::Answered => Ok(()),
-            CreateOutcome::Unknown(error) => Err(error),
-            CreateOutcome::Refused => {
-                self.attach_refused = true;
-                result
-            }
-        }
-    }
-    fn wait_membership(
-        &self,
-        expected: &str,
-        deadline: Instant,
-        cancelled: &AtomicBool,
-    ) -> Result<(), Error> {
-        loop {
-            io::tick(deadline)?;
-            if cancelled.load(Ordering::Acquire) {
-                return Err(Error::Cancelled);
-            }
-            self.same_owner()?;
-            if io::membership(deadline)? == expected {
-                return Ok(());
-            }
-            std::thread::sleep(
-                Duration::from_millis(2).min(deadline.saturating_duration_since(Instant::now())),
-            );
-        }
-    }
-}
 impl Slice {
-    /// Pin the manager's door and name the slice after the attempt (`config.run_id`, the ledger
-    /// attempt: R22 C1a) through `aggregate_unit`; no manager call, no mutation.
+    /// Pin the manager's door and name the slice after `attempt`, the ledger attempt the caller
+    /// holds (R22 C1a), through `aggregate_unit`; no manager call, no mutation.
     /// # Errors
-    /// The door's pin refusal; `Invalid` for a run id that is not a `UUIDv4`.
-    pub fn prepare(config: Config, deadline: Instant) -> Result<Self, Error> {
+    /// The door's pin refusal.
+    pub fn prepare(config: Config, attempt: UuidV4<'_>, deadline: Instant) -> Result<Self, Error> {
         io::pin(&config, deadline)?;
-        let unit = aggregate_unit(UuidV4::parse(&config.run_id).map_err(|_| Error::Invalid)?);
+        let unit = aggregate_unit(attempt);
         Ok(Self {
             config,
             phase: SlicePhase::Prepared,
@@ -900,32 +566,6 @@ pub fn main_pid_reply(bytes: &[u8]) -> Result<u32, Error> {
     Ok(reply.data)
 }
 
-fn identity() -> Result<[u32; 4], Error> {
-    Ok([
-        std::process::id(),
-        getppid().map_or(0, |v| v.as_raw_nonzero().get().cast_unsigned()),
-        getpgrp().as_raw_nonzero().get().cast_unsigned(),
-        getsid(None)
-            .map_err(|_| Error::Io)?
-            .as_raw_nonzero()
-            .get()
-            .cast_unsigned(),
-    ])
-}
-fn origin_parts(path: &str) -> Result<(String, String), Error> {
-    let parts: Vec<_> = path.split('/').filter(|s| !s.is_empty()).collect();
-    let index = parts
-        .iter()
-        .rposition(|s| {
-            s.rsplit_once('.')
-                .is_some_and(|(_, kind)| matches!(kind, "scope" | "service"))
-        })
-        .ok_or(Error::Invalid)?;
-    Ok((
-        parts[index].into(),
-        format!("/{}", parts[index + 1..].join("/")),
-    ))
-}
 fn job(bytes: &[u8]) -> Result<(), Error> {
     let reply: Reply<(String,)> = serde_json::from_slice(bytes).map_err(|_| Error::Manager)?;
     let id = reply

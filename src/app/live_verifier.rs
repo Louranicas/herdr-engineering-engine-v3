@@ -126,8 +126,8 @@ impl Aggregates for Manager {
                 busctl: aggregate::BUSCTL.into(),
                 busctl_sha256: self.busctl_sha256.clone(),
                 runtime_dir: self.runtime_dir.clone(),
-                run_id: attempt.as_str().to_owned(),
             },
+            attempt,
             deadline,
         )
     }

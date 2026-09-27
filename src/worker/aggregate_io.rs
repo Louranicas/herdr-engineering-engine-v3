@@ -94,33 +94,6 @@ pub(super) fn read(
 pub(super) fn text(file: &File, name: &str, deadline: Instant) -> Result<String, Error> {
     String::from_utf8(read(file, name, 4096, deadline)?).map_err(|_| Error::Invalid)
 }
-pub(super) fn membership(deadline: Instant) -> Result<String, Error> {
-    let proc = directory(
-        Path::new(&format!("/proc/{}", std::process::id())),
-        deadline,
-    )?;
-    if fstatfs(&proc).map_err(|_| Error::Io)?.f_type != rustix::fs::PROC_SUPER_MAGIC {
-        return Err(Error::Identity);
-    }
-    let raw = text(&proc, "cgroup", deadline)?;
-    let path = raw
-        .strip_prefix("0::")
-        .and_then(|s| s.strip_suffix('\n'))
-        .ok_or(Error::Invalid)?;
-    if !path.starts_with('/')
-        || path.len() > 2048
-        || !path
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b"/@._-".contains(&b))
-        || path
-            .split('/')
-            .skip(1)
-            .any(|c| c.is_empty() || c == "." || c == "..")
-    {
-        return Err(Error::Invalid);
-    }
-    Ok(path.to_owned())
-}
 fn same(a: &Metadata, b: &Metadata) -> bool {
     a.dev() == b.dev()
         && a.ino() == b.ino()

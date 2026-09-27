@@ -449,8 +449,6 @@ fn compose_native(
         busctl: aggregate::BUSCTL.into(),
         busctl_sha256: profile.declared.busctl_sha256.clone(),
         runtime_dir: runtime_root.to_path_buf(),
-        // Read only by `Aggregate::prepare`; the MainPID door never parses it.
-        run_id: String::new(),
     });
     Ok((
         NativeProvider::new(file, systemd, runtime_root.to_path_buf()),
