@@ -8,7 +8,8 @@
 //!
 //! Everything past the candidate (apply, the check, the receipt, acceptance) is the runtime's.
 //! Precondition (R18 A9): the model must be resident at the adapter's context when `next` is
-//! called; B14b's dispatcher establishes it — the identity readback refuses anything else by name.
+//! called; the source's own `CandidateSource::ready` establishes it before every attempt (R21 N4)
+//! — the identity readback refuses anything else by name.
 
 use super::evidence::digest;
 use super::runtime::{
@@ -274,8 +275,9 @@ pub struct NativeCandidates {
     profile: native::Profile,
     adapter: &'static AdapterProfile,
     prompt: ClassPrompt,
-    /// Children an exchange left pending, retained so their custody is never dropped (A4); B14b
-    /// settles them.
+    /// Children an exchange left pending, retained so their custody is never dropped (A4); the
+    /// runtime settles them through `settle_retained`, from `StoreRuntime::settle_custody` after
+    /// every answer and on every exit of `drive` (R21 N18, K5; closure C4).
     retained: Vec<PendingChild>,
 }
 

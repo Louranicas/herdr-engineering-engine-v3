@@ -120,9 +120,10 @@ pub struct Readbacks {
 }
 
 /// The eleven identity facts `decide` requires, in its declaration order: eight with a source the
-/// class fixes, three (`Collector`, `Locks`, `Standards`) `Unavailable` by name until B14b and the
-/// class profile supply them (R16-G3). A readback that matched is `Matched`, one that did not is
-/// `Changed`, one the runtime could not perform is `Unavailable`.
+/// class fixes, three (`Collector`, `Locks`, `Standards`) `Unavailable` by name until a source
+/// supplies them (R16-G3). B14b-2 does not: R16-G3 is deferred out of it to its owner, B16
+/// (CHK-G6) — R21 round-1 closure C15 (OC2). A readback that matched is `Matched`, one that did not
+/// is `Changed`, one the runtime could not perform is `Unavailable`.
 #[must_use]
 pub fn identities(readbacks: Readbacks) -> [IdentityFact; 11] {
     let state = |readback: Option<bool>| match readback {
