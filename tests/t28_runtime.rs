@@ -4587,6 +4587,20 @@ fn native_provider(
     file: native_provider::NativeFile,
     pid: Result<u32, habitat_engine::worker::native::Error>,
 ) -> (native_provider::NativeProvider<StandInPid>, AskedPid) {
+    native_provider_at(
+        file,
+        pid,
+        format!("/run/user/{}", rustix::process::geteuid().as_raw()).into(),
+    )
+}
+
+/// The provider over `file` and a pid double answering `pid`, with `runtime_dir` as its runtime
+/// directory.
+fn native_provider_at(
+    file: native_provider::NativeFile,
+    pid: Result<u32, habitat_engine::worker::native::Error>,
+    runtime_dir: PathBuf,
+) -> (native_provider::NativeProvider<StandInPid>, AskedPid) {
     let seen = Arc::new(Mutex::new(Vec::new()));
     (
         native_provider::NativeProvider::new(
@@ -4595,7 +4609,7 @@ fn native_provider(
                 pid,
                 seen: Arc::clone(&seen),
             },
-            format!("/run/user/{}", rustix::process::geteuid().as_raw()).into(),
+            runtime_dir,
         ),
         seen,
     )
@@ -4685,6 +4699,62 @@ fn the_native_provider_opens_over_the_stand_in_and_names_each_refusal() -> Outco
         assert_eq!(
             opened_name(dispatcher::Provider::open(&mut provider, &next, &admitted)),
             expected
+        );
+    }
+    Ok(())
+}
+
+/// R22 step 4 (C7) · `open`'s composition is pinned: the live verifier it returns carries the
+/// class's systemd-run pin and the provider's runtime directory, and its aggregate lifecycle the
+/// class's busctl pin over the same runtime directory. Two fixtures differing in every field, so a
+/// swapped or constant pin cannot pass either.
+#[test]
+fn the_native_provider_composes_the_live_verifier_from_the_class_s_pins() -> Outcome_ {
+    let principal = owner();
+    let next = habitat_engine::store::Dispatchable {
+        task: TASK.to_owned(),
+        generation: "1".to_owned(),
+        owner: owner(),
+        cancellation: false,
+    };
+    let stand_in = DaemonStandIn::spawn();
+    let pid = stand_in.daemon().pid;
+    let drain = AtomicBool::new(false);
+    for (systemd_run, busctl, runtime_dir) in [
+        (
+            format!("sha256:{}", "a1".repeat(32)),
+            format!("sha256:{}", "b2".repeat(32)),
+            "/run/hee3-c7/first",
+        ),
+        (
+            format!("sha256:{}", "3c".repeat(32)),
+            format!("sha256:{}", "4d".repeat(32)),
+            "/var/tmp/hee3-c7-second",
+        ),
+    ] {
+        let bench = rig(&Shape {
+            base_cargo: true,
+            ..Shape::default()
+        })?;
+        let fixture = native_fixture(&bench, &stand_in, &[(REFERENCE_LIB, "stop")], 4096)?;
+        let manifest = fixture.manifest.sha256.clone();
+        let mut class = native_class(&bench, &manifest);
+        class.declared.systemd_run_sha256.clone_from(&systemd_run);
+        class.declared.busctl_sha256.clone_from(&busctl);
+        let admitted = admitted_with(&bench, &principal, &drain, &class)?;
+        let (mut provider, _) = native_provider_at(
+            operator_file(&fixture, &manifest)?,
+            Ok(pid),
+            runtime_dir.into(),
+        );
+        let (_, verifier) = dispatcher::Provider::open(&mut provider, &next, &admitted)
+            .map_err(dispatcher::Unavailable::name)?;
+        assert_eq!(
+            format!("{verifier:?}"),
+            format!(
+                "LiveVerifier {{ systemd_run_sha256: \"{systemd_run}\", runtime_dir: \"{runtime_dir}\", \
+                 aggregates: Manager {{ busctl_sha256: \"{busctl}\", runtime_dir: \"{runtime_dir}\" }} }}"
+            )
         );
     }
     Ok(())

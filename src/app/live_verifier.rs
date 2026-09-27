@@ -151,7 +151,9 @@ impl Aggregates for Manager {
 
 /// The production verifier: the fixed workload under three bounded scopes in the check's own
 /// aggregate, run against the applied candidate inside the check window, returned as observed —
-/// nothing is published or decided here.
+/// nothing is published or decided here. Its `Debug` is the whole composition: `open`'s pins are
+/// asserted through it (R22 C7).
+#[derive(Debug)]
 pub struct LiveVerifier<A> {
     systemd_run_sha256: String,
     runtime_dir: PathBuf,
