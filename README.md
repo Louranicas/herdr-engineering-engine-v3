@@ -201,6 +201,8 @@ HEE3-ANCHORS-END
 
 **Known unknowns:** [What cannot yet be verified, each with its reason](file:///var/home/Louranicas/.claude/known-unknowns.md) — read it before trusting a green result; it links back to this README.
 
+**Habitat capabilities and memory, on demand:** [Habitat capabilities — on demand](QUICK_START.md#habitat-capabilities--on-demand) · [Context and memory substrates](QUICK_START.md#context-and-memory-substrates) — two sections of the quick start, each linking back to this README.
+
 **Before each coding task:** [Progressive module context workflow](docs/module-context.md) provides 22 focused context cards and the $hee-module-scout skill. Scout contracts, callers, evidence and tool availability; retain omissions and re-scout changed boundaries.
 
 The planned stack has source/configuration anchors and detailed deployment contracts. Inspect declared source bodies and the evidence index to distinguish comment stubs from substantive implementation candidates. Full engine implementation, qualification and installation remain subject to the owning atlas tasks. No service or model call is started by this corpus.
@@ -290,6 +292,7 @@ Each module links only its scoped lessons and their source reflections. Original
 - [Complete native-note and artifact tree](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Ultra%20Map%2FCorpus%20Tree)
 - [Systematic update and evidence protocol](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Ultra%20Map%2FUpdate%20Protocol)
 - [Current source, test, hardening and deployment observations](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Ultra%20Map%2FDeployment%20Status)
+- Platform substrate highway: [Kinoite master](obsidian://open?vault=fedora-kinoite.vault&file=00%20-%20Fedora%20Master%20Index) ↔ [Habitat master](obsidian://open?vault=herdr-fedora-habitat.vault&file=00%20-%20Fedora%20Master%20Index) · [owning notes and pointer](obsidian://open?vault=herdr-engineering-engine-v3.vault&file=Ultra%20Map%2FHighways)
 
 ## End-to-end deployment stems
 
@@ -612,6 +615,7 @@ Exact current bytes are inventoried without inserting managed comments. These ar
 | [migrations/005.sql](file:///var/home/herdr-engineering-engine-v3/migrations/005.sql) | store | T04 |
 | [migrations/006.sql](file:///var/home/herdr-engineering-engine-v3/migrations/006.sql) | store | T04 |
 | [migrations/007.sql](file:///var/home/herdr-engineering-engine-v3/migrations/007.sql) | store | T04 |
+| [migrations/008.sql](file:///var/home/herdr-engineering-engine-v3/migrations/008.sql) | store | T04 |
 | [src/contracts/roster.rs](file:///var/home/herdr-engineering-engine-v3/src/contracts/roster.rs) | contracts | T05 |
 | [src/store/roster.rs](file:///var/home/herdr-engineering-engine-v3/src/store/roster.rs) | store | T05 |
 | [src/store/roster/attempts.rs](file:///var/home/herdr-engineering-engine-v3/src/store/roster/attempts.rs) | store | T05 |

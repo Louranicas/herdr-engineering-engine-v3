@@ -7,7 +7,7 @@
     "codebase": "/var/home/herdr-engineering-engine-v3"
   },
   "source_plan_sha256": "e62091172c60c391bbd5221dd7d3a9bfa398c8a89a1b66c8c5de97c4ddc88d0c",
-  "catalogue_sha256": "c819d04e42f8f9ba2e455e7caeb70e48418b7fe6934c729130f651c5836e535e",
+  "catalogue_sha256": "4ee2efe1773ac7b7cce718ec48ef4be526a65d0522584b68b881fb5d33b5ec8a",
   "readiness": {
     "id": "HEE3-READINESS-001",
     "sha256": "f574043487f39db6424c4988bce58e88a6e766f02f974fbcf3fa8dd6e0003548",
@@ -6080,6 +6080,16 @@
           "task_id": "T04"
         },
         {
+          "path": "migrations/008.sql",
+          "owner": "store",
+          "modules": [
+            "store",
+            "task"
+          ],
+          "reason": "Eighth migration of the additive chain (B14b-2, designs R21 N13-N17 and C18): attempt_paths records, in the transaction that begins a bound attempt, the attempts root's marker id (root_id, a UuidV4 CHECK) so a restart's Host reads back the workspace and check job root the runtime materialised; the foreign key is attempt_bindings(attempt_id). Identity is its own pinned body digest in store::schema. Inventoried by exact bytes, never rewritten by the publisher.",
+          "task_id": "T04"
+        },
+        {
           "path": "src/store/roster/attempts.rs",
           "owner": "store",
           "modules": [
@@ -8941,6 +8951,16 @@
             "task"
           ],
           "reason": "Seventh migration of the additive chain (B14a-5, design R19): attempt_records is rebuilt under a kind CHECK widened with worker_settle, so the settle that observes a native attempt commits the worker's settle (usage, identity, wall, outcome) as a sixth run record beside the check's five; every row preserved and the by-attempt index recreated. Identity is its own pinned body digest in store::schema. Inventoried by exact bytes, never rewritten by the publisher.",
+          "task_id": "T04"
+        },
+        {
+          "path": "migrations/008.sql",
+          "owner": "store",
+          "modules": [
+            "store",
+            "task"
+          ],
+          "reason": "Eighth migration of the additive chain (B14b-2, designs R21 N13-N17 and C18): attempt_paths records, in the transaction that begins a bound attempt, the attempts root's marker id (root_id, a UuidV4 CHECK) so a restart's Host reads back the workspace and check job root the runtime materialised; the foreign key is attempt_bindings(attempt_id). Identity is its own pinned body digest in store::schema. Inventoried by exact bytes, never rewritten by the publisher.",
           "task_id": "T04"
         },
         {
@@ -53215,6 +53235,16 @@
       "task_id": "T04"
     },
     {
+      "path": "migrations/008.sql",
+      "owner": "store",
+      "modules": [
+        "store",
+        "task"
+      ],
+      "reason": "Eighth migration of the additive chain (B14b-2, designs R21 N13-N17 and C18): attempt_paths records, in the transaction that begins a bound attempt, the attempts root's marker id (root_id, a UuidV4 CHECK) so a restart's Host reads back the workspace and check job root the runtime materialised; the foreign key is attempt_bindings(attempt_id). Identity is its own pinned body digest in store::schema. Inventoried by exact bytes, never rewritten by the publisher.",
+      "task_id": "T04"
+    },
+    {
       "path": "src/contracts/roster.rs",
       "owner": "contracts",
       "modules": [
@@ -54836,8 +54866,8 @@
       "bytes": 6019
     },
     "tools/check-quality": {
-      "sha256": "03fe2af1ec8f8befcedd4defba165a1384a9d9350ace7860b501538da85535bb",
-      "bytes": 98782
+      "sha256": "277e9de9c7fc8b019e90db341e9461a68f8031930d863b9a22cb77e6f21474c6",
+      "bytes": 99334
     },
     "tools/development_process.py": {
       "sha256": "e76e3a794193e5df7ee96fabf700113d718527745a0f9a9dba1e04fd5c7baaf3",
@@ -54848,8 +54878,8 @@
       "bytes": 10433
     },
     "tests/t25_quality.py": {
-      "sha256": "11f508618b976cf3d63ece900d1274ee3d420dbfcb37fc85ce43a650f82f5df4",
-      "bytes": 166023
+      "sha256": "d42a48ff404337dcba234b90e18478f27284b87caae4d3553323f7c4b4d67f32",
+      "bytes": 166045
     },
     "julia/Manifest.toml": {
       "sha256": "097d5028df4e1667a970a8297d41eedb908e0319a0b4154c7ec12548140a9f79",
@@ -55580,16 +55610,16 @@
       "bytes": 9161
     },
     "src/store/schema.rs": {
-      "sha256": "c52068f0eb7d1379f30fc1d47a8f624ba456f64fbb06e41bae23fa7e48c5a7c5",
-      "bytes": 26211
+      "sha256": "b1e7b60ae33327709546ce9445b267490af41f71e2c81e003a83d8444e2ee986",
+      "bytes": 27017
     },
     "src/store/backup.rs": {
       "sha256": "76fdeb5de58a67c7660a3ed2eea1273c250478cbc5133627c45a5b5bd37b4812",
       "bytes": 14607
     },
     "tests/t04_store.rs": {
-      "sha256": "ddf881ec138d97c6f0997b600e43fd0d83e2f9739f2f4224b52e2d0370642eb0",
-      "bytes": 180547
+      "sha256": "600afdc6db4f2a3ec7064ccb25991f254782dfaf35b2cdf12e457cc6c575f1be",
+      "bytes": 187383
     },
     "docs/store-contract.md": {
       "sha256": "b65ffe744d2abf93c3b0c40345787940213806ade52e9ef010e17f3012a81396",
@@ -55600,8 +55630,8 @@
       "bytes": 10139
     },
     "tools/check-store-mutations": {
-      "sha256": "7d8cdeb5431609437862c0867c01bd2fab35fc75f64d88d1a1ed7044ac388322",
-      "bytes": 19831
+      "sha256": "550b46ce92245789e30f87b70bf21721cdde90359e17e757d614904976935036",
+      "bytes": 19853
     },
     "tools/sqlite-inputs/sqlite-amalgamation-3530400.zip": {
       "sha256": "1e71ddf93849c6a6ecf58b827c0692073d2dd7ee40196158068f7b29f422e87d",
@@ -55723,6 +55753,10 @@
       "sha256": "33c9ef2eb45cb6d4b05147a38ddf731d16f2aa6c9843ca5b8ea1d06cceebf14a",
       "bytes": 1948
     },
+    "migrations/008.sql": {
+      "sha256": "08ebdc82bb2ba7f40f13245c7d2b27439aff22df039cc711baa7d74cc79a6d5e",
+      "bytes": 2417
+    },
     "src/contracts/roster.rs": {
       "sha256": "bdde6efe1ee29cf620b521b8b8ddce051f73cc86dcac05ec46f35193440a4710",
       "bytes": 14706
@@ -55732,8 +55766,8 @@
       "bytes": 23081
     },
     "src/store/roster/attempts.rs": {
-      "sha256": "9561c69380f132e7c22f03593b0d1f6975c71df86a1602a5c1cb7c138a5e591d",
-      "bytes": 18810
+      "sha256": "fd7717595d0da7e48217e0bdde47b3ac70da5ef970814ad95f7f686763d0706f",
+      "bytes": 19453
     },
     "tests/t05_roster.rs": {
       "sha256": "704a9516fb2d2077eeeff65ceb2c274f9c078bdf8d20b1b3f3108d005b3d810e",
@@ -55744,8 +55778,8 @@
       "bytes": 10585
     },
     "tests/t05_store.rs": {
-      "sha256": "17567f425340009d388f8802226cb56dfe4ec5a9cd5d42c3a095f5ac9f8ff230",
-      "bytes": 79505
+      "sha256": "6755d403cfef0058e37cab0232b909ac5cefe0a3ef4ab8db3e68ac409c1f46a2",
+      "bytes": 83846
     },
     "docs/roster-contract.md": {
       "sha256": "32612a958aa81b95eb8f6260b91ce91bcc911387047df4594cd0c6b58d7e01f3",
@@ -55960,8 +55994,8 @@
       "bytes": 10352
     },
     "src/app/mod.rs": {
-      "sha256": "17bff200c9532a33c27ef417105339b380c5a1c5abbdd5083ad7233af15d8f2e",
-      "bytes": 510
+      "sha256": "3ce5b3d60208427758c702838c29801025d8e9d49b15842393ff2d9a1d40fe08",
+      "bytes": 535
     },
     "src/app/receipt_import.rs": {
       "sha256": "393bd6b147ebe968ffe29532665c1e542972d9f1ea9708699cc6ef962ba0735d",
@@ -55976,8 +56010,8 @@
       "bytes": 11101
     },
     "src/app/workload.rs": {
-      "sha256": "227a88e24597cb7758ca5a9a14b46dd112b27abe12537d45b13be951cbbc79d1",
-      "bytes": 21994
+      "sha256": "bf1a326a74a207b531a191ff067892d895822fdee3392b555556d3dcdb5fa53c",
+      "bytes": 22039
     },
     "src/bin/namespace_shim.rs": {
       "sha256": "fb6d07323426e5ed5c5624cf9e21cb4fbd3d4ef8c25f17b0e49868f8d25ace8e",
@@ -56024,12 +56058,12 @@
       "bytes": 2276
     },
     "src/contracts.rs": {
-      "sha256": "e76455d9b35484af633e02e6d3acbef5262d821e490a0721cf8be6ca5c57186e",
-      "bytes": 26561
+      "sha256": "86fae80fdfdaf032381340deeefd1f70f40fb8de3ebe01a38cf5788b6f8029b6",
+      "bytes": 26576
     },
     "src/main.rs": {
-      "sha256": "5c8092ccb5101ff7784979b382b6076276720f9566a285c5972ceb6aa4b30726",
-      "bytes": 40041
+      "sha256": "3f3e185b0bf1ee75d15ec6ee76a74b1dd80843e64065b0b4aed4a84b63a14198",
+      "bytes": 55843
     },
     "src/store/staging.rs": {
       "sha256": "8bb17b5598550fd2c002dc7063ddfa56cf4a6e0a51566264b908ba655acce5d3",
@@ -56048,12 +56082,12 @@
       "bytes": 7666
     },
     "src/worker/aggregate.rs": {
-      "sha256": "c340f260bf1d2001b47d64ee49a46f2b85ffdda2520aee724ea695daf3fd2dff",
-      "bytes": 22418
+      "sha256": "a24d9fc51491148c083591edb2738165a01bf71177d326f0a0270aee5ee609dd",
+      "bytes": 52480
     },
     "src/worker/aggregate_io.rs": {
-      "sha256": "6f0897eeaf1c5a3297f27b25bad109a415d04040d84597495c756a8703e09ba2",
-      "bytes": 6469
+      "sha256": "e875f653c3e295f53bb15011309246e2a2a1503261d4f37d65cc98e824566217",
+      "bytes": 6465
     },
     "src/worker/namespace.rs": {
       "sha256": "c6ece43dd5e1f650d3c196bac7f81c5237e49acc46d6d50d6d43bf9ca9fcec82",
@@ -56064,16 +56098,16 @@
       "bytes": 11385
     },
     "src/worker/process.rs": {
-      "sha256": "8fcb1c1c8719c647a32caf8a531ab9e841001539bd4c71012691115661e73fca",
-      "bytes": 30056
+      "sha256": "55ed85e963a22ceaefd6964065f1b419bfef8c5478a15bac33824049e6d73443",
+      "bytes": 36114
     },
     "src/worker/resources.rs": {
-      "sha256": "a0bfdd7dc0162dc1bb0c66d0b9748b434076eff84a54bf345fac2682194924e2",
-      "bytes": 20835
+      "sha256": "16564df75336e8008d939460420d9753fb3d80db5452a74de3ca02b6d1a9a693",
+      "bytes": 20962
     },
     "src/worker/workspace.rs": {
-      "sha256": "d0d7740ca5720d61300f6eea12be27d0da89ae5b7732bc5fd6c68c5d634e4a6a",
-      "bytes": 33942
+      "sha256": "a189b7ddcbc26355f2f64acdd4a37368389b86937de69912caf122ecb9717d2b",
+      "bytes": 36997
     },
     "tests/fixtures/receipt-import/nonpass.json": {
       "sha256": "496d768d300ec5e962a807bc85c6a2a3a78bbe7525b9b133dd4913cd0622b73d",
