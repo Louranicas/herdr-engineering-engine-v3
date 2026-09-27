@@ -61,15 +61,6 @@ impl<'a> Evidence<'a> {
         Self::with_owner(Owner::Staging(store), deadline)
     }
 
-    /// Borrow only the artifact staging owner; never exposes the ledger owner.
-    #[must_use]
-    pub const fn staging_owner(&self) -> Option<&ArtifactStaging> {
-        match self.store {
-            Owner::Staging(owner) => Some(owner),
-            Owner::Store(_) => None,
-        }
-    }
-
     fn with_owner(store: Owner<'a>, deadline: Instant) -> Self {
         Self {
             store,

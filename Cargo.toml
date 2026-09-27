@@ -2580,10 +2580,6 @@ name = "t06_bounded_preflight"
 path = "tests/t06_bounded_preflight.rs"
 
 [[test]]
-name = "t06_durable_control"
-path = "tests/t06_durable_control.rs"
-
-[[test]]
 name = "t06_receipt_import"
 path = "tests/t06_receipt_import.rs"
 

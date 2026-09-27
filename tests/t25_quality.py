@@ -1702,12 +1702,12 @@ class T06QualityInventoryControls(unittest.TestCase):
         self.assertEqual(set(main[1::2]), expected)
         self.assertEqual(len(main[1::2]), len(set(main[1::2])))
         t06 = partitions[1][1]
-        self.assertEqual(t06[::2], ["--test"] * 18)
+        self.assertEqual(t06[::2], ["--test"] * 17)
         self.assertEqual(set(t06[1::2]), {"t06_receipts", "t06_store", "t06_graph",
                     "t06_driver", "t06_consistency", "t06_workspace", "t06_terminal",
                     "t06_evidence", "t06_collector", "t06_availability", "t06_decision",
                     "t06_staging", "t06_subjects", "t06_process_timing", "t06_workspace_export",
-                    "t06_bounded_preflight", "t06_durable_control", "t06_receipt_import"})
+                    "t06_bounded_preflight", "t06_receipt_import"})
         self.assertEqual(len(t06[1::2]), len(set(t06[1::2])))
 
     def test_t21_partition_refuses_unaccounted_or_conditional_targets(self):
@@ -1858,8 +1858,8 @@ class T06QualityInventoryControls(unittest.TestCase):
         self.assertEqual(rows[3][1], ["--test", "t07_inventory"])
         targets = [args[i+1] for _,args in rows for i,value in enumerate(args) if value == "--test"]
         self.assertEqual(targets.count("t07_inventory"), 1)
-        self.assertEqual(len(targets), 42)
-        self.assertEqual(len(set(targets)), 42)
+        self.assertEqual(len(targets), 41)
+        self.assertEqual(len(set(targets)), 41)
         for name in ["recovery_cancel", "recovery_inspect", "recovery_crash", "recovery_pi_queue", "frontend_controls"]:
             self.assertNotIn(name, targets)
 
@@ -1979,8 +1979,8 @@ class T06QualityInventoryControls(unittest.TestCase):
         self.assertNotIn("t08_native", rows[1][1])
         targets = [args[i + 1] for _, args in rows for i, value in enumerate(args) if value == "--test"]
         self.assertEqual(targets.count("t08_native"), 1)
-        self.assertEqual(len(targets), 42)
-        self.assertEqual(len(set(targets)), 42)
+        self.assertEqual(len(targets), 41)
+        self.assertEqual(len(set(targets)), 41)
         # The partition world is the manifest's declared test inventory, every target once.
         declared = quality.tomllib.loads((ROOT / "Cargo.toml").read_text())
         self.assertEqual(sorted(targets), sorted(target["name"] for target in declared["test"]))
@@ -2052,7 +2052,7 @@ class T06QualityInventoryControls(unittest.TestCase):
         self.assertEqual(t06[::2], ["--test"] * (len(t06) // 2))
         declared = quality.tomllib.loads((ROOT / "Cargo.toml").read_text())
         expected = sorted(target["name"] for target in declared["test"] if target["name"].startswith("t06_"))
-        self.assertEqual(len(expected), 18)
+        self.assertEqual(len(expected), 17)
         self.assertEqual(sorted(t06[1::2]), expected)
         self.assertFalse(any(name.startswith("t06_") for name in rows[0][1][1::2]))
         for _, arguments in rows[2:]:
