@@ -128,6 +128,13 @@ const MIGRATIONS: [Migration; 8] = [
 /// The version a current ledger records: the chain's length.
 pub(super) const CURRENT: u32 = 8;
 const _: () = assert!(MIGRATIONS.len() == CURRENT as usize);
+// R22-4 (C17): the upgrade tripwire. A pre-8 ledger has no production population today (serve
+// never creates one, a v7 ledger is refused by name, `Store::upgrade` has no caller outside tests);
+// migration 9 must not land without the operator's upgrade verb and the rootless-tail count.
+const _: () = assert!(
+    CURRENT == 8,
+    "R22-4: migration 9 lands with the upgrade verb (FT3-06, owner T18) and the rootless-tail count"
+);
 
 /// Which clause of the migration chain a ledger (or this binary) fails, at which version (A25).
 /// Every clause refuses by its own name, so a refusal says what differs.
