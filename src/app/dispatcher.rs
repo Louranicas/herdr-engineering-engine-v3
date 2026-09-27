@@ -364,7 +364,8 @@ fn run<P: Provider>(dispatcher: Dispatcher<'_, P>, report: &(dyn Fn(&str) + Sync
                 drain,
             },
         );
-        // The custody a driven dispatch's retained children came to (R21 N18), reported by name.
+        // The custody a driven dispatch's retained children came to (R21 N18), reported by name on
+        // every exit of `drive` (closure C4).
         let (result, custody) = match admitted {
             Err(error) => (Err(error), None),
             Ok(Admission::Refused(refusal)) => (Ok(Outcome::Refused(refusal)), None),
@@ -376,14 +377,19 @@ fn run<P: Provider>(dispatcher: Dispatcher<'_, P>, report: &(dyn Fn(&str) + Sync
                 Ok((mut source, mut verifier)) => {
                     match drive(tasks, *ready, &mut source, &mut verifier) {
                         Ok(driven) => (Ok(driven.outcome), Some(driven.custody)),
-                        Err(error) => (Err(error), None),
+                        Err(undispatched) => (Err(undispatched.error), Some(undispatched.custody)),
                     }
                 }
             },
         };
         let step = classify(&result);
+        // A provider not ready is reported by its refusal's name (closure C4).
+        let cause = match &result {
+            Ok(Outcome::NotReady(error)) => format!(": {}", error.name()),
+            _ => String::new(),
+        };
         report(&format!(
-            "dispatcher: task {} -> {step:?}{}{}",
+            "dispatcher: task {} -> {step:?}{cause}{}{}",
             next.task,
             result
                 .as_ref()

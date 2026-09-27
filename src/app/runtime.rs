@@ -432,6 +432,15 @@ pub struct Dispatched {
     pub custody: Custody,
 }
 
+/// What `drive` came to when it ended in an error (closure C4): the error, and the custody the
+/// source's retained children came to — a settle turn runs on this exit too, so custody is reported
+/// on every exit of a driven dispatch.
+#[derive(Debug)]
+pub struct Undispatched {
+    pub error: Error,
+    pub custody: Custody,
+}
+
 #[derive(Debug)]
 pub enum Error {
     Store(store::Error),
@@ -685,6 +694,9 @@ struct StoreRuntime<'a, C, V> {
     /// The custody the source's retained children came to (R21 N18): settled over the dispatch,
     /// and pending after the last settle turn.
     custody: Custody,
+    /// The work window the last begin computed before asking the provider (closure C3), `None`
+    /// before any: an exit's custody turn is bounded by its teardown bound (closure C4).
+    window: Option<Instant>,
 }
 
 /// The most task events that may follow the runtime's own last write: every instance observation
@@ -704,9 +716,9 @@ pub fn dispatch<'a, C: CandidateSource, V: Verifier>(
 ) -> Result<Outcome, Error> {
     match admit(tasks, profile, dispatch)? {
         Admission::Refused(refusal) => Ok(Outcome::Refused(refusal)),
-        Admission::Ready(admitted) => {
-            drive(tasks, *admitted, source, verifier).map(|dispatched| dispatched.outcome)
-        }
+        Admission::Ready(admitted) => drive(tasks, *admitted, source, verifier)
+            .map(|dispatched| dispatched.outcome)
+            .map_err(|undispatched| undispatched.error),
     }
 }
 
@@ -869,18 +881,19 @@ pub(crate) fn capture_share(
 }
 
 /// Phase two: drive the admitted task through the driver over `source` and `verifier`; the outcome
-/// with the custody the source's retained children came to (R21 N18).
+/// with the custody the source's retained children came to (R21 N18) — on every exit (closure C4).
 ///
 /// # Errors
-/// The runtime's, with a store refusal at the attempt door before any attempt row turned into a
-/// named stop (`begin_refused_<kind>`) and any other pre-attempt store error into
-/// [`Error::PreDispatch`], so no result leaves the task re-pickable at once (R20 round 2 A2).
+/// [`Undispatched`]: the runtime's error, with a store refusal at the attempt door before any
+/// attempt row turned into a named stop (`begin_refused_<kind>`) and any other pre-attempt store
+/// error into [`Error::PreDispatch`], so no result leaves the task re-pickable at once (R20 round 2
+/// A2) — and the custody the exit's settle turn came to.
 pub fn drive<'a, C: CandidateSource, V: Verifier>(
     tasks: &'a StoreTasks,
     admitted: Admitted<'a>,
     source: &'a mut C,
     verifier: &'a mut V,
-) -> Result<Dispatched, Error> {
+) -> Result<Dispatched, Undispatched> {
     let Admitted {
         dispatch,
         profile,
@@ -906,15 +919,55 @@ pub fn drive<'a, C: CandidateSource, V: Verifier>(
         digests: prepared.digests,
         origin,
         deadline,
-        own: pre(number(&head.generation))?,
+        own: pre(number(&head.generation)).map_err(untouched)?,
         last_event: anchor,
         attempts: Vec::new(),
         row_committed: false,
         previous: None,
         custody: Custody::default(),
+        window: None,
     };
-    let count = u8::try_from(U64_CRITERIA.len()).map_err(|_| Error::Identity)?;
-    let outcome = match driver::run(&mut runtime, count) {
+    let count = u8::try_from(U64_CRITERIA.len()).map_err(|_| untouched(Error::Identity))?;
+    let run = driver::run(&mut runtime, count);
+    // Custody on every exit (closure C4): an exit other than the driver's own outcome — NotReady,
+    // Drained, a stop, an error — runs one settle turn, so a child `ready`'s load or an earlier
+    // attempt retained is settled and counted there too. It is bounded by the teardown bound of the
+    // last work window computed (the share held back for exactly this), the dispatch deadline before
+    // any — an existing bound, none created.
+    if run.is_err() {
+        let until = runtime.window.map_or(deadline, |window| {
+            teardown_deadline(window, runtime.dispatch.teardown_ms, deadline)
+        });
+        runtime.settle_custody(until);
+    }
+    match ended(&mut runtime, run) {
+        Ok(outcome) => Ok(Dispatched {
+            outcome,
+            custody: runtime.custody,
+        }),
+        Err(error) => Err(Undispatched {
+            error,
+            custody: runtime.custody,
+        }),
+    }
+}
+
+/// An error before the driver ran (closure C4): no source was asked, so no custody to report.
+fn untouched(error: Error) -> Undispatched {
+    Undispatched {
+        error,
+        custody: Custody::default(),
+    }
+}
+
+/// What the driver's result comes to for `drive` (R20 round 2 A2; closure H3): a stop is written
+/// through the task's stop, a drain and a provider not ready write nothing, and an error while no
+/// attempt row exists is the pre-dispatch path's.
+fn ended<C: CandidateSource, V: Verifier>(
+    runtime: &mut StoreRuntime<'_, C, V>,
+    run: Result<driver::Outcome, driver::Error<Fault>>,
+) -> Result<Outcome, Error> {
+    match run {
         Ok(outcome) => Ok(Outcome::Driven(outcome)),
         Err(driver::Error::Runtime(Fault::Stop(reason))) => {
             // A stop before any row (a racing cancel at the first begin, a spent reservation) is
@@ -943,7 +996,13 @@ pub fn drive<'a, C: CandidateSource, V: Verifier>(
             match kind {
                 Some(kind) => {
                     let stop = Refusal::BeginRefused(kind);
-                    pre(refuse(tasks, &runtime.dispatch, stop, origin, deadline))?;
+                    pre(refuse(
+                        runtime.tasks,
+                        &runtime.dispatch,
+                        stop,
+                        runtime.origin,
+                        runtime.deadline,
+                    ))?;
                     Ok(Outcome::Refused(stop))
                 }
                 None => pre(Err(error)),
@@ -951,11 +1010,7 @@ pub fn drive<'a, C: CandidateSource, V: Verifier>(
         }
         Err(driver::Error::Runtime(Fault::Error(error))) => Err(error),
         Err(driver::Error::Policy(refusal)) => Err(Error::Policy(refusal)),
-    }?;
-    Ok(Dispatched {
-        outcome,
-        custody: runtime.custody,
-    })
+    }
 }
 
 struct Prepared {
@@ -1164,6 +1219,8 @@ impl<C: CandidateSource, V: Verifier> StoreRuntime<'_, C, V> {
             charged_from,
             self.deadline,
         );
+        // The window an exit's custody turn is bounded by from here on (closure C4).
+        self.window = Some(work_until);
         if lease_ms(work_until) == 0 {
             return Err(Fault::Stop(StopReason::Policy(LoopRefusal::Deadline)));
         }
@@ -1211,14 +1268,16 @@ impl<C: CandidateSource, V: Verifier> StoreRuntime<'_, C, V> {
         Ok(())
     }
 
-    /// One settle turn over the source's retained children (R21 N18), under the dispatch deadline
-    /// and the runtime's cancel flag — no limit of its own; the counts are added to the dispatch's
-    /// custody. Asked after every answer (K5: a success arm does not carry the source's custody).
-    /// True when no child is still pending — never a reason to read a source's unsettled cleanup as
-    /// settled, since the source's flag cannot tell a retained child from a reaped leader's live
-    /// group, which nothing settles.
-    fn settle_custody(&mut self) -> bool {
-        let custody = self.source.settle_retained(self.deadline, &self.cancelled);
+    /// One settle turn over the source's retained children (R21 N18), under `until` and the
+    /// runtime's cancel flag — no limit of its own; the counts are added to the dispatch's custody.
+    /// Asked after every answer (K5: a success arm does not carry the source's custody) under the
+    /// attempt's teardown bound, so the attempt's settle keeps the remainder of the dispatch window
+    /// (N18 amended by closure C4), and once on every other exit of `drive`. True when no child is
+    /// still pending — never a reason to read a source's unsettled cleanup as settled, since the
+    /// source's flag cannot tell a retained child from a reaped leader's live group, which nothing
+    /// settles.
+    fn settle_custody(&mut self, until: Instant) -> bool {
+        let custody = self.source.settle_retained(until, &self.cancelled);
         self.custody.settled = self.custody.settled.saturating_add(custody.settled);
         self.custody.pending = custody.pending;
         custody.pending == 0
@@ -1234,7 +1293,8 @@ impl<C: CandidateSource, V: Verifier> StoreRuntime<'_, C, V> {
     /// so `committed_run` cannot return it. The source's retained children are settled inside
     /// `drive` before this observation (R21 N18), so the one observation carries the custody; a
     /// later settle, which must commit the worker settle again, is left only where a child is still
-    /// pending at the dispatch deadline or the source's own cleanup did not settle — recovery's.
+    /// pending at the attempt's teardown bound (closure C4) or the source's own cleanup did not
+    /// settle — recovery's.
     fn settle(
         &mut self,
         index: usize,
@@ -2019,8 +2079,14 @@ impl<C: CandidateSource, V: Verifier> driver::Runtime for StoreRuntime<'_, C, V>
             settle: worker,
         } = answered(&mut *self.source, &ask)?;
         // After EVERY answer, before the attempt's settle (R21 N18, K5): each arm's cleanup is
-        // settled only when its own is and no retained child is still pending.
-        let held = self.settle_custody();
+        // settled only when its own is and no retained child is still pending. Bounded by the
+        // attempt's teardown bound — the share held back past its work window — so the settle
+        // below keeps the rest of the dispatch window (closure C4).
+        let held = self.settle_custody(teardown_deadline(
+            work_until,
+            self.dispatch.teardown_ms,
+            self.deadline,
+        ));
         match candidate {
             // Exhaustion after begin is truthful (B14a-R2.3): the attempt is not ready to verify.
             Candidate::Exhausted => {

@@ -443,6 +443,9 @@ struct Script<'h> {
     /// Run inside every `ready`, after its call is recorded, with the flag `ready` was handed (closure
     /// C3): a proof raises the engine's drain here, and records which flag the source was handed.
     ready_hook: Option<ReadyHook<'h>>,
+    /// A model of the retained children (closure C4): handed the deadline `settle_retained` was
+    /// handed, it answers the custody in place of the scripted `custody`.
+    settle_model: Option<SettleModel<'h>>,
 }
 
 /// What a source's `ready`/`settle_retained` were handed, per call: which, the deadline, the flag.
@@ -450,6 +453,10 @@ type Readied = Arc<Mutex<Vec<(&'static str, Instant, bool)>>>;
 
 /// What a proof runs inside a source's `ready`, handed the flag `ready` was handed (closure C3).
 type ReadyHook<'h> = Box<dyn FnMut(&AtomicBool) + Send + 'h>;
+
+/// A model of a source's retained children: the custody one settle turn comes to under the deadline
+/// it was handed (closure C4).
+type SettleModel<'h> = Box<dyn FnMut(Instant) -> Custody + Send + 'h>;
 
 impl CandidateSource for Script<'_> {
     fn next(&mut self, ask: &habitat_engine::app::runtime::Ask<'_>) -> SourceAnswer {
@@ -498,7 +505,10 @@ impl CandidateSource for Script<'_> {
                 cancelled.load(Ordering::Acquire),
             ),
         );
-        self.custody
+        match self.settle_model.as_mut() {
+            Some(model) => model(deadline),
+            None => self.custody,
+        }
     }
 }
 
@@ -621,6 +631,7 @@ fn script<'h>(answers: Vec<Candidate>) -> (Script<'h>, Asked) {
             custody: Custody::default(),
             readied: Arc::new(Mutex::new(Vec::new())),
             ready_hook: None,
+            settle_model: None,
         },
         seen,
     )
@@ -1071,19 +1082,17 @@ fn the_dispatcher_picks_the_admitted_task_and_drives_it_to_acceptance() -> Outco
             drain_is_the_dispatcher_s: true,
         }
     );
-    // Closure C3: ready is handed the attempt's work window, which closes before the dispatch.
-    let work_until = window_end(
-        origin,
-        Shape::default().work_ms,
-        u64::try_from(CHECK_TEARDOWN.as_millis())?,
-        until,
-    );
-    assert!(work_until < until);
+    // Closure C3: ready is handed the attempt's work window, which closes before the dispatch;
+    // closure C4: the custody turn its teardown bound, which leaves the settle the remainder.
+    let teardown = u64::try_from(CHECK_TEARDOWN.as_millis())?;
+    let work_until = window_end(origin, Shape::default().work_ms, teardown, until);
+    let bound = teardown_bound(work_until, teardown, until);
+    assert!(work_until < bound && bound < until);
     assert_eq!(
         taken(&readied),
         vec![
             ("ready", work_until, false),
-            ("settle_retained", until, false)
+            ("settle_retained", bound, false)
         ]
     );
     Ok(())
@@ -1821,10 +1830,18 @@ fn a_provider_not_ready_at_attempt_one_leaves_the_task_admitted_and_writes_nothi
     assert_eq!(count(&rig, "SELECT count(*) FROM roster_observations")?, 0);
     assert!(taken(&asked).is_empty(), "no candidate was asked");
     assert!(taken(&handed).is_empty(), "no check ran");
-    // Closure C3: under the attempt's work window, which closes before the dispatch.
+    // Closure C3: under the attempt's work window, which closes before the dispatch; closure C4:
+    // the NotReady exit runs one custody turn under that window's teardown bound.
     let work_until = window_end(origin, Shape::default().work_ms, rig.teardown_ms, until);
-    assert!(work_until < until);
-    assert_eq!(taken(&readied), vec![("ready", work_until, false)]);
+    let bound = teardown_bound(work_until, rig.teardown_ms, until);
+    assert!(work_until < bound && bound < until);
+    assert_eq!(
+        taken(&readied),
+        vec![
+            ("ready", work_until, false),
+            ("settle_retained", bound, false)
+        ]
+    );
     Ok(())
 }
 
@@ -1921,13 +1938,15 @@ fn each_attempt_is_preceded_by_its_own_provider_response_observation() -> Outcom
     let asked = taken(&asked);
     assert_eq!(asked.len(), 2);
     let windows = two_windows(&rig, (origin, asked[1].charged_from), until)?;
+    // Closure C4: each custody turn under its own attempt's teardown bound.
+    let bounds = windows.map(|window| teardown_bound(window, rig.teardown_ms, until));
     assert_eq!(
         taken(&readied),
         vec![
             ("ready", windows[0], false),
-            ("settle_retained", until, false),
+            ("settle_retained", bounds[0], false),
             ("ready", windows[1], false),
-            ("settle_retained", until, false),
+            ("settle_retained", bounds[1], false),
         ]
     );
     let (observed, started) = (observations(&rig)?, attempt_starts(&rig)?);
@@ -2024,8 +2043,10 @@ fn custody_run(answer: Candidate, custody: Custody) -> Result<CustodyRun, Box<dy
 }
 
 /// R21 N18, K5 · the source's retained children are settled inside `drive` after EVERY answer,
-/// before the attempt's settle, under the dispatch deadline, and the attempt's cleanup is settled
-/// only when the arm's own is and none is still pending; the dispatcher reports the custody by name.
+/// before the attempt's settle, under the attempt's teardown bound (N18 as closure C4 amends it:
+/// before the dispatch deadline, so the settle keeps the remainder), and the attempt's cleanup is
+/// settled only when the arm's own is and none is still pending; the dispatcher reports the custody
+/// by name.
 /// Three fixtures differing in every field: (1) a success arm — a replacement, whose custody the
 /// source does not pass on (K5) — with one child still pending: the attempt is not settled and the
 /// task is left `needs settlement`, no check run; (2) a provider arm whose own cleanup settled, with
@@ -2074,19 +2095,18 @@ fn a_retained_child_is_settled_inside_drive_before_the_attempt_s_settle() -> Out
         let (lines, readied, (origin, until), rig) = custody_run(answer, custody)?;
         let line = format!("dispatcher: task {TASK} -> {step}");
         assert!(lines.contains(&line), "{line} in {lines:?}");
-        // Closure C3: ready under the attempt's work window, which closes before the dispatch.
-        let work_until = window_end(
-            origin,
-            Shape::default().work_ms,
-            u64::try_from(CHECK_TEARDOWN.as_millis())?,
-            until,
-        );
-        assert!(work_until < until, "{step}");
+        // Closure C3: ready under the attempt's work window, which closes before the dispatch;
+        // closure C4 (amending N18): the custody turn under its teardown bound, strictly before the
+        // dispatch deadline, so the attempt's settle keeps the remainder.
+        let teardown = u64::try_from(CHECK_TEARDOWN.as_millis())?;
+        let work_until = window_end(origin, Shape::default().work_ms, teardown, until);
+        let bound = teardown_bound(work_until, teardown, until);
+        assert!(work_until < bound && bound < until, "{step}");
         assert_eq!(
             readied,
             vec![
                 ("ready", work_until, false),
-                ("settle_retained", until, false)
+                ("settle_retained", bound, false)
             ],
             "{step}"
         );
@@ -2109,6 +2129,170 @@ fn a_retained_child_is_settled_inside_drive_before_the_attempt_s_settle() -> Out
             "{step}"
         );
     }
+    Ok(())
+}
+
+/// Closure C4 (FT2-01, M6) · a source not ready still has its retained children settled — one custody
+/// turn on the `NotReady` exit, under the attempt's teardown bound (its work window plus the
+/// teardown share, before the dispatch deadline) — and the dispatcher reports the refusal's name and
+/// the custody on its one line. Two fixtures differing in every field; nothing is written and the
+/// task stays `admitted`.
+#[test]
+fn a_provider_not_ready_still_settles_and_reports_its_custody_by_name() -> Outcome_ {
+    use habitat_engine::worker::native::Error as Native;
+    let fixtures = [
+        (
+            Native::Identity,
+            Custody {
+                settled: 2,
+                pending: 1,
+            },
+            "identity, custody: settled=2 pending=1",
+        ),
+        (
+            Native::Deadline,
+            Custody {
+                settled: 0,
+                pending: 3,
+            },
+            "deadline, custody: settled=0 pending=3",
+        ),
+    ];
+    let teardown = u64::try_from(CHECK_TEARDOWN.as_millis())?;
+    for (error, custody, tail) in fixtures {
+        let rig = Arc::new(rig(&Shape::default())?);
+        let (mut source, asked) = script(vec![Candidate::Replacement(SECOND.to_vec())]);
+        source.readiness = Err(error);
+        source.custody = custody;
+        let readied = Arc::clone(&source.readied);
+        let (verifier, handed) = oracle(vec![matched(7)]);
+        let stop = Arc::new(AtomicBool::new(false));
+        let (provider, _) = provider_of(vec![(source, verifier)], &stop);
+        let opened = Arc::clone(&provider.admitted);
+        let (exit, lines) = run_dispatcher(&rig, provider, &stop)?;
+        assert_eq!(
+            lines,
+            vec![format!(
+                "dispatcher: task {TASK} -> DispatcherStops(\"provider not ready\"): {tail}"
+            )]
+        );
+        assert_eq!(exit, dispatcher::Exit::Stopped("provider not ready"));
+        let (origin, until) = taken(&opened).first().ok_or("an open")?.window;
+        let work_until = window_end(origin, Shape::default().work_ms, teardown, until);
+        let bound = teardown_bound(work_until, teardown, until);
+        assert!(bound < until, "{tail}");
+        assert_eq!(
+            taken(&readied),
+            vec![
+                ("ready", work_until, false),
+                ("settle_retained", bound, false)
+            ],
+            "{tail}"
+        );
+        assert_eq!(state(&rig)?, "admitted");
+        assert_eq!(count(&rig, "SELECT count(*) FROM attempts")?, 0);
+        assert!(taken(&asked).is_empty() && taken(&handed).is_empty());
+    }
+    Ok(())
+}
+
+/// How long a model child is polled toward the bound it was handed (F102): a bound past this is
+/// not waited for, so a bound handed too far away fails the proof by the recorded deadline instead
+/// of hanging it.
+const SETTLE_MODEL_BUDGET: Duration = Duration::from_secs(5);
+
+/// A retained child that never settles, as a model (F101): polled to the bound it was handed, it is
+/// still pending there — one child pending, none settled. A bound past `SETTLE_MODEL_BUDGET` is not
+/// waited for (the recorded deadline says which bound it was handed).
+fn pending_to_its_bound(deadline: Instant) -> Custody {
+    let budget = Instant::now() + SETTLE_MODEL_BUDGET;
+    while Instant::now() < deadline && deadline <= budget {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    Custody {
+        settled: 0,
+        pending: 1,
+    }
+}
+
+/// Closure C4 (FT2-04; N18 amended) · the custody turn inside `execute` is bounded by the attempt's
+/// teardown bound — its work window plus the teardown share — not the dispatch deadline, so a child
+/// still pending at that bound leaves the attempt's settle its remainder: the settle is written, the
+/// attempt stays unsettled and the task is left `needs settlement` with the child counted pending —
+/// never an entropy failure after the whole dispatch window was spent polling.
+#[test]
+fn a_child_pending_to_its_bound_leaves_the_task_needs_settlement_not_entropy() -> Outcome_ {
+    let rig = rig(&Shape {
+        work_ms: 1_500,
+        ..Shape::default()
+    })?;
+    let (mut source, asked) = script(vec![Candidate::Provider {
+        error: habitat_engine::worker::native::Error::Identity,
+        state: habitat_engine::worker::native::ProviderState::NotDispatched,
+        cleanup_settled: true,
+        retained: 1,
+    }]);
+    source.settle_model = Some(Box::new(pending_to_its_bound));
+    let readied = Arc::clone(&source.readied);
+    let (mut verifier, handed) = oracle(vec![]);
+    let (principal, drain) = (owner(), AtomicBool::new(false));
+    let admission = admit(
+        &rig.tasks,
+        &rig.profile,
+        Dispatch {
+            principal: &principal,
+            task: id(TASK),
+            agent_record_id: &rig.agent,
+            selections: &rig.selections,
+            attempts: &rig.attempts,
+            forbidden: &[],
+            teardown_ms: rig.teardown_ms,
+            capture_ms: Some(10),
+            drain: &drain,
+        },
+    )
+    .map_err(|e| format!("{e:?}"))?;
+    let Admission::Ready(admitted) = admission else {
+        return Err("refused at admission".into());
+    };
+    let (origin, until) = admitted.window();
+    let dispatched =
+        drive(&rig.tasks, *admitted, &mut source, &mut verifier).map_err(|e| format!("{e:?}"))?;
+    let work_until = window_end(origin, 1_500, rig.teardown_ms, until);
+    let bound = teardown_bound(work_until, rig.teardown_ms, until);
+    assert!(bound < until);
+    assert_eq!(
+        taken(&readied),
+        vec![
+            ("ready", work_until, false),
+            ("settle_retained", bound, false)
+        ]
+    );
+    assert_eq!(
+        dispatched.outcome,
+        Outcome::Driven(Driven::NeedsSettlement(StopReason::Unsettled))
+    );
+    assert_eq!(
+        dispatcher::classify(&Ok(dispatched.outcome)),
+        dispatcher::Step::TaskLeft("needs settlement")
+    );
+    assert_eq!(
+        dispatched.custody,
+        Custody {
+            settled: 0,
+            pending: 1
+        }
+    );
+    assert_eq!(
+        rows(
+            &rig,
+            "SELECT settled_event IS NULL FROM attempts WHERE task_id=?"
+        )?,
+        vec![vec!["1".to_owned()]]
+    );
+    assert_eq!(count(&rig, "SELECT count(*) FROM task_stops")?, 0);
+    assert_eq!(taken(&asked).len(), 1);
+    assert!(taken(&handed).is_empty(), "no check ran");
     Ok(())
 }
 
@@ -2892,6 +3076,13 @@ fn window_end(
     until.min(charged_from + Duration::from_millis(reserved_ms.saturating_sub(teardown_ms)))
 }
 
+/// The bound an attempt's custody turn is handed, by the design's rule (review MEDIUM-2; N18 as
+/// closure C4 amends it): its work window's end plus the teardown share held back for cleanup, never
+/// past the dispatch deadline.
+fn teardown_bound(work_until: Instant, teardown_ms: u64, until: Instant) -> Instant {
+    until.min(work_until + Duration::from_millis(teardown_ms))
+}
+
 /// Closure C3 (FT2-03) · a work reservation spent before the next attempt is refused before the
 /// provider is asked: the second begin reads the head before `ready`, finds no work window past the
 /// teardown share, and stops the task by policy — the source was asked ready once, for attempt 1.
@@ -2966,7 +3157,15 @@ fn a_drain_raised_inside_ready_ends_drained_with_no_attempt_row() -> Outcome_ {
         work_until < until,
         "the work window closes before the dispatch"
     );
-    assert_eq!(taken(&readied), vec![("ready", work_until, false)]);
+    // Closure C4: the Drained exit runs one custody turn under the window's teardown bound.
+    let bound = teardown_bound(work_until, rig.teardown_ms, until);
+    assert_eq!(
+        taken(&readied),
+        vec![
+            ("ready", work_until, false),
+            ("settle_retained", bound, false)
+        ]
+    );
     Ok(())
 }
 
