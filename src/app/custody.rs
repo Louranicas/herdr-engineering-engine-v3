@@ -74,7 +74,14 @@ impl PrivateDirectory {
             Err(errno) => return Err(DirectoryError::Io(io_error(errno))),
         };
         let meta = directory.metadata().map_err(DirectoryError::Io)?;
-        if !meta.is_dir() || !owned_private(&meta, 0o700) {
+        if private_directory_verdict(
+            meta.is_dir(),
+            meta.uid(),
+            rustix::process::geteuid().as_raw(),
+            meta.mode(),
+        )
+        .is_err()
+        {
             return Err(DirectoryError::Custody);
         }
         Ok(Self { directory })
@@ -122,5 +129,52 @@ impl PrivateDirectory {
 }
 
 fn owned_private(meta: &std::fs::Metadata, mode: u32) -> bool {
-    meta.uid() == rustix::process::geteuid().as_raw() && meta.mode() & 0o777 == mode
+    owned_with_bits(
+        meta.uid(),
+        rustix::process::geteuid().as_raw(),
+        meta.mode(),
+        mode,
+    )
+    .is_ok()
+}
+
+/// Why a directory is not this user's private directory (R21 closure C9), first failing rule first.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PrivateWhy {
+    /// It is not a directory.
+    NotDirectory,
+    /// It is not owned by the effective user.
+    NotOwned,
+    /// Its permission bits (`mode & 0o777`) are not 0700: the bits found.
+    Mode(u32),
+}
+
+/// The private-directory rule, pure (R21 closure C9): a directory, owned by `euid`, whose
+/// permission bits (`mode & 0o777`) are exactly 0700. `mode` is the raw `st_mode`.
+///
+/// # Errors
+/// The first rule that fails, as [`PrivateWhy`].
+pub const fn private_directory_verdict(
+    is_dir: bool,
+    uid: u32,
+    euid: u32,
+    mode: u32,
+) -> Result<(), PrivateWhy> {
+    if !is_dir {
+        return Err(PrivateWhy::NotDirectory);
+    }
+    owned_with_bits(uid, euid, mode, 0o700)
+}
+
+/// Ownership and permission bits, the half of the private rule a directory and a 0600 file share:
+/// owned by `euid`, and `mode & 0o777` exactly `bits`.
+const fn owned_with_bits(uid: u32, euid: u32, mode: u32, bits: u32) -> Result<(), PrivateWhy> {
+    if uid != euid {
+        return Err(PrivateWhy::NotOwned);
+    }
+    let found = mode & 0o777;
+    if found != bits {
+        return Err(PrivateWhy::Mode(found));
+    }
+    Ok(())
 }

@@ -3736,6 +3736,36 @@ fn the_host_reads_three_states_from_the_root_and_its_two_leaves() {
     );
 }
 
+/// R21 closure C9 (M7) · the private-directory rule has one door, reachable by argument: the
+/// custody door, the startup workspace readback and `main`'s attempts root all route through it.
+/// The table is whole; `mode` is a raw `st_mode`, so the directory type bits are masked away, and
+/// the first failing rule names the refusal.
+#[test]
+fn the_private_directory_rule_is_one_table_reachable_by_argument() {
+    use habitat_engine::app::custody::{PrivateWhy, private_directory_verdict};
+    let table = [
+        ((true, 1000, 1000, 0o700), Ok(())),
+        ((true, 4242, 4242, 0o40_700), Ok(())),
+        ((false, 1000, 1000, 0o700), Err(PrivateWhy::NotDirectory)),
+        ((false, 1001, 1000, 0o755), Err(PrivateWhy::NotDirectory)),
+        ((true, 1001, 1000, 0o700), Err(PrivateWhy::NotOwned)),
+        ((true, 1001, 1000, 0o755), Err(PrivateWhy::NotOwned)),
+        ((true, 1000, 1000, 0o755), Err(PrivateWhy::Mode(0o755))),
+        ((true, 4242, 4242, 0o40_750), Err(PrivateWhy::Mode(0o750))),
+        ((true, 1000, 1000, 0o600), Err(PrivateWhy::Mode(0o600))),
+    ];
+    let said: Vec<_> = table
+        .iter()
+        .map(|((is_dir, uid, euid, mode), _)| {
+            (
+                (*is_dir, *uid, *euid, *mode),
+                private_directory_verdict(*is_dir, *uid, *euid, *mode),
+            )
+        })
+        .collect();
+    assert_eq!(said, table.to_vec());
+}
+
 /// T07-AP-79 · a ledger that changed between the inspection read and the writable read is
 /// refused as `Changed`, never acted on. The branch in `run` is reachable only through a
 /// concurrent writer, so its rule was extracted (review §3: "add the test reaching

@@ -199,7 +199,7 @@ use habitat_engine::app::coordinator;
 use habitat_engine::app::grants::{self, FileGrants};
 use habitat_engine::app::native_provider::{self, Installed, NativeFileError, NativeProvider};
 use habitat_engine::app::tasks::StoreTasks;
-use habitat_engine::app::{class_profile, dispatcher, routing};
+use habitat_engine::app::{class_profile, custody, dispatcher, routing};
 use habitat_engine::contracts::control::{FrameReader, MAX_FRAME_BYTES, ReadError};
 use habitat_engine::worker::aggregate;
 use habitat_engine::worker::namespace_shim::{self, NamespaceExec};
@@ -316,14 +316,14 @@ fn attempts_root(state_root: &Path) -> Option<PathBuf> {
     let refused = match created {
         Err(error) if error.kind() != io::ErrorKind::AlreadyExists => Some(error.to_string()),
         _ => match std::fs::symlink_metadata(&attempts) {
-            Ok(meta)
-                if meta.is_dir()
-                    && meta.mode() & 0o777 == 0o700
-                    && meta.uid() == rustix::process::geteuid().as_raw() =>
-            {
-                None
-            }
-            Ok(_) => Some("not this user's private directory".to_owned()),
+            Ok(meta) => custody::private_directory_verdict(
+                meta.is_dir(),
+                meta.uid(),
+                rustix::process::geteuid().as_raw(),
+                meta.mode(),
+            )
+            .err()
+            .map(|why| format!("not this user's private directory: {why:?}")),
             Err(error) => Some(error.to_string()),
         },
     };

@@ -10,6 +10,7 @@
 //! any effect, every effect is read back afterwards, and a record whose content
 //! already exists is found rather than written again.
 
+use crate::app::custody::private_directory_verdict;
 use crate::contracts::UuidV4;
 use crate::contracts::roster::{Instance, ReceiptTime};
 use crate::recovery::{
@@ -392,17 +393,16 @@ const WALK_DEPTH_LIMIT: usize = 16;
 /// this caps the wall time of an effect that `Physical::clean` has no deadline for.
 const WORKSPACE_REMOVAL_BUDGET: std::time::Duration = std::time::Duration::from_secs(30);
 
+/// The private-directory rule through its one door ([`private_directory_verdict`], R21 closure C9).
 fn owned_private_dir(path: &Path) -> Result<fs::Metadata, String> {
     let meta = fs::symlink_metadata(path).map_err(|e| format!("metadata: {e}"))?;
-    if !meta.is_dir() {
-        return Err("not a directory".into());
-    }
-    if meta.uid() != rustix::process::geteuid().as_raw() {
-        return Err("not owned by this uid".into());
-    }
-    if meta.mode() & 0o777 != 0o700 {
-        return Err(format!("mode {:o} is not 0700", meta.mode() & 0o777));
-    }
+    private_directory_verdict(
+        meta.is_dir(),
+        meta.uid(),
+        rustix::process::geteuid().as_raw(),
+        meta.mode(),
+    )
+    .map_err(|why| format!("{why:?}"))?;
     Ok(meta)
 }
 
