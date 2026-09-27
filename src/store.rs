@@ -349,7 +349,7 @@ pub use evidence::{MAX_VIEW_REFS, ObjectReader};
 pub use roster::{RequestSource, RosterAttempt, RosterSnapshot, RosterStart};
 
 pub use artifact::Object;
-pub use backup::{BackupReport, RestoreStatus};
+pub use backup::{BackupReport, OBJECT_INVENTORY_BOUND, RestoreStatus};
 pub use run_records::{
     Committed, CommittedCheck, CommittedRun, Observation, RECORD_MEDIA_TYPE, RunRecord,
     RunRecordKind,

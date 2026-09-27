@@ -192,6 +192,7 @@
 
 use habitat_engine::actions::Catalogue;
 use habitat_engine::actions::control::{Grants, NoGrants};
+use habitat_engine::app::backup_target::{self, BackupTarget, BackupUnready};
 use habitat_engine::app::control_socket::{
     self, Drain, IDLE_TIMEOUT, RUNTIME_DIRECTORY, SOCKET_NAME, WRITE_TIMEOUT,
 };
@@ -554,11 +555,37 @@ fn compose_native(
 type Composed = Result<(NativeProvider<Systemd>, Installed), NoNative>;
 
 /// What the dispatcher runs over (B14b-2 review round 2, FT-5): the task owner, the attempts root
-/// `serve` prepared and its id, and the native provider composed after both.
+/// `serve` prepared and its id, the native provider composed after both, and RC01's backup target
+/// (OPS-2) or why there is none.
 struct Dispatching<'a> {
     tasks: &'a StoreTasks,
     root: AttemptsRoot,
     native: Composed,
+    backup: Result<BackupTarget, BackupUnready>,
+}
+
+/// RC01's backup target (OPS-2), read once from the operator's record and said in one line: where
+/// the backups go, or why dispatch is unavailable. The state root's device is the real one here;
+/// the reader takes it as an argument so its rule is chosen by argument in the proofs.
+fn read_backup_target(home: &Path, state_root: &Path) -> Result<BackupTarget, BackupUnready> {
+    use std::os::unix::fs::MetadataExt;
+    let directory = coordinator::config_path(home, backup_target::BACKUP_DIRECTORY);
+    let read = std::fs::metadata(state_root)
+        .map_err(|_| BackupUnready::Custody)
+        .and_then(|state| backup_target::read_target(&directory, state_root, state.dev()));
+    match &read {
+        Ok(target) => say(format_args!(
+            "backup target read from {} (destination {})",
+            directory.display(),
+            target.destination.display()
+        )),
+        Err(why) => say(format_args!(
+            "dispatch unavailable: backup target {} ({})",
+            why.line(),
+            directory.display()
+        )),
+    }
+    read
 }
 
 /// Why no dispatcher runs, by name (B14b-2 review round 2, FT-5): an engine with a task owner whose
@@ -584,10 +611,12 @@ fn prepare_dispatch<'a>(
     let tasks = tasks.ok_or(Undispatched::NoTaskOwner)?;
     let root = attempts_root(state_root, deadline).ok_or(Undispatched::AttemptsRoot)?;
     let native = compose_native(home, tasks, runtime_root, deadline);
+    let backup = read_backup_target(home, state_root);
     Ok(Dispatching {
         tasks,
         root,
         native,
+        backup,
     })
 }
 
@@ -835,8 +864,10 @@ fn serve_until_signalled(
                 tasks,
                 root,
                 native,
+                backup,
             }) => {
                 scope.spawn(move || {
+                    let space = backup_target::Statvfs;
                     let exit = match native {
                         Ok((mut provider, installed)) => dispatcher::Dispatcher {
                             tasks,
@@ -846,6 +877,8 @@ fn serve_until_signalled(
                             agent_record_id: &installed.record_id,
                             selections: &installed.selections,
                             drain: drain.flag(),
+                            backup: &backup,
+                            space: &space,
                         }
                         .run(&report),
                         Err(why) => dispatcher::Dispatcher {
@@ -856,6 +889,8 @@ fn serve_until_signalled(
                             agent_record_id: "",
                             selections: &[],
                             drain: drain.flag(),
+                            backup: &backup,
+                            space: &space,
                         }
                         .run(&report),
                     };

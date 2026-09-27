@@ -5,6 +5,7 @@ pub mod workload;
 
 pub mod subjects;
 
+pub mod backup_target;
 pub mod candidates;
 pub mod capture;
 

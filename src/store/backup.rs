@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 
 /// The most distinct objects a backup copies (`copy_objects` refuses more): the bound every
 /// registration that can grow the inventory from outside must keep (B09 R2.4).
-pub(super) const OBJECT_INVENTORY_BOUND: usize = 4096;
+pub const OBJECT_INVENTORY_BOUND: usize = 4096;
 
 /// This store snapshot does not qualify operational restoration by itself.
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]

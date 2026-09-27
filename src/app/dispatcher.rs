@@ -17,6 +17,7 @@
 //! `dispatch_unavailable`" revisited: the task is the owner's and the missing configuration the
 //! operator's.
 
+use super::backup_target::{BackupTarget, BackupUnready, FreeSpace};
 use super::coordinator::RootIdError;
 use super::runtime::{
     Admission, Admitted, CandidateSource, Dispatch, Error as RuntimeError, Outcome, Verifier,
@@ -27,9 +28,10 @@ use crate::contracts::UuidV4;
 use crate::contracts::roster::Selection;
 use crate::store::{Dispatchable, Error as StoreError, ResolveRefusal};
 use crate::task::driver;
+use std::os::unix::fs::DirBuilderExt;
 use std::path::Path;
 use std::sync::atomic::AtomicBool;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 /// Where the dispatcher's candidate source and verifier come from, per dispatch (B14b-1 D7).
 pub trait Provider {
@@ -66,6 +68,9 @@ pub enum Unavailable {
     Closure,
     /// The class prompt refused an input, by the class profile's name for it (R21 N22).
     Prompt(super::candidates::ClassPromptError),
+    /// RC01's backup-freshness gate refused the dispatch (OPS-2): the whole line, with the reason
+    /// and both headroom numbers, is [`BackupWhy::line`]; [`Unavailable::name`] is its fixed prefix.
+    Backup(BackupWhy),
 }
 
 /// Which of the operator's native declarations does not fit the class (R21 D1, N11).
@@ -184,8 +189,271 @@ impl Unavailable {
             Self::Prompt(Input::Task) => "unavailable: prompt task",
             Self::Prompt(Input::Cargo) => "unavailable: prompt cargo",
             Self::Prompt(Input::Base) => "unavailable: prompt base",
+            Self::Backup(_) => "unavailable: backup",
         }
     }
+}
+
+/// RC01 "Backup freshness" (docs/contract-decisions.md): the latest complete backup must be at most
+/// 15 minutes old before any dispatch.
+pub(crate) const BACKUP_FRESHNESS: Duration = Duration::from_mins(15);
+/// RC01 "Backup freshness": a backup at every batch boundary, at most 8 tasks.
+pub(crate) const BATCH_BOUNDARY: u32 = 8;
+/// RC01 "Persistent capacity": at least 96 GiB free on the state filesystem before dispatch.
+pub(crate) const STATE_RESERVE: u64 = 96 << 30;
+/// RC01 "Persistent capacity": at least 256 GiB free on the backup filesystem before dispatch.
+pub(crate) const BACKUP_RESERVE: u64 = 256 << 30;
+
+/// Why a backup is due (RC01): none yet in this process, the last one aged past
+/// [`BACKUP_FRESHNESS`], or [`BATCH_BOUNDARY`] dispatches since it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum Due {
+    Never,
+    Aged,
+    Batch,
+}
+
+/// RC01's freshness rule, pure (F95): `last` is this process's last complete backup on the
+/// monotonic clock, `dispatched_since` the dispatches since it. Age is checked before the batch.
+/// "<=15 minutes" is fresh, so exactly [`BACKUP_FRESHNESS`] old is not due.
+pub(crate) fn backup_due(
+    last: Option<Instant>,
+    dispatched_since: u32,
+    now: Instant,
+) -> Option<Due> {
+    let Some(last) = last else {
+        return Some(Due::Never);
+    };
+    if now.saturating_duration_since(last) > BACKUP_FRESHNESS {
+        Some(Due::Aged)
+    } else if dispatched_since >= BATCH_BOUNDARY {
+        Some(Due::Batch)
+    } else {
+        None
+    }
+}
+
+/// Which filesystem RC01's headroom names.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Fs {
+    /// The state root's.
+    State,
+    /// The backup destination's.
+    Backup,
+}
+
+impl Fs {
+    const fn name(self) -> &'static str {
+        match self {
+            Self::State => "state",
+            Self::Backup => "backup",
+        }
+    }
+}
+
+/// A headroom refusal with both numbers (HO-03 C10 `headroom{free, reserve}`).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Headroom {
+    pub fs: Fs,
+    pub free: u64,
+    pub reserve: u64,
+}
+
+/// RC01's headroom rule, pure: `free` must be at least `reserve`.
+pub(crate) fn headroom(fs: Fs, free: u64, reserve: u64) -> Result<(), Headroom> {
+    if free < reserve {
+        Err(Headroom { fs, free, reserve })
+    } else {
+        Ok(())
+    }
+}
+
+/// Why RC01's backup-freshness gate refused (OPS-2), each by its own name.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BackupWhy {
+    /// The store's backup door refused, by the reason `store_reason` names (HO-03 C10
+    /// `backup_failed{reason}`).
+    Store(&'static str),
+    /// A filesystem is below its RC01 reserve.
+    Headroom(Headroom),
+    /// A filesystem's free space could not be measured.
+    Unmeasured(Fs),
+    /// There is no backup target: `serve` said why once at start.
+    Target(BackupUnready),
+    /// No backup id could be drawn under the backup's deadline.
+    Id,
+    /// The backup's own directory could not be made under the destination.
+    Destination(&'static str),
+}
+
+impl BackupWhy {
+    /// The one renderer of every refusal line the gate reports (after `dispatcher: `).
+    #[must_use]
+    pub fn line(&self) -> String {
+        match self {
+            Self::Store(reason) => format!("unavailable: backup failed ({reason})"),
+            Self::Headroom(Headroom { fs, free, reserve }) => format!(
+                "unavailable: headroom ({}: free={free} reserve={reserve})",
+                fs.name()
+            ),
+            Self::Unmeasured(fs) => format!("unavailable: headroom unmeasured ({})", fs.name()),
+            Self::Target(why) => format!("unavailable: no backup target ({})", why.line()),
+            Self::Id => "unavailable: backup failed (id)".to_owned(),
+            Self::Destination(reason) => {
+                format!("unavailable: backup failed (destination {reason})")
+            }
+        }
+    }
+}
+
+/// The store's refusal as the backup-failed line names it: a total `match` with no catch-all, so a
+/// new store error is a compile error here (the `store_step` precedent).
+const fn store_reason(error: &StoreError) -> &'static str {
+    match error {
+        StoreError::Outstanding => "outstanding",
+        StoreError::Bound => "bound",
+        StoreError::Custody => "custody",
+        StoreError::Conflict => "conflict",
+        StoreError::Deadline => "deadline",
+        StoreError::Corrupt => "corrupt",
+        StoreError::UncertainCommit => "uncertain commit",
+        StoreError::Full => "full",
+        StoreError::Invalid => "invalid",
+        StoreError::Forbidden => "forbidden",
+        StoreError::NotFound => "not found",
+        StoreError::Cancelled => "cancelled",
+        StoreError::Budget => "budget",
+        StoreError::Locked => "locked",
+        StoreError::TaskViewBound { .. } => "task view bound",
+        StoreError::StartupBound { .. } => "startup bound",
+        StoreError::StaleGeneration { .. } => "stale generation",
+        StoreError::SnapshotAhead { .. } => "snapshot ahead",
+        StoreError::SnapshotMoved { .. } => "snapshot moved",
+        StoreError::Disposition(_) => "disposition",
+        StoreError::EvidenceIdentity => "evidence identity",
+        StoreError::EvidenceBound { .. } => "evidence bound",
+        StoreError::EventsBound { .. } => "events bound",
+        StoreError::AlreadyStopped => "already stopped",
+        StoreError::NotWritable => "not writable",
+        StoreError::UnsupportedSchema => "unsupported schema",
+        StoreError::Chain(_) => "chain",
+        StoreError::UpgradeRequired { .. } => "upgrade required",
+        StoreError::Runtime => "runtime",
+        StoreError::Constraint => "constraint",
+        StoreError::RecoveryRequired => "recovery required",
+        StoreError::InspectionOnly => "inspection only",
+        StoreError::Cleanup { .. } => "cleanup",
+        StoreError::Rollback { .. } => "rollback",
+        StoreError::Io(_) => "io",
+        StoreError::Os(_) => "os",
+        StoreError::Sqlite(_) => "sqlite",
+        StoreError::Encoding(_) => "encoding",
+        #[cfg(test)]
+        StoreError::Injected(_) => "injected",
+    }
+}
+
+/// An I/O failure's kind as a static reason: the kinds a directory create meets by name, the rest
+/// as `io` (`ErrorKind` is non-exhaustive, so it cannot be matched totally).
+const fn io_reason(kind: std::io::ErrorKind) -> &'static str {
+    match kind {
+        std::io::ErrorKind::NotFound => "io:not_found",
+        std::io::ErrorKind::PermissionDenied => "io:permission_denied",
+        std::io::ErrorKind::AlreadyExists => "io:already_exists",
+        std::io::ErrorKind::StorageFull => "io:storage_full",
+        std::io::ErrorKind::ReadOnlyFilesystem => "io:read_only_filesystem",
+        _ => "io",
+    }
+}
+
+/// This process's backup freshness, held on the monotonic clock (HO-03 as amended): set only from a
+/// backup the store's door read back. A new process has none, so its first pick backs up.
+#[derive(Default)]
+struct Freshness {
+    last: Option<Instant>,
+    dispatched_since: u32,
+}
+
+/// Why the gate did not pass: RC01's refusal, or a ledger owner that panicked.
+enum Gate {
+    Refused(BackupWhy),
+    Poisoned,
+}
+
+impl Gate {
+    /// The exit this gate's refusal stops the dispatcher as, its line reported first.
+    fn stop(self, report: &(dyn Fn(&str) + Sync)) -> Exit {
+        match self {
+            Self::Poisoned => Exit::Poisoned,
+            Self::Refused(why) => {
+                report(&format!("dispatcher: {}", why.line()));
+                Exit::Unavailable(Unavailable::Backup(why))
+            }
+        }
+    }
+}
+
+/// RC01's gate (OPS-2): when a backup is due ([`backup_due`]), check both filesystems' headroom,
+/// then back up through the store's one door into a fresh 0700 `<destination>/<backup-id>/`, under
+/// the operator's deadline, and report the backup's line. Quiesce is the door's own rule (it refuses
+/// `Outstanding`). A refused backup's directory is removed when empty; a partial copy is inert,
+/// since its manifest is published last and it is never reused (the door refuses a non-empty
+/// destination).
+fn ensure_fresh(
+    tasks: &StoreTasks,
+    backup: &Result<BackupTarget, BackupUnready>,
+    space: &(dyn FreeSpace + Sync),
+    freshness: &mut Freshness,
+    report: &(dyn Fn(&str) + Sync),
+) -> Result<(), Gate> {
+    let Some(due) = backup_due(freshness.last, freshness.dispatched_since, Instant::now()) else {
+        return Ok(());
+    };
+    let target = backup
+        .as_ref()
+        .map_err(|why| Gate::Refused(BackupWhy::Target(*why)))?;
+    for (fs, path, reserve) in [
+        (Fs::State, &target.state_root, STATE_RESERVE),
+        (Fs::Backup, &target.destination, BACKUP_RESERVE),
+    ] {
+        let free = space
+            .free(path)
+            .map_err(|_| Gate::Refused(BackupWhy::Unmeasured(fs)))?;
+        headroom(fs, free, reserve).map_err(|short| Gate::Refused(BackupWhy::Headroom(short)))?;
+    }
+    let deadline = Instant::now()
+        .checked_add(target.deadline)
+        .ok_or(Gate::Refused(BackupWhy::Store("deadline")))?;
+    let id = super::evidence::fresh_id(deadline).map_err(|_| Gate::Refused(BackupWhy::Id))?;
+    let directory = target.destination.join(id.as_str());
+    std::fs::DirBuilder::new()
+        .mode(0o700)
+        .create(&directory)
+        .map_err(|error| Gate::Refused(BackupWhy::Destination(io_reason(error.kind()))))?;
+    let backed = match tasks.with_store(|store| store.backup(&directory, deadline)) {
+        Err(super::tasks::Poisoned) => Err(Gate::Poisoned),
+        Ok(Err(error)) => Err(Gate::Refused(BackupWhy::Store(store_reason(&error)))),
+        Ok(Ok(report)) => Ok(report),
+    };
+    let backed = match backed {
+        Ok(backed) => backed,
+        Err(gate) => {
+            // Best effort, and only when empty: a partial copy is inert and never reused.
+            let _ = std::fs::remove_dir(&directory);
+            return Err(gate);
+        }
+    };
+    freshness.last = Some(Instant::now());
+    freshness.dispatched_since = 0;
+    report(&format!(
+        "dispatcher: backup {} complete: objects={}/{} database_bytes={} cutoff={} due={due:?}",
+        id.as_str(),
+        backed.objects.len(),
+        crate::store::OBJECT_INVENTORY_BOUND,
+        backed.database_bytes,
+        backed.cutoff
+    ));
+    Ok(())
 }
 
 /// The provider when `serve` composed none: every `open` refuses by the compose refusal it holds
@@ -422,6 +690,10 @@ pub struct Dispatcher<'a, P> {
     pub selections: &'a [Selection],
     /// The engine's drain (`Drain::flag`): ends the wait, and is read by the runtime between attempts.
     pub drain: &'a AtomicBool,
+    /// Where RC01's backups go, or why there is none (OPS-2): read once at `serve` start.
+    pub backup: &'a Result<BackupTarget, BackupUnready>,
+    /// How RC01's headroom is measured (`backup_target::Statvfs` in `serve`).
+    pub space: &'a (dyn FreeSpace + Sync),
 }
 
 impl<P: Provider> Dispatcher<'_, P> {
@@ -440,6 +712,8 @@ fn run<P: Provider>(dispatcher: Dispatcher<'_, P>, report: &(dyn Fn(&str) + Sync
         agent_record_id,
         selections,
         drain,
+        backup,
+        space,
     } = dispatcher;
     let Ok(profile) = tasks.class_profile() else {
         report(&format!(
@@ -453,6 +727,7 @@ fn run<P: Provider>(dispatcher: Dispatcher<'_, P>, report: &(dyn Fn(&str) + Sync
     // The task the last step handled: a read that returns it again is a defect in the rules above
     // (a handled task is stopped, accepted, or has an attempt row), stopped by name, never looped.
     let mut handled: Option<String> = None;
+    let mut freshness = Freshness::default();
     loop {
         let next = match tasks.wait_dispatchable(&stopped) {
             Err(super::tasks::Poisoned) => return Exit::Poisoned,
@@ -477,6 +752,11 @@ fn run<P: Provider>(dispatcher: Dispatcher<'_, P>, report: &(dyn Fn(&str) + Sync
             ));
             return Exit::Stopped("a stored task id is malformed");
         };
+        // RC01 (OPS-2 point a): before any dispatch, the latest complete backup is fresh — or the
+        // dispatcher stops by name and the task stays `admitted`.
+        if let Err(exit) = ensure_fresh(tasks, backup, space, &mut freshness, report) {
+            return exit.stop(report);
+        }
         // Phase one before any provider (R20 round 2 A2/A4): the free checks and the captures; a
         // refusal stops the task by name here, and a provider is opened only for an admitted task.
         let admitted = admit(
@@ -500,25 +780,38 @@ fn run<P: Provider>(dispatcher: Dispatcher<'_, P>, report: &(dyn Fn(&str) + Sync
         let (result, custody) = match admitted {
             Err(error) => (Err(error), None),
             Ok(Admission::Refused(refusal)) => (Ok(Outcome::Refused(refusal)), None),
-            Ok(Admission::Ready(ready)) => match provider.open(&next, &ready) {
-                Err(why) => {
-                    let (exit, line) = open_refused(why, stopped());
-                    report(&line);
-                    return exit;
-                }
-                Ok((mut source, mut verifier)) => {
-                    match drive(tasks, *ready, &mut source, &mut verifier) {
-                        Ok(driven) => (Ok(driven.outcome), Some(driven.custody)),
-                        Err(undispatched) => (Err(undispatched.error), Some(undispatched.custody)),
+            Ok(Admission::Ready(ready)) => {
+                // A dispatch that reached a provider: what RC01's batch boundary counts.
+                freshness.dispatched_since = freshness.dispatched_since.saturating_add(1);
+                match provider.open(&next, &ready) {
+                    Err(why) => {
+                        let (exit, line) = open_refused(why, stopped());
+                        report(&line);
+                        return exit;
+                    }
+                    Ok((mut source, mut verifier)) => {
+                        match drive(tasks, *ready, &mut source, &mut verifier) {
+                            Ok(driven) => (Ok(driven.outcome), Some(driven.custody)),
+                            Err(undispatched) => {
+                                (Err(undispatched.error), Some(undispatched.custody))
+                            }
+                        }
                     }
                 }
-            },
+            }
         };
         let step = classify(&result);
         report(&step_line(&next.task, step, &result, custody));
         handled = Some(next.task.clone());
         if let Step::DispatcherStops(why) = step {
             return Exit::Stopped(why);
+        }
+        // RC01 (OPS-2 point b): after each task, back up if freshness expired or a batch ended.
+        // A refusal is only reported: point (a) refuses the next dispatch if it is still due.
+        if let Err(gate) = ensure_fresh(tasks, backup, space, &mut freshness, report)
+            && let Exit::Poisoned = gate.stop(report)
+        {
+            return Exit::Poisoned;
         }
     }
 }
@@ -553,7 +846,10 @@ fn step_line(
 
 #[cfg(test)]
 mod tests {
-    use super::{NativeWhy, NoNative, Step, Unavailable, classify, teardown_share};
+    use super::{
+        BACKUP_FRESHNESS, BACKUP_RESERVE, BATCH_BOUNDARY, Due, Fs, Headroom, NativeWhy, NoNative,
+        STATE_RESERVE, Step, Unavailable, backup_due, classify, headroom, teardown_share,
+    };
     use crate::app::candidates::ClassPromptError;
     use crate::app::coordinator::RootIdError;
     use crate::app::runtime::{Error as RuntimeError, Outcome, Refusal};
@@ -562,6 +858,7 @@ mod tests {
     use crate::task::driver::{self, StopReason};
     use crate::worker::aggregate::Error as Manager;
     use crate::worker::native::{DirectoryError as Directory, Error as Native};
+    use std::time::{Duration, Instant};
 
     /// Every result the classification is pinned over, with its step.
     fn cases() -> Vec<(Result<Outcome, RuntimeError>, Step)> {
@@ -841,5 +1138,144 @@ mod tests {
         ] {
             assert_eq!(Unavailable::NoNativeProvider(kind).name(), name, "{kind:?}");
         }
+    }
+
+    /// OPS-2 · RC01's freshness rule at its boundaries (F103), asserted as one whole table: no
+    /// backup yet is due; exactly 15 minutes old is fresh ("<=15 minutes") and one nanosecond more
+    /// is aged; seven dispatches since are not a batch and eight are; age is named before the batch;
+    /// a `now` before `last` (never on a monotonic clock) saturates to fresh.
+    #[test]
+    fn backup_due_is_rc01_s_rule_at_its_boundaries() {
+        let t = Instant::now();
+        let fifteen = Duration::from_mins(15);
+        let cases = [
+            ("none yet", None, 0, t),
+            ("none yet, a batch", None, 8, t),
+            ("exactly 15 min", Some(t), 0, t + fifteen),
+            (
+                "15 min + 1 ns",
+                Some(t),
+                0,
+                t + fifteen + Duration::from_nanos(1),
+            ),
+            ("seven since", Some(t), 7, t + Duration::from_secs(1)),
+            ("eight since", Some(t), 8, t + Duration::from_secs(1)),
+            ("nine since", Some(t), 9, t + Duration::from_secs(1)),
+            ("aged and a batch", Some(t), 8, t + Duration::from_secs(901)),
+            ("now before last", Some(t + Duration::from_secs(5)), 0, t),
+        ];
+        let found: Vec<(&str, Option<Due>)> = cases
+            .iter()
+            .map(|(case, last, since, now)| (*case, backup_due(*last, *since, *now)))
+            .collect();
+        assert_eq!(
+            found,
+            vec![
+                ("none yet", Some(Due::Never)),
+                ("none yet, a batch", Some(Due::Never)),
+                ("exactly 15 min", None),
+                ("15 min + 1 ns", Some(Due::Aged)),
+                ("seven since", None),
+                ("eight since", Some(Due::Batch)),
+                ("nine since", Some(Due::Batch)),
+                ("aged and a batch", Some(Due::Aged)),
+                ("now before last", None),
+            ]
+        );
+    }
+
+    /// OPS-2 · RC01's headroom rule refuses below the reserve with both numbers (HO-03 C10), and
+    /// admits exactly the reserve and above: each filesystem at its own reserve, off the origin.
+    #[test]
+    fn headroom_refuses_below_the_reserve_with_both_numbers() {
+        assert_eq!(
+            [
+                headroom(Fs::Backup, 274_877_906_943, BACKUP_RESERVE),
+                headroom(Fs::Backup, 274_877_906_944, BACKUP_RESERVE),
+                headroom(Fs::State, 103_079_215_103, STATE_RESERVE),
+                headroom(Fs::State, 103_079_215_104, STATE_RESERVE),
+                headroom(Fs::State, u64::MAX, STATE_RESERVE),
+            ],
+            [
+                Err(Headroom {
+                    fs: Fs::Backup,
+                    free: 274_877_906_943,
+                    reserve: 274_877_906_944
+                }),
+                Ok(()),
+                Err(Headroom {
+                    fs: Fs::State,
+                    free: 103_079_215_103,
+                    reserve: 103_079_215_104
+                }),
+                Ok(()),
+                Ok(()),
+            ]
+        );
+    }
+
+    /// The decimal number written immediately before `suffix` in `text`.
+    fn number_before(text: &str, suffix: &str) -> Option<u64> {
+        let head = &text[..text.find(suffix)?];
+        let start = head
+            .rfind(|c: char| !c.is_ascii_digit())
+            .map_or(0, |index| index + 1);
+        head[start..].parse().ok()
+    }
+
+    /// OPS-2 · the independent source for RC01's constants (F122): the published contract text,
+    /// read at run time from the repository (not compiled in, so a missing document fails this case
+    /// by name rather than the build). Each number is parsed out of its row and compared with the
+    /// constant the gate enforces.
+    #[test]
+    fn rc01_s_numbers_are_the_contract_s() {
+        let path =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("docs/contract-decisions.md");
+        let text = std::fs::read_to_string(&path).unwrap_or_default();
+        assert!(
+            !text.is_empty(),
+            "the RC01 contract text is unreadable at {}",
+            path.display()
+        );
+        let row = |name: &str| {
+            text.lines()
+                .find(|line| line.starts_with(&format!("| {name} |")))
+                .unwrap_or_default()
+        };
+        let freshness = row("Backup freshness");
+        let capacity = row("Persistent capacity");
+        assert!(
+            freshness.contains("latest complete backup must be <=15 minutes old"),
+            "{freshness}"
+        );
+        assert!(
+            freshness.contains("at every batch boundary (at most 8 tasks)"),
+            "{freshness}"
+        );
+        assert!(
+            capacity.contains(
+                "reserve at least 96 GiB free on the state filesystem and 256 GiB on backup \
+                 filesystem before dispatch"
+            ),
+            "{capacity}"
+        );
+        let minutes = number_before(freshness, " minutes old");
+        let tasks = number_before(freshness, " tasks)");
+        let state = number_before(capacity, " GiB free on the state filesystem");
+        let backup = number_before(capacity, " GiB on backup filesystem");
+        assert_eq!(
+            (
+                minutes.map(|minutes| Duration::from_secs(minutes * 60)),
+                tasks,
+                state.map(|gib| gib << 30),
+                backup.map(|gib| gib << 30),
+            ),
+            (
+                Some(BACKUP_FRESHNESS),
+                Some(u64::from(BATCH_BOUNDARY)),
+                Some(STATE_RESERVE),
+                Some(BACKUP_RESERVE),
+            )
+        );
     }
 }

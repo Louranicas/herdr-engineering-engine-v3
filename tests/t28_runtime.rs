@@ -9,6 +9,9 @@
 
 use super::t08_rig::{self, DaemonStandIn};
 use habitat_engine::actions::control::{TaskRequest, Tasks};
+use habitat_engine::app::backup_target::{
+    BACKUP_FILE, BACKUP_SCHEMA, BackupTarget, BackupUnready, FreeSpace, read_target,
+};
 use habitat_engine::app::candidates::{
     ClassPrompt, FilePins, NativeCandidates, Outcome as CandidateOutcome, Settle, render,
 };
@@ -132,6 +135,99 @@ struct Rig {
     selections: Vec<Selection>,
     reserved_work_ms: u64,
     teardown_ms: u64,
+    /// The state root the ledger is under (RC01's state filesystem).
+    state: PathBuf,
+    /// The backup destination (OPS-2): each backup is a fresh `<id>/` child of it.
+    backups: PathBuf,
+    /// The operator's backup record's directory, holding `backup.json` naming `backups`.
+    backup_config: PathBuf,
+    /// The free-space double the dispatcher measures RC01's headroom through.
+    space: Space,
+}
+
+/// A free-space double (F101: a model that records what it was asked): the state root's filesystem
+/// answers `state_free`, any other path `backup_free`, and every path asked is kept in order.
+struct Space {
+    state: PathBuf,
+    state_free: u64,
+    backup_free: u64,
+    asked: Mutex<Vec<PathBuf>>,
+}
+
+impl FreeSpace for Space {
+    fn free(&self, path: &Path) -> std::io::Result<u64> {
+        if let Ok(mut asked) = self.asked.lock() {
+            asked.push(path.to_path_buf());
+        }
+        Ok(if path == self.state {
+            self.state_free
+        } else {
+            self.backup_free
+        })
+    }
+}
+
+/// Free space well above both RC01 reserves: the rig's default world.
+const ROOMY: u64 = 1 << 50;
+
+/// The rig's backup target through the one reader, with the state root's device chosen by
+/// argument as one other than the destination's (F95): the scratch holds both on one device.
+fn target(rig: &Rig) -> Result<BackupTarget, BackupUnready> {
+    use std::os::unix::fs::MetadataExt;
+    let other = fs::metadata(&rig.backups).map_or(0, |meta| meta.dev().wrapping_add(1));
+    read_target(&rig.backup_config, &rig.state, other)
+}
+
+/// The children of the rig's backup destination: one per backup taken.
+fn backup_children(rig: &Rig) -> Result<Vec<String>, Box<dyn Error>> {
+    let mut names = fs::read_dir(&rig.backups)?
+        .map(|entry| entry.map(|entry| entry.file_name().to_string_lossy().into_owned()))
+        .collect::<Result<Vec<_>, _>>()?;
+    names.sort();
+    Ok(names)
+}
+
+/// The backup `<id>` under the rig's destination, read back through the store's own inspection
+/// door against the digest of its published manifest.
+fn inspected(rig: &Rig, id: &str) -> Result<habitat_engine::store::BackupReport, Box<dyn Error>> {
+    let child = rig.backups.join(id);
+    let digest = format!(
+        "sha256:{}",
+        hex_digest(&fs::read(child.join("store-backup.json"))?)
+    );
+    Store::inspect_backup(&child, Sha256Digest::parse(&digest)?, deadline())
+        .map_err(|error| format!("{error:?}").into())
+}
+
+/// The line the dispatcher must report for the backup `<id>`, derived from the backup as the store
+/// reads it back (never from the dispatcher's renderer) and the literal RC01 bound 4096.
+fn backup_line(rig: &Rig, id: &str, due: &str) -> Result<String, Box<dyn Error>> {
+    let report = inspected(rig, id)?;
+    Ok(format!(
+        "dispatcher: backup {id} complete: objects={}/4096 database_bytes={} cutoff={} due={due}",
+        report.objects.len(),
+        report.database_bytes,
+        report.cutoff
+    ))
+}
+
+/// Every `dispatcher: backup` line in `lines` checked whole against the backup it names, and the
+/// other lines returned in order: the proofs that are not about RC01 keep asserting their own lines.
+fn past_backups(rig: &Rig, lines: Vec<String>) -> Result<Vec<String>, Box<dyn Error>> {
+    let mut rest = Vec::new();
+    for line in lines {
+        if let Some(tail) = line.strip_prefix("dispatcher: backup ") {
+            let id = tail.split(' ').next().ok_or("a backup line names no id")?;
+            let due = tail
+                .rsplit("due=")
+                .next()
+                .ok_or("a backup line names no due")?;
+            assert_eq!(line, backup_line(rig, id, due)?);
+        } else {
+            rest.push(line);
+        }
+    }
+    Ok(rest)
 }
 
 struct Shape<'a> {
@@ -378,6 +474,11 @@ fn class_directory(class: &Path, shape: &Shape<'_>) -> Result<String, Box<dyn Er
 }
 
 fn rig(shape: &Shape<'_>) -> Result<Rig, Box<dyn Error>> {
+    rig_spaced(shape, ROOMY, ROOMY)
+}
+
+/// The rig, with RC01's two filesystems answering `state_free` and `backup_free`.
+fn rig_spaced(shape: &Shape<'_>, state_free: u64, backup_free: u64) -> Result<Rig, Box<dyn Error>> {
     let scratch = Scratch::new()?;
     let state = scratch.0.join("state");
     private(&state)?;
@@ -418,9 +519,23 @@ fn rig(shape: &Shape<'_>) -> Result<Rig, Box<dyn Error>> {
         .map_err(|e| format!("{e:?}"))?;
     // The dispatcher reads the class profile from the task owner (R20 round 2 A11): install it there.
     let tasks = StoreTasks::new(store, EPOCH.to_owned()).with_class_profile(Ok(profile.clone()));
+    // OPS-2: the operator's backup record, naming a private destination in the scratch.
+    let backups = scratch.0.join("backups");
+    private(&backups)?;
+    let backup_config = scratch.0.join("backup-config");
+    private(&backup_config)?;
+    file(
+        &backup_config.join(BACKUP_FILE),
+        serde_json::json!({
+            "schema": BACKUP_SCHEMA,
+            "destination": backups,
+            "deadline_seconds": 60,
+        })
+        .to_string()
+        .as_bytes(),
+    )?;
     Ok(Rig {
         tasks,
-        scratch,
         profile,
         attempts,
         root_id,
@@ -428,6 +543,16 @@ fn rig(shape: &Shape<'_>) -> Result<Rig, Box<dyn Error>> {
         selections,
         reserved_work_ms: shape.work_ms,
         teardown_ms: shape.teardown_ms,
+        space: Space {
+            state: state.clone(),
+            state_free,
+            backup_free,
+            asked: Mutex::new(Vec::new()),
+        },
+        state,
+        backups,
+        backup_config,
+        scratch,
     })
 }
 
@@ -892,18 +1017,24 @@ fn provider_of(
 const DISPATCHER_BUDGET: Duration = Duration::from_secs(20);
 
 /// Run the dispatcher over the rig with the rig's own selections, under `DISPATCHER_BUDGET`.
+/// Every `dispatcher: backup` line is checked whole against the backup it names and removed
+/// (`past_backups`), so a proof not about RC01 asserts its own lines.
 fn run_dispatcher<P: dispatcher::Provider + Send + 'static>(
     rig: &Arc<Rig>,
     provider: P,
     stop: &Arc<AtomicBool>,
 ) -> Result<(dispatcher::Exit, Vec<String>), String> {
-    run_dispatcher_owned(
+    let (exit, lines) = run_dispatcher_owned(
         Arc::clone(rig),
         provider,
         Arc::clone(stop),
         rig.selections.clone(),
         DISPATCHER_BUDGET,
-    )
+    )?;
+    Ok((
+        exit,
+        past_backups(rig, lines).map_err(|error| error.to_string())?,
+    ))
 }
 
 /// Run the dispatcher over the rig until it exits, with `stop` as both the engine's drain and the
@@ -925,6 +1056,7 @@ fn run_dispatcher_owned<P: dispatcher::Provider + Send + 'static>(
     // The thread owns the rig and the stop; this side keeps its own handles to raise the stop and
     // wake the wait at the budget.
     let (waker_rig, waker_stop) = (Arc::clone(&rig), Arc::clone(&stop));
+    let backup = target(&rig);
     let handle = std::thread::Builder::new()
         .name("t28-dispatcher".to_owned())
         .spawn(move || {
@@ -942,6 +1074,8 @@ fn run_dispatcher_owned<P: dispatcher::Provider + Send + 'static>(
                 agent_record_id: &rig.agent,
                 selections: &selections,
                 drain: &stop,
+                backup: &backup,
+                space: &rig.space,
             }
             .run(&report);
             let _ = exit_to.send(exit);
@@ -5040,4 +5174,590 @@ fn a_client_directory_that_is_not_private_is_refused_at_open_by_name() -> Outcom
         assert_eq!(taken(&seen), vec![(STAND_IN_UNIT.to_owned(), until, flag)]);
     }
     Ok(())
+}
+
+// ---- OPS-2: RC01's backup-freshness gate at dispatch -------------------------------------------
+
+/// What the rig's free-space double was asked, in order.
+fn asked(rig: &Rig) -> Vec<PathBuf> {
+    rig.space
+        .asked
+        .lock()
+        .map(|asked| asked.clone())
+        .unwrap_or_default()
+}
+
+/// The ledger sequence of the first `attempt_started` event of `task`.
+fn first_begin(rig: &Rig, task: &str) -> Result<u64, Box<dyn Error>> {
+    let sequence: i64 = ledger(rig)?.query_row(
+        "SELECT min(sequence) FROM events WHERE task_id=? AND kind='attempt_started'",
+        [task],
+        |row| row.get(0),
+    )?;
+    Ok(u64::try_from(sequence)?)
+}
+
+/// OPS-2 case 4 (RC01 "before any dispatch") · a new dispatcher's first pick backs up before the
+/// task is admitted: the destination holds exactly one backup, it reads back through the store's
+/// own inspection door, its cutoff precedes the attempt's begin, the free-space door was asked for
+/// the state root then the destination, and the lines are asserted whole and in order — the
+/// backup's (derived from the backup as read back) before the task's.
+#[test]
+fn the_first_pick_backs_up_before_admission_and_the_backup_reads_back() -> Outcome_ {
+    let rig = Arc::new(rig(&Shape::default())?);
+    let (source, _) = script(vec![Candidate::Replacement(SECOND.to_vec())]);
+    let (mut verifier, _) = oracle(vec![matched(7)]);
+    let stop = Arc::new(AtomicBool::new(false));
+    let flag = Arc::clone(&stop);
+    verifier.hook = Some(Box::new(move || {
+        flag.store(true, Ordering::SeqCst);
+    }));
+    let (provider, opened) = provider_of(vec![(source, verifier)], &stop);
+    let (exit, lines) = run_dispatcher_owned(
+        Arc::clone(&rig),
+        provider,
+        Arc::clone(&stop),
+        rig.selections.clone(),
+        DISPATCHER_BUDGET,
+    )?;
+    assert_eq!(exit, dispatcher::Exit::Drained, "{lines:?}");
+    assert_eq!(taken(&opened), vec![TASK.to_owned()]);
+    assert_eq!(state(&rig)?, "accepted");
+    let children = backup_children(&rig)?;
+    assert_eq!(children.len(), 1, "{children:?}");
+    let report = inspected(&rig, &children[0])?;
+    assert!(
+        report.cutoff < first_begin(&rig, TASK)?,
+        "the backup ({}) preceded the begin",
+        report.cutoff
+    );
+    assert_eq!(
+        lines,
+        vec![
+            backup_line(&rig, &children[0], "Never")?,
+            format!(
+                "dispatcher: task {TASK} -> TaskDone(\"accepted\"), custody: settled=0 pending=0"
+            ),
+        ]
+    );
+    assert_eq!(asked(&rig), vec![rig.state.clone(), rig.backups.clone()]);
+    Ok(())
+}
+
+/// OPS-2 case 5 (RC01 "at every batch boundary (at most 8 tasks)", off the origin, F129) · nine
+/// dispatches that each reach the provider: the first pick backs up (`due=Never`), and after the
+/// eighth task's step the batch boundary backs up again (`due=Batch`, point b) — before the ninth is
+/// picked, which then needs none. Two backups, their lines whole and in place, the second's cutoff
+/// after the first's. Run again over exactly eight tasks, the second backup still follows the
+/// eighth step with no ninth pick to trigger it: the batch backup is point (b)'s, not a deferred
+/// point (a)'s. Each task is refused at `begin` by a stale selection (no attempt row), so the
+/// ledger stays quiesced between tasks.
+#[test]
+fn a_batch_of_eight_backs_up_again_before_the_ninth() -> Outcome_ {
+    for tasks in [9_usize, 8] {
+        let rig = Arc::new(rig(&Shape::default())?);
+        for index in 1..tasks {
+            submit_as(
+                &rig,
+                &owner(),
+                &format!("28f10000-0000-4000-8000-0000000009{index:02}"),
+                U64_CRITERIA.iter().map(|c| (*c).to_owned()).collect(),
+            )?;
+        }
+        let mut stale = rig.selections.clone();
+        for selection in &mut stale {
+            selection.expected_revision = "99".to_owned();
+        }
+        let pairs = (0..tasks)
+            .map(|_| {
+                let (source, _) = script(vec![Candidate::Replacement(SECOND.to_vec())]);
+                let (verifier, _) = oracle(vec![matched(7)]);
+                (source, verifier)
+            })
+            .collect();
+        let stop = Arc::new(AtomicBool::new(false));
+        let (provider, opened) = provider_of(pairs, &stop);
+        let failed = i64::try_from(tasks)?;
+        let (exit, lines) = std::thread::scope(|scope| {
+            scope.spawn(|| {
+                let started = Instant::now();
+                while count(&rig, "SELECT count(*) FROM tasks WHERE state='failed'").unwrap_or(0)
+                    < failed
+                {
+                    assert!(
+                        started.elapsed() < Duration::from_secs(20),
+                        "{tasks} tasks never failed within 20 s"
+                    );
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                stop.store(true, Ordering::SeqCst);
+                rig.tasks.wake();
+            });
+            run_dispatcher_owned(
+                Arc::clone(&rig),
+                provider,
+                Arc::clone(&stop),
+                stale,
+                DISPATCHER_BUDGET,
+            )
+        })?;
+        assert_eq!(exit, dispatcher::Exit::Drained, "{tasks}: {lines:?}");
+        let opened = taken(&opened);
+        assert_eq!(opened.len(), tasks, "{opened:?}");
+        let mut backups = backup_children(&rig)?
+            .into_iter()
+            .map(|id| inspected(&rig, &id).map(|report| (report.cutoff, id)))
+            .collect::<Result<Vec<_>, _>>()?;
+        backups.sort();
+        assert_eq!(backups.len(), 2, "{tasks}: {backups:?}");
+        assert!(backups[0].0 < backups[1].0, "{backups:?}");
+        let step_of = |task: &str| {
+            format!(
+                "dispatcher: task {task} -> TaskDone(\"begin_refused_conflict\"), custody: \
+                 settled=0 pending=0"
+            )
+        };
+        let mut expected = vec![backup_line(&rig, &backups[0].1, "Never")?];
+        expected.extend(opened[..8].iter().map(|task| step_of(task)));
+        expected.push(backup_line(&rig, &backups[1].1, "Batch")?);
+        expected.extend(opened[8..].iter().map(|task| step_of(task)));
+        assert_eq!(lines, expected, "{tasks}");
+    }
+    Ok(())
+}
+
+/// OPS-2 case 6 (RC01 "quiesce"; §2.3's stated consequence) · a ledger with an outstanding attempt
+/// cannot back up, so the next pick stops the dispatcher by name — `backup failed (outstanding)`,
+/// the whole line and the whole exit — before any admission: the picked task stays `admitted` with
+/// no attempt row, no provider is opened, and the backup's directory is removed (it was refused
+/// before any copy). Headroom was measured first.
+#[test]
+fn an_outstanding_attempt_stops_the_dispatcher_by_name_and_leaves_the_task_admitted() -> Outcome_ {
+    let rig = Arc::new(rig(&Shape::default())?);
+    // A settle naming another attempt is refused before any write, so the first task's attempt
+    // stays as begun, unsettled (`a_settle_naming_another_attempt_is_refused_before_any_write`).
+    let (mut source, _) = script(vec![Candidate::Replacement(SECOND.to_vec())]);
+    source.settle = Some(Settle {
+        attempt: "28f00000-0000-4000-8000-0000000000ee".to_owned(),
+        adapter: "ollama-fc44-12ff8654/2",
+        input_tokens: None,
+        output_tokens: None,
+        wall_ms: 1,
+        finish: None,
+        identity_sha256: None,
+        raw_sha256: None,
+        outcome: CandidateOutcome::Replacement(SECOND.len()),
+    });
+    let (verifier, _) = oracle(vec![]);
+    let outcome = run(&rig, &owner(), source, verifier, 5_000);
+    assert!(
+        matches!(outcome, Err(RuntimeError::Identity)),
+        "{outcome:?}"
+    );
+    assert_eq!(
+        rows(
+            &rig,
+            "SELECT state,settled_event IS NULL FROM attempts WHERE task_id=?"
+        )?,
+        vec![vec!["running".to_owned(), "1".to_owned()]],
+        "the fixture's premise: one begun, unsettled attempt"
+    );
+    let second = submit_as(
+        &rig,
+        &owner(),
+        "28f10000-0000-4000-8000-0000000009e1",
+        U64_CRITERIA.iter().map(|c| (*c).to_owned()).collect(),
+    )?;
+    let stop = Arc::new(AtomicBool::new(false));
+    let (provider, opened) = provider_of(Vec::new(), &stop);
+    let (exit, lines) = run_dispatcher_owned(
+        Arc::clone(&rig),
+        provider,
+        Arc::clone(&stop),
+        rig.selections.clone(),
+        DISPATCHER_BUDGET,
+    )?;
+    assert_eq!(
+        (exit, lines),
+        (
+            dispatcher::Exit::Unavailable(dispatcher::Unavailable::Backup(
+                dispatcher::BackupWhy::Store("outstanding")
+            )),
+            vec!["dispatcher: unavailable: backup failed (outstanding)".to_owned()]
+        )
+    );
+    assert_eq!(state_of(&rig, &second)?, "admitted");
+    assert_eq!(
+        count(
+            &rig,
+            &format!("SELECT count(*) FROM attempts WHERE task_id='{second}'")
+        )?,
+        0
+    );
+    assert!(taken(&opened).is_empty(), "no provider was opened");
+    assert_eq!(backup_children(&rig)?, Vec::<String>::new());
+    assert_eq!(asked(&rig), vec![rig.state.clone(), rig.backups.clone()]);
+    Ok(())
+}
+
+/// OPS-2 case 7 · with no backup record the first pick stops the dispatcher by name before any
+/// admission or measurement: the operator's record is removed, so the one reader says `Absent`; the
+/// line and the exit whole, the task `admitted` with no attempt row, nothing measured or written.
+#[test]
+fn no_backup_target_stops_before_any_admission() -> Outcome_ {
+    let rig = Arc::new(rig(&Shape::default())?);
+    fs::remove_file(rig.backup_config.join(BACKUP_FILE))?;
+    let stop = Arc::new(AtomicBool::new(false));
+    let (provider, opened) = provider_of(Vec::new(), &stop);
+    let (exit, lines) = run_dispatcher_owned(
+        Arc::clone(&rig),
+        provider,
+        Arc::clone(&stop),
+        rig.selections.clone(),
+        DISPATCHER_BUDGET,
+    )?;
+    assert_eq!(
+        (exit, lines),
+        (
+            dispatcher::Exit::Unavailable(dispatcher::Unavailable::Backup(
+                dispatcher::BackupWhy::Target(BackupUnready::Absent)
+            )),
+            vec!["dispatcher: unavailable: no backup target (absent)".to_owned()]
+        )
+    );
+    assert_eq!(state(&rig)?, "admitted");
+    assert_eq!(
+        rows(&rig, "SELECT count(*) FROM attempts WHERE task_id=?")?,
+        vec![vec!["0".to_owned()]]
+    );
+    assert!(taken(&opened).is_empty());
+    assert_eq!(asked(&rig), Vec::<PathBuf>::new());
+    assert_eq!(backup_children(&rig)?, Vec::<String>::new());
+    Ok(())
+}
+
+/// OPS-2 · RC01 "Persistent capacity" through the dispatcher (HO-03 C10 `headroom{free, reserve}`):
+/// one byte short of the state reserve, and seven short of the backup reserve — two fixtures that
+/// differ in every field. Each stops the first pick with both numbers, whole; the state root is
+/// measured first and the destination only when the state root passed; nothing is written.
+#[test]
+fn headroom_below_either_reserve_stops_the_dispatcher_with_both_numbers() -> Outcome_ {
+    const STATE: u64 = 96 * 1024 * 1024 * 1024;
+    const BACKUP: u64 = 256 * 1024 * 1024 * 1024;
+    for (state_free, backup_free, fs, free, reserve, line, measured) in [
+        (
+            STATE - 1,
+            ROOMY,
+            dispatcher::Fs::State,
+            103_079_215_103_u64,
+            103_079_215_104_u64,
+            "dispatcher: unavailable: headroom (state: free=103079215103 reserve=103079215104)",
+            1,
+        ),
+        (
+            ROOMY,
+            BACKUP - 7,
+            dispatcher::Fs::Backup,
+            274_877_906_937,
+            274_877_906_944,
+            "dispatcher: unavailable: headroom (backup: free=274877906937 reserve=274877906944)",
+            2,
+        ),
+    ] {
+        let rig = Arc::new(rig_spaced(&Shape::default(), state_free, backup_free)?);
+        let stop = Arc::new(AtomicBool::new(false));
+        let (provider, opened) = provider_of(Vec::new(), &stop);
+        let (exit, lines) = run_dispatcher_owned(
+            Arc::clone(&rig),
+            provider,
+            Arc::clone(&stop),
+            rig.selections.clone(),
+            DISPATCHER_BUDGET,
+        )?;
+        assert_eq!(
+            (exit, lines),
+            (
+                dispatcher::Exit::Unavailable(dispatcher::Unavailable::Backup(
+                    dispatcher::BackupWhy::Headroom(dispatcher::Headroom { fs, free, reserve })
+                )),
+                vec![line.to_owned()]
+            )
+        );
+        assert_eq!(
+            asked(&rig),
+            [rig.state.clone(), rig.backups.clone()][..measured].to_vec()
+        );
+        assert_eq!(state(&rig)?, "admitted");
+        assert!(taken(&opened).is_empty());
+        assert_eq!(backup_children(&rig)?, Vec::<String>::new());
+    }
+    Ok(())
+}
+
+/// Write `bytes` as the backup record in a fresh private directory under `scratch`.
+fn backup_record(scratch: &Path, name: &str, bytes: &[u8]) -> Result<PathBuf, Box<dyn Error>> {
+    let directory = scratch.join(name);
+    private(&directory)?;
+    file(&directory.join(BACKUP_FILE), bytes)?;
+    Ok(directory)
+}
+
+/// A record naming `destination` with `deadline` seconds, as the operator writes it.
+fn record_text(destination: &Path, deadline: u64) -> String {
+    serde_json::json!({"schema": BACKUP_SCHEMA, "destination": destination, "deadline_seconds": deadline})
+        .to_string()
+}
+
+/// OPS-2 · the operator's backup record (RC01/RC02; HO-03 "a required config field with no
+/// default") read through its one reader: every field required and no other admitted, a positive
+/// deadline, and custody of the record. Two accepted records that differ in every field are
+/// compared as whole values; the state root's device is chosen by argument as another (F95).
+#[test]
+fn the_backup_record_is_read_whole_with_no_defaults() -> Outcome_ {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    let scratch = Scratch::new()?;
+    let root = &scratch.0;
+    let state = root.join("state");
+    let destination = root.join("backups");
+    private(&destination)?;
+    let other_destination = root.join("backups-two");
+    private(&other_destination)?;
+    let other = fs::metadata(&destination)?.dev().wrapping_add(1);
+    let record = record_text;
+    // Accepted, whole, over two records differing in every field.
+    for (name, at, seconds) in [
+        ("ok-one", &destination, 60),
+        ("ok-two", &other_destination, 7),
+    ] {
+        let directory = backup_record(root, name, record(at, seconds).as_bytes())?;
+        assert_eq!(
+            read_target(&directory, &state, other),
+            Ok(BackupTarget {
+                destination: at.clone(),
+                deadline: Duration::from_secs(seconds),
+                state_root: state.clone(),
+            }),
+            "{name}"
+        );
+    }
+    // Absent: no directory, and a directory with no record.
+    assert_eq!(
+        read_target(&root.join("nowhere"), &state, other),
+        Err(BackupUnready::Absent)
+    );
+    let empty = root.join("empty");
+    private(&empty)?;
+    assert_eq!(
+        read_target(&empty, &state, other),
+        Err(BackupUnready::Absent)
+    );
+    // Custody: a shared directory, and a shared record.
+    let shared = backup_record(
+        root,
+        "shared-directory",
+        record(&destination, 60).as_bytes(),
+    )?;
+    fs::set_permissions(&shared, fs::Permissions::from_mode(0o750))?;
+    assert_eq!(
+        read_target(&shared, &state, other),
+        Err(BackupUnready::Custody)
+    );
+    let readable = backup_record(root, "shared-record", record(&destination, 60).as_bytes())?;
+    fs::set_permissions(
+        readable.join(BACKUP_FILE),
+        fs::Permissions::from_mode(0o644),
+    )?;
+    assert_eq!(
+        read_target(&readable, &state, other),
+        Err(BackupUnready::Custody)
+    );
+    // Malformed: each field missing (no defaults), an unknown field, a zero deadline, another schema.
+    let place = destination.to_string_lossy().into_owned();
+    for (case, body) in [
+        (
+            "no schema",
+            serde_json::json!({"destination": place, "deadline_seconds": 60}),
+        ),
+        (
+            "no destination",
+            serde_json::json!({"schema": BACKUP_SCHEMA, "deadline_seconds": 60}),
+        ),
+        (
+            "no deadline",
+            serde_json::json!({"schema": BACKUP_SCHEMA, "destination": place}),
+        ),
+        (
+            "unknown field",
+            serde_json::json!({"schema": BACKUP_SCHEMA, "destination": place, "deadline_seconds": 60, "keep": 3}),
+        ),
+        (
+            "zero deadline",
+            serde_json::json!({"schema": BACKUP_SCHEMA, "destination": place, "deadline_seconds": 0}),
+        ),
+        (
+            "another schema",
+            serde_json::json!({"schema": "hee3.backup-target/2", "destination": place, "deadline_seconds": 60}),
+        ),
+    ] {
+        let directory = backup_record(
+            root,
+            &format!("malformed-{}", case.replace(' ', "-")),
+            body.to_string().as_bytes(),
+        )?;
+        assert_eq!(
+            read_target(&directory, &state, other),
+            Err(BackupUnready::Malformed),
+            "{case}"
+        );
+    }
+    Ok(())
+}
+
+/// OPS-2 · the destination the record names (RC02 "Backups": a separate local device, mode 0700):
+/// its own canonical path (not relative, not reached through a link), present (an unmounted disk's
+/// missing directory is named), the operator's private directory, and on another device than the
+/// state root — the state root's device chosen by argument (F95): the same device is refused with
+/// both numbers.
+#[test]
+fn the_backup_destination_must_be_canonical_private_and_on_another_device() -> Outcome_ {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    let scratch = Scratch::new()?;
+    let root = &scratch.0;
+    let state = root.join("state");
+    let destination = root.join("backups");
+    private(&destination)?;
+    let device = fs::metadata(&destination)?.dev();
+    let other = device.wrapping_add(1);
+    let record = record_text;
+    // Not canonical: relative, and reached through a link.
+    let relative = backup_record(
+        root,
+        "relative",
+        record(Path::new("backups"), 60).as_bytes(),
+    )?;
+    assert_eq!(
+        read_target(&relative, &state, other),
+        Err(BackupUnready::NotCanonical)
+    );
+    let link = root.join("link-to-backups");
+    std::os::unix::fs::symlink(&destination, &link)?;
+    let linked = backup_record(root, "linked", record(&link, 60).as_bytes())?;
+    assert_eq!(
+        read_target(&linked, &state, other),
+        Err(BackupUnready::NotCanonical)
+    );
+    // The destination: absent (an unmounted disk's missing directory), and not private.
+    let missing = backup_record(
+        root,
+        "missing",
+        record(&root.join("unmounted"), 60).as_bytes(),
+    )?;
+    assert_eq!(
+        read_target(&missing, &state, other),
+        Err(BackupUnready::DestinationAbsent)
+    );
+    let open = root.join("open-backups");
+    DirBuilder::new().mode(0o755).create(&open)?;
+    fs::set_permissions(&open, fs::Permissions::from_mode(0o755))?;
+    let opened = backup_record(root, "open", record(&open, 60).as_bytes())?;
+    assert_eq!(
+        read_target(&opened, &state, other),
+        Err(BackupUnready::DestinationCustody)
+    );
+    // The same device as the state root: refused with both devices (RC02).
+    let same = backup_record(root, "same", record(&destination, 60).as_bytes())?;
+    assert_eq!(
+        read_target(&same, &state, device),
+        Err(BackupUnready::SameDevice {
+            state: device,
+            destination: device,
+        })
+    );
+    Ok(())
+}
+
+/// OPS-2 · every refusal line RC01's gate reports, whole, through its one renderer: each store
+/// reason, both headroom filesystems with both numbers (two fixtures differing in every field), an
+/// unmeasured filesystem, every target refusal (the same-device one with both devices), the id and
+/// the destination directory.
+#[test]
+fn every_backup_refusal_line_is_whole() {
+    use dispatcher::{BackupWhy, Fs, Headroom};
+    for (why, line) in [
+        (
+            BackupWhy::Store("outstanding"),
+            "unavailable: backup failed (outstanding)",
+        ),
+        (
+            BackupWhy::Store("bound"),
+            "unavailable: backup failed (bound)",
+        ),
+        (
+            BackupWhy::Headroom(Headroom {
+                fs: Fs::State,
+                free: 5,
+                reserve: 103_079_215_104,
+            }),
+            "unavailable: headroom (state: free=5 reserve=103079215104)",
+        ),
+        (
+            BackupWhy::Headroom(Headroom {
+                fs: Fs::Backup,
+                free: 274_877_906_000,
+                reserve: 9,
+            }),
+            "unavailable: headroom (backup: free=274877906000 reserve=9)",
+        ),
+        (
+            BackupWhy::Unmeasured(Fs::State),
+            "unavailable: headroom unmeasured (state)",
+        ),
+        (
+            BackupWhy::Unmeasured(Fs::Backup),
+            "unavailable: headroom unmeasured (backup)",
+        ),
+        (
+            BackupWhy::Target(BackupUnready::Absent),
+            "unavailable: no backup target (absent)",
+        ),
+        (
+            BackupWhy::Target(BackupUnready::Custody),
+            "unavailable: no backup target (custody)",
+        ),
+        (
+            BackupWhy::Target(BackupUnready::Malformed),
+            "unavailable: no backup target (malformed)",
+        ),
+        (
+            BackupWhy::Target(BackupUnready::NotCanonical),
+            "unavailable: no backup target (not canonical)",
+        ),
+        (
+            BackupWhy::Target(BackupUnready::DestinationAbsent),
+            "unavailable: no backup target (destination absent)",
+        ),
+        (
+            BackupWhy::Target(BackupUnready::DestinationCustody),
+            "unavailable: no backup target (destination custody)",
+        ),
+        (
+            BackupWhy::Target(BackupUnready::SameDevice {
+                state: 64_769,
+                destination: 2_065,
+            }),
+            "unavailable: no backup target (same device (state=64769 destination=2065))",
+        ),
+        (BackupWhy::Id, "unavailable: backup failed (id)"),
+        (
+            BackupWhy::Destination("io:permission_denied"),
+            "unavailable: backup failed (destination io:permission_denied)",
+        ),
+    ] {
+        assert_eq!(why.line(), line, "{why:?}");
+        assert_eq!(
+            dispatcher::Unavailable::Backup(why).name(),
+            "unavailable: backup",
+            "{why:?}"
+        );
+    }
 }
