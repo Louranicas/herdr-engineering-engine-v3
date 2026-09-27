@@ -215,6 +215,9 @@ pub struct CheckPlan<'a> {
     /// (R17 round 2, decision 2) — never re-derived by the verifier.
     pub tools: &'a Tools,
     pub window: CheckWindow,
+    /// The ledger attempt this check verifies (R22 C1a): committed before the check runs, so the
+    /// aggregate slice named after it is in the ledger before the slice exists.
+    pub attempt: UuidV4<'a>,
     pub cancelled: &'a AtomicBool,
 }
 
@@ -2218,6 +2221,7 @@ impl<C: CandidateSource, V: Verifier> driver::Runtime for StoreRuntime<'_, C, V>
                 // subject, and creating one would change the subject); the runtime then
                 // records what was observed (R15 round 2).
                 let job_root = begun.paths.job_root();
+                let attempt_id = begun.id.clone();
                 let applied = applied.clone();
                 // The per-check plan (R17 round 2, shape C), in a hold of its own, before the
                 // producer runs; its ids are the verification's, the run id the root's.
@@ -2251,6 +2255,7 @@ impl<C: CandidateSource, V: Verifier> driver::Runtime for StoreRuntime<'_, C, V>
                     job_root: &job_root,
                     tools: &self.tools,
                     window,
+                    attempt: uuid(&attempt_id)?,
                     cancelled: &self.cancelled,
                 });
                 let recorded = self.record_observed(

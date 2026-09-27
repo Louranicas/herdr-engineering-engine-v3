@@ -63,8 +63,8 @@ pub fn tools(declared: &Declared) -> Tools {
 
 /// One check's aggregate slice (R21 S20a): started once per check, finished once per check.
 pub trait Aggregates {
-    /// Start a fresh aggregate named by `run_id` and return its unit — the one name the check's
-    /// scopes are built on, never re-formatted by the caller.
+    /// Start a fresh aggregate named after the ledger attempt `run_id` (R22 C1a) and return its
+    /// unit — the one name the check's scopes are built on, never re-formatted by the caller.
     ///
     /// # Errors
     /// The aggregate's refusal; `State` while an earlier aggregate is still held.
@@ -172,12 +172,13 @@ impl<A: Aggregates> LiveVerifier<A> {
         }
     }
 
-    /// Four fresh ids under the cutoff (the aggregate's and three scopes'), the aggregate started
-    /// under the cutoff and the plan's own cancellation, the scopes built on the unit it returned.
-    /// A refusal before the workload is `Io`: the runtime records it as a setup failure.
+    /// Three fresh ids under the cutoff (the three scopes'), the aggregate named after the plan's
+    /// attempt (R22 C1a) and started under the cutoff and the plan's own cancellation, the scopes
+    /// built on the unit it returned. A refusal before the workload is `Io`: the runtime records it
+    /// as a setup failure.
     fn bounded(&mut self, plan: &CheckPlan<'_>) -> Result<Run, workload::Error> {
         let until = plan.window.until;
-        let [aggregate_id, first, second, third] = [(); 4].map(|()| fresh_id(until));
+        let [first, second, third] = [(); 3].map(|()| fresh_id(until));
         let id = |drawn: Result<crate::contracts::receipt::Id, _>| {
             drawn
                 .map(|id| id.as_str().to_owned())
@@ -186,7 +187,7 @@ impl<A: Aggregates> LiveVerifier<A> {
         let (first, second, third) = (id(first)?, id(second)?, id(third)?);
         let unit = self
             .aggregates
-            .start(&id(aggregate_id)?, until, plan.cancelled)
+            .start(plan.attempt.as_str(), until, plan.cancelled)
             .map_err(|_| workload::Error::Io)?;
         let scopes = [first, second, third].map(|run_id| Scope {
             systemd_run: SYSTEMD_RUN.into(),

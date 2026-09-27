@@ -118,7 +118,8 @@ impl Aggregate {
     /// Refuses untrusted paths, source changes or an unsupported origin.
     pub fn prepare(config: Config, deadline: Instant) -> Result<Self, Error> {
         io::pin(&config, deadline)?;
-        UuidV4::parse(&config.run_id).map_err(|_| Error::Invalid)?;
+        let attempt = UuidV4::parse(&config.run_id).map_err(|_| Error::Invalid)?;
+        let unit = aggregate_unit(attempt);
         let stem = config.run_id.replace('-', "");
         let origin = io::membership(deadline)?;
         let (origin_unit, origin_subgroup) = origin_parts(&origin)?;
@@ -126,7 +127,7 @@ impl Aggregate {
         Ok(Self {
             config,
             phase: Phase::Prepared,
-            unit: format!("hee3aggregate{stem}.slice"),
+            unit,
             coordinator: format!("hee3coordinator{stem}.scope"),
             origin,
             origin_unit,
@@ -752,4 +753,10 @@ fn empty(events: &str) -> Result<bool, Error> {
         }
     }
     populated.ok_or(Error::Invalid)
+}
+/// The one name of an attempt's aggregate slice (R22 C1a): `hee3aggregate<attempt without
+/// dashes>.slice`. The attempt row is committed before its check runs, so the ledger names the
+/// slice before the slice exists, and a slice left by a crash is found by exact name.
+pub(crate) fn aggregate_unit(attempt: UuidV4<'_>) -> String {
+    format!("hee3aggregate{}.slice", attempt.as_str().replace('-', ""))
 }

@@ -3724,12 +3724,35 @@ fn cleanup_object(rig: &Rig) -> Result<serde_json::Value, Box<dyn Error>> {
     object_json(rig, &row[2])
 }
 
+/// The ids the aggregate double was started with, in call order.
+fn started(log: Vec<Held>) -> Vec<String> {
+    log.into_iter()
+        .filter_map(|call| match call {
+            Held::Start(id, ..) => Some(id),
+            Held::Finish(_) => None,
+        })
+        .collect()
+}
+
+/// The task's attempt ids, in the ledger's generation order.
+fn attempt_ids(rig: &Rig) -> Result<Vec<String>, Box<dyn Error>> {
+    Ok(rows(
+        rig,
+        "SELECT id FROM attempts WHERE task_id=? ORDER BY CAST(generation AS INTEGER)",
+    )?
+    .into_iter()
+    .flatten()
+    .collect())
+}
+
 /// One direct check of the live verifier over the rig's class: the baseline as the subject, the
-/// protected tree, a fresh job root under the scratch, the class's tools, and `window`.
+/// protected tree, a fresh job root under the scratch, the class's tools, `window` and the ledger
+/// `attempt` it verifies.
 fn live_check(
     rig: &Rig,
     verifier: &mut LiveVerifier<Slices>,
     window: CheckWindow,
+    attempt: &str,
     job_root: &Path,
     cancelled: &AtomicBool,
 ) -> Result<Observed, Box<dyn Error>> {
@@ -3746,18 +3769,22 @@ fn live_check(
         job_root,
         tools: &tools,
         window,
+        attempt: UuidV4::parse(attempt).map_err(|e| format!("{e:?}"))?,
         cancelled,
     }))
 }
 
-/// R21 S20a · the check owns its aggregate: each `check` draws fresh ids, starts ONE aggregate under
-/// the check's cutoff and the plan's own cancellation, builds its three scopes on the unit `start`
-/// returned (the scopes' only source), and finishes the aggregate under the teardown deadline on
-/// every path — so two checks over windows differing in every field hold two different aggregates,
+/// R21 S20a · the check owns its aggregate: each `check` starts ONE aggregate named after the
+/// plan's attempt (R22 C1a) under the check's cutoff and the plan's own cancellation, builds its
+/// three scopes on the unit `start` returned (the scopes' only source), and finishes the aggregate
+/// under the teardown deadline on every path — so two checks over windows differing in every field hold two different aggregates,
 /// each torn down inside its own window. A refused start still finishes and never launches; a
 /// refused finish is observed `Pending`, and through the runtime the check's cleanup is unsettled.
 #[test]
 fn the_live_verifier_holds_one_fresh_aggregate_per_check_inside_the_check_s_window() -> Outcome_ {
+    // Two ledger attempts differing in every hex digit but the version digit (R22 §5).
+    const A1: &str = "01234567-89ab-4cde-8f01-23456789abcd";
+    const A2: &str = "fedcba98-7654-4321-b0fe-dcba98765432";
     let rig = rig(&Shape::default())?;
     let now = Instant::now();
     let window = |begun_ms: u64, unix: u64, until_s: u64, teardown_s: u64| CheckWindow {
@@ -3773,27 +3800,15 @@ fn the_live_verifier_holds_one_fresh_aggregate_per_check_inside_the_check_s_wind
     // (A) two checks: two aggregates, each started under its cutoff and finished under its teardown.
     let (slices, held) = Slices::new();
     let mut verifier = live_verifier(slices);
-    let first = live_check(&rig, &mut verifier, w1, &root("check-a1"), &cancelled)?;
-    let second = live_check(&rig, &mut verifier, w2, &root("check-a2"), &cancelled)?;
-    let log = taken(&held);
-    let started: Vec<String> = log
-        .iter()
-        .filter_map(|call| match call {
-            Held::Start(id, ..) => Some(id.clone()),
-            Held::Finish(_) => None,
-        })
-        .collect();
-    assert_eq!(started.len(), 2, "{log:?}");
-    assert_ne!(started[0], started[1], "a fresh aggregate per check");
-    for id in &started {
-        assert!(UuidV4::parse(id).is_ok(), "{id} is a v4 UUID");
-    }
+    let first = live_check(&rig, &mut verifier, w1, A1, &root("check-a1"), &cancelled)?;
+    let second = live_check(&rig, &mut verifier, w2, A2, &root("check-a2"), &cancelled)?;
+    // Each check's aggregate is its attempt's (R22 C1a), never a fresh draw.
     assert_eq!(
-        log,
+        taken(&held),
         vec![
-            Held::Start(started[0].clone(), w1.until, flag),
+            Held::Start(A1.to_owned(), w1.until, flag),
             Held::Finish(w1.teardown_until),
-            Held::Start(started[1].clone(), w2.until, flag),
+            Held::Start(A2.to_owned(), w2.until, flag),
             Held::Finish(w2.teardown_until),
         ]
     );
@@ -3816,7 +3831,7 @@ fn the_live_verifier_holds_one_fresh_aggregate_per_check_inside_the_check_s_wind
     slices.start = Some(Err(habitat_engine::worker::aggregate::Error::Busy));
     let mut verifier = live_verifier(slices);
     let job_root = root("check-b");
-    let refused = live_check(&rig, &mut verifier, w1, &job_root, &cancelled)?;
+    let refused = live_check(&rig, &mut verifier, w1, A1, &job_root, &cancelled)?;
     assert!(matches!(refused.run, Err(workload::Error::Io)));
     assert_eq!(fs::read_dir(&job_root)?.count(), 0, "nothing launched");
     assert_eq!(
@@ -3829,19 +3844,19 @@ fn the_live_verifier_holds_one_fresh_aggregate_per_check_inside_the_check_s_wind
     let (mut slices, _) = Slices::new();
     slices.start = Some(Ok("not-a-slice".to_owned()));
     let mut verifier = live_verifier(slices);
-    let malformed = live_check(&rig, &mut verifier, w2, &root("check-c"), &cancelled)?;
+    let malformed = live_check(&rig, &mut verifier, w2, A2, &root("check-c"), &cancelled)?;
     assert!(matches!(malformed.run, Err(workload::Error::Layout)));
     // (D) a refused finish is observed pending.
     let (mut slices, _) = Slices::new();
     slices.finish = Err(habitat_engine::worker::aggregate::Error::Busy);
     let mut verifier = live_verifier(slices);
-    let unfinished = live_check(&rig, &mut verifier, w1, &root("check-d"), &cancelled)?;
+    let unfinished = live_check(&rig, &mut verifier, w1, A1, &root("check-d"), &cancelled)?;
     assert_eq!(unfinished.resources, Resources::Pending);
     // (E) through the runtime: the pending aggregate is the cleanup record's, and the check's
     // cleanup is unsettled, so the task needs settlement (B14a-1c review H1).
     let principal = owner();
     let (source, _) = script(vec![Candidate::Replacement(SECOND.to_vec())]);
-    let (mut slices, _) = Slices::new();
+    let (mut slices, through_runtime) = Slices::new();
     slices.finish = Err(habitat_engine::worker::aggregate::Error::Busy);
     let outcome = run(&rig, &principal, source, live_verifier(slices), 5_000)
         .map_err(|e| format!("{e:?}"))?;
@@ -3862,6 +3877,11 @@ fn the_live_verifier_holds_one_fresh_aggregate_per_check_inside_the_check_s_wind
             ])
         )
     );
+    // (F) the slice is named after the attempt (R22 C1a): through the runtime, every aggregate
+    // started is the ledger's own attempt id, in the ledger's order — never a fresh draw.
+    let attempts = attempt_ids(&rig)?;
+    assert!(!attempts.is_empty(), "the run began an attempt");
+    assert_eq!(started(taken(&through_runtime)), attempts);
     Ok(())
 }
 
