@@ -907,6 +907,19 @@ fn tail_predicate() -> String {
     format!("(a.state='settled' AND t.state IN {TERMINAL} AND NOT {CLOSED_BY_ENGINE_READBACK})")
 }
 
+/// The terminal tail's one batch (R22 C16): at most `batch` tail attempts, rooted attempts first,
+/// then by age. Both the selected set and the cleanup list read it, so they cannot disagree, and a
+/// rootless attempt (one begun before migration 8, which reads `NotRead` forever) can never take a
+/// batch slot ahead of a rooted one.
+fn tail_batch(batch: u64) -> String {
+    format!(
+        "SELECT a.id AS id FROM attempts a JOIN tasks t ON t.id=a.task_id WHERE {} \
+         ORDER BY NOT EXISTS (SELECT 1 FROM attempt_paths p WHERE p.attempt_id=a.id), a.rowid \
+         LIMIT {batch}",
+        tail_predicate()
+    )
+}
+
 fn collect_open(
     db: &Connection,
     epoch: &str,
@@ -936,13 +949,12 @@ fn collect_open(
     )?;
     let batch = u64::try_from(limits.cleanup_batch).map_err(|_| Error::Bound)?;
     remaining(deadline)?;
-    // One definition of the selected set, prefixed to every read below.
+    // One definition of the selected set, prefixed to every read below; its tail is `tail_batch`'s.
     let selected = format!(
         "WITH selected(id) AS (SELECT a.id FROM attempts a JOIN tasks t ON t.id=a.task_id WHERE {open} \
-         UNION ALL SELECT id FROM (SELECT a.id AS id FROM attempts a JOIN tasks t ON t.id=a.task_id \
-         WHERE {tail} ORDER BY a.rowid LIMIT {batch})) ",
+         UNION ALL SELECT id FROM ({tail})) ",
         open = open_attempts_predicate(),
-        tail = tail_predicate(),
+        tail = tail_batch(batch),
     );
     let mut budget = Budget {
         limits: limits.read,
@@ -964,10 +976,7 @@ fn collect_open(
     let pins = budget.read(db, &format!("{selected}{PIN_COLUMNS} WHERE attempt_id IN (SELECT id FROM selected) ORDER BY attempt_id,record_id LIMIT ?"), pin_row)?;
     let roots = budget.read(db, &format!("{selected}{ROOT_COLUMNS} WHERE attempt_id IN (SELECT id FROM selected) ORDER BY attempt_id LIMIT ?"), root_row)?;
     validate_roster_bindings(&instances, &pins, &attempts, event_high_water, deadline)?;
-    let mut statement = db.prepare(&format!(
-        "SELECT a.id FROM attempts a JOIN tasks t ON t.id=a.task_id WHERE {} ORDER BY a.rowid LIMIT {batch}",
-        tail_predicate()
-    ))?;
+    let mut statement = db.prepare(&tail_batch(batch))?;
     let mut rows = statement.query([])?;
     let mut cleanup_attempts = Vec::new();
     while let Some(row) = rows.next()? {

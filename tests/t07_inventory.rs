@@ -902,6 +902,87 @@ fn the_startup_inventory_carries_each_selected_attempt_s_root() {
     assert_eq!(r.snapshot().roots, vec![first, second]);
 }
 
+/// R22 step 5 (C16) · the terminal tail has one order, rooted attempts first: a rootless attempt
+/// (bound, with no `attempt_paths` row: the shape an attempt begun before migration 8 reads as)
+/// never takes a batch slot ahead of a rooted one, however much older it is. Batch 1 selects the
+/// rooted `B` over the older rootless `U`, and carries `B`'s root; batch 2 selects both, rooted
+/// first, with nothing left behind. `U` is bound because no task mixes bound and unbound attempts
+/// (`begin_bound_attempt`'s `Conflict`); its row is removed through the ledger itself.
+#[test]
+fn a_rooted_tail_attempt_takes_a_batch_slot_before_an_older_rootless_one() {
+    use habitat_engine::store::AttemptRoot;
+    const ROOTED: &str = "07000000-0000-4000-8000-000000000012";
+    let mut r = Rig::admitted();
+    let (agent, selections) = roster_fixture(&mut r);
+    let pins = (agent.as_str(), selections.as_slice());
+    bound_begin(
+        &mut r,
+        pins,
+        (ATTEMPT, START),
+        ("/srv/hee/pre-8", (2049, 7)),
+    );
+    settle_to_repair(&mut r, ATTEMPT, "1", SETTLE);
+    bound_begin(
+        &mut r,
+        pins,
+        (ROOTED, "07000000-0000-4000-8000-000000000013"),
+        ("/srv/hee/rooted", (64_769, 42)),
+    );
+    settle_to_repair(&mut r, ROOTED, "2", "07000000-0000-4000-8000-000000000014");
+    let evidence = r.evidence.clone();
+    let revision = generation(&r.revision());
+    r.store()
+        .finish_unaccepted(
+            &principal(),
+            Stop {
+                task: id(TASK),
+                generation: revision,
+                reason: &Name::new("fixture_failed").unwrap(),
+                evidence: &evidence,
+                identity: habitat_engine::store::EvidenceIdentity {
+                    artifact_id: id(STOP),
+                    media_type: "application/json",
+                    schema_id: "hee3.test-evidence/1",
+                },
+                event: id(STOP),
+            },
+            deadline(),
+        )
+        .unwrap();
+    drop(r.store.take());
+    let db = Connection::open(r.area.db()).unwrap();
+    assert_eq!(
+        db.execute("DELETE FROM attempt_paths WHERE attempt_id=?", [ATTEMPT])
+            .unwrap(),
+        1
+    );
+    db.close().unwrap();
+    r.store = Some(r.area.open(false));
+    let first = startup_read(&mut r, 1);
+    assert_eq!(
+        (
+            first.cleanup_attempts,
+            first.cleanup_backlog,
+            first.inventory.roots
+        ),
+        (
+            vec![ROOTED.to_owned()],
+            1,
+            vec![AttemptRoot {
+                attempt: ROOTED.to_owned(),
+                root: "/srv/hee/rooted".to_owned(),
+                dev: 64_769,
+                ino: 42,
+            }]
+        )
+    );
+    let both = startup_read(&mut r, 2);
+    assert_eq!(
+        (both.cleanup_attempts, both.cleanup_backlog),
+        (vec![ROOTED.to_owned(), ATTEMPT.to_owned()], 0)
+    );
+}
+
 /// A bound begin of `TASK` at its current revision under `root` with the root's (device, inode),
 /// pinned by the fixture's record.
 fn bound_begin(
