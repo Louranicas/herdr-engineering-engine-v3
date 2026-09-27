@@ -120,16 +120,42 @@ enum Call {
     RecordPaths(Vec<AttemptRoot>),
 }
 
+/// An attempt's workspace leaf `<root>/<attempt>` as the host finds it (R21 closure C12): the
+/// presence read, and for a present leaf whether its guard and walk read its bytes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Leaf {
+    Absent,
+    /// Present, private and walked: its bytes.
+    Walked(u64),
+    /// Present, but its guard or walk refused it: nothing is read of it.
+    Guarded,
+    /// The presence read itself failed.
+    Unreadable,
+}
+
+impl Leaf {
+    fn presence(self) -> Presence {
+        match self {
+            Self::Absent => Presence::Absent,
+            Self::Walked(_) | Self::Guarded => Presence::Present,
+            Self::Unreadable => Presence::Unreadable,
+        }
+    }
+}
+
 #[derive(Default)]
 struct World {
     /// PID → what `/proc` says. A PID the pass never observed reads as absent.
     processes: BTreeMap<u32, LiveRead>,
     /// Attempt → queue custody; an attempt with no session is unreconciled.
     queues: BTreeMap<String, PiQueueCustody>,
-    /// Attempt → the obligations still remaining; no entry means the world
-    /// cannot read the attempt's cleanup at all.
-    obligations: BTreeMap<String, Vec<String>>,
-    workspaces: BTreeMap<String, WorkspaceReadback>,
+    /// Attempt → its two leaves under its root: the workspace and the check's job root. The
+    /// readbacks are derived from them by `leaves_readback`, the host's own rule, and only for an
+    /// attempt the pass handed a root for (R21 N16, closure C12): no entry, or no root, reads
+    /// not-read on both, and no script can say complete beside a writable workspace.
+    leaves: BTreeMap<String, (Leaf, Presence)>,
+    /// The attempts the pass handed a root for, from the last `record_paths`.
+    rooted: BTreeSet<String>,
     acknowledgements: BTreeMap<String, Acknowledgement>,
     clock: Option<ReceiptTime>,
     attach_refusal: Option<String>,
@@ -156,29 +182,36 @@ impl World {
         self.queues.insert(ATTEMPT.into(), custody);
         self
     }
-    fn with_obligations(mut self, remaining: &[&str]) -> Self {
-        self.obligations.insert(
-            ATTEMPT.into(),
-            remaining.iter().map(|s| (*s).to_owned()).collect(),
-        );
+    /// The fixture attempt's two leaves under its root.
+    fn with_leaves(self, workspace: Leaf, job_root: Presence) -> Self {
+        self.with_leaves_for(ATTEMPT, workspace, job_root)
+    }
+    /// One named attempt's two leaves (the many-task B03b ledgers).
+    fn with_leaves_for(mut self, attempt: &str, workspace: Leaf, job_root: Presence) -> Self {
+        self.leaves
+            .insert(attempt.to_owned(), (workspace, job_root));
         self
     }
-    /// The obligations still remaining for one named attempt (the many-task B03b ledgers).
-    fn with_obligations_for(mut self, attempt: &str, remaining: &[&str]) -> Self {
-        self.obligations.insert(
-            attempt.to_owned(),
-            remaining.iter().map(|s| (*s).to_owned()).collect(),
-        );
-        self
-    }
-    fn with_workspace(mut self, readback: WorkspaceReadback) -> Self {
-        self.workspaces.insert(ATTEMPT.into(), readback);
-        self
-    }
-    /// One named attempt's workspace readback (the many-task B03b ledgers).
-    fn with_workspace_for(mut self, attempt: &str, readback: WorkspaceReadback) -> Self {
-        self.workspaces.insert(attempt.to_owned(), readback);
-        self
+    /// What the host's rule reads for `attempt`: its root is present only when the pass handed
+    /// one AND the script says what stands under it; otherwise nothing is known of it.
+    fn read(&self, attempt: &str) -> (CleanupReadback, Leaf) {
+        let (workspace, job_root) = self
+            .leaves
+            .get(attempt)
+            .copied()
+            .unwrap_or((Leaf::Unreadable, Presence::Unreadable));
+        let root = if self.rooted.contains(attempt) && self.leaves.contains_key(attempt) {
+            Presence::Present
+        } else {
+            Presence::Unreadable
+        };
+        let (cleanup, presence) = leaves_readback(root, workspace.presence(), job_root);
+        let leaf = match presence {
+            Presence::Present => workspace,
+            Presence::Absent => Leaf::Absent,
+            Presence::Unreadable => Leaf::Unreadable,
+        };
+        (cleanup, leaf)
     }
     fn with_acknowledgement(mut self, acknowledgement: Acknowledgement) -> Self {
         self.acknowledgements
@@ -257,20 +290,15 @@ impl Physical for World {
             );
             db.close().unwrap();
         }
-        match self.obligations.get(subject.attempt) {
-            None => CleanupReadback::NotRead,
-            Some(remaining) if remaining.is_empty() => CleanupReadback::Complete,
-            Some(remaining) => CleanupReadback::Partial {
-                remaining: remaining.clone(),
-            },
-        }
+        self.read(subject.attempt).0
     }
     fn workspace(&mut self, subject: &Subject<'_>) -> WorkspaceReadback {
         self.calls.push(Call::Workspace(subject.to_value()));
-        self.workspaces
-            .get(subject.attempt)
-            .copied()
-            .unwrap_or(WorkspaceReadback::NotRead)
+        match self.read(subject.attempt).1 {
+            Leaf::Absent => WorkspaceReadback::Released,
+            Leaf::Walked(bytes) => WorkspaceReadback::Writable { bytes },
+            Leaf::Guarded | Leaf::Unreadable => WorkspaceReadback::NotRead,
+        }
     }
     fn acknowledgement(&mut self, subject: &Subject<'_>) -> Acknowledgement {
         self.calls.push(Call::Acknowledgement(subject.to_value()));
@@ -285,6 +313,7 @@ impl Physical for World {
     }
     fn record_paths(&mut self, roots: &[AttemptRoot]) {
         self.calls.push(Call::RecordPaths(roots.to_vec()));
+        self.rooted = roots.iter().map(|root| root.attempt.clone()).collect();
     }
     fn attach(&mut self, subject: &Subject<'_>, identity: &ProcessIdentity) -> Result<(), String> {
         self.calls.push(Call::Attach {
@@ -314,15 +343,21 @@ impl Physical for World {
         if self.clean_refusals.contains(target) {
             return Err(format!("refused: {target}"));
         }
-        let remaining = self
-            .obligations
+        if !self.rooted.contains(subject.attempt) {
+            return Err("no root recorded for this attempt".into());
+        }
+        let (workspace, job_root) = self
+            .leaves
             .get_mut(subject.attempt)
-            .ok_or_else(|| format!("no obligations readable for {}", subject.attempt))?;
-        let index = remaining
-            .iter()
-            .position(|name| name == target)
-            .ok_or_else(|| format!("nothing remaining named {target}"))?;
-        remaining.remove(index);
+            .ok_or_else(|| format!("no leaves readable for {}", subject.attempt))?;
+        match target {
+            "workspace" if matches!(*workspace, Leaf::Walked(_) | Leaf::Guarded) => {
+                *workspace = Leaf::Absent;
+            }
+            "job_root" if *job_root == Presence::Present => *job_root = Presence::Absent,
+            "workspace" | "job_root" => return Err(format!("nothing remaining named {target}")),
+            _ => return Err(format!("no such obligation: {target}")),
+        }
         Ok(())
     }
 }
@@ -344,6 +379,10 @@ impl Area {
     }
     fn store(&self) -> PathBuf {
         self.path.join("store")
+    }
+    /// The rig's own attempts root: the directory a bound begin records when the test names none.
+    fn attempts(&self) -> PathBuf {
+        self.path.join("attempts")
     }
     fn db(&self) -> PathBuf {
         self.store()
@@ -412,6 +451,18 @@ struct Rig {
     area: Area,
     store: Option<Store>,
     evidence: Object,
+    /// The one roster record (id, version) every rostered attempt on this ledger selects, applied
+    /// and observed on first use.
+    agent: Option<(String, String)>,
+}
+
+/// The ids one rostered begin names (the fixture's, or a many-task ledger's `nth` roles).
+struct Begin<'a> {
+    task: &'a str,
+    attempt: &'a str,
+    event: &'a str,
+    session: &'a str,
+    workspace: &'a str,
 }
 impl Rig {
     fn admitted() -> Self {
@@ -440,10 +491,15 @@ impl Rig {
         let evidence = store
             .publish(b"retained fixture evidence", id(STAGE), deadline())
             .unwrap();
+        DirBuilder::new()
+            .mode(0o700)
+            .create(area.attempts())
+            .unwrap();
         Self {
             area,
             store: Some(store),
             evidence,
+            agent: None,
         }
     }
     fn store(&mut self) -> &mut Store {
@@ -455,7 +511,8 @@ impl Rig {
             .unwrap()
             .generation
     }
-    /// A plain running attempt: no roster pin, so no process identity.
+    /// A plain running attempt: no roster pin, so no process identity, and unbound, so the pass
+    /// hands no root and the world reads nothing of its leaves (R21 closure C12).
     fn running() -> Self {
         let mut r = Self::admitted();
         r.store()
@@ -470,20 +527,51 @@ impl Rig {
         r
     }
     /// A rostered running attempt whose pinned observation carries `identity`
-    /// as its `actual_identity`, leased for `lease_ms`.
+    /// as its `actual_identity`, leased for `lease_ms`, bound under the rig's own attempts root.
     fn rostered(identity: &str, lease_ms: u64) -> Self {
         Self::rostered_under(identity, lease_ms, None)
     }
-    /// A bound, rostered attempt recorded under `root` (B14b-2; migration 8), settled with a known
-    /// cost and settled cleanup, the task verifying. Its observation names no process.
-    fn bound_ready(root: &Path) -> Self {
+    /// A bound, rostered running attempt under the rig's own attempts root (B14b-2; migration 8):
+    /// the attempt the world reads leaves for (R21 closure C12). Its observation names no process.
+    fn bound_running() -> Self {
+        Self::rostered_under("fixture/worker", 60_000, None)
+    }
+    /// [`Rig::bound_running`], settled with a known cost and settled cleanup, the task verifying.
+    fn bound_ready() -> Self {
+        let mut r = Self::bound_running();
+        r.settle(Effect::None, Some(47_977), true);
+        r
+    }
+    /// [`Rig::bound_ready`], recorded under `root` instead: the `Host` cases read real leaves there.
+    fn bound_ready_at(root: &Path) -> Self {
         let mut r = Self::rostered_under("fixture/worker", 60_000, Some(root));
         r.settle(Effect::None, Some(47_977), true);
         r
     }
-    /// [`Rig::rostered`], begun bound under `root` when one is given.
+    /// [`Rig::rostered`], begun bound under `root`, or the rig's own attempts root when none is
+    /// given.
     fn rostered_under(identity: &str, lease_ms: u64, root: Option<&Path>) -> Self {
         let mut r = Self::admitted();
+        let root = root.map_or_else(|| r.area.attempts(), Path::to_path_buf);
+        r.begin_bound(
+            identity,
+            &Begin {
+                task: TASK,
+                attempt: ATTEMPT,
+                event: START,
+                session: KEY,
+                workspace: STAGE,
+            },
+            lease_ms,
+            &root,
+        );
+        r
+    }
+    /// The ledger's roster record, applied and observed with `identity` on first use.
+    fn agent(&mut self, identity: &str) -> (String, String) {
+        if let Some(agent) = &self.agent {
+            return agent.clone();
+        }
         let input = Update {
             idempotency_key: OTHER.into(),
             record_id: None,
@@ -501,7 +589,7 @@ impl Rig {
             audit_reason: "startup reconciliation fixture".into(),
         };
         let raw = serde_json::to_vec(&json!({"protocol":"hee3.control","version":1,"kind":"request","request_id":OTHER,"action":"roster.update","action_version":1,"idempotency_key":OTHER,"deadline_unix_ms":"1030000","authority":{"grant_id":OTHER,"scope_sha256":DIGEST},"precondition":null,"body":{"record_id":null,"definition":input.definition,"audit_reason":input.audit_reason}})).unwrap();
-        let head = r
+        let head = self
             .store()
             .roster_apply(
                 &principal(),
@@ -512,7 +600,7 @@ impl Rig {
             .unwrap()
             .remove(0)
             .head;
-        r.store()
+        self.store()
             .roster_observe_worker(
                 &principal(),
                 &ObservationInput {
@@ -533,9 +621,17 @@ impl Rig {
                 deadline(),
             )
             .unwrap();
+        let agent = (head.record_id, head.record_version);
+        self.agent = Some(agent.clone());
+        agent
+    }
+    /// One bound, rostered begin of `ids.task`'s first attempt, recorded under `root` with the
+    /// root's real (device, inode) (R21 closure C10), selecting the ledger's roster record.
+    fn begin_bound(&mut self, identity: &str, ids: &Begin<'_>, lease_ms: u64, root: &Path) {
+        let (record_id, record_version) = self.agent(identity);
         let selections = [Selection {
-            record_id: head.record_id.clone(),
-            expected_revision: head.record_version,
+            record_id: record_id.clone(),
+            expected_revision: record_version,
             capabilities: vec!["text".into()],
             local_only: true,
             version: Some("v1".into()),
@@ -543,34 +639,32 @@ impl Rig {
         }];
         let start = RosterStart {
             principal: &principal(),
-            task: id(TASK),
+            task: id(ids.task),
             expected: generation("1"),
-            attempt: id(ATTEMPT),
-            event: id(START),
-            agent_record_id: &head.record_id,
-            session: id(KEY),
-            workspace: id(STAGE),
+            attempt: id(ids.attempt),
+            event: id(ids.event),
+            agent_record_id: &record_id,
+            session: id(ids.session),
+            workspace: id(ids.workspace),
             selections: &selections,
             lease_ms,
         };
         let digest = Sha256Digest::parse(DIGEST).unwrap();
-        match root {
-            None => r.store().begin_rostered_attempt(start, deadline()),
-            Some(root) => r.store().begin_bound_attempt(
+        let (root_dev, root_ino) = root_identity(root);
+        self.store()
+            .begin_bound_attempt(
                 start,
                 &habitat_engine::store::Binding {
                     baseline: digest,
                     protected: digest,
                     profile: digest,
                     root,
-                    root_dev: root_identity(root).0,
-                    root_ino: root_identity(root).1,
+                    root_dev,
+                    root_ino,
                 },
                 deadline(),
-            ),
-        }
-        .unwrap();
-        r
+            )
+            .unwrap();
     }
     fn expected(&mut self) -> Expected<'static> {
         Expected {
@@ -596,7 +690,7 @@ impl Rig {
             )
             .unwrap();
     }
-    /// Worker returned cleanly: attempt settled, task verifying.
+    /// Worker returned cleanly: attempt settled, task verifying. Unbound, as [`Rig::running`].
     fn ready() -> Self {
         let mut r = Self::running();
         r.settle(Effect::None, Some(47_977), true);
@@ -1326,7 +1420,7 @@ fn reuse_refused(entry: &Entry, reason: &ReuseRefusal) {
 #[test]
 fn literal_identity_is_unobserved_before_the_workspace_is_considered() {
     let mut r = Rig::rostered("literal/fixture", 60_000);
-    let mut world = World::new().with_workspace(WorkspaceReadback::Writable { bytes: 512 });
+    let mut world = World::new().with_leaves(Leaf::Walked(512), Presence::Absent);
     let pass = r.pass(&mut world);
     let entry = only(&pass);
     assert!(world.calls_of("process").is_empty());
@@ -1349,7 +1443,7 @@ fn literal_identity_is_unobserved_before_the_workspace_is_considered() {
 #[test]
 fn leased_writable_workspace_without_clock_is_refused_clock_unavailable() {
     let mut r = Rig::rostered(IDENTITY, 60_000);
-    let mut world = World::new().with_workspace(WorkspaceReadback::Writable { bytes: 4096 });
+    let mut world = World::new().with_leaves(Leaf::Walked(4096), Presence::Absent);
     let pass = r.pass(&mut world);
     let entry = only(&pass);
     reuse_refused(entry, &ReuseRefusal::ClockUnavailable);
@@ -1366,7 +1460,7 @@ fn lease_from_another_receiver_epoch_is_not_comparable() {
     let mut r = Rig::rostered(IDENTITY, 60_000);
     let lease_epoch = r.inventory().instances[0].started.epoch.clone();
     let mut world = World::new()
-        .with_workspace(WorkspaceReadback::Writable { bytes: 1 })
+        .with_leaves(Leaf::Walked(1), Presence::Absent)
         .with_clock(OTHER, 5);
     let pass = r.pass(&mut world);
     let entry = only(&pass);
@@ -1387,7 +1481,7 @@ fn lease_held_in_its_own_epoch_is_refused_with_the_remaining_time() {
     let mut r = Rig::rostered(IDENTITY, 60_000);
     let instance = r.inventory().instances[0].clone();
     let mut world = World::new()
-        .with_workspace(WorkspaceReadback::Writable { bytes: 1 })
+        .with_leaves(Leaf::Walked(1), Presence::Absent)
         .with_clock(
             &instance.started.epoch,
             instance.lease_expires_monotonic_ms - 250,
@@ -1402,7 +1496,7 @@ fn expired_lease_over_writable_workspace_is_still_refused() {
     let mut r = Rig::rostered(IDENTITY, 1);
     let instance = r.inventory().instances[0].clone();
     let mut world = World::new()
-        .with_workspace(WorkspaceReadback::Writable { bytes: 77 })
+        .with_leaves(Leaf::Walked(77), Presence::Absent)
         .with_clock(
             &instance.started.epoch,
             instance.lease_expires_monotonic_ms + 900,
@@ -1429,7 +1523,7 @@ fn expired_lease_over_writable_workspace_is_still_refused() {
 fn released_workspace_of_absent_worker_falls_to_the_acknowledgement_rule() {
     let mut r = Rig::rostered(IDENTITY, 60_000);
     let mut world = World::new()
-        .with_workspace(WorkspaceReadback::Released)
+        .with_leaves(Leaf::Absent, Presence::Absent)
         .with_acknowledgement(Acknowledgement::NotSeen);
     let pass = r.pass(&mut world);
     retained(
@@ -1452,7 +1546,7 @@ fn a_writable_workspace_does_not_hide_an_absent_workers_unknown_effect() {
         ("running".into(), "pending".into(), "pending".into())
     );
     let mut world = World::new()
-        .with_workspace(WorkspaceReadback::Writable { bytes: 4096 })
+        .with_leaves(Leaf::Walked(4096), Presence::Absent)
         .with_acknowledgement(Acknowledgement::Correlated { generation: 1 });
     let pass = r.pass(&mut world);
     let entry = only(&pass);
@@ -1608,12 +1702,12 @@ fn settled_worker_with_unread_cleanup_is_retained_unverified() {
 /// target; the readback after it is complete; both rows carry their ordinals.
 #[test]
 fn partial_cleanup_records_intent_performs_the_target_and_reads_back_complete() {
-    let mut r = Rig::ready();
+    let mut r = Rig::bound_ready();
     let before = r.area.events();
-    let mut world = World::new().with_obligations(&["workspace"]);
+    let mut world = World::new().with_leaves(Leaf::Guarded, Presence::Absent);
     let pass = r.pass(&mut world);
     let entry = only(&pass);
-    let subject = subject_value(1, false);
+    let subject = subject_value(1, true);
     assert_eq!(
         entry.handed.cleanup,
         CleanupReadback::Partial {
@@ -1642,7 +1736,7 @@ fn partial_cleanup_records_intent_performs_the_target_and_reads_back_complete() 
         2,
         "one read before the decision, one readback after the effect"
     );
-    assert_eq!(world.obligations[ATTEMPT], Vec::<String>::new());
+    assert_eq!(world.leaves[ATTEMPT], (Leaf::Absent, Presence::Absent));
     assert_eq!(
         entry.action,
         Some(Action::CleanupPerformed {
@@ -1681,9 +1775,9 @@ fn partial_cleanup_records_intent_performs_the_target_and_reads_back_complete() 
 /// refusal is recorded with the target it named; nothing is settled.
 #[test]
 fn refused_cleanup_effect_is_recorded_with_a_partial_readback() {
-    let mut r = Rig::ready();
+    let mut r = Rig::bound_ready();
     let mut world = World::new()
-        .with_obligations(&["workspace"])
+        .with_leaves(Leaf::Guarded, Presence::Absent)
         .refusing_clean("workspace");
     let pass = r.pass(&mut world);
     let entry = only(&pass);
@@ -1705,7 +1799,7 @@ fn refused_cleanup_effect_is_recorded_with_a_partial_readback() {
             ledger_refusal: None,
         })
     );
-    assert_eq!(world.obligations[ATTEMPT], vec!["workspace".to_owned()]);
+    assert_eq!(world.leaves[ATTEMPT], (Leaf::Guarded, Presence::Absent));
     let readback = body(&r.records()[1]);
     assert_eq!(readback["effects"][0]["error"], "refused: workspace");
     assert_eq!(readback["readback"]["remaining"], json!(["workspace"]));
@@ -1716,13 +1810,13 @@ fn refused_cleanup_effect_is_recorded_with_a_partial_readback() {
 /// the column reads back `settled`.
 #[test]
 fn complete_readback_settles_the_ledger_cleanup_column_with_the_readback_row() {
-    let mut r = Rig::running();
+    let mut r = Rig::bound_running();
     r.settle(Effect::Committed, Some(100), false);
     assert_eq!(
         r.area.attempt_row(),
         ("unknown".into(), "committed".into(), "unknown".into())
     );
-    let mut world = World::new().with_obligations(&[]);
+    let mut world = World::new().with_leaves(Leaf::Absent, Presence::Absent);
     let pass = r.pass(&mut world);
     let entry = only(&pass);
     assert_eq!(
@@ -1766,9 +1860,9 @@ fn complete_readback_settles_the_ledger_cleanup_column_with_the_readback_row() {
 /// guard free to flip either way.
 #[test]
 fn a_settlement_lost_to_a_concurrent_writer_is_recorded_as_refused() {
-    let mut r = Rig::running();
+    let mut r = Rig::bound_running();
     r.settle(Effect::Committed, Some(100), false);
-    let mut world = World::new().with_obligations(&[]);
+    let mut world = World::new().with_leaves(Leaf::Absent, Presence::Absent);
     world.concurrent_settle = Some(r.area.db());
     let pass = r.pass(&mut world);
     let entry = only(&pass);
@@ -1800,9 +1894,9 @@ fn a_settlement_lost_to_a_concurrent_writer_is_recorded_as_refused() {
 /// pass after that writes nothing.
 #[test]
 fn passes_after_a_ledger_effect_converge_to_no_writes() {
-    let mut r = Rig::running();
+    let mut r = Rig::bound_running();
     r.settle(Effect::Committed, Some(100), false);
-    let mut world = World::new().with_obligations(&[]);
+    let mut world = World::new().with_leaves(Leaf::Absent, Presence::Absent);
     let first = r.pass(&mut world);
     let second = r.pass(&mut world);
     let rows = r.area.events();
@@ -1828,9 +1922,9 @@ fn passes_after_a_ledger_effect_converge_to_no_writes() {
 /// readback before the decision was complete, so it follows on the next pass.
 #[test]
 fn remaining_obligations_are_performed_then_the_ledger_settles_on_the_next_pass() {
-    let mut r = Rig::running();
+    let mut r = Rig::bound_running();
     r.settle(Effect::None, Some(100), false);
-    let mut world = World::new().with_obligations(&["workspace", "pi-session"]);
+    let mut world = World::new().with_leaves(Leaf::Guarded, Presence::Present);
     let pass = r.pass(&mut world);
     let entry = only(&pass);
     assert_eq!(
@@ -1856,7 +1950,7 @@ fn remaining_obligations_are_performed_then_the_ledger_settles_on_the_next_pass(
                 name: "workspace".into()
             },
             CleanupTarget::Remaining {
-                name: "pi-session".into()
+                name: "job_root".into()
             }
         ]
     );
@@ -1880,10 +1974,10 @@ fn remaining_obligations_are_performed_then_the_ledger_settles_on_the_next_pass(
 /// partial and nothing in the ledger is settled.
 #[test]
 fn ledger_is_not_settled_while_a_remaining_obligation_persists() {
-    let mut r = Rig::running();
+    let mut r = Rig::bound_running();
     r.settle(Effect::None, Some(100), false);
     let mut world = World::new()
-        .with_obligations(&["workspace"])
+        .with_leaves(Leaf::Guarded, Presence::Absent)
         .refusing_clean("workspace");
     let pass = r.pass(&mut world);
     let Some(Action::CleanupPerformed {
@@ -1907,9 +2001,9 @@ fn ledger_is_not_settled_while_a_remaining_obligation_persists() {
 /// `T07-AP-34` · an unknown external effect stays explicit: no cleanup is read for it.
 #[test]
 fn unknown_effect_is_retained_explicitly() {
-    let mut r = Rig::running();
+    let mut r = Rig::bound_running();
     r.settle(Effect::Unknown, Some(100), true);
-    let mut world = World::new().with_obligations(&[]);
+    let mut world = World::new().with_leaves(Leaf::Absent, Presence::Absent);
     let pass = r.pass(&mut world);
     retained(
         only(&pass),
@@ -1943,7 +2037,7 @@ fn live_holder_of_a_settled_attempt_blocks_cleanup() {
     r.settle(Effect::None, Some(10), true);
     let mut world = World::new()
         .with_process(PID, present(START_TICKS, NAMESPACE))
-        .with_obligations(&["workspace"]);
+        .with_leaves(Leaf::Guarded, Presence::Absent);
     let pass = r.pass(&mut world);
     let entry = only(&pass);
     assert_eq!(entry.decision.rule, Rule::R09WorkspaceReuse);
@@ -1969,8 +2063,8 @@ fn live_holder_of_a_settled_attempt_blocks_cleanup() {
 /// complete, no verdict yet → R12 verification outstanding, evidence unassessed.
 #[test]
 fn restart_at_verification_boundary_reports_verification_outstanding() {
-    let mut r = Rig::ready();
-    let mut world = World::new().with_obligations(&[]);
+    let mut r = Rig::bound_ready();
+    let mut world = World::new().with_leaves(Leaf::Absent, Presence::Absent);
     let pass = r.pass(&mut world);
     let entry = only(&pass);
     assert_eq!(entry.decision.rule, Rule::R12VerificationBoundary);
@@ -1998,9 +2092,9 @@ fn restart_at_verification_boundary_reports_verification_outstanding() {
 /// still not acceptance.
 #[test]
 fn restart_after_passed_verification_reads_evidence_back_as_published() {
-    let mut r = Rig::ready();
+    let mut r = Rig::bound_ready();
     r.verify(VerificationVerdict::Passed, true);
-    let mut world = World::new().with_obligations(&[]);
+    let mut world = World::new().with_leaves(Leaf::Absent, Presence::Absent);
     let pass = r.pass(&mut world);
     let entry = only(&pass);
     assert_eq!(entry.handed.evidence, Evidence::Published);
@@ -2022,10 +2116,10 @@ fn restart_after_passed_verification_reads_evidence_back_as_published() {
 /// `T07-AP-39` · the evidence object's bytes gone: the real readback says absent.
 #[test]
 fn missing_evidence_object_reads_back_absent() {
-    let mut r = Rig::ready();
+    let mut r = Rig::bound_ready();
     r.verify(VerificationVerdict::Passed, true);
     r.remove_evidence_object();
-    let mut world = World::new().with_obligations(&[]);
+    let mut world = World::new().with_leaves(Leaf::Absent, Presence::Absent);
     let pass = r.pass(&mut world);
     let entry = only(&pass);
     assert_eq!(entry.handed.evidence, Evidence::Absent);
@@ -2043,9 +2137,9 @@ fn missing_evidence_object_reads_back_absent() {
 /// `T07-AP-40` · a failed verification leaves the task repair-pending: still R12.
 #[test]
 fn failed_verification_is_repair_pending_and_outstanding() {
-    let mut r = Rig::ready();
+    let mut r = Rig::bound_ready();
     r.verify(VerificationVerdict::Failed, true);
-    let mut world = World::new().with_obligations(&[]);
+    let mut world = World::new().with_leaves(Leaf::Absent, Presence::Absent);
     let pass = r.pass(&mut world);
     assert!(matches!(
         only(&pass).decision.reconciliation,
@@ -2065,9 +2159,9 @@ fn failed_verification_is_repair_pending_and_outstanding() {
 /// releasable, and releasing is recorded, not performed.
 #[test]
 fn failed_task_workspace_is_recorded_releasable_without_effect() {
-    let mut r = Rig::ready();
+    let mut r = Rig::bound_ready();
     r.verify(VerificationVerdict::Error, true);
-    let mut world = World::new().with_obligations(&[]);
+    let mut world = World::new().with_leaves(Leaf::Absent, Presence::Absent);
     let pass = r.pass(&mut world);
     let entry = only_cleanup(&pass);
     assert_eq!(entry.decision.rule, Rule::R11CleanupReadback);
@@ -2093,11 +2187,11 @@ fn failed_task_workspace_is_recorded_releasable_without_effect() {
 /// its cleanup performed: R11 precedes the terminal state.
 #[test]
 fn stopped_task_with_remaining_obligation_is_cleaned() {
-    let mut r = Rig::ready();
+    let mut r = Rig::bound_ready();
     r.verify(VerificationVerdict::Failed, true);
     r.stop();
     assert_eq!(r.area.task_row().0, "failed");
-    let mut world = World::new().with_obligations(&["workspace"]);
+    let mut world = World::new().with_leaves(Leaf::Guarded, Presence::Absent);
     let pass = r.pass(&mut world);
     assert!(matches!(
         only_cleanup(&pass).action,
@@ -2114,12 +2208,12 @@ fn stopped_task_with_remaining_obligation_is_cleaned() {
 /// rewritten and the second pass writes nothing.
 #[test]
 fn committed_acceptance_stands_with_its_ordinal_and_is_not_rewritten() {
-    let mut r = Rig::ready();
+    let mut r = Rig::bound_ready();
     r.verify(VerificationVerdict::Passed, true);
     r.accept();
     let before = r.area.task_row();
     assert_eq!(before, ("accepted".into(), false, Some(ACCEPT.into())));
-    let mut world = World::new().with_obligations(&["workspace"]);
+    let mut world = World::new().with_leaves(Leaf::Guarded, Presence::Absent);
     let pass = r.pass(&mut world);
     let entry = only_cleanup(&pass);
     assert_eq!(entry.decision.rule, Rule::R04AcceptanceStands);
@@ -2127,7 +2221,7 @@ fn committed_acceptance_stands_with_its_ordinal_and_is_not_rewritten() {
         entry.decision.reconciliation,
         Reconciliation::AcceptanceStands {
             event: ACCEPT.into(),
-            ordinal: Some(5),
+            ordinal: Some(7),
             later_cancellation: None,
             cleanup: Cleanup::Settled,
         }
@@ -2136,7 +2230,7 @@ fn committed_acceptance_stands_with_its_ordinal_and_is_not_rewritten() {
         entry.handed.history,
         startup::HistoryValue::Accepted {
             event: ACCEPT.into(),
-            ordinal: Some(5)
+            ordinal: Some(7)
         }
     );
     assert_eq!(
@@ -2309,17 +2403,17 @@ fn a_sibling_attempts_records_cannot_truncate_this_attempts_history() {
 /// journal ordinal; the ledger head agrees.
 #[test]
 fn committed_cancellation_stands_for_settled_work_with_its_ordinal() {
-    let mut r = Rig::running();
+    let mut r = Rig::bound_running();
     r.cancel();
     r.settle(Effect::None, Some(10), true);
-    let mut world = World::new().with_obligations(&[]);
+    let mut world = World::new().with_leaves(Leaf::Absent, Presence::Absent);
     let pass = r.pass(&mut world);
     let entry = only(&pass);
     assert_eq!(entry.decision.rule, Rule::R05CancellationStands);
     assert_eq!(
         entry.decision.reconciliation,
         Reconciliation::CancellationStands {
-            ordinal: Some(3),
+            ordinal: Some(5),
             rejected_acceptance: None,
             attempt_state: AttemptState::Settled,
             cleanup: Cleanup::Settled,
@@ -2341,16 +2435,16 @@ fn committed_cancellation_stands_for_settled_work_with_its_ordinal() {
 /// rejected, even before terminal cleanup.
 #[test]
 fn prepared_acceptance_after_cancellation_is_rejected_before_cleanup() {
-    let mut r = Rig::ready();
+    let mut r = Rig::bound_ready();
     r.verify(VerificationVerdict::Passed, true);
     r.cancel();
-    let mut world = World::new().with_obligations(&["workspace"]);
+    let mut world = World::new().with_leaves(Leaf::Guarded, Presence::Absent);
     let pass = r.pass(&mut world);
     let entry = only(&pass);
     assert_eq!(
         entry.decision.reconciliation,
         Reconciliation::CancellationStands {
-            ordinal: Some(5),
+            ordinal: Some(7),
             rejected_acceptance: Some(CHECK.into()),
             attempt_state: AttemptState::Settled,
             cleanup: Cleanup::Settled,
@@ -2429,17 +2523,17 @@ fn cancellation_pending_is_carried_into_reattach() {
 /// terminal state committed, cleanup settled.
 #[test]
 fn cancelled_and_stopped_task_reports_cancellation_standing() {
-    let mut r = Rig::ready();
+    let mut r = Rig::bound_ready();
     r.verify(VerificationVerdict::Failed, true);
     r.cancel();
     r.stop();
     assert_eq!(r.area.task_row(), ("cancelled".into(), true, None));
-    let mut world = World::new().with_obligations(&[]);
+    let mut world = World::new().with_leaves(Leaf::Absent, Presence::Absent);
     let pass = r.pass(&mut world);
     assert!(matches!(
         only_cleanup(&pass).decision.reconciliation,
         Reconciliation::CancellationStands {
-            ordinal: Some(5),
+            ordinal: Some(7),
             rejected_acceptance: None,
             ..
         }
@@ -3063,7 +3157,7 @@ fn host_keeps_a_real_writable_workspace_at_the_verification_boundary() {
     let area = Area::new("workspace");
     // The ledger recorded `area` as the attempt's root (B14b-2): the host reads `<root>/<attempt>`,
     // handed to it by the pass, never inserted by a caller.
-    let mut r = Rig::bound_ready(&area.path);
+    let mut r = Rig::bound_ready_at(&area.path);
     let workspace = area.path.join(ATTEMPT);
     DirBuilder::new().mode(0o700).create(&workspace).unwrap();
     fs::create_dir(workspace.join("nested")).unwrap();
@@ -3635,7 +3729,7 @@ fn workspace_walk_refuses_past_its_entry_bound() {
 fn record_paths_hands_the_inventory_s_roots_after_the_clock_and_before_any_readback() {
     for label in ["roots-a", "roots-b"] {
         let area = Area::new(label);
-        let mut r = Rig::bound_ready(&area.path);
+        let mut r = Rig::bound_ready_at(&area.path);
         let mut world = World::new();
         r.pass(&mut world);
         assert_eq!(
@@ -3666,10 +3760,8 @@ fn record_paths_hands_the_inventory_s_roots_after_the_clock_and_before_any_readb
 #[test]
 fn a_partial_readback_beside_a_writable_workspace_is_never_cleaned() {
     let area = Area::new("partial-verifying");
-    let mut r = Rig::bound_ready(&area.path);
-    let mut world = World::new()
-        .with_obligations(&["workspace"])
-        .with_workspace(WorkspaceReadback::Writable { bytes: 4096 });
+    let mut r = Rig::bound_ready_at(&area.path);
+    let mut world = World::new().with_leaves(Leaf::Walked(4096), Presence::Absent);
     let pass = r.pass(&mut world);
     let entry = only(&pass);
     assert_eq!(
@@ -3698,16 +3790,17 @@ fn a_partial_readback_beside_a_writable_workspace_is_never_cleaned() {
         })
     );
     assert!(world.calls_of("clean").is_empty(), "{:?}", world.calls);
-    assert_eq!(world.obligations[ATTEMPT], vec!["workspace".to_owned()]);
+    assert_eq!(
+        world.leaves[ATTEMPT],
+        (Leaf::Walked(4096), Presence::Absent)
+    );
 
     let area = Area::new("partial-failed");
-    let mut r = Rig::bound_ready(&area.path);
+    let mut r = Rig::bound_ready_at(&area.path);
     r.verify(VerificationVerdict::Failed, true);
     r.stop();
     assert_eq!(r.area.task_row().0, "failed");
-    let mut world = World::new()
-        .with_obligations(&["workspace", "job_root"])
-        .with_workspace(WorkspaceReadback::Writable { bytes: 8192 });
+    let mut world = World::new().with_leaves(Leaf::Walked(8192), Presence::Present);
     let pass = r.pass(&mut world);
     let entry = only_cleanup(&pass);
     assert_eq!(
@@ -3735,9 +3828,99 @@ fn a_partial_readback_beside_a_writable_workspace_is_never_cleaned() {
     );
     assert!(world.calls_of("clean").is_empty(), "{:?}", world.calls);
     assert_eq!(
-        world.obligations[ATTEMPT],
-        vec!["workspace".to_owned(), "job_root".to_owned()]
+        world.leaves[ATTEMPT],
+        (Leaf::Walked(8192), Presence::Present)
     );
+}
+
+/// R21 closure C12 (FT3-02, L9; N16) · the world answers from the roots the pass hands it, through
+/// the host's own rule. An attempt the ledger recorded no root for reads not-read on both, whatever
+/// the script says about its leaves, and nothing is cleaned. The same leaves under a handed root read
+/// what `leaves_readback` yields — a walked workspace is a remaining obligation, never complete
+/// beside writable — and a handed root with no leaves scripted is nothing known. A released
+/// workspace with its job root left is the one partial the pass cleans, and the leaf it cleans is the
+/// one the readback after it no longer finds.
+#[test]
+fn the_world_reads_nothing_for_an_attempt_it_was_handed_no_root_for() {
+    let mut r = Rig::ready();
+    let mut world = World::new().with_leaves(Leaf::Walked(4096), Presence::Present);
+    let pass = r.pass(&mut world);
+    let entry = only(&pass);
+    assert_eq!(world.calls[..2], [Call::Clock, Call::RecordPaths(vec![])]);
+    assert_eq!(
+        (&entry.handed.cleanup, &entry.handed.workspace),
+        (&CleanupReadback::NotRead, &WorkspaceReadback::NotRead)
+    );
+    retained(
+        entry,
+        Rule::R11CleanupReadback,
+        &Unknown::CleanupUnverified,
+        &ProcessCustody::Unobserved,
+    );
+    assert!(world.calls_of("clean").is_empty(), "{:?}", world.calls);
+
+    let mut r = Rig::bound_ready();
+    let mut world = World::new().with_leaves(Leaf::Walked(4096), Presence::Present);
+    let pass = r.pass(&mut world);
+    let entry = only(&pass);
+    assert_eq!(
+        (&entry.handed.cleanup, &entry.handed.workspace),
+        (
+            &CleanupReadback::Partial {
+                remaining: vec!["workspace".into(), "job_root".into()]
+            },
+            &WorkspaceReadback::Writable { bytes: 4096 }
+        )
+    );
+    assert_eq!(entry.decision.rule, Rule::R12VerificationBoundary);
+    assert!(world.calls_of("clean").is_empty(), "{:?}", world.calls);
+
+    let mut r = Rig::bound_ready();
+    let mut world = World::new();
+    let pass = r.pass(&mut world);
+    let entry = only(&pass);
+    assert_eq!(
+        world.calls_of("record_paths"),
+        vec![&Call::RecordPaths(vec![AttemptRoot {
+            attempt: ATTEMPT.into(),
+            root: r.area.attempts().to_str().unwrap().into(),
+            dev: root_identity(&r.area.attempts()).0,
+            ino: root_identity(&r.area.attempts()).1,
+        }])]
+    );
+    assert_eq!(
+        (&entry.handed.cleanup, &entry.handed.workspace),
+        (&CleanupReadback::NotRead, &WorkspaceReadback::NotRead)
+    );
+
+    let mut r = Rig::bound_ready();
+    let mut world = World::new().with_leaves(Leaf::Absent, Presence::Present);
+    let pass = r.pass(&mut world);
+    let entry = only(&pass);
+    assert_eq!(
+        (&entry.handed.cleanup, &entry.handed.workspace),
+        (
+            &CleanupReadback::Partial {
+                remaining: vec!["job_root".into()]
+            },
+            &WorkspaceReadback::Released
+        )
+    );
+    assert_eq!(
+        world.calls_of("clean"),
+        vec![&Call::Clean {
+            subject: subject_value(1, true),
+            target: "job_root".into()
+        }]
+    );
+    assert!(matches!(
+        entry.action,
+        Some(Action::CleanupPerformed {
+            readback: CleanupReadback::Complete,
+            ..
+        })
+    ));
+    assert_eq!(world.leaves[ATTEMPT], (Leaf::Absent, Presence::Absent));
 }
 
 /// B14b-2 S15 (R21 N15, N17) · three states from a recorded root and its two leaves. The pure rule
@@ -3893,7 +4076,7 @@ fn a_root_moved_and_recreated_reads_not_read_across_restarts() {
     let area = Area::new("moved");
     let root = area.path.join("attempts");
     DirBuilder::new().mode(0o700).create(&root).unwrap();
-    let mut r = Rig::bound_ready(&root);
+    let mut r = Rig::bound_ready_at(&root);
     let workspace = root.join(ATTEMPT);
     DirBuilder::new().mode(0o700).create(&workspace).unwrap();
     fs::write(workspace.join("output"), b"12345").unwrap();
@@ -3960,7 +4143,7 @@ fn kill_child_entrypoint() {
         return;
     };
     let root = PathBuf::from(root);
-    let mut world = World::new().with_obligations(&["workspace"]);
+    let mut world = World::new().with_leaves(Leaf::Guarded, Presence::Absent);
     world.block_in_clean = true;
     let _ = startup::run(
         &Startup {
@@ -3985,7 +4168,7 @@ fn kill_child_entrypoint() {
 #[test]
 fn a_pass_killed_inside_its_effect_recovers_without_a_duplicate_intent()
 -> Result<(), Box<dyn std::error::Error>> {
-    let mut r = Rig::ready();
+    let mut r = Rig::bound_ready();
     r.close();
     let before = r.area.events();
     let mut child = std::process::Command::new(std::env::current_exe()?)
@@ -4036,7 +4219,7 @@ fn a_pass_killed_inside_its_effect_recovers_without_a_duplicate_intent()
     assert_eq!(rows.len(), 1, "the intent alone survives the kill");
     assert_eq!(body(&rows[0])["intent"], "cleanup_performed");
 
-    let mut world = World::new().with_obligations(&["workspace"]);
+    let mut world = World::new().with_leaves(Leaf::Guarded, Presence::Absent);
     r.pass(&mut world);
     assert_eq!(
         world.calls_of("clean").len(),
@@ -4288,8 +4471,7 @@ fn fail_tasks(r: &mut Rig, n: u32) {
             nth(0x28b7, index),
             nth(0x28b8, index),
         );
-        let store = r.store();
-        store
+        r.store()
             .submit(
                 Submission {
                     principal: &principal(),
@@ -4308,15 +4490,20 @@ fn fail_tasks(r: &mut Rig, n: u32) {
                 deadline(),
             )
             .unwrap();
-        store
-            .begin_attempt(
-                id(&task),
-                generation("1"),
-                id(&attempt),
-                id(&start),
-                deadline(),
-            )
-            .unwrap();
+        let root = r.area.attempts();
+        r.begin_bound(
+            "fixture/worker",
+            &Begin {
+                task: &task,
+                attempt: &attempt,
+                event: &start,
+                session: &nth(0x28b9, index),
+                workspace: &nth(0x28ba, index),
+            },
+            60_000,
+            &root,
+        );
+        let store = r.store();
         let revision = |store: &mut Store| {
             store
                 .get(&principal(), id(&task), deadline())
@@ -4392,7 +4579,7 @@ fn stop_of<'a>(
 /// A world in which each of the `n` extra tasks' attempts reads back clean.
 fn clean_world(n: u32) -> World {
     (0..n).fold(World::new(), |world, index| {
-        world.with_obligations_for(&nth(0x28b4, index), &[])
+        world.with_leaves_for(&nth(0x28b4, index), Leaf::Absent, Presence::Absent)
     })
 }
 
@@ -4542,7 +4729,7 @@ fn more_open_attempts_than_the_bound_are_refused_with_both_numbers() {
 #[test]
 fn a_standing_decision_on_a_clean_workspace_is_not_read_again() {
     for standing in ["accepted", "cancelled"] {
-        let mut r = Rig::ready();
+        let mut r = Rig::bound_ready();
         if standing == "accepted" {
             r.verify(VerificationVerdict::Passed, true);
             r.accept();
@@ -4552,7 +4739,7 @@ fn a_standing_decision_on_a_clean_workspace_is_not_read_again() {
             r.stop();
         }
         assert_eq!(r.area.task_row().0, standing);
-        let mut world = World::new().with_obligations(&[]);
+        let mut world = World::new().with_leaves(Leaf::Absent, Presence::Absent);
         let first = r.pass(&mut world);
         assert!(
             matches!(
@@ -4578,10 +4765,10 @@ fn a_standing_decision_on_a_clean_workspace_is_not_read_again() {
 /// boot reads nothing. T07-AP-41's releasable record closes it the same way.
 #[test]
 fn ap41_and_ap42_keep_their_first_boot_and_are_closed_after_it() {
-    let mut r = Rig::ready();
+    let mut r = Rig::bound_ready();
     r.verify(VerificationVerdict::Failed, true);
     r.stop();
-    let mut world = World::new().with_obligations(&["workspace"]);
+    let mut world = World::new().with_leaves(Leaf::Guarded, Presence::Absent);
     let first = r.pass(&mut world);
     assert!(matches!(
         only_cleanup(&first).action,
@@ -4600,9 +4787,9 @@ fn ap41_and_ap42_keep_their_first_boot_and_are_closed_after_it() {
         "AP-42"
     );
 
-    let mut r = Rig::ready();
+    let mut r = Rig::bound_ready();
     r.verify(VerificationVerdict::Error, true);
-    let mut world = World::new().with_obligations(&[]);
+    let mut world = World::new().with_leaves(Leaf::Absent, Presence::Absent);
     let first = r.pass(&mut world);
     assert!(matches!(
         only_cleanup(&first).action,
@@ -4645,7 +4832,7 @@ fn an_unsettled_attempt_of_a_terminal_task_is_read_every_boot() {
         1
     );
     drop(db);
-    let mut world = World::new().with_obligations_for(&attempt, &[]);
+    let mut world = World::new().with_leaves_for(&attempt, Leaf::Absent, Presence::Absent);
     for boot in 0..2 {
         let pass = r.pass(&mut world);
         assert_eq!(
@@ -4663,9 +4850,9 @@ fn an_unsettled_attempt_of_a_terminal_task_is_read_every_boot() {
 /// every boot, even after a clean decision — because closure applies only to terminal tasks.
 #[test]
 fn a_settled_attempt_of_a_live_task_is_read_every_boot() {
-    let mut r = Rig::ready();
+    let mut r = Rig::bound_ready();
     assert_eq!(r.area.task_row().0, "verifying");
-    let mut world = World::new().with_obligations(&[]);
+    let mut world = World::new().with_leaves(Leaf::Absent, Presence::Absent);
     for boot in 0..2 {
         let pass = r.pass(&mut world);
         assert_eq!(only(&pass).attempt, ATTEMPT, "boot {boot}");
@@ -4707,8 +4894,7 @@ fn accept_tasks(r: &mut Rig, n: u32, base: u16) {
     for index in 0..n {
         let role = |offset: u16| nth(base + offset, index);
         let (task, attempt) = (role(2), role(4));
-        let store = r.store();
-        store
+        r.store()
             .submit(
                 Submission {
                     principal: &principal(),
@@ -4727,15 +4913,20 @@ fn accept_tasks(r: &mut Rig, n: u32, base: u16) {
                 deadline(),
             )
             .unwrap();
-        store
-            .begin_attempt(
-                id(&task),
-                generation("1"),
-                id(&attempt),
-                id(&role(5)),
-                deadline(),
-            )
-            .unwrap();
+        let root = r.area.attempts();
+        r.begin_bound(
+            "fixture/worker",
+            &Begin {
+                task: &task,
+                attempt: &attempt,
+                event: &role(5),
+                session: &role(9),
+                workspace: &role(10),
+            },
+            60_000,
+            &root,
+        );
+        let store = r.store();
         let revision = |store: &mut Store| {
             store
                 .get(&principal(), id(&task), deadline())
@@ -4806,14 +4997,12 @@ fn retained_standing_workspaces_do_not_starve_a_cleanable_one() {
     accept_tasks(&mut r, standing, 0x28e0);
     fail_tasks(&mut r, 1);
     let cleanable = nth(0x28b4, 0);
-    let retained = WorkspaceReadback::Writable { bytes: 4096 };
+    let retained = Leaf::Walked(4096);
     let mut world = (0..standing).fold(World::new(), |world, index| {
         let attempt = nth(0x28e4, index);
-        world
-            .with_obligations_for(&attempt, &["workspace"])
-            .with_workspace_for(&attempt, retained)
+        world.with_leaves_for(&attempt, retained, Presence::Absent)
     });
-    world = world.with_obligations_for(&cleanable, &["workspace"]);
+    world = world.with_leaves_for(&cleanable, Leaf::Guarded, Presence::Absent);
     let budget = 3;
     for boot in 0..budget {
         let pass = r.pass(&mut world);
