@@ -49,6 +49,14 @@ pub enum Phase {
     StopRequested,
     Stopped,
 }
+/// What a create request came to (R22-2): a job path came back, nothing reached the manager (or it
+/// answered with an error), or a failure after which the manager may still act on the request.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CreateOutcome {
+    Answered,
+    Refused,
+    Unknown(Error),
+}
 #[derive(Debug)]
 pub struct Call {
     pub argv: Vec<OsString>,
@@ -188,35 +196,18 @@ impl Aggregate {
             return Err(Error::Identity);
         }
         for name in [self.unit.clone(), self.coordinator.clone()] {
-            let bytes = self.method(
-                "ListUnitsByPatterns",
-                vec!["asas".into(), "0".into(), "1".into(), name],
-                deadline,
-                cancelled,
-            )?;
-            let reply: Reply<(Vec<UnitRow>,)> =
-                serde_json::from_slice(&bytes).map_err(|_| Error::Manager)?;
-            if reply.signature != "a(ssssssouso)" {
-                return Err(Error::Manager);
-            }
-            if !reply.data.0.is_empty() {
-                return Err(Error::Identity);
-            }
+            absent(&self.config, &mut self.calls, name, deadline, cancelled)?;
         }
         self.phase = Phase::CreateRequested;
-        let properties = resources::aggregate_properties();
-        // D-Bus `a(sv)`: the count of (name, value) pairs precedes them, derived from the one vector.
-        let mut args = vec![
-            "ssa(sv)a(sa(sv))".into(),
-            self.unit.clone(),
-            "fail".into(),
-            (properties.len() / 3).to_string(),
-        ];
-        args.extend(properties);
-        args.push("0".into());
-        job(&self.method("StartTransientUnit", args, deadline, cancelled)?)?;
+        create_slice(
+            &self.config,
+            &mut self.calls,
+            &self.unit,
+            deadline,
+            cancelled,
+        )?;
         self.phase = Phase::SliceCreated;
-        self.slice_fd = Some(self.capture_slice(deadline, cancelled)?);
+        self.slice_fd = Some(capture(&self.aggregate_path(), deadline, cancelled)?);
         self.phase = Phase::AttachRequested;
         let args = vec![
             "ssa(sv)a(sa(sv))".into(),
@@ -267,7 +258,7 @@ impl Aggregate {
             return Err(Error::Identity);
         }
         let name = scope.unit().map_err(|_| Error::Invalid)?;
-        self.query(&name, deadline, cancelled)
+        query(&self.config, &mut self.calls, &name, deadline, cancelled)
     }
     /// Restore only this current coordinator; never stop a unit containing it.
     /// # Errors
@@ -285,7 +276,13 @@ impl Aggregate {
                 &self.aggregate_path(),
                 deadline,
             )?;
-            let coordinator = self.query(&self.coordinator.clone(), deadline, &uncancelled)?;
+            let coordinator = query(
+                &self.config,
+                &mut self.calls,
+                &self.coordinator,
+                deadline,
+                &uncancelled,
+            )?;
             if coordinator.load_state != "not-found"
                 || coordinator.active_state != "inactive"
                 || coordinator.sub_state != "dead"
@@ -316,9 +313,15 @@ impl Aggregate {
                     "1".into(),
                     self.identity[0].to_string(),
                 ];
-                if !self
-                    .method("AttachProcessesToUnit", args, deadline, &uncancelled)?
-                    .is_empty()
+                if !method(
+                    &self.config,
+                    &mut self.calls,
+                    "AttachProcessesToUnit",
+                    args,
+                    deadline,
+                    &uncancelled,
+                )?
+                .is_empty()
                 {
                     return Err(Error::Manager);
                 }
@@ -342,43 +345,32 @@ impl Aggregate {
             return Err(Error::State);
         }
         io::stable(&self.origin_fd, &self.origin, deadline)?;
-        let uncancelled = AtomicBool::new(false);
         if self.phase == Phase::Restored {
             if self.slice_fd.is_none() {
                 self.slice_fd = Some(io::cgroup(&self.aggregate_path(), deadline)?);
             }
+            let path = self.aggregate_path();
             let fd = self.slice_fd.as_ref().ok_or(Error::State)?;
-            io::stable(fd, &self.aggregate_path(), deadline)?;
-            if !empty(&io::text(fd, "cgroup.events", deadline)?)? {
-                return Err(Error::Busy);
-            }
-            io::stable(fd, &self.aggregate_path(), deadline)?;
-            self.empty_at = Some(Instant::now());
-            self.phase = Phase::StopRequested;
-            job(&self.method(
-                "StopUnit",
-                vec!["ss".into(), self.unit.clone(), "fail".into()],
+            let (phase, empty_at) = (&mut self.phase, &mut self.empty_at);
+            stop_empty(
+                &self.config,
+                &mut self.calls,
+                fd,
+                &path,
+                &self.unit,
                 deadline,
-                &uncancelled,
-            )?)?;
+                |at| {
+                    *empty_at = Some(at);
+                    *phase = Phase::StopRequested;
+                },
+            )?;
         }
-        loop {
-            io::tick(deadline)?;
-            let observation = self.query(&self.unit.clone(), deadline, &uncancelled)?;
-            if observation.active_state == "inactive"
-                && (observation.load_state == "not-found"
-                    || observation.control_group.as_deref() == Some(""))
-            {
-                self.phase = Phase::Stopped;
-                return Ok(Stopped {
-                    direct_empty_observed_at: self.empty_at.ok_or(Error::State)?,
-                    manager: observation,
-                });
-            }
-            std::thread::sleep(
-                Duration::from_millis(2).min(deadline.saturating_duration_since(Instant::now())),
-            );
-        }
+        let observation = await_settled(&self.config, &mut self.calls, &self.unit, deadline)?;
+        self.phase = Phase::Stopped;
+        Ok(Stopped {
+            direct_empty_observed_at: self.empty_at.ok_or(Error::State)?,
+            manager: observation,
+        })
     }
     fn request_attach(
         &mut self,
@@ -387,41 +379,22 @@ impl Aggregate {
         cancelled: &AtomicBool,
     ) -> Result<(), Error> {
         let recorded = self.calls.len();
-        let response = match self.method("StartTransientUnit", args, deadline, cancelled) {
-            Ok(bytes) => bytes,
-            Err(error) => {
-                self.attach_refused = self.calls.len() == recorded
-                    || self.calls.last().is_some_and(|call| match &call.report {
-                        Err(_) => true,
-                        Ok(report) => {
-                            error == Error::Manager
-                                && report.exit_code.is_some_and(|code| code != 0)
-                                && report.stdout.bytes.is_empty()
-                        }
-                    });
-                return Err(error);
+        let result = method(
+            &self.config,
+            &mut self.calls,
+            "StartTransientUnit",
+            args,
+            deadline,
+            cancelled,
+        )
+        .and_then(|bytes| job(&bytes));
+        match create_outcome(self.calls.get(recorded), result) {
+            CreateOutcome::Answered => Ok(()),
+            CreateOutcome::Unknown(error) => Err(error),
+            CreateOutcome::Refused => {
+                self.attach_refused = true;
+                result
             }
-        };
-        job(&response)
-    }
-    fn capture_slice(&self, deadline: Instant, cancelled: &AtomicBool) -> Result<File, Error> {
-        loop {
-            io::tick(deadline)?;
-            if cancelled.load(Ordering::Acquire) {
-                return Err(Error::Cancelled);
-            }
-            match io::cgroup(&self.aggregate_path(), deadline) {
-                Ok(file) => {
-                    aggregate_limits(&file, deadline)?;
-                    io::stable(&file, &self.aggregate_path(), deadline)?;
-                    return Ok(file);
-                }
-                Err(Error::Io) => {}
-                Err(error) => return Err(error),
-            }
-            std::thread::sleep(
-                Duration::from_millis(2).min(deadline.saturating_duration_since(Instant::now())),
-            );
         }
     }
     fn wait_membership(
@@ -443,80 +416,6 @@ impl Aggregate {
                 Duration::from_millis(2).min(deadline.saturating_duration_since(Instant::now())),
             );
         }
-    }
-    fn method(
-        &mut self,
-        name: &str,
-        parameters: Vec<String>,
-        deadline: Instant,
-        cancelled: &AtomicBool,
-    ) -> Result<Vec<u8>, Error> {
-        let mut argv = vec![
-            "call".to_owned(),
-            SERVICE.into(),
-            OBJECT.into(),
-            MANAGER.into(),
-            name.into(),
-        ];
-        argv.extend(parameters);
-        self.command(argv, deadline, cancelled)
-    }
-    fn command(
-        &mut self,
-        parameters: Vec<String>,
-        deadline: Instant,
-        cancelled: &AtomicBool,
-    ) -> Result<Vec<u8>, Error> {
-        if self.calls.len() >= 64 {
-            return Err(Error::Bound);
-        }
-        let call = busctl(&self.config, parameters, deadline, cancelled)?;
-        self.calls.push(call);
-        self.calls.last().ok_or(Error::Process)?.stdout()
-    }
-    fn query(
-        &mut self,
-        name: &str,
-        deadline: Instant,
-        cancelled: &AtomicBool,
-    ) -> Result<UnitObservation, Error> {
-        let bytes = self.method(
-            "ListUnitsByNames",
-            vec!["as".into(), "1".into(), name.into()],
-            deadline,
-            cancelled,
-        )?;
-        let (mut observation, object) = unit_reply(&bytes, name)?;
-        if observation.load_state != "not-found" {
-            let class = if name
-                .rsplit_once('.')
-                .is_some_and(|(_, kind)| kind == "slice")
-            {
-                "org.freedesktop.systemd1.Slice"
-            } else {
-                "org.freedesktop.systemd1.Scope"
-            };
-            let bytes = self.command(
-                vec![
-                    "get-property".into(),
-                    SERVICE.into(),
-                    object,
-                    class.into(),
-                    "ControlGroup".into(),
-                ],
-                deadline,
-                cancelled,
-            )?;
-            let reply: Reply<String> =
-                serde_json::from_slice(&bytes).map_err(|_| Error::Manager)?;
-            if reply.signature != "s" || reply.data.len() > 2048 {
-                return Err(Error::Manager);
-            }
-            observation.control_group = Some(reply.data);
-        }
-        observation.observed_at = Instant::now();
-        io::tick(deadline)?;
-        Ok(observation)
     }
 }
 /// The one busctl door (R21 N6): the pinned `/usr/bin/busctl` (`io::pin`, re-checked per call)
@@ -551,6 +450,201 @@ fn busctl(
     };
     let report = process::run(&spec, deadline, cancelled);
     Ok(Call { argv, report })
+}
+/// One recorded manager call (R22 C8, the one home of the 64-call cap): refused `Bound` before the
+/// 65th, else run through the busctl door and recorded whole before its output is read.
+fn call(
+    config: &Config,
+    calls: &mut Vec<Call>,
+    parameters: Vec<String>,
+    deadline: Instant,
+    cancelled: &AtomicBool,
+) -> Result<Vec<u8>, Error> {
+    if calls.len() >= 64 {
+        return Err(Error::Bound);
+    }
+    let call = busctl(config, parameters, deadline, cancelled)?;
+    calls.push(call);
+    calls.last().ok_or(Error::Process)?.stdout()
+}
+/// One method of the user manager, recorded.
+fn method(
+    config: &Config,
+    calls: &mut Vec<Call>,
+    name: &str,
+    parameters: Vec<String>,
+    deadline: Instant,
+    cancelled: &AtomicBool,
+) -> Result<Vec<u8>, Error> {
+    let mut argv = vec![
+        "call".to_owned(),
+        SERVICE.into(),
+        OBJECT.into(),
+        MANAGER.into(),
+        name.into(),
+    ];
+    argv.extend(parameters);
+    call(config, calls, argv, deadline, cancelled)
+}
+/// The manager's row for one unit and, unless not found, its `ControlGroup`.
+fn query(
+    config: &Config,
+    calls: &mut Vec<Call>,
+    name: &str,
+    deadline: Instant,
+    cancelled: &AtomicBool,
+) -> Result<UnitObservation, Error> {
+    let bytes = method(
+        config,
+        calls,
+        "ListUnitsByNames",
+        vec!["as".into(), "1".into(), name.into()],
+        deadline,
+        cancelled,
+    )?;
+    let (mut observation, object) = unit_reply(&bytes, name)?;
+    if observation.load_state != "not-found" {
+        let class = if name
+            .rsplit_once('.')
+            .is_some_and(|(_, kind)| kind == "slice")
+        {
+            "org.freedesktop.systemd1.Slice"
+        } else {
+            "org.freedesktop.systemd1.Scope"
+        };
+        let bytes = call(
+            config,
+            calls,
+            vec![
+                "get-property".into(),
+                SERVICE.into(),
+                object,
+                class.into(),
+                "ControlGroup".into(),
+            ],
+            deadline,
+            cancelled,
+        )?;
+        let reply: Reply<String> = serde_json::from_slice(&bytes).map_err(|_| Error::Manager)?;
+        if reply.signature != "s" || reply.data.len() > 2048 {
+            return Err(Error::Manager);
+        }
+        observation.control_group = Some(reply.data);
+    }
+    observation.observed_at = Instant::now();
+    io::tick(deadline)?;
+    Ok(observation)
+}
+/// The manager lists no unit of this exact name (else `Identity`).
+fn absent(
+    config: &Config,
+    calls: &mut Vec<Call>,
+    name: String,
+    deadline: Instant,
+    cancelled: &AtomicBool,
+) -> Result<(), Error> {
+    let bytes = method(
+        config,
+        calls,
+        "ListUnitsByPatterns",
+        vec!["asas".into(), "0".into(), "1".into(), name],
+        deadline,
+        cancelled,
+    )?;
+    let reply: Reply<(Vec<UnitRow>,)> =
+        serde_json::from_slice(&bytes).map_err(|_| Error::Manager)?;
+    if reply.signature != "a(ssssssouso)" {
+        return Err(Error::Manager);
+    }
+    if reply.data.0.is_empty() {
+        Ok(())
+    } else {
+        Err(Error::Identity)
+    }
+}
+/// Ask the manager to create the slice with its limits; a job path is the only answer.
+fn create_slice(
+    config: &Config,
+    calls: &mut Vec<Call>,
+    unit: &str,
+    deadline: Instant,
+    cancelled: &AtomicBool,
+) -> Result<(), Error> {
+    job(&method(
+        config,
+        calls,
+        "StartTransientUnit",
+        create_arguments(unit),
+        deadline,
+        cancelled,
+    )?)
+}
+/// The created slice's cgroup directory, once it exists, with its limits read back.
+fn capture(path: &str, deadline: Instant, cancelled: &AtomicBool) -> Result<File, Error> {
+    loop {
+        io::tick(deadline)?;
+        if cancelled.load(Ordering::Acquire) {
+            return Err(Error::Cancelled);
+        }
+        match io::cgroup(path, deadline) {
+            Ok(file) => {
+                aggregate_limits(&file, deadline)?;
+                io::stable(&file, path, deadline)?;
+                return Ok(file);
+            }
+            Err(Error::Io) => {}
+            Err(error) => return Err(error),
+        }
+        std::thread::sleep(
+            Duration::from_millis(2).min(deadline.saturating_duration_since(Instant::now())),
+        );
+    }
+}
+/// Stop the slice only when its own cgroup reads empty (else `Busy`): the emptiness readback, then
+/// `requested` with the instant it was seen empty (the caller records the stop as asked before it
+/// is sent), then `StopUnit`. Never cancelled.
+fn stop_empty(
+    config: &Config,
+    calls: &mut Vec<Call>,
+    fd: &File,
+    path: &str,
+    unit: &str,
+    deadline: Instant,
+    requested: impl FnOnce(Instant),
+) -> Result<(), Error> {
+    io::stable(fd, path, deadline)?;
+    if !empty(&io::text(fd, "cgroup.events", deadline)?)? {
+        return Err(Error::Busy);
+    }
+    io::stable(fd, path, deadline)?;
+    requested(Instant::now());
+    job(&method(
+        config,
+        calls,
+        "StopUnit",
+        vec!["ss".into(), unit.to_owned(), "fail".into()],
+        deadline,
+        &AtomicBool::new(false),
+    )?)
+}
+/// Poll the manager until it has let the unit go ([`settled`]), under the deadline; never cancelled.
+fn await_settled(
+    config: &Config,
+    calls: &mut Vec<Call>,
+    unit: &str,
+    deadline: Instant,
+) -> Result<UnitObservation, Error> {
+    let uncancelled = AtomicBool::new(false);
+    loop {
+        io::tick(deadline)?;
+        let observation = query(config, calls, unit, deadline, &uncancelled)?;
+        if settled(&observation) {
+            return Ok(observation);
+        }
+        std::thread::sleep(
+            Duration::from_millis(2).min(deadline.saturating_duration_since(Instant::now())),
+        );
+    }
 }
 
 impl Call {
@@ -759,4 +853,200 @@ fn empty(events: &str) -> Result<bool, Error> {
 /// slice before the slice exists, and a slice left by a crash is found by exact name.
 pub(crate) fn aggregate_unit(attempt: UuidV4<'_>) -> String {
     format!("hee3aggregate{}.slice", attempt.as_str().replace('-', ""))
+}
+/// The manager has let the unit go: inactive, and not found or holding no control group.
+fn settled(observation: &UnitObservation) -> bool {
+    observation.active_state == "inactive"
+        && (observation.load_state == "not-found"
+            || observation.control_group.as_deref() == Some(""))
+}
+/// What a create request came to, from the one call it recorded (`None` when none was) and its
+/// result: a job path is `Answered`; nothing recorded, a spawn refusal, or the manager's own error
+/// reply (non-zero exit, nothing printed) is `Refused`; anything else may still reach the manager
+/// and is `Unknown`, carrying its error.
+fn create_outcome(call: Option<&Call>, result: Result<(), Error>) -> CreateOutcome {
+    let Err(error) = result else {
+        return CreateOutcome::Answered;
+    };
+    let refused = call.is_none_or(|call| match &call.report {
+        Err(_) => true,
+        Ok(report) => {
+            error == Error::Manager
+                && report.exit_code.is_some_and(|code| code != 0)
+                && report.stdout.bytes.is_empty()
+        }
+    });
+    if refused {
+        CreateOutcome::Refused
+    } else {
+        CreateOutcome::Unknown(error)
+    }
+}
+/// The slice's `StartTransientUnit` arguments: its name and the aggregate limits, nothing else.
+fn create_arguments(unit: &str) -> Vec<String> {
+    let properties = resources::aggregate_properties();
+    // D-Bus `a(sv)`: the count of (name, value) pairs precedes them, derived from the one vector.
+    let mut args = vec![
+        "ssa(sv)a(sa(sv))".into(),
+        unit.to_owned(),
+        "fail".into(),
+        (properties.len() / 3).to_string(),
+    ];
+    args.extend(properties);
+    args.push("0".into());
+    args
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Call, CreateOutcome, Error, aggregate_unit, create_arguments, create_outcome};
+    use crate::contracts::UuidV4;
+    use crate::worker::process::{Interruption, ProcessReport, Refusal, SignalFacts, Stream};
+    use std::time::{Duration, Instant};
+
+    /// Two attempts differing in every hex digit except the version digit (R22 §5).
+    const A1: &str = "01234567-89ab-4cde-8f01-23456789abcd";
+    const A2: &str = "fedcba98-7654-4321-b0fe-dcba98765432";
+
+    fn attempt(value: &str) -> Result<UuidV4<'_>, Box<dyn std::error::Error>> {
+        UuidV4::parse(value).map_err(|e| format!("{e:?}").into())
+    }
+
+    /// One busctl call as the door records it: a reaped leader, a settled group, both streams
+    /// complete, with this exit code, stdout and interruption.
+    fn call(exit_code: Option<i32>, stdout: &[u8], interruption: Option<Interruption>) -> Call {
+        let stream = |bytes: &[u8]| Stream {
+            bytes: bytes.to_vec(),
+            observed_bytes: bytes.len() as u64,
+            eof: true,
+            truncated: false,
+            failed: false,
+        };
+        Call {
+            argv: vec!["call".into()],
+            report: Ok(ProcessReport {
+                started_at: Instant::now(),
+                leader_pid: 4817,
+                exit_code,
+                signal: None,
+                interruption,
+                interruption_observed_at: None,
+                stdout: stream(stdout),
+                stderr: stream(if exit_code == Some(0) { b"" } else { b"Failed" }),
+                elapsed: Duration::from_millis(3),
+                signals: SignalFacts::default(),
+                leader_reaped: true,
+                process_group_settled: true,
+                observer_ready: true,
+                pending: None,
+            }),
+        }
+    }
+
+    /// R22-2 · only a manager answer (or nothing reaching it) counts as refused; a call that may
+    /// still have reached the manager is unknown, carrying its error; a job path is answered. The
+    /// last two rows each hold one clause of the manager answer false (a failed exit whose call
+    /// did not settle; a failed exit that printed), so each clause decides a row of its own.
+    #[test]
+    fn create_outcome_counts_only_a_manager_answer_as_refused() {
+        let spawn_refused = Call {
+            argv: vec!["call".into()],
+            report: Err(Refusal::Spawn),
+        };
+        assert_eq!(
+            [
+                create_outcome(None, Err(Error::Invalid)),
+                create_outcome(Some(&spawn_refused), Err(Error::Process)),
+                create_outcome(Some(&call(Some(1), b"", None)), Err(Error::Manager)),
+                create_outcome(
+                    Some(&call(None, b"", Some(Interruption::Timeout))),
+                    Err(Error::Process)
+                ),
+                create_outcome(Some(&call(Some(0), b"x", None)), Err(Error::Manager)),
+                create_outcome(
+                    Some(&call(
+                        Some(0),
+                        br#"{"type":"o","data":["/org/freedesktop/systemd1/job/4817"]}"#,
+                        None
+                    )),
+                    Ok(())
+                ),
+                create_outcome(
+                    Some(&call(Some(1), b"", Some(Interruption::ResidualGroup))),
+                    Err(Error::Process)
+                ),
+                create_outcome(
+                    Some(&call(
+                        Some(1),
+                        br#"{"type":"o","data":["/org/freedesktop/systemd1/job/4817"]}"#,
+                        None
+                    )),
+                    Err(Error::Manager)
+                ),
+            ],
+            [
+                CreateOutcome::Refused,
+                CreateOutcome::Refused,
+                CreateOutcome::Refused,
+                CreateOutcome::Unknown(Error::Process),
+                CreateOutcome::Unknown(Error::Manager),
+                CreateOutcome::Answered,
+                CreateOutcome::Unknown(Error::Process),
+                CreateOutcome::Unknown(Error::Manager),
+            ]
+        );
+    }
+
+    /// R22 C1a · the slice's one name, from the attempt, over two attempts differing in every digit.
+    #[test]
+    fn aggregate_unit_names_the_attempt() -> Result<(), Box<dyn std::error::Error>> {
+        assert_eq!(
+            [aggregate_unit(attempt(A1)?), aggregate_unit(attempt(A2)?)],
+            [
+                "hee3aggregate0123456789ab4cde8f0123456789abcd.slice",
+                "hee3aggregatefedcba9876544321b0fedcba98765432.slice",
+            ]
+        );
+        Ok(())
+    }
+
+    /// R22-1 · the slice's create request, whole, for each attempt: its limits and nothing else —
+    /// no `PIDs`, so no process is ever placed in it by the request.
+    #[test]
+    fn the_slice_request_carries_no_process() -> Result<(), Box<dyn std::error::Error>> {
+        for (value, unit) in [
+            (A1, "hee3aggregate0123456789ab4cde8f0123456789abcd.slice"),
+            (A2, "hee3aggregatefedcba9876544321b0fedcba98765432.slice"),
+        ] {
+            assert_eq!(
+                create_arguments(&aggregate_unit(attempt(value)?)),
+                [
+                    "ssa(sv)a(sa(sv))",
+                    unit,
+                    "fail",
+                    "6",
+                    "CPUQuotaPerSecUSec",
+                    "t",
+                    "4000000",
+                    "MemoryMax",
+                    "t",
+                    "17179869184",
+                    "MemorySwapMax",
+                    "t",
+                    "0",
+                    "TasksMax",
+                    "t",
+                    "256",
+                    "IOWeight",
+                    "t",
+                    "25",
+                    "CollectMode",
+                    "s",
+                    "inactive-or-failed",
+                    "0",
+                ]
+            );
+        }
+        Ok(())
+    }
 }
