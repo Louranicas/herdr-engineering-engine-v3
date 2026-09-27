@@ -94,6 +94,10 @@ pub struct UnitObservation {
     pub active_state: String,
     pub sub_state: String,
     pub control_group: Option<String>,
+    /// The id of the job the manager holds queued or running for the unit, `0` when none (the
+    /// row's eighth field). A unit whose start job is still queued reads loaded and inactive with
+    /// no control group, which without the job is the row of a stopped unit.
+    pub job: u32,
     pub observed_at: Instant,
 }
 #[derive(Debug)]
@@ -506,7 +510,8 @@ impl Slice {
     /// it ends at `Stopped` or at a named refusal.
     /// # Errors
     /// The manager's, the door's or the readback's refusal; `Busy` for a slice that is not empty;
-    /// a create whose outcome is unknown and whose unit is not found is its own error (R22-2 row 2).
+    /// a create whose outcome is unknown and whose unit is not found, or still holds a queued job,
+    /// is its own error (R22-2 row 2; B14b-2 closure D4).
     pub fn stop(&mut self, deadline: Instant) -> Result<(), Error> {
         let uncancelled = AtomicBool::new(false);
         let path = slice_path(&self.unit);
@@ -960,6 +965,7 @@ fn unit_reply(bytes: &[u8], name: &str) -> Result<(UnitObservation, String), Err
             active_state: row.3,
             sub_state: row.4,
             control_group: None,
+            job: row.7,
             observed_at: Instant::now(),
         },
         row.6,
@@ -1005,11 +1011,13 @@ fn empty(events: &str) -> Result<bool, Error> {
 pub(crate) fn aggregate_unit(attempt: UuidV4<'_>) -> String {
     format!("hee3aggregate{}.slice", attempt.as_str().replace('-', ""))
 }
-/// The manager has let the unit go: inactive, and not found or holding no control group.
+/// The manager has let the unit go: inactive, not found or holding no control group, and holding
+/// no job for it (a queued start job would still realise it; B14b-2 closure D4).
 fn settled(observation: &UnitObservation) -> bool {
     observation.active_state == "inactive"
         && (observation.load_state == "not-found"
             || observation.control_group.as_deref() == Some(""))
+        && observation.job == 0
 }
 /// What a create request came to, from the one call it recorded (`None` when none was) and its
 /// result: a job path is `Answered`; nothing recorded, a spawn refusal, or the manager's own error
@@ -1064,7 +1072,10 @@ const fn stop_step(phase: SlicePhase) -> StopStep {
     }
 }
 /// What the manager's own row `o` says of a slice whose create was asked (R22-2), rows in order:
-/// settled with a create refused or answered is gone; not found after a create whose outcome is
+/// a job the manager still holds for the unit (a queued start: loaded, inactive, no control group,
+/// which without the job reads as stopped) is never gone — after a create whose outcome is unknown
+/// it is that create's error, otherwise a slice to stop (B14b-2 closure D4); settled with a create
+/// refused or answered is gone; not found after a create whose outcome is
 /// unknown is that create's error (a lost reply may still land: never recorded settled); loaded,
 /// inactive, holding no control group is gone; any other load state is `Manager`; no control group
 /// while active or activating is an unrealised slice to stop; its own path is a slice to check
@@ -1074,6 +1085,12 @@ fn resolve(
     expected_path: &str,
     created: CreateOutcome,
 ) -> Result<Resolved, Error> {
+    if o.job != 0 {
+        return match created {
+            CreateOutcome::Unknown(error) => Err(error),
+            CreateOutcome::Refused | CreateOutcome::Answered => Ok(Resolved::StopUnrealised),
+        };
+    }
     if settled(o) && matches!(created, CreateOutcome::Refused | CreateOutcome::Answered) {
         return Ok(Resolved::Gone);
     }
@@ -1101,7 +1118,8 @@ fn resolve(
 mod tests {
     use super::{
         Call, CreateOutcome, Error, Resolved, SlicePhase, StopStep, UnitObservation,
-        aggregate_unit, create_arguments, create_outcome, resolve, slice_path, stop_step,
+        aggregate_unit, create_arguments, create_outcome, resolve, settled, slice_path, stop_step,
+        unit_reply,
     };
     use crate::contracts::UuidV4;
     use crate::worker::process::{Interruption, ProcessReport, Refusal, SignalFacts, Stream};
@@ -1169,15 +1187,16 @@ mod tests {
         );
     }
 
-    /// One manager row: load, active and sub state, and the `ControlGroup` read (`None` when the
-    /// unit is not found and none was read).
-    fn row(load: &str, active: &str, sub: &str, group: Option<&str>) -> UnitObservation {
+    /// One manager row: load, active and sub state, the `ControlGroup` read (`None` when the unit
+    /// is not found and none was read), and the id of the job the manager holds for it.
+    fn row(load: &str, active: &str, sub: &str, group: Option<&str>, job: u32) -> UnitObservation {
         UnitObservation {
             name: "hee3probe4817.slice".to_owned(),
             load_state: load.to_owned(),
             active_state: active.to_owned(),
             sub_state: sub.to_owned(),
             control_group: group.map(str::to_owned),
+            job,
             observed_at: Instant::now(),
         }
     }
@@ -1187,18 +1206,23 @@ mod tests {
     /// the probe's live slice at its own path. Hand-typed, self-consistent only (labelled so): an
     /// activating and an active unrealised slice, and a load state that is not `loaded`. A
     /// not-found unit after an unknown create is that create's error, never gone; the stopped
-    /// slice is gone whatever the create came to (row 3 decides a row of its own).
+    /// slice is gone whatever the create came to (row 3 decides a row of its own). The job column
+    /// is hand-typed on every row: the T06 rows recorded none, so they carry `0`, and `queued` —
+    /// the stopped slice's row with a start job still queued (B14b-2 closure D4) — carries 4817.
+    /// A queued job is never gone and never settled: after an unknown create it is that create's
+    /// error, otherwise a slice to stop.
     #[test]
     fn resolve_reads_the_manager_s_own_rows() -> Result<(), Box<dyn std::error::Error>> {
         const P: &str = "/user.slice/user-1000.slice/user@1000.service/hee3probe4817.slice";
         let a1_path = slice_path(&aggregate_unit(attempt(A1)?));
-        let stopped = row("loaded", "inactive", "dead", Some(""));
-        let collected = row("not-found", "inactive", "dead", None);
-        let live = row("loaded", "active", "active", Some(P));
+        let stopped = row("loaded", "inactive", "dead", Some(""), 0);
+        let collected = row("not-found", "inactive", "dead", None, 0);
+        let live = row("loaded", "active", "active", Some(P), 0);
         // Hand-typed rows: self-consistent, not recorded from a host.
-        let activating = row("loaded", "activating", "start", Some(""));
-        let unrealised = row("loaded", "active", "active", Some(""));
-        let errored = row("error", "active", "running", Some(P));
+        let activating = row("loaded", "activating", "start", Some(""), 0);
+        let unrealised = row("loaded", "active", "active", Some(""), 0);
+        let errored = row("error", "active", "running", Some(P), 0);
+        let queued = row("loaded", "inactive", "dead", Some(""), 4817);
         assert_eq!(
             [
                 resolve(&stopped, P, CreateOutcome::Answered),
@@ -1210,6 +1234,8 @@ mod tests {
                 resolve(&activating, P, CreateOutcome::Answered),
                 resolve(&unrealised, P, CreateOutcome::Unknown(Error::Process)),
                 resolve(&errored, P, CreateOutcome::Answered),
+                resolve(&queued, P, CreateOutcome::Unknown(Error::Process)),
+                resolve(&queued, P, CreateOutcome::Answered),
             ],
             [
                 Ok(Resolved::Gone),
@@ -1221,7 +1247,72 @@ mod tests {
                 Ok(Resolved::StopUnrealised),
                 Ok(Resolved::StopUnrealised),
                 Err(Error::Manager),
+                Err(Error::Process),
+                Ok(Resolved::StopUnrealised),
             ]
+        );
+        assert_eq!(
+            [&stopped, &collected, &queued].map(settled),
+            [true, true, false],
+            "a queued job is not settled"
+        );
+        Ok(())
+    }
+
+    /// B14b-2 closure D4 · the manager's row carries the job it holds for the unit. The first
+    /// reply is recorded from this host's user manager (`busctl --user --json=short call …
+    /// ListUnitsByNames as 1 app.slice`, 2026-09-27): no job, so `0`. The second is that reply
+    /// with the stopped probe slice's name, load and active state, and a queued start job's three
+    /// fields hand-typed (a queued job was not recorded): it carries 4817.
+    #[test]
+    fn unit_reply_carries_the_queued_job() -> Result<(), Box<dyn std::error::Error>> {
+        let recorded = br#"{"type":"a(ssssssouso)","data":[[["app.slice","User Application Slice","loaded","active","active","","/org/freedesktop/systemd1/unit/app_2eslice",0,"","/"]]]}"#;
+        let queued = br#"{"type":"a(ssssssouso)","data":[[["hee3probe4817.slice","hee3probe4817.slice","loaded","inactive","dead","","/org/freedesktop/systemd1/unit/hee3probe4817_2eslice",4817,"start","/org/freedesktop/systemd1/job/4817"]]]}"#;
+        let (app, app_object) = unit_reply(recorded, "app.slice").map_err(|e| format!("{e:?}"))?;
+        let (probe, probe_object) =
+            unit_reply(queued, "hee3probe4817.slice").map_err(|e| format!("{e:?}"))?;
+        assert_eq!(
+            [
+                (
+                    app.name.as_str(),
+                    app.load_state.as_str(),
+                    app.active_state.as_str(),
+                    app.sub_state.as_str(),
+                    app.job,
+                    app_object.as_str(),
+                ),
+                (
+                    probe.name.as_str(),
+                    probe.load_state.as_str(),
+                    probe.active_state.as_str(),
+                    probe.sub_state.as_str(),
+                    probe.job,
+                    probe_object.as_str(),
+                ),
+            ],
+            [
+                (
+                    "app.slice",
+                    "loaded",
+                    "active",
+                    "active",
+                    0,
+                    "/org/freedesktop/systemd1/unit/app_2eslice",
+                ),
+                (
+                    "hee3probe4817.slice",
+                    "loaded",
+                    "inactive",
+                    "dead",
+                    4817,
+                    "/org/freedesktop/systemd1/unit/hee3probe4817_2eslice",
+                ),
+            ]
+        );
+        assert_eq!(
+            (app.control_group, probe.control_group),
+            (None, None),
+            "the row alone reads no control group"
         );
         Ok(())
     }

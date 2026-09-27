@@ -229,7 +229,7 @@ T06_UNIT_COUNTS = {
     "app::runtime::tests::": 11, "app::run_records::tests::": 11,
     "app::live_verifier::tests::": 3, "app::plan::tests::": 5, "app::u64_receipt::tests::": 9, "worker::host::tests::": 1,
     "app::candidates::tests::": 5, "app::dispatcher::tests::": 2,
-    "app::native_provider::tests::": 3, "worker::aggregate::tests::": 5,
+    "app::native_provider::tests::": 3, "worker::aggregate::tests::": 6,
 }
 
 
