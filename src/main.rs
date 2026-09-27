@@ -326,9 +326,11 @@ fn open_grants(home: &Path) -> Result<Box<dyn Grants + Sync>, ExitCode> {
 /// user's private directory through its one door (`coordinator::prepare_attempts_root`, B14b-2
 /// closure C18): the shared plan and every attempt are materialised under it, and the plan refuses
 /// a root whose parent does not exist (`plan_root_not_canonical`) — which would stop the owner's
-/// task for the machine's missing directory. A root that exists without its marker is refused,
-/// never re-created. When it cannot be had, dispatch is said unavailable once and no dispatcher
-/// runs. `deadline` is the startup's own, passed through: it bounds only drawing a new root's id.
+/// task for the machine's missing directory. The door refuses the rest of that rule here, by name
+/// (`NotCanonical`: a root reached through a link, B14b-2 closure D5), for the same reason. A root
+/// that exists without its marker is refused, never re-created. When it cannot be had, dispatch is
+/// said unavailable once and no dispatcher runs. `deadline` is the startup's own, passed through:
+/// it bounds only drawing a new root's id.
 fn attempts_root(state_root: &Path, deadline: std::time::Instant) -> Option<PathBuf> {
     let attempts = coordinator::attempts_root(state_root);
     match coordinator::prepare_attempts_root(&attempts, deadline) {

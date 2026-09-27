@@ -4318,6 +4318,10 @@ fn the_attempts_root_is_marked_once_by_the_door_that_creates_it()
 /// (never marked after the fact, never re-created); a marker reached through a link, a marker that
 /// is not 0600, or a root that is not 0700 is `Custody`; a marker over 64 bytes, in upper case, or
 /// with a trailing newline is `Marker`. A planted 36-byte lowercase `UuidV4` in a 0600 file reads.
+/// B14b-2 closure D5 · the creator alone refuses a root that is not its own canonical path, by
+/// name and before any read or create: one under a linked ancestor (nothing is created at the
+/// link's target), one that is itself a link to a marked root (which the reader refuses as
+/// `Custody`), and a relative one; a root whose parent is missing keeps its I/O kind.
 #[test]
 fn the_attempts_root_door_names_each_refusal() -> Result<(), Box<dyn std::error::Error>> {
     use habitat_engine::app::coordinator::{
@@ -4378,6 +4382,47 @@ fn the_attempts_root_door_names_each_refusal() -> Result<(), Box<dyn std::error:
             root.display()
         );
     }
+    let alias = area.path.join("alias");
+    std::os::unix::fs::symlink(&area.path, &alias)?;
+    let pointed = area.path.join("pointed");
+    std::os::unix::fs::symlink(&fits, &pointed)?;
+    assert_eq!(
+        [
+            prepare_attempts_root(&alias.join("attempts"), deadline()),
+            prepare_attempts_root(&pointed, deadline()),
+            read_root_id(&pointed),
+            prepare_attempts_root(Path::new("t07-d5-relative/attempts"), deadline()),
+            prepare_attempts_root(&area.path.join("missing").join("attempts"), deadline()),
+        ],
+        [
+            Err(RootIdError::NotCanonical),
+            Err(RootIdError::NotCanonical),
+            Err(RootIdError::Custody),
+            Err(RootIdError::NotCanonical),
+            Err(RootIdError::Io(std::io::ErrorKind::NotFound)),
+        ]
+    );
+    let mut beside: Vec<String> = fs::read_dir(&area.path)?
+        .map(|entry| entry.map(|entry| entry.file_name().to_string_lossy().into_owned()))
+        .collect::<Result<_, _>>()?;
+    beside.sort();
+    assert_eq!(
+        beside,
+        [
+            ROOT_ID_MARKER,
+            "alias",
+            "bare",
+            "fits",
+            "linked",
+            "long",
+            "newline",
+            "pointed",
+            "shared",
+            "upper",
+            "wide",
+        ],
+        "nothing is created or staged through the alias"
+    );
     Ok(())
 }
 
@@ -4458,6 +4503,7 @@ fn a_restart_reads_the_root_by_its_marker_not_its_inode() -> Result<(), Box<dyn 
         (Err(RootIdError::Absent), Presence::Absent),
         (Err(RootIdError::Unmarked), Presence::Unreadable),
         (Err(RootIdError::Custody), Presence::Unreadable),
+        (Err(RootIdError::NotCanonical), Presence::Unreadable),
         (Err(RootIdError::Marker), Presence::Unreadable),
         (Err(RootIdError::Entropy), Presence::Unreadable),
         (

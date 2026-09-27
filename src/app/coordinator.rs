@@ -335,6 +335,11 @@ pub enum RootIdError {
     /// The root is not this user's private 0700 directory, or its marker is not this user's
     /// regular 0600 file reached without following a link.
     Custody,
+    /// The root's path is not its own canonical path: it is relative, a directory on the way to it
+    /// is reached through a link, or it is itself a link. The plan refuses such a root when the
+    /// first task is dispatched (`plan_root_not_canonical`), so the door refuses it at startup,
+    /// before any read or create (B14b-2 closure D5).
+    NotCanonical,
     /// The root exists and carries no marker. It is refused, never marked after the fact and
     /// never re-created: what stands there is not a root this engine made.
     Unmarked,
@@ -381,12 +386,16 @@ pub fn read_root_id(root: &Path) -> Result<String, RootIdError> {
 /// leaves a root without its marker. A root that exists is read, never re-marked: the id it returns
 /// is the one written when the root was created, however many times the engine starts. A leftover
 /// staged directory (a crash between the stage and the rename) is never renamed and never read.
+/// Before any read or create, the root must be its own canonical path (`canonical_root`).
 ///
 /// # Errors
-/// Those of [`read_root_id`] for a root that exists (an unmarked one is [`RootIdError::Unmarked`]);
+/// [`RootIdError::NotCanonical`] for a root that is not its own canonical path; those of
+/// [`read_root_id`] for a root that exists (an unmarked one is [`RootIdError::Unmarked`]);
 /// [`RootIdError::Entropy`] when no id can be drawn; [`RootIdError::Custody`] for a root with no
-/// parent or a name that is not UTF-8; [`RootIdError::Io`] for a stage or a rename that failed.
+/// parent or a name that is not UTF-8; [`RootIdError::Io`] for a parent that cannot be resolved, or
+/// a stage or a rename that failed.
 pub fn prepare_attempts_root(root: &Path, deadline: Instant) -> Result<String, RootIdError> {
+    canonical_root(root)?;
     match read_root_id(root) {
         Err(RootIdError::Absent) => {}
         read => return read,
@@ -413,6 +422,34 @@ pub fn prepare_attempts_root(root: &Path, deadline: Instant) -> Result<String, R
         Ok(read) if read == id => Ok(read),
         Ok(_) => Err(RootIdError::Marker),
         Err(error) => Err(error),
+    }
+}
+
+/// The attempts root is its own canonical path (B14b-2 closure D5), the rule the plan applies to
+/// it when a task is dispatched (`plan_root_not_canonical`), decided here at startup instead of
+/// stopping every admitted task: `root` is absolute, its parent resolves to itself, and a root that
+/// resolves resolves to itself (a root that does not resolve is left to [`read_root_id`], which
+/// names it). A root with no parent is left to the reader too.
+///
+/// # Errors
+/// [`RootIdError::NotCanonical`] when one of those does not hold; [`RootIdError::Io`], by its kind,
+/// for a parent that cannot be resolved.
+fn canonical_root(root: &Path) -> Result<(), RootIdError> {
+    if !root.is_absolute() {
+        return Err(RootIdError::NotCanonical);
+    }
+    let Some(parent) = root.parent() else {
+        return Ok(());
+    };
+    let resolved = parent
+        .canonicalize()
+        .map_err(|error| RootIdError::Io(error.kind()))?;
+    if resolved != parent {
+        return Err(RootIdError::NotCanonical);
+    }
+    match root.canonicalize() {
+        Ok(resolved) if resolved != root => Err(RootIdError::NotCanonical),
+        Ok(_) | Err(_) => Ok(()),
     }
 }
 
