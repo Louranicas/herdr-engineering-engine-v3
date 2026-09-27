@@ -183,9 +183,10 @@ impl Prepared {
     }
 }
 
-/// The engine's drain (APP-01): begun once, by SIGTERM in `main` or by a caller in a test. From
-/// then on the accept loop admits nothing, every admitted connection finishes the frame it is
-/// serving and reads no other, and `health` reports `socket: draining`.
+/// The engine's drain (APP-01): begun once, by the first drain signal in `main` (SIGTERM, SIGHUP or
+/// SIGINT; the stdin watcher of `serve --until-stdin-closes` raises SIGTERM) or by a caller in a
+/// test. From then on the accept loop admits nothing, every admitted connection finishes the frame
+/// it is serving and reads no other, and `health` reports `socket: draining`.
 #[derive(Debug, Default)]
 pub struct Drain {
     begun: AtomicBool,

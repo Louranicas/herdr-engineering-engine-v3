@@ -226,7 +226,7 @@ T06_UNIT_COUNTS = {
     "app::repair::tests::": 7, "worker::namespace::": 8,
     "check::patch::tests::": 6, "app::class_profile::tests::": 21,
     "worker::resources::limit_tests::": 3, "worker::workspace::manifest_tests::": 2,
-    "app::runtime::tests::": 11, "app::run_records::tests::": 11,
+    "app::runtime::tests::": 11, "app::run_records::tests::": 12,
     "app::live_verifier::tests::": 3, "app::plan::tests::": 5, "app::u64_receipt::tests::": 9, "worker::host::tests::": 1,
     "app::candidates::tests::": 5, "app::dispatcher::tests::": 2,
     "app::native_provider::tests::": 3, "worker::aggregate::tests::": 6,
@@ -240,12 +240,14 @@ def has_t06(root):
             or any(str(t.get("name", "")).startswith("t06_") for t in manifest.get("test", [])))
 
 
-# Reviewed current T07 inventory target: 52 controls (51 + B14-P2c's workspace case; the earlier 43-control
-# inventory is superseded; this recipe does not accept it).
+# Reviewed current T07 inventory target: 55 controls (51 + B14-P2c's workspace case + B14b-2 skeleton
+# S14's root inventory + R22 step 5's tail order (C16) + closure C18's root-id CHECK; the earlier
+# 43-control inventory is superseded; this recipe does not accept it).
 T07_TARGET_COUNTS = {"t07_inventory": 55}
 T07_INPUTS = ("src/store/recovery.rs", "tests/t07_inventory.rs")
 # Reviewed T08 native adapter extension: one registered offline-client target
-# with 27 controls (26 + R21 closure C6) and no library-unit namespace. The Rust tests copy the
+# with 28 controls (26 + R21 closure C6 + R21 round-1 LOW L7's selection count) and no library-unit
+# namespace. The Rust tests copy the
 # fixture client and execute it through its own interpreter line, so that
 # interpreter is an evidence pin (see native_client_interpreter), never a
 # candidate input; the other files under tests/fixtures/native are not read by
@@ -253,13 +255,13 @@ T07_INPUTS = ("src/store/recovery.rs", "tests/t07_inventory.rs")
 T08_TARGET_COUNTS = {"t08_native": 28}
 T08_INPUTS = ("src/worker/native.rs", "tests/t08_native.rs", "tests/fixtures/native/client.py")
 NATIVE_CLIENT_FIXTURE = "tests/fixtures/native/client.py"
-# Reviewed T07 engine reconciliation policy target: 58 controls. tests/recovery.rs
+# Reviewed T07 engine reconciliation policy target: 60 controls. tests/recovery.rs
 # reads only habitat_engine::recovery and src/recovery.rs (declared by src/lib.rs)
 # reads no store or contracts module, so its input pins are exactly its two
 # sources; the Store-owned src/store/recovery.rs stays pinned by T07_INPUTS.
 RECOVERY_TARGET_COUNTS = {"recovery": 60}
 RECOVERY_INPUTS = ("src/recovery.rs", "tests/recovery.rs")
-# Reviewed T07 startup application target: 78 controls, no library-unit namespace.
+# Reviewed T07 startup application target: 119 controls, no library-unit namespace.
 # tests/t07_startup.rs drives the startup pass, so its pins are the two sources
 # only this target owns: the app-owned I/O shell and the Store-owned reconciliation
 # reads/writes. The pure policy src/recovery.rs stays pinned by RECOVERY_INPUTS and
@@ -296,7 +298,7 @@ CONTRACT_CLIENT_FIXTURE = "tests/fixtures/native/contract-client.py"
 # adapter sources it shares with t08_native keep counting for that battery.
 T08_CONTRACT_OWN_SOURCES = tuple(name for name in T08_CONTRACT_INPUTS if name not in T08_INPUTS and name not in T03_IMPLEMENTATION_PATHS)
 
-# Reviewed T09 routing battery: 72 controls, no library-unit namespace. The inputs are
+# Reviewed T09 routing battery: 77 controls, no library-unit namespace. The inputs are
 # what tests/t09_route.rs includes with include_str! -- the router source, the route
 # configuration and the two fixture files -- so the pins follow the battery's own reads
 # rather than a list somebody maintains beside them. The battery is pure and sub-second,
@@ -317,7 +319,7 @@ CONTEXT_INPUTS = ("src/context.rs",)
 COHORT_TARGET_COUNTS = {"t22_cohort": 67}
 COHORT_INPUTS = ("src/cohort.rs", "evaluation/cohorts/claim-overlap-v1.json",
                  "tests/fixtures/t22/C01.json", "tests/fixtures/t22/C02.json")
-ACTIONS_TARGET_COUNTS = {"t28_actions": 276}
+ACTIONS_TARGET_COUNTS = {"t28_actions": 277}
 # The control receiver (review coordinator step 1) is served from the catalogue: its wire half in
 # contracts, its catalogue half in actions, and the independent Python oracle its cases run.
 ACTIONS_INPUTS = ("src/actions.rs", "src/worker/tools.rs", "src/actions/control.rs",

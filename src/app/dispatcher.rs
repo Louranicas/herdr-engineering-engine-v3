@@ -75,8 +75,9 @@ pub enum NativeWhy {
     Manifest,
     /// The class's adapter row is not one this build knows.
     Adapter,
-    /// The client's working directory is not canonical, the engine's, and 0700.
-    Directory,
+    /// The client's working directory is not canonical, the engine's, and 0700, by its cause
+    /// (B14b-2 review round 2, FT-11).
+    Directory(crate::worker::native::DirectoryError),
 }
 
 /// Why `serve` composed no native provider (R21 round-1 LOW F8): the kind of the compose refusal
@@ -107,7 +108,7 @@ impl Unavailable {
     pub const fn name(self) -> &'static str {
         use super::candidates::ClassPromptError as Input;
         use crate::worker::aggregate::Error as Manager;
-        use crate::worker::native::Error as Native;
+        use crate::worker::native::{DirectoryError as Directory, Error as Native};
         match self {
             Self::NoNativeProvider(NoNative::NotInstalled) => {
                 "unavailable: no native provider (not installed)"
@@ -134,7 +135,15 @@ impl Unavailable {
             Self::ClassNotNative => "unavailable: class declares no native model",
             Self::Native(NativeWhy::Manifest) => "unavailable: native manifest",
             Self::Native(NativeWhy::Adapter) => "unavailable: native adapter",
-            Self::Native(NativeWhy::Directory) => "unavailable: native directory",
+            Self::Native(NativeWhy::Directory(Directory::NotCanonical)) => {
+                "unavailable: native directory not canonical"
+            }
+            Self::Native(NativeWhy::Directory(Directory::Unreadable(_))) => {
+                "unavailable: native directory unreadable"
+            }
+            Self::Native(NativeWhy::Directory(Directory::Custody)) => {
+                "unavailable: native directory custody"
+            }
             Self::Daemon(Native::Profile) => "unavailable: daemon profile",
             Self::Daemon(Native::Subject) => "unavailable: daemon subject",
             Self::Daemon(Native::Deadline) => "unavailable: daemon deadline",
@@ -284,6 +293,7 @@ pub fn classify(result: &Result<Outcome, RuntimeError>) -> Step {
             | RootIdError::Unmarked
             | RootIdError::Marker
             | RootIdError::Entropy
+            | RootIdError::Deadline
             | RootIdError::Io(_),
         )) => Step::TaskLeft("attempts root unreadable"),
         // Raised only in `admit`, so it reaches here inside `PreDispatch`; bare, it is still before
@@ -551,7 +561,7 @@ mod tests {
     use crate::task::LoopRefusal;
     use crate::task::driver::{self, StopReason};
     use crate::worker::aggregate::Error as Manager;
-    use crate::worker::native::Error as Native;
+    use crate::worker::native::{DirectoryError as Directory, Error as Native};
 
     /// Every result the classification is pinned over, with its step.
     fn cases() -> Vec<(Result<Outcome, RuntimeError>, Step)> {
@@ -673,27 +683,10 @@ mod tests {
         ]
     }
 
-    /// R20 round 2 D3 · every result lands in exactly one of three steps, by a table: a refusal and
-    /// every driven outcome; each runtime error; the store kinds that stop the dispatcher against
-    /// the kinds that leave the task to recovery. A new variant is a compile error in `classify`.
-    #[test]
-    fn every_dispatch_result_is_classified_into_one_of_three_steps() {
-        let cases = cases();
-        for (result, expected) in &cases {
-            assert_eq!(classify(result), *expected, "{result:?}");
-        }
-        // The teardown share is the check's grace, derived; the capture share is not fixed here.
-        assert_eq!(
-            u128::from(teardown_share()),
-            crate::app::runtime::CHECK_TEARDOWN.as_millis()
-        );
-        assert_eq!(
-            Unavailable::NoClassProfile.name(),
-            "unavailable: no class profile"
-        );
-        // R21 D2 · the native provider's states, every variant and payload by its whole name.
+    /// The native provider's named states (R21 D2), every variant and payload with its whole name.
+    fn native_names() -> Vec<(Unavailable, &'static str)> {
         let native = |why| Unavailable::Daemon(why);
-        let names = [
+        vec![
             (
                 Unavailable::ClassNotNative,
                 "unavailable: class declares no native model",
@@ -707,8 +700,18 @@ mod tests {
                 "unavailable: native adapter",
             ),
             (
-                Unavailable::Native(NativeWhy::Directory),
-                "unavailable: native directory",
+                Unavailable::Native(NativeWhy::Directory(Directory::NotCanonical)),
+                "unavailable: native directory not canonical",
+            ),
+            (
+                Unavailable::Native(NativeWhy::Directory(Directory::Unreadable(
+                    std::io::ErrorKind::NotFound,
+                ))),
+                "unavailable: native directory unreadable",
+            ),
+            (
+                Unavailable::Native(NativeWhy::Directory(Directory::Custody)),
+                "unavailable: native directory custody",
             ),
             (native(Native::Profile), "unavailable: daemon profile"),
             (native(Native::Subject), "unavailable: daemon subject"),
@@ -758,8 +761,30 @@ mod tests {
                 Unavailable::Prompt(ClassPromptError::Base),
                 "unavailable: prompt base",
             ),
-        ];
-        for (state, name) in names {
+        ]
+    }
+
+    /// R20 round 2 D3 · every result lands in exactly one of three steps, by a table: a refusal and
+    /// every driven outcome; each runtime error; the store kinds that stop the dispatcher against
+    /// the kinds that leave the task to recovery. A new variant is a compile error in `classify`.
+    #[test]
+    fn every_dispatch_result_is_classified_into_one_of_three_steps() {
+        let cases = cases();
+        for (result, expected) in &cases {
+            assert_eq!(classify(result), *expected, "{result:?}");
+        }
+        // The teardown share is the check's grace, derived; the capture share is not fixed here.
+        assert_eq!(
+            u128::from(teardown_share()),
+            crate::app::runtime::CHECK_TEARDOWN.as_millis()
+        );
+        assert_eq!(
+            Unavailable::NoClassProfile.name(),
+            "unavailable: no class profile"
+        );
+        // R21 D2 · the native provider's states, every variant and payload by its whole name.
+        let native = |why| Unavailable::Daemon(why);
+        for (state, name) in native_names() {
             assert_eq!(state.name(), name, "{state:?}");
         }
         // R21 closure C6 · the user manager's refusal, every kind by its whole name.

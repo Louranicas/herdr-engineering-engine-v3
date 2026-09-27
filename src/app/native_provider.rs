@@ -459,7 +459,7 @@ impl<M: MainPid> Provider for NativeProvider<M> {
         )
         .map_err(Unavailable::Daemon)?;
         native::working_directory(&self.file.directory)
-            .map_err(|_| Unavailable::Native(NativeWhy::Directory))?;
+            .map_err(|why| Unavailable::Native(NativeWhy::Directory(why)))?;
         let (pins, task) =
             class_profile::candidate_inputs(class).map_err(|_| Unavailable::Closure)?;
         let prompt = ClassPrompt::new(

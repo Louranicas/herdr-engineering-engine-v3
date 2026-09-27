@@ -1148,30 +1148,33 @@ fn a_task_cancelled_before_dispatch_is_stopped_by_name_and_never_picked_again() 
 
 /// B14b-1 (b) · with no provider configured the dispatcher enters its named unavailable state after
 /// the free checks pass: it stops picking and the task stays `admitted` — never stopped for an
-/// operator's missing configuration (P2c-R1.5 revisited).
+/// operator's missing configuration (P2c-R1.5 revisited). Its exit and every line it reported are
+/// asserted whole (B14b-2 review round 2, D11) over two compose refusals differing in every field:
+/// a file not installed, and an install the store refused.
 #[test]
 fn no_provider_is_a_named_dispatcher_state_and_leaves_the_task_admitted() -> Outcome_ {
-    let rig = Arc::new(rig(&Shape::default())?);
-    let stop = Arc::new(AtomicBool::new(false));
-    let (exit, lines) = run_dispatcher(
-        &rig,
-        dispatcher::NoProvider(dispatcher::NoNative::NotInstalled),
-        &stop,
-    )?;
-    assert_eq!(
-        exit,
-        dispatcher::Exit::Unavailable(dispatcher::Unavailable::NoNativeProvider(
-            dispatcher::NoNative::NotInstalled
-        )),
-        "{lines:?}"
-    );
-    assert_eq!(state(&rig)?, "admitted");
-    assert!(
-        lines
-            .iter()
-            .any(|line| line.contains("unavailable: no native provider (not installed)")),
-        "{lines:?}"
-    );
+    for (why, line) in [
+        (
+            dispatcher::NoNative::NotInstalled,
+            "dispatcher: unavailable: no native provider (not installed)",
+        ),
+        (
+            dispatcher::NoNative::Install,
+            "dispatcher: unavailable: native provider refused (install)",
+        ),
+    ] {
+        let rig = Arc::new(rig(&Shape::default())?);
+        let stop = Arc::new(AtomicBool::new(false));
+        let (exit, lines) = run_dispatcher(&rig, dispatcher::NoProvider(why), &stop)?;
+        assert_eq!(
+            (exit, lines),
+            (
+                dispatcher::Exit::Unavailable(dispatcher::Unavailable::NoNativeProvider(why)),
+                vec![line.to_owned()]
+            )
+        );
+        assert_eq!(state(&rig)?, "admitted");
+    }
     Ok(())
 }
 
@@ -4924,7 +4927,9 @@ fn the_native_provider_composes_the_live_verifier_from_the_class_s_pins() -> Out
 /// R21 round-1 LOW L2 (N11) · `open` refuses a client working directory that is not canonical, the
 /// engine's and 0700 as `unavailable: native directory`, after the daemon is resolved (the seam's
 /// log holds the one ask, as the dispatch asks it): a 0755 directory and an absent one. The
-/// fixture's own 0700 directory, handed the same way, opens.
+/// fixture's own 0700 directory, handed the same way, opens. B14b-2 review round 2, FT-11 (dispatch):
+/// each refusal keeps its cause — the 0755 directory is `custody`, the absent one `unreadable`, and
+/// a link to the fixture's own directory `not canonical`.
 #[test]
 fn a_client_directory_that_is_not_private_is_refused_at_open_by_name() -> Outcome_ {
     use std::os::unix::fs::PermissionsExt;
@@ -4951,12 +4956,15 @@ fn a_client_directory_that_is_not_private_is_refused_at_open_by_name() -> Outcom
     let shared = bench.scratch.0.join("client-0755");
     DirBuilder::new().mode(0o700).create(&shared)?;
     fs::set_permissions(&shared, fs::Permissions::from_mode(0o755))?;
+    let linked = bench.scratch.0.join("client-linked");
+    std::os::unix::fs::symlink(&fixture.directory, &linked)?;
     for (directory, expected) in [
-        (shared, "unavailable: native directory"),
+        (shared, "unavailable: native directory custody"),
         (
             bench.scratch.0.join("client-absent"),
-            "unavailable: native directory",
+            "unavailable: native directory unreadable",
         ),
+        (linked, "unavailable: native directory not canonical"),
         (fixture.directory.clone(), "opened"),
     ] {
         let file = operator_file(

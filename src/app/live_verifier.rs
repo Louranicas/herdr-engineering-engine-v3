@@ -235,6 +235,9 @@ impl<A: Aggregates> Verifier for LiveVerifier<A> {
             None => Resources::Settled,
             Some(held) => match self.aggregates.finish(held, plan.window.teardown_until) {
                 Ok(()) => Resources::Settled,
+                // Named only in this run's RunCleanup record (`resources: pending`): the reclaimer
+                // (B17) must read its population from the run records, since startup closes the
+                // attempt on its leaves alone (B14b-2 review round 2, D7).
                 Err(error) => Resources::Pending(error),
             },
         };

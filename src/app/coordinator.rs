@@ -345,8 +345,11 @@ pub enum RootIdError {
     Unmarked,
     /// The marker is over [`MAX_ROOT_ID_BYTES`] or is not one `UuidV4`.
     Marker,
-    /// No identity could be drawn before the caller's deadline.
+    /// No identity could be drawn: the system's entropy refused, with time left.
     Entropy,
+    /// The caller's deadline was spent before an identity could be drawn (B14b-2 review round 2,
+    /// FT-6): told apart from entropy that refused, and nothing staged or created.
+    Deadline,
     /// Any other I/O failure, by its kind.
     Io(std::io::ErrorKind),
     /// The root at the path carries another id than the one `serve` prepared at its start: read
@@ -395,9 +398,10 @@ pub fn read_root_id(root: &Path) -> Result<String, RootIdError> {
 /// # Errors
 /// [`RootIdError::NotCanonical`] for a root that is not its own canonical path; those of
 /// [`read_root_id`] for a root that exists (an unmarked one is [`RootIdError::Unmarked`]);
-/// [`RootIdError::Entropy`] when no id can be drawn; [`RootIdError::Custody`] for a root with no
-/// parent or a name that is not UTF-8; [`RootIdError::Io`] for a parent that cannot be resolved, or
-/// a stage or a rename that failed.
+/// [`RootIdError::Deadline`] when `deadline` is spent before an id is drawn, and
+/// [`RootIdError::Entropy`] when entropy refused with time left; [`RootIdError::Custody`] for a
+/// root with no parent or a name that is not UTF-8; [`RootIdError::Io`] for a parent that cannot
+/// be resolved, or a stage or a rename that failed.
 pub fn prepare_attempts_root(root: &Path, deadline: Instant) -> Result<String, RootIdError> {
     canonical_root(root)?;
     match read_root_id(root) {
@@ -408,7 +412,15 @@ pub fn prepare_attempts_root(root: &Path, deadline: Instant) -> Result<String, R
     else {
         return Err(RootIdError::Custody);
     };
-    let id = fresh_id(deadline).map_err(|_| RootIdError::Entropy)?;
+    // The one id door refuses a spent deadline and refused entropy alike; the clock tells them
+    // apart here (FT-6). Entropy refusing with time left is reachable only by arranging the host.
+    let id = fresh_id(deadline).map_err(|_| {
+        if Instant::now() >= deadline {
+            RootIdError::Deadline
+        } else {
+            RootIdError::Entropy
+        }
+    })?;
     let id = id.as_str();
     let staged = parent.join(format!(".{name}.{id}.staged"));
     std::fs::DirBuilder::new()

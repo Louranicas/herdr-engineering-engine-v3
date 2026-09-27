@@ -1661,33 +1661,10 @@ fn serve_dispatches_an_admitted_task_and_stops_it_by_name_through_main() -> Outc
 fn with_a_scratch_runtime_directory_the_busctl_pin_refuses_and_the_task_stays_admitted() -> Outcome
 {
     const KEY: &str = "28c00000-0000-4000-8000-0000000000d2";
-    let manifest = format!("sha256:{}", "7".repeat(64));
     let world = World::granting(&["task"], &["read", "durable admission"])?;
     let (run, scope) = (&world.run, &world.scope);
     commission(&world.home)?;
-    let config = world.home.join(".config/herdr-engineering-engine-v3");
-    let classes = config.join("classes");
-    DirBuilder::new()
-        .mode(0o700)
-        .recursive(true)
-        .create(&classes)?;
-    let class = classes.join("rust-library-change-1");
-    let text = super::runtime::native_class_text(&class, &manifest)?;
-    write_grant(&class, "profile.toml", text.as_bytes(), 0o600)?;
-    let native = config.join("native");
-    DirBuilder::new().mode(0o700).create(&native)?;
-    let operator = format!(
-        "schema = \"hee3.native/1\"\ndirectory = \"/srv/hee/native\"\n\n[client]\n\
-         path = \"/usr/bin/curl\"\nsha256 = \"sha256:{c}\"\nbytes = 218440\n\n[install]\n\
-         manifest = {{ path = \"/srv/models/manifests/m\", sha256 = \"{manifest}\", bytes = 1005 }}\n\
-         blobs = \"/srv/models/blobs\"\n\n[daemon]\nunit = \"hee3-t28-absent.service\"\n\
-         scope = \"user\"\nexecutable = {{ sha256 = \"sha256:{e}\", bytes = 32276424 }}\n\n\
-         [roster]\nidempotency_key = \"28c00000-0000-4000-8000-0000000000e1\"\n\
-         endpoint_ref = \"28c00000-0000-4000-8000-0000000000e2\"\n",
-        c = "a".repeat(64),
-        e = "b".repeat(64),
-    );
-    write_grant(&native, "native.toml", operator.as_bytes(), 0o600)?;
+    let native = installable_native(&world.home)?;
     let log = world.home.join("engine.log");
     let engine = Engine::start_logged(run, &world.home, &log)?;
     // The class's workspace and criteria, so admission admits and a provider is opened.
@@ -1729,10 +1706,15 @@ fn with_a_scratch_runtime_directory_the_busctl_pin_refuses_and_the_task_stays_ad
     )?)?;
     assert_eq!(got["body"]["task"]["state"], json!("admitted"), "{got}");
     let _output = engine.terminate(Duration::from_secs(20))?;
+    // Read again once the engine has exited: the dispatcher's exit line follows its state line.
+    let stderr = fs::read_to_string(&log).map_err(|e| format!("{e}: {stderr}"))?;
     let installed = format!(
         "habitat-engine: native provider installed from {}",
         native.display()
     );
+    // The dispatcher's exit, whole (B14b-2 review round 2, D11): this fixture's and the refused
+    // file's below differ in every field.
+    let stopped = "habitat-engine: dispatcher stopped: Unavailable(Daemon(Manager(Invalid)))";
     assert_eq!(
         (
             stderr.lines().filter(|line| *line == said).count(),
@@ -1740,9 +1722,9 @@ fn with_a_scratch_runtime_directory_the_busctl_pin_refuses_and_the_task_stays_ad
                 .lines()
                 .filter(|line| line.starts_with(&installed))
                 .count(),
-            stderr.contains("Unavailable(Daemon(Manager(Invalid)))"),
+            stderr.lines().filter(|line| *line == stopped).count(),
         ),
-        (1, 1, true),
+        (1, 1, 1),
         "{stderr}"
     );
     Ok(())
@@ -1817,6 +1799,8 @@ fn a_native_file_refused_at_start_is_named_by_its_refusal_not_as_absent() -> Out
     )?)?;
     assert_eq!(got["body"]["task"]["state"], json!("admitted"), "{got}");
     let _output = engine.terminate(Duration::from_secs(20))?;
+    // Read again once the engine has exited: the dispatcher's exit line follows its state line.
+    let stderr = fs::read_to_string(&log).map_err(|e| format!("{e}: {stderr}"))?;
     let started_line = format!(
         "habitat-engine: native provider unavailable: refused: Read {{ what: \"file custody\" }} ({})",
         native.display()
@@ -1835,7 +1819,89 @@ fn a_native_file_refused_at_start_is_named_by_its_refusal_not_as_absent() -> Out
         ],
         "{stderr}"
     );
+    // The dispatcher's exit, whole (D11): the busctl fixture's above differs in every field.
+    assert_eq!(
+        stderr
+            .lines()
+            .filter(|line| line.starts_with("habitat-engine: dispatcher stopped"))
+            .collect::<Vec<_>>(),
+        ["habitat-engine: dispatcher stopped: Unavailable(NoNativeProvider(Read))"],
+        "{stderr}"
+    );
     Ok(())
+}
+
+/// B14b-2 review round 2, FT-5 (dispatch), through `main` · a refused attempts root composes no
+/// native provider and is said once, by its own name. An unmarked `attempts` directory stands under
+/// the state root beside an installable operator file and a `/2` class: the door refuses it
+/// `Unmarked` before the native install, so nothing is installed, no dispatcher runs, and `serve`
+/// says that one line — never "no task owner" for an engine that has one.
+#[test]
+fn a_refused_attempts_root_installs_nothing_and_is_said_by_its_own_name() -> Outcome {
+    let world = World::granting(&["task"], &["read", "durable admission"])?;
+    commission(&world.home)?;
+    installable_native(&world.home)?;
+    let attempts = world
+        .home
+        .join(".local/state/herdr-engineering-engine-v3/attempts");
+    DirBuilder::new().mode(0o700).create(&attempts)?;
+    let log = world.home.join("engine.log");
+    let engine = Engine::start_logged(&world.run, &world.home, &log)?;
+    let output = engine.terminate(Duration::from_secs(20))?;
+    assert_eq!(
+        (output.status.code(), output.status.signal()),
+        (Some(0), None)
+    );
+    let stderr = fs::read_to_string(&log)?;
+    let said = format!(
+        "habitat-engine: dispatch unavailable: attempts root {} refused (Unmarked)",
+        attempts.display()
+    );
+    assert_eq!(
+        stderr
+            .lines()
+            .filter(|line| {
+                line.starts_with("habitat-engine: dispatch")
+                    || line.starts_with("habitat-engine: native provider")
+            })
+            .collect::<Vec<_>>(),
+        [said.as_str()],
+        "{stderr}"
+    );
+    assert_eq!(fs::read_dir(&attempts)?.count(), 0, "never marked or used");
+    Ok(())
+}
+
+/// The operator's native file under `home`'s configuration, installable beside a `/2` class whose
+/// native row names its manifest pin: the client, manifest and daemon it declares are never opened
+/// at start, and its unit (`hee3-t28-absent.service`) is never resolved there. Returns the native
+/// directory.
+fn installable_native(home: &Path) -> Result<PathBuf, Box<dyn Error>> {
+    let manifest = format!("sha256:{}", "7".repeat(64));
+    let config = home.join(".config/herdr-engineering-engine-v3");
+    let classes = config.join("classes");
+    DirBuilder::new()
+        .mode(0o700)
+        .recursive(true)
+        .create(&classes)?;
+    let class = classes.join("rust-library-change-1");
+    let text = super::runtime::native_class_text(&class, &manifest)?;
+    write_grant(&class, "profile.toml", text.as_bytes(), 0o600)?;
+    let native = config.join("native");
+    DirBuilder::new().mode(0o700).create(&native)?;
+    let operator = format!(
+        "schema = \"hee3.native/1\"\ndirectory = \"/srv/hee/native\"\n\n[client]\n\
+         path = \"/usr/bin/curl\"\nsha256 = \"sha256:{c}\"\nbytes = 218440\n\n[install]\n\
+         manifest = {{ path = \"/srv/models/manifests/m\", sha256 = \"{manifest}\", bytes = 1005 }}\n\
+         blobs = \"/srv/models/blobs\"\n\n[daemon]\nunit = \"hee3-t28-absent.service\"\n\
+         scope = \"user\"\nexecutable = {{ sha256 = \"sha256:{e}\", bytes = 32276424 }}\n\n\
+         [roster]\nidempotency_key = \"28c00000-0000-4000-8000-0000000000e1\"\n\
+         endpoint_ref = \"28c00000-0000-4000-8000-0000000000e2\"\n",
+        c = "a".repeat(64),
+        e = "b".repeat(64),
+    );
+    write_grant(&native, "native.toml", operator.as_bytes(), 0o600)?;
+    Ok(native)
 }
 
 #[test]

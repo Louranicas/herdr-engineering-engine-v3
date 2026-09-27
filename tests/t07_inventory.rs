@@ -912,7 +912,8 @@ fn the_startup_inventory_carries_each_selected_attempt_s_root() {
 /// first, with nothing left behind. `U` is bound because no task mixes bound and unbound attempts
 /// (`begin_bound_attempt`'s `Conflict`); its row is removed through the ledger itself.
 #[test]
-fn a_rooted_tail_attempt_takes_a_batch_slot_before_an_older_rootless_one() {
+fn a_rooted_tail_attempt_takes_a_batch_slot_before_an_older_rootless_one()
+-> Result<(), Box<dyn std::error::Error>> {
     use habitat_engine::store::AttemptRoot;
     const ROOTED: &str = "07000000-0000-4000-8000-000000000012";
     let mut r = Rig::admitted();
@@ -940,7 +941,7 @@ fn a_rooted_tail_attempt_takes_a_batch_slot_before_an_older_rootless_one() {
             Stop {
                 task: id(TASK),
                 generation: revision,
-                reason: &Name::new("fixture_failed").unwrap(),
+                reason: &Name::new("fixture_failed").map_err(|e| format!("{e:?}"))?,
                 evidence: &evidence,
                 identity: habitat_engine::store::EvidenceIdentity {
                     artifact_id: id(STOP),
@@ -951,15 +952,14 @@ fn a_rooted_tail_attempt_takes_a_batch_slot_before_an_older_rootless_one() {
             },
             deadline(),
         )
-        .unwrap();
+        .map_err(|e| format!("{e:?}"))?;
     drop(r.store.take());
-    let db = Connection::open(r.area.db()).unwrap();
+    let db = Connection::open(r.area.db())?;
     assert_eq!(
-        db.execute("DELETE FROM attempt_paths WHERE attempt_id=?", [ATTEMPT])
-            .unwrap(),
+        db.execute("DELETE FROM attempt_paths WHERE attempt_id=?", [ATTEMPT])?,
         1
     );
-    db.close().unwrap();
+    db.close().map_err(|(_, error)| error)?;
     r.store = Some(r.area.open(false));
     let first = startup_read(&mut r, 1);
     assert_eq!(
@@ -983,6 +983,7 @@ fn a_rooted_tail_attempt_takes_a_batch_slot_before_an_older_rootless_one() {
         (both.cleanup_attempts, both.cleanup_backlog),
         (vec![ROOTED.to_owned(), ATTEMPT.to_owned()], 0)
     );
+    Ok(())
 }
 
 /// B14b-2 closure C18 · a recorded root id is one `UuidV4` by one door: migration 8's CHECK, which
@@ -990,7 +991,8 @@ fn a_rooted_tail_attempt_takes_a_batch_slot_before_an_older_rootless_one() {
 /// whose row was rewritten past the CHECK (the same id in upper case) is refused `Corrupt` at open;
 /// the row as the begin wrote it reads back whole first.
 #[test]
-fn a_recorded_root_id_that_is_not_a_uuid_v4_is_refused_at_open() {
+fn a_recorded_root_id_that_is_not_a_uuid_v4_is_refused_at_open()
+-> Result<(), Box<dyn std::error::Error>> {
     use habitat_engine::store::AttemptRoot;
     const ROOT_ID: &str = "0700c0de-0000-4000-a000-00000000000b";
     let mut r = Rig::admitted();
@@ -1010,20 +1012,19 @@ fn a_recorded_root_id_that_is_not_a_uuid_v4_is_refused_at_open() {
         }]
     );
     drop(r.store.take());
-    let db = Connection::open(r.area.db()).unwrap();
-    db.execute_batch("PRAGMA ignore_check_constraints=ON")
-        .unwrap();
+    let db = Connection::open(r.area.db())?;
+    db.execute_batch("PRAGMA ignore_check_constraints=ON")?;
     assert_eq!(
         db.execute(
             "UPDATE attempt_paths SET root_id=? WHERE attempt_id=?",
             [ROOT_ID.to_uppercase().as_str(), ATTEMPT],
-        )
-        .unwrap(),
+        )?,
         1
     );
-    db.close().unwrap();
+    db.close().map_err(|(_, error)| error)?;
     let reopened = Store::open(&r.area.path, id(GEN), id(EPOCH), false, deadline());
     assert!(matches!(reopened, Err(Error::Corrupt)), "{reopened:?}");
+    Ok(())
 }
 
 /// A bound begin of `TASK` at its current revision under `root` with the root's id, pinned by the

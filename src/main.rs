@@ -233,10 +233,13 @@ const UNTIL_STDIN_CLOSES: &str = "--until-stdin-closes";
 /// What ends `serve`.
 #[derive(Clone, Copy)]
 enum Lifetime {
-    /// SIGTERM alone (the default; a systemd unit's stdin is `/dev/null` and its cgroup owns it).
+    /// The drain signals (SIGTERM, SIGHUP, SIGINT) alone: the default; a systemd unit's stdin is
+    /// `/dev/null` and its cgroup owns it.
     Signalled,
-    /// SIGTERM, or the end of standard input, which the kernel delivers on any death of the
-    /// parent holding the pipe's write end -- an unwound exit, an abort, SIGKILL.
+    /// The drain signals, or the end of standard input, which the kernel delivers on any death of
+    /// the parent holding the pipe's write end -- an unwound exit, an abort, SIGKILL. Like a signal,
+    /// it drains between attempts: an in-flight exchange or check is waited for under the attempt's
+    /// own deadline, never cut short (`runtime::Dispatch::drain`, R21 D8).
     UntilStdinCloses,
 }
 
@@ -359,7 +362,8 @@ struct AttemptsRoot {
 /// adapter row, the agent record installed as the operator inside the startup window, and the
 /// provider over the user manager's pinned busctl door and the engine's runtime root. Every absence
 /// or refusal is said once; the dispatcher then runs over `NoProvider`, holding the refusal's kind
-/// so its own named state says it again (R21 round-1 LOW F8).
+/// so its own named state says it again (R21 round-1 LOW F8). Composed only once the attempts root
+/// is prepared (`prepare_dispatch`, FT-5): the install writes the agent record to the ledger.
 fn compose_native(
     home: &Path,
     tasks: &StoreTasks,
@@ -457,15 +461,55 @@ fn compose_native(
 /// What `compose_native` came to: the provider and its install, or the refusal's kind.
 type Composed = Result<(NativeProvider<Systemd>, Installed), NoNative>;
 
+/// What the dispatcher runs over (B14b-2 review round 2, FT-5): the task owner, the attempts root
+/// `serve` prepared and its id, and the native provider composed after both.
+struct Dispatching<'a> {
+    tasks: &'a StoreTasks,
+    root: AttemptsRoot,
+    native: Composed,
+}
+
+/// Why no dispatcher runs, by name (B14b-2 review round 2, FT-5): an engine with a task owner whose
+/// attempts root was refused is never said to have no task owner.
+enum Undispatched {
+    /// No task owner was composed; said by the serve scope.
+    NoTaskOwner,
+    /// The attempts root was refused; said once by `attempts_root`, at startup.
+    AttemptsRoot,
+}
+
+/// The dispatcher's inputs, prepared at start in the order each needs the last (B14b-2 review round
+/// 2, FT-5): the task owner, then the attempts root through its one door, and only then the native
+/// provider — whose install writes the agent record to the ledger, so a refused root installs
+/// nothing.
+fn prepare_dispatch<'a>(
+    home: &Path,
+    state_root: &Path,
+    tasks: Option<&'a StoreTasks>,
+    runtime_root: &Path,
+    deadline: std::time::Instant,
+) -> Result<Dispatching<'a>, Undispatched> {
+    let tasks = tasks.ok_or(Undispatched::NoTaskOwner)?;
+    let root = attempts_root(state_root, deadline).ok_or(Undispatched::AttemptsRoot)?;
+    let native = compose_native(home, tasks, runtime_root, deadline);
+    Ok(Dispatching {
+        tasks,
+        root,
+        native,
+    })
+}
+
 /// `habitat-engine serve`: take single-instance custody of IPC01, reconcile the active
 /// generation, compose the task owner over the ledger startup left open, and only then bind and
 /// serve until SIGTERM (IPC01: acquire custody before recovery; bind after ready). SIGTERM drains
 /// (APP-01): nothing more is admitted, each open connection finishes the frame it is serving, the
 /// ledger's writer lock is released, the socket is removed and the engine exits 0. SIGHUP (a closed
 /// terminal tab or pane) and SIGINT (Ctrl-C) drain the same way, through the same door
-/// (`drain_signals`). A stale socket left by a killed engine is cleared at the next start; a live
-/// or starting one refuses the start. With `--until-stdin-closes` the end of standard input raises
-/// that same SIGTERM (`watch_stdin`).
+/// (`drain_signals`). Only the first drain signal is acted on: once the drain has begun, a further
+/// Ctrl-C or SIGHUP is held and ignored, so an operator cannot hard-stop a draining engine that way
+/// (APP-01, recorded by B14b-2 review round 2, D12). A stale socket left by a killed engine is
+/// cleared at the next start; a live or starting one refuses the start. With
+/// `--until-stdin-closes` the end of standard input raises that same SIGTERM (`watch_stdin`).
 fn serve(lifetime: Lifetime) -> ExitCode {
     let mut signals = match drain_signals(lifetime) {
         Ok(signals) => signals,
@@ -535,11 +579,15 @@ fn serve(lifetime: Lifetime) -> ExitCode {
             None
         }
     };
-    // The native provider (B14b-2): read the operator's file, install its agent record, and compose
-    // the provider the dispatcher opens per dispatch — or say once why there is none (LOW F8).
-    let native = tasks
-        .as_ref()
-        .map(|tasks| compose_native(&home, tasks, &runtime_root, startup_deadline));
+    // What the dispatcher runs over, in order: the task owner, the attempts root, then the native
+    // provider — or the one reason none runs (B14b-2 review round 2, FT-5).
+    let dispatching = prepare_dispatch(
+        &home,
+        &state_root,
+        tasks.as_ref(),
+        &runtime_root,
+        startup_deadline,
+    );
     let listener = match control_socket::bind(&prepared) {
         Ok(listener) => listener,
         Err(error) => {
@@ -560,14 +608,13 @@ fn serve(lifetime: Lifetime) -> ExitCode {
     // The dispatcher (B14b-1): one thread beside the accept loop, over the same task owner and the
     // native provider when one composed (B14b-2) — else it runs the free checks, stops by name, and
     // reports its named unavailable state when a task passes them.
-    let attempts = attempts_root(&state_root, startup_deadline);
     if let Err(error) = serve_until_signalled(
         &mut signals,
         &listener,
         shared,
         &drain,
         &prepared,
-        tasks.as_ref().zip(attempts.as_ref()).zip(native),
+        dispatching,
     ) {
         say(format_args!("accept failed: {error}"));
         return ExitCode::from(EXIT_CONTRACT);
@@ -604,7 +651,10 @@ fn drain_signals(lifetime: Lifetime) -> Result<Signals, ExitCode> {
 /// drains the engine through the one door APP-01 already holds, not a second path: during startup
 /// the signal is held, once serving it drains. Detached, so the serve scope never joins a thread
 /// blocked in `read`. Any other standard input is refused by name with the contract's code: it
-/// could never report the parent's death (`/dev/null` reads end of file at once).
+/// could never report the parent's death (`/dev/null` reads end of file at once). Tier-3 rows (each
+/// reachable only by arranging the world, never by an argument): a standard input `fstat` refuses,
+/// a read that fails other than by interruption, a watcher thread that cannot be spawned, and a
+/// SIGTERM that cannot be raised (B14b-2 review round 2, D12).
 fn watch_stdin() -> Result<(), ExitCode> {
     let refused = |why: String| {
         say(format_args!("{UNTIL_STDIN_CLOSES} refused: {why}"));
@@ -653,9 +703,12 @@ fn serve_until_signalled(
     shared: control_socket::Shared<'_>,
     drain: &Drain,
     prepared: &control_socket::Prepared,
-    dispatching: Option<((&StoreTasks, &AttemptsRoot), Composed)>,
+    dispatching: Result<Dispatching<'_>, Undispatched>,
 ) -> io::Result<()> {
-    let tasks = dispatching.as_ref().map(|((tasks, _), _)| *tasks);
+    let tasks = dispatching
+        .as_ref()
+        .ok()
+        .map(|dispatching| dispatching.tasks);
     let report = |line: &str| say(format_args!("{line}"));
     let handle = signals.handle();
     std::thread::scope(|scope| {
@@ -686,7 +739,11 @@ fn serve_until_signalled(
         // The dispatcher runs over the task owner (the one class profile is read inside it);
         // without one, its absence is said once, like the other unavailable doors.
         match dispatching {
-            Some(((tasks, root), native)) => {
+            Ok(Dispatching {
+                tasks,
+                root,
+                native,
+            }) => {
                 scope.spawn(move || {
                     let exit = match native {
                         Ok((mut provider, installed)) => dispatcher::Dispatcher {
@@ -713,7 +770,11 @@ fn serve_until_signalled(
                     say(format_args!("dispatcher stopped: {exit:?}"));
                 });
             }
-            None => say(format_args!("dispatch unavailable: no task owner")),
+            Err(Undispatched::NoTaskOwner) => {
+                say(format_args!("dispatch unavailable: no task owner"));
+            }
+            // Said once at startup, where the door refused it, and no native provider was composed.
+            Err(Undispatched::AttemptsRoot) => {}
         }
         let served = control_socket::run(listener, shared, &now_unix_ms, &report);
         drop(release);

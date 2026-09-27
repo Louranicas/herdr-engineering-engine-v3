@@ -27,6 +27,9 @@ pub enum Refusal {
     Clock,
     /// The captures handed in do not pair the run's steps one to one.
     Steps,
+    /// An aggregate refusal was handed beside a run with steps: the aggregate refuses before the
+    /// workload runs, so a run carrying one never launched (B14b-2 review round 2, FT-07).
+    Launched,
     /// The commitment is of another kind than the record read.
     Kind {
         /// The kind the commitment names.
@@ -405,12 +408,16 @@ impl RunOutcome {
     ///
     /// # Errors
     /// [`Refusal::Steps`] when `captures` does not pair `run.steps` one to one — a completed step
-    /// with no capture, a refused step with one, or a different count.
+    /// with no capture, a refused step with one, or a different count; [`Refusal::Launched`] for an
+    /// aggregate refusal beside a run with steps (B14b-2 review round 2, FT-07).
     pub fn of(
         run: &Run,
         captures: &[Option<Ref>],
         aggregate_refusal: Option<AggregateRefusal>,
     ) -> Result<Self, Refusal> {
+        if aggregate_refusal.is_some() && !run.steps.is_empty() {
+            return Err(Refusal::Launched);
+        }
         if captures.len() != run.steps.len() {
             return Err(Refusal::Steps);
         }
@@ -470,6 +477,10 @@ impl RunOutcome {
     fn decode(bytes: &[u8]) -> Result<Self, Refusal> {
         let fields: RunOutcomeFields =
             serde_json::from_slice(bytes).map_err(|_| Refusal::Encoding)?;
+        // `of`'s rule, read back: a refusal is carried only beside a run with no steps (FT-07).
+        if fields.aggregate_refusal.is_some() && !fields.steps.is_empty() {
+            return Err(Refusal::Encoding);
+        }
         for step in &fields.steps {
             if step.capture.is_some() == step.refused.is_some() {
                 return Err(Refusal::Encoding);
@@ -1150,7 +1161,9 @@ mod tests {
             serde_json::from_slice::<serde_json::Value>(&bytes).map_err(|_| Refusal::Encoding)
         };
         assert_eq!(json(record.to_bytes()?)?.get("aggregate_refusal"), None);
-        let refused = RunOutcome::of(&run, &[None, None], Some(AggregateRefusal::Limits))?;
+        // Beside the run that never launched, as the aggregate's refusal always is (FT-07).
+        let unlaunched = Run::unlaunched(Outcome::SetupFailed);
+        let refused = RunOutcome::of(&unlaunched, &[], Some(AggregateRefusal::Limits))?;
         assert_eq!(
             json(refused.to_bytes()?)?.get("aggregate_refusal"),
             Some(&json!("limits"))
@@ -1175,6 +1188,27 @@ mod tests {
         let both = br#"{"outcome":"timeout","steps":[{"label":"compile","capture":{"artifact_id":"28f00000-0000-4000-8000-000000000001","sha256":"sha256:0101010101010101010101010101010101010101010101010101010101010101","byte_length":2,"media_type":"application/json","schema_id":"hee3.raw/1"},"refused":"prepare"}],"observations":{"process_cleanup":"complete","subjects":"unchanged","cancellation":"not_observed","scratch":"released"}}"#;
         assert!(matches!(
             RunOutcome::decode_bytes(both).err(),
+            Some(Refusal::Encoding)
+        ));
+    }
+
+    /// B14b-2 review round 2, FT-07 · an aggregate refusal belongs to a run that never launched: the
+    /// aggregate refuses before the workload runs, so no step exists beside it. Beside a run with a
+    /// step it is refused by name before any record exists, and bytes carrying one beside a step
+    /// do not decode — the same bytes without it do, so the refusal alone is what is refused.
+    #[test]
+    fn an_aggregate_refusal_is_refused_beside_a_launched_run() {
+        let launched = run(Outcome::SetupFailed, vec![refused("compile", true)]);
+        assert!(matches!(
+            RunOutcome::of(&launched, &[None], Some(AggregateRefusal::Busy)).err(),
+            Some(Refusal::Launched)
+        ));
+        assert!(RunOutcome::of(&launched, &[None], None).is_ok());
+        let without = br#"{"outcome":"setup_failed","steps":[{"label":"compile","refused":"prepare"}],"observations":{"process_cleanup":"complete","subjects":"unchanged","cancellation":"not_observed","scratch":"released"}}"#;
+        let beside = br#"{"outcome":"setup_failed","steps":[{"label":"compile","refused":"prepare"}],"observations":{"process_cleanup":"complete","subjects":"unchanged","cancellation":"not_observed","scratch":"released"},"aggregate_refusal":"busy"}"#;
+        assert!(RunOutcome::decode_bytes(without).is_ok());
+        assert!(matches!(
+            RunOutcome::decode_bytes(beside).err(),
             Some(Refusal::Encoding)
         ));
     }

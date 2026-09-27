@@ -1008,6 +1008,9 @@ fn empty(events: &str) -> Result<bool, Error> {
 /// The one name of an attempt's aggregate slice (R22 C1a): `hee3aggregate<attempt without
 /// dashes>.slice`. The attempt row is committed before its check runs, so the ledger names the
 /// slice before the slice exists, and a slice left by a crash is found by exact name.
+/// Reclaimer note (B14b-2 review round 2, D7; owner B17): a slice left pending is named only by
+/// its attempt's `RunCleanup` record (`resources: pending`), never by startup's selected set, which
+/// closes the attempt on its leaves alone — the reclaimer reads its population from the run records.
 pub(crate) fn aggregate_unit(attempt: UuidV4<'_>) -> String {
     format!("hee3aggregate{}.slice", attempt.as_str().replace('-', ""))
 }

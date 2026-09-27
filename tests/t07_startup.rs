@@ -3154,16 +3154,17 @@ fn host_reads_a_reaped_real_child_as_absent() {
 /// pass (R21 closure C11: a partial readback beside a writable workspace is never cleaned; the
 /// verifying task still owns its materialised candidate). Before C11 this pinned the removal.
 #[test]
-fn host_keeps_a_real_writable_workspace_at_the_verification_boundary() {
+fn host_keeps_a_real_writable_workspace_at_the_verification_boundary()
+-> Result<(), Box<dyn std::error::Error>> {
     let area = Area::new("workspace");
     // The ledger recorded `area` as the attempt's root (B14b-2): the host reads `<root>/<attempt>`,
     // handed to it by the pass, never inserted by a caller.
     let mut r = Rig::bound_ready_at(&area.path);
     let workspace = area.path.join(ATTEMPT);
-    DirBuilder::new().mode(0o700).create(&workspace).unwrap();
-    fs::create_dir(workspace.join("nested")).unwrap();
-    fs::write(workspace.join("output"), b"12345").unwrap();
-    fs::write(workspace.join("nested").join("more"), b"67").unwrap();
+    DirBuilder::new().mode(0o700).create(&workspace)?;
+    fs::create_dir(workspace.join("nested"))?;
+    fs::write(workspace.join("output"), b"12345")?;
+    fs::write(workspace.join("nested").join("more"), b"67")?;
     let mut host = Host::new(deadline());
     for boot in 0..2 {
         let pass = r.pass(&mut host);
@@ -3188,12 +3189,10 @@ fn host_keeps_a_real_writable_workspace_at_the_verification_boundary() {
             }),
             "boot {boot}"
         );
-        assert_eq!(fs::read(workspace.join("output")).unwrap(), b"12345");
-        assert_eq!(
-            fs::read(workspace.join("nested").join("more")).unwrap(),
-            b"67"
-        );
+        assert_eq!(fs::read(workspace.join("output"))?, b"12345");
+        assert_eq!(fs::read(workspace.join("nested").join("more"))?, b"67");
     }
+    Ok(())
 }
 
 /// R21 closure C14 (FT3-05) · each workspace removal takes the remainder of the one startup window:
@@ -3201,15 +3200,16 @@ fn host_keeps_a_real_writable_workspace_at_the_verification_boundary() {
 /// A host whose window has already closed refuses the removal by the workspace owner's deadline
 /// refusal and leaves the workspace whole; the same workspace under an open window is removed.
 #[test]
-fn a_workspace_removal_takes_the_remainder_of_the_startup_window() {
+fn a_workspace_removal_takes_the_remainder_of_the_startup_window()
+-> Result<(), Box<dyn std::error::Error>> {
     let area = Area::new("removal-window");
     let workspace = area.path.join(ATTEMPT);
-    DirBuilder::new().mode(0o700).create(&workspace).unwrap();
-    fs::write(workspace.join("output"), b"12345").unwrap();
+    DirBuilder::new().mode(0o700).create(&workspace)?;
+    fs::write(workspace.join("output"), b"12345")?;
     let root_id = root_id(&area.path);
     let recorded = [AttemptRoot {
         attempt: ATTEMPT.into(),
-        root: area.path.to_str().unwrap().into(),
+        root: area.path.to_str().ok_or("a root that is not UTF-8")?.into(),
         root_id: root_id.clone(),
     }];
     let subject = Subject {
@@ -3225,11 +3225,12 @@ fn a_workspace_removal_takes_the_remainder_of_the_startup_window() {
         closed.clean(&subject, "workspace"),
         Err("remove: Deadline".to_owned())
     );
-    assert_eq!(fs::read(workspace.join("output")).unwrap(), b"12345");
+    assert_eq!(fs::read(workspace.join("output"))?, b"12345");
     let mut open = Host::new(deadline());
     open.record_paths(&recorded);
     assert_eq!(open.clean(&subject, "workspace"), Ok(()));
     assert!(!workspace.exists());
+    Ok(())
 }
 
 /// `T07-AP-66` · nothing bound for the attempt: the host infers no convention and
@@ -3940,7 +3941,8 @@ fn a_partial_readback_beside_a_writable_workspace_is_never_cleaned() {
 /// workspace with its job root left is the one partial the pass cleans, and the leaf it cleans is the
 /// one the readback after it no longer finds.
 #[test]
-fn the_world_reads_nothing_for_an_attempt_it_was_handed_no_root_for() {
+fn the_world_reads_nothing_for_an_attempt_it_was_handed_no_root_for()
+-> Result<(), Box<dyn std::error::Error>> {
     let mut r = Rig::ready();
     let mut world = World::new().with_leaves(Leaf::Walked(4096), Presence::Present);
     let pass = r.pass(&mut world);
@@ -3982,7 +3984,12 @@ fn the_world_reads_nothing_for_an_attempt_it_was_handed_no_root_for() {
         world.calls_of("record_paths"),
         vec![&Call::RecordPaths(vec![AttemptRoot {
             attempt: ATTEMPT.into(),
-            root: r.area.attempts().to_str().unwrap().into(),
+            root: r
+                .area
+                .attempts()
+                .to_str()
+                .ok_or("a root that is not UTF-8")?
+                .into(),
             root_id: root_id(&r.area.attempts()),
         }])]
     );
@@ -4019,6 +4026,7 @@ fn the_world_reads_nothing_for_an_attempt_it_was_handed_no_root_for() {
         })
     ));
     assert_eq!(world.leaves[ATTEMPT], (Leaf::Absent, Presence::Absent));
+    Ok(())
 }
 
 /// B14b-2 S15 (R21 N15, N17) · three states from a recorded root and its two leaves. The pure rule
@@ -4028,7 +4036,8 @@ fn the_world_reads_nothing_for_an_attempt_it_was_handed_no_root_for() {
 /// cleaned (complete and released, the root kept), and the paths replaced by an empty hand-over
 /// (nothing read).
 #[test]
-fn the_host_reads_three_states_from_the_root_and_its_two_leaves() {
+fn the_host_reads_three_states_from_the_root_and_its_two_leaves()
+-> Result<(), Box<dyn std::error::Error>> {
     use Presence::{Absent as A, Present as P, Unreadable as U};
     let partial = |remaining: &[&str]| CleanupReadback::Partial {
         remaining: remaining.iter().map(|name| (*name).to_owned()).collect(),
@@ -4082,26 +4091,26 @@ fn the_host_reads_three_states_from_the_root_and_its_two_leaves() {
     // The ledger records a root's id at the begin, when the root exists (B14b-2 closure C18).
     marked_root(&root);
     let recorded_id = root_id(&root);
-    let recorded = |at: &Path| {
-        [AttemptRoot {
+    let recorded = |at: &Path| -> Result<[AttemptRoot; 1], &str> {
+        Ok([AttemptRoot {
             attempt: ATTEMPT.into(),
-            root: at.to_str().unwrap().into(),
+            root: at.to_str().ok_or("a root that is not UTF-8")?.into(),
             root_id: recorded_id.clone(),
-        }]
+        }])
     };
     let mut host = Host::new(deadline());
-    host.record_paths(&recorded(&area.path.join("absent")));
+    host.record_paths(&recorded(&area.path.join("absent"))?);
     let read = |host: &mut Host| (host.cleanup(&subject), host.workspace(&subject));
     assert_eq!(
         read(&mut host),
         (CleanupReadback::NotRead, WorkspaceReadback::NotRead)
     );
-    host.record_paths(&recorded(&root));
+    host.record_paths(&recorded(&root)?);
     let (workspace, job) = (root.join(ATTEMPT), root.join(format!("{ATTEMPT}.check")));
     for directory in [&workspace, &job] {
-        DirBuilder::new().mode(0o700).create(directory).unwrap();
+        DirBuilder::new().mode(0o700).create(directory)?;
     }
-    fs::write(workspace.join("output"), b"abc").unwrap();
+    fs::write(workspace.join("output"), b"abc")?;
     assert_eq!(
         read(&mut host),
         (
@@ -4129,6 +4138,7 @@ fn the_host_reads_three_states_from_the_root_and_its_two_leaves() {
         read(&mut host),
         (CleanupReadback::NotRead, WorkspaceReadback::NotRead)
     );
+    Ok(())
 }
 
 /// R21 round-1 LOW FT3-08 · `Host::record_paths` maps each attempt to ITS OWN recorded root, beyond
@@ -4321,7 +4331,9 @@ fn the_attempts_root_is_marked_once_by_the_door_that_creates_it()
 /// B14b-2 closure D5 · the creator alone refuses a root that is not its own canonical path, by
 /// name and before any read or create: one under a linked ancestor (nothing is created at the
 /// link's target), one that is itself a link to a marked root (which the reader refuses as
-/// `Custody`), and a relative one; a root whose parent is missing keeps its I/O kind.
+/// `Custody`), and a relative one; a root whose parent is missing keeps its I/O kind. B14b-2 review
+/// round 2, FT-6 (dispatch): an absent root under a spent deadline is `Deadline`, never `Entropy`,
+/// and nothing is staged or created for it.
 #[test]
 fn the_attempts_root_door_names_each_refusal() -> Result<(), Box<dyn std::error::Error>> {
     use habitat_engine::app::coordinator::{
@@ -4342,19 +4354,7 @@ fn the_attempts_root_door_names_each_refusal() -> Result<(), Box<dyn std::error:
         !bare.join(ROOT_ID_MARKER).exists(),
         "never marked after the fact"
     );
-    let planted = |name: &str, content: &[u8]| -> Result<PathBuf, Box<dyn std::error::Error>> {
-        use std::io::Write;
-        use std::os::unix::fs::OpenOptionsExt;
-        let root = area.path.join(name);
-        DirBuilder::new().mode(0o700).create(&root)?;
-        fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(root.join(ROOT_ID_MARKER))?
-            .write_all(content)?;
-        Ok(root)
-    };
+    let planted = |name: &str, content: &[u8]| planted_root(&area.path.join(name), content);
     let fits = planted("fits", ID.as_bytes())?;
     let linked = area.path.join("linked");
     DirBuilder::new().mode(0o700).create(&linked)?;
@@ -4393,6 +4393,7 @@ fn the_attempts_root_door_names_each_refusal() -> Result<(), Box<dyn std::error:
             read_root_id(&pointed),
             prepare_attempts_root(Path::new("t07-d5-relative/attempts"), deadline()),
             prepare_attempts_root(&area.path.join("missing").join("attempts"), deadline()),
+            prepare_attempts_root(&area.path.join("spent"), Instant::now()),
         ],
         [
             Err(RootIdError::NotCanonical),
@@ -4400,6 +4401,7 @@ fn the_attempts_root_door_names_each_refusal() -> Result<(), Box<dyn std::error:
             Err(RootIdError::Custody),
             Err(RootIdError::NotCanonical),
             Err(RootIdError::Io(std::io::ErrorKind::NotFound)),
+            Err(RootIdError::Deadline),
         ]
     );
     let mut beside: Vec<String> = fs::read_dir(&area.path)?
@@ -4426,6 +4428,21 @@ fn the_attempts_root_door_names_each_refusal() -> Result<(), Box<dyn std::error:
     Ok(())
 }
 
+/// A 0700 root at `root` with a 0600 marker holding `content`, planted by hand rather than by the
+/// door, so the reader's refusals can be met one by one.
+fn planted_root(root: &Path, content: &[u8]) -> Result<PathBuf, Box<dyn std::error::Error>> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    DirBuilder::new().mode(0o700).create(root)?;
+    fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(root.join(habitat_engine::app::coordinator::ROOT_ID_MARKER))?
+        .write_all(content)?;
+    Ok(root.to_path_buf())
+}
+
 /// B14b-2 closure C18 (superseding R21 closure C10's (device, inode)) · a restart reads an
 /// attempt's root by the marker the door wrote in it, never by where it sits on disk. Two fixtures,
 /// differing in every field:
@@ -4434,9 +4451,11 @@ fn the_attempts_root_door_names_each_refusal() -> Result<(), Box<dyn std::error:
 ///   read without the recorded id would be complete and released while the workspace lives on
 ///   elsewhere: it reads not-read on both, is retained under R11, and nothing is removed.
 /// - **re-homed**: the same marker is moved into a new directory put at the path, so the root's
-///   inode changes and its content does not — what a reboot does to `st_dev` on this dm-crypt host,
-///   which under C10 read not-read forever and retained the workspace. Its leaves are absent: it
-///   reads complete and released.
+///   inode changes and its content does not — the shape of a root whose `(st_dev, st_ino)` is not
+///   stable: on this host's btrfs `st_dev` is an anonymous per-subvolume number allocated at mount
+///   (INTERP, not measured across a reboot; DESIGN 2026-09-27 13:36 corrected the earlier dm-crypt
+///   premise), which under C10 read not-read forever and retained the workspace. Its leaves are
+///   absent: it reads complete and released.
 #[test]
 fn a_restart_reads_the_root_by_its_marker_not_its_inode() -> Result<(), Box<dyn std::error::Error>>
 {
@@ -4511,6 +4530,7 @@ fn a_restart_reads_the_root_by_its_marker_not_its_inode() -> Result<(), Box<dyn 
             Presence::Unreadable,
         ),
         (Err(RootIdError::Changed), Presence::Unreadable),
+        (Err(RootIdError::Deadline), Presence::Unreadable),
     ];
     for (observed, expected) in table {
         assert_eq!(root_presence(recorded, observed), expected, "{observed:?}");

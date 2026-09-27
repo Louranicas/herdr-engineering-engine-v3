@@ -904,23 +904,54 @@ pub fn resolve(
         executable_bytes: pin.executable_bytes,
     })
 }
+/// Why the client's working directory is refused (B14b-2 review round 2, FT-11): the cause is kept,
+/// so the provider's named state tells a link from an absent directory from a shared one.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DirectoryError {
+    /// The path is relative, or is not its own canonical path (it, or a directory on the way to
+    /// it, is a link).
+    NotCanonical,
+    /// The path could not be resolved or read, by the I/O kind (an absent directory is `NotFound`).
+    Unreadable(std::io::ErrorKind),
+    /// It is not a directory, not this euid's, or not mode 0700.
+    Custody,
+}
 /// The client's working directory as the adapter requires it (R21 N11): canonical, a directory, the
 /// process euid's, mode exactly 0700 — the one check, run by `subject` before every exchange and by
-/// the provider at `open`.
+/// the provider at `open`, which names its cause (B14b-2 review round 2, FT-11); `subject` reads
+/// it as the adapter's `Subject` or `Profile` (`From`).
 ///
 /// # Errors
-/// `Subject` for a path that is not canonical or cannot be read; `Profile` for a directory that is
-/// not one, not this euid's, or not 0700.
-pub fn working_directory(path: &Path) -> Result<(), Error> {
-    canonical(path)?;
-    let directory = fs::metadata(path).map_err(|_| Error::Subject)?;
+/// [`DirectoryError::NotCanonical`] for a relative path or one that is not its own canonical path;
+/// [`DirectoryError::Unreadable`] for one that cannot be resolved or read; [`DirectoryError::Custody`]
+/// for a directory that is not one, not this euid's, or not 0700.
+pub fn working_directory(path: &Path) -> Result<(), DirectoryError> {
+    if !path.is_absolute() {
+        return Err(DirectoryError::NotCanonical);
+    }
+    let resolved =
+        fs::canonicalize(path).map_err(|error| DirectoryError::Unreadable(error.kind()))?;
+    if resolved != path {
+        return Err(DirectoryError::NotCanonical);
+    }
+    let directory = fs::metadata(path).map_err(|error| DirectoryError::Unreadable(error.kind()))?;
     if !directory.is_dir()
         || directory.uid() != rustix::process::geteuid().as_raw()
         || directory.mode() & 0o777 != 0o700
     {
-        return Err(Error::Profile);
+        return Err(DirectoryError::Custody);
     }
     Ok(())
+}
+/// The adapter's reading of a refused working directory, as `subject` has always named it: a path
+/// that is not canonical or cannot be read is `Subject`; one outside custody is `Profile`.
+impl From<DirectoryError> for Error {
+    fn from(error: DirectoryError) -> Self {
+        match error {
+            DirectoryError::NotCanonical | DirectoryError::Unreadable(_) => Self::Subject,
+            DirectoryError::Custody => Self::Profile,
+        }
+    }
 }
 fn subject(profile: &Profile, deadline: Instant, cancelled: &AtomicBool) -> Result<(), Error> {
     for path in [&profile.manifest.path, &profile.blobs, &profile.client.path] {
