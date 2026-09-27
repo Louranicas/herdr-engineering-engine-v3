@@ -3414,8 +3414,8 @@ tmpfs, as that earlier run's recorded workspace shows. The split keeps the
 Store-heavy suites out of the main command; the scratch location is the
 runner's responsibility and is recorded in every run. The main command keeps
 the library, the two binaries and the T01–T05, T13 and T21 analysis targets
-(14 groups); the T06 command holds exactly the `t06_` targets (18 groups before B14c-1, 449
-controls). All five raw outputs (main, T06, numerical process, inventory,
+(14 groups); the T06 command holds exactly the `t06_` targets (18 groups and 449
+controls at an earlier dated snapshot; seventeen since B14c-1). All five raw outputs (main, T06, numerical process, inventory,
 native) must pass the single complete census/namespace/transport oracle
 together; every target runs exactly once. The 180-second per-command bound,
 the 300-second cleanup reserve and the 8 MiB stream limit are unchanged by the

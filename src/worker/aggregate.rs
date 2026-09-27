@@ -1033,7 +1033,7 @@ mod tests {
 
     /// The slice is named after the attempt `prepare` is handed, not one it derives (P7 plant A:
     /// a constant attempt passed every test while the name sat behind the pin). Two attempts
-    /// differing in every digit, each asserted as its whole unit name.
+    /// differing in every digit but the UUID version nibble, each asserted as its whole unit name.
     #[test]
     fn a_prepared_slice_is_named_after_the_handed_attempt() -> Result<(), Box<dyn std::error::Error>>
     {
