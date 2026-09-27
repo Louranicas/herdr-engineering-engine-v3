@@ -1782,7 +1782,6 @@ class T06QualityInventoryControls(unittest.TestCase):
         paths = quality.quality_subject_paths(ROOT, time.monotonic() + 5, True)
         for name in ["src/store/recovery.rs", "tests/t07_inventory.rs"]:
             self.assertIn(name, paths)
-        self.assertFalse(any(name.startswith("development/t06/") for name in paths))
 
     def test_t07_absent_subject_drops_the_inventory_and_application_batteries(self):
         # The T13/T21-only subject has neither the inventory nor the native target.
@@ -1882,7 +1881,6 @@ class T06QualityInventoryControls(unittest.TestCase):
         paths = quality.quality_subject_paths(ROOT, time.monotonic() + 5, True)
         for name in quality.T08_INPUTS:
             self.assertIn(name, paths)
-        self.assertFalse(any(name.startswith("development/t06/") for name in paths))
         # Exactly one control-v1 fixture is a gate input: the request table the bash suite's
         # Envelope class replays (review N1). The rest stay unpinned.
         self.assertEqual({name for name in paths if name.startswith("tests/fixtures/native/control-v1/")},
@@ -2090,7 +2088,6 @@ class T06QualityInventoryControls(unittest.TestCase):
                       "tests/fixtures/native/control-v1/C01-control-valid-cancel.jsonl",
                       "tests/fixtures/native/control-v1/C01-metadata.json"})
         self.assertNotIn("tests/fixtures/native/README.stub.md", paths)
-        self.assertFalse(any(name.startswith("development/t06/") for name in paths))
         # The inputs are what the sources read: every include of the battery is pinned.
         included = re.findall(r'include_(?:str|bytes)!\("([^"]+)"\)', (ROOT / "tests/t08_contract.rs").read_text())
         self.assertTrue(included)

@@ -3081,6 +3081,18 @@ Neither mode admits a module or qualifies protected collection.
 | Julia sensitivity | Assertion, warning, skip, Broken, bounds, deprecation and empty-result controls each fail at the intended detector |
 | Julia formatting | Pinned JuliaFormatter 2.12.5; authored bodies only, exact managed comments preserved; missing-indentation and valid-neighbor controls |
 | Process custody | Standalone supervisor controls include stream limits, deadlines, descendant settlement, interrupted/setup-failure cleanup and incomplete-cleanup refusal |
+| One composer controls | `tests/one_composer.py` prints `run=42 failures=0 errors=0 transforms=4/4`: whole-line cases over the census's pure judge, disposable git worlds for the shell, and each of the four transforms replaced by the identity must fail its named killer |
+| One composer site sweep | `tools/check-one-composer-sites` neuters each of the census's 18 refusal sites in turn and requires its named case to fail for that site: `sites=18 killed=18 wrong_reason=0 survived=0` |
+| One composer | `tools/check-one-composer --repo ROOT` counts every implementation of the task driver's `Runtime` trait in the committed non-test Rust and requires exactly one, `StoreRuntime` in `src/app/runtime.rs`; the one test double in a `[[test]]` root is named and excluded: `runtime_impls=1 excluded_test_sites=1`, then `verdict=PASS` |
+
+The `one-composer` step reads its world from git, not from the copied subject.
+It requires the repository root to be a git work tree with a `HEAD`, and no
+`*.rs` or `Cargo.toml` may be modified, staged or untracked there. A gate run
+from a non-git copy, or over uncommitted Rust, therefore fails at that step
+(`world_unmeasured` or `world_dirty`, naming each path). Every `.rs` in the
+copied subject must also equal its committed blob (`subject_uncovered`,
+`subject_differs`). The separate required-input tracking check keeps its own
+`git_tracking=unmeasured` tolerance outside a git work tree; this step does not.
 
 The retained T25 foundation [full development run](../evidence/implementation/T25/runs/20260915T122619433485Z/results.json)
 passed 27 recorded commands, including 17 process controls and eight integration
@@ -3306,13 +3318,14 @@ closure, and permits only the selected additional rustix/event feature for T06.
 Its temporary fixture copies use a finite inventory so they remain bounded when
 TMPDIR is the copied source workspace. The process suite remains 17 controls.
 
-The two existing app development packages under development/t06 are independent
-Cargo workspaces. Their runtime/frontend test, pedantic and separate-doctest
-matrices are recorded separately. Both explicitly declare RC02 profiles; the
-runtime retains its permitted test-only debug=0 setting. Release line debug data
-is retained. The fixed frontend's lossless ELF debug compression and exact
-build-to-package provenance are independently reviewed before fresh execution;
-this does not change the 16 MiB artifact or 64 MiB executor-identity limits.
+The two app development packages T06 kept beside the root engine, a task
+runtime and a fixed frontend in independent Cargo workspaces, were retired at
+B14c-1 (2026-09-28): the engine has one composer, and the census above requires
+it. Their source stays reachable at commit aaea637. The retirement record names
+the lane tree, its file list, the per-file test counts, what stays UNMEASURED,
+and the deferred port of the real-process recovery cases (owner recovery/T07).
+It is the section "B14c-1 D12 retirement record (2026-09-28)" of the B14c-1
+design record, ~/hee3-evidence/T28/B14c-one-composer-20260927/DESIGN.md.
 
 The execute/check/repair loop, source-specific bootstrap evidence, unresolved
 qualification gates and current operational status remain in the T06 handoff.
