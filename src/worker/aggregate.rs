@@ -21,6 +21,8 @@ pub struct Config {
     pub runtime_dir: PathBuf,
     pub run_id: String,
 }
+/// busctl's fixed host path: the one the door pins (`aggregate_io::pin`) and every caller names.
+pub const BUSCTL: &str = "/usr/bin/busctl";
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Error {
     Invalid,

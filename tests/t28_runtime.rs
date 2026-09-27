@@ -14,12 +14,12 @@ use habitat_engine::app::candidates::{
 };
 use habitat_engine::app::class_profile::{self, Profile};
 use habitat_engine::app::dispatcher;
-use habitat_engine::app::live_verifier::LiveVerifier;
+use habitat_engine::app::live_verifier::{Aggregates, LiveVerifier};
 use habitat_engine::app::native_provider::{self, Installed};
 use habitat_engine::app::runtime::{
     Admission, Admitted, Answer as SourceAnswer, CHECK_TEARDOWN, Candidate, CandidateSource,
     CheckPlan, CheckWindow, Custody, Dispatch, Error as RuntimeError, Observed, Outcome, Previous,
-    Readiness, Refusal, Verifier, admit, dispatch, drive,
+    Readiness, Refusal, Resources, Verifier, admit, dispatch, drive,
 };
 use habitat_engine::app::tasks::StoreTasks;
 use habitat_engine::app::workload::{self, Outcome as RunOutcome, Run};
@@ -39,7 +39,6 @@ use habitat_engine::task::control::Cancel;
 use habitat_engine::task::control::Spec;
 use habitat_engine::task::driver::{Outcome as Driven, StopReason};
 use habitat_engine::worker::native::FULL_FILE;
-use habitat_engine::worker::resources::Scope;
 use habitat_engine::worker::workspace::Snapshot;
 use std::collections::VecDeque;
 use std::error::Error;
@@ -514,7 +513,11 @@ impl Verifier for Oracle<'_> {
             run.decisive = decisive;
             run
         });
-        Observed { run, observed }
+        Observed {
+            run,
+            observed,
+            resources: Resources::NotHeld,
+        }
     }
 }
 
@@ -1470,22 +1473,76 @@ fn committed_records(rig: &Rig) -> Result<Vec<Vec<String>>, Box<dyn Error>> {
     )
 }
 
-/// Three bounded scopes whose systemd-run pin is wrong, as t06 uses them: the launcher refuses
-/// before any process starts, so a live verifier reaches `LauncherFailed` in the gate.
+/// A systemd-run pin no host binary has: the live verifier's launcher refuses at it, so no process
+/// starts in the gate (as t06 uses it).
 const BAD_PIN: &str = "sha256:0000000000000000000000000000000000000000000000000000000000000000";
-fn bad_pin_scopes() -> [Scope; 3] {
-    [
-        "28f10000-0000-4000-8000-0000000000e1",
-        "28f10000-0000-4000-8000-0000000000e2",
-        "28f10000-0000-4000-8000-0000000000e3",
-    ]
-    .map(|id| Scope {
-        systemd_run: "/usr/bin/systemd-run".into(),
-        systemd_run_sha256: BAD_PIN.into(),
-        runtime_dir: format!("/run/user/{}", rustix::process::geteuid().as_raw()).into(),
-        run_id: id.into(),
-        aggregate: "hee3boundedcontrols.slice".into(),
-    })
+
+/// What the aggregate double was handed, per call (F101): the run id and the deadline `start` was
+/// given, with the address of the cancellation flag; the deadline `finish` was given.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Held {
+    Start(String, Instant, usize),
+    Finish(Instant),
+}
+
+/// The check's aggregate lifecycle as a model (R21 S20a): `start` answers with the slice its run id
+/// names (`hee3aggregate<id without dashes>.slice`, the shape the production aggregate derives) unless
+/// scripted otherwise, `finish` with its scripted result; every call is recorded.
+struct Slices {
+    log: Arc<Mutex<Vec<Held>>>,
+    start: Option<Result<String, habitat_engine::worker::aggregate::Error>>,
+    finish: Result<(), habitat_engine::worker::aggregate::Error>,
+}
+
+impl Slices {
+    fn new() -> (Self, Arc<Mutex<Vec<Held>>>) {
+        let log = Arc::new(Mutex::new(Vec::new()));
+        (
+            Self {
+                log: Arc::clone(&log),
+                start: None,
+                finish: Ok(()),
+            },
+            log,
+        )
+    }
+}
+
+impl Aggregates for Slices {
+    fn start(
+        &mut self,
+        run_id: &str,
+        deadline: Instant,
+        cancelled: &AtomicBool,
+    ) -> Result<String, habitat_engine::worker::aggregate::Error> {
+        record(
+            &self.log,
+            Held::Start(
+                run_id.to_owned(),
+                deadline,
+                std::ptr::from_ref(cancelled) as usize,
+            ),
+        );
+        self.start
+            .clone()
+            .unwrap_or_else(|| Ok(format!("hee3aggregate{}.slice", run_id.replace('-', ""))))
+    }
+    fn finish(
+        &mut self,
+        deadline: Instant,
+    ) -> Result<(), habitat_engine::worker::aggregate::Error> {
+        record(&self.log, Held::Finish(deadline));
+        self.finish
+    }
+}
+
+/// The live verifier over the rig's class, the bad systemd-run pin and the aggregate double.
+fn live_verifier(slices: Slices) -> LiveVerifier<Slices> {
+    LiveVerifier::new(
+        BAD_PIN.to_owned(),
+        format!("/run/user/{}", rustix::process::geteuid().as_raw()).into(),
+        slices,
+    )
 }
 
 /// Every object the ledger's registry holds — the table `OBJECT_INVENTORY_BOUND` and the backup count
@@ -3035,7 +3092,8 @@ fn the_live_verifier_records_a_refused_launch_with_four_records() -> Outcome_ {
     let rig = rig(&Shape::default())?;
     let principal = owner();
     let (source, _) = script(vec![Candidate::Replacement(SECOND.to_vec())]);
-    let verifier = LiveVerifier::new(bad_pin_scopes());
+    let (slices, held) = Slices::new();
+    let verifier = live_verifier(slices);
     let outcome = run(&rig, &principal, source, verifier, 5_000).map_err(|e| format!("{e:?}"))?;
     assert_eq!(
         outcome,
@@ -3072,6 +3130,178 @@ fn the_live_verifier_records_a_refused_launch_with_four_records() -> Outcome_ {
         .filter(|entry| entry.file_name().to_string_lossy().ends_with(".check"))
         .count();
     assert_eq!(check_roots, 0, "the check's job root was torn down");
+    // R21 S20a · the check held its own aggregate and settled it: one start, one finish, and the
+    // cleanup record's "resources" obligation reads what the verifier observed.
+    assert_eq!(
+        taken(&held)
+            .iter()
+            .map(|call| match call {
+                Held::Start(..) => "start",
+                Held::Finish(_) => "finish",
+            })
+            .collect::<Vec<_>>(),
+        vec!["start", "finish"]
+    );
+    assert_eq!(
+        cleanup_object(&rig)?["obligations"],
+        serde_json::json!([
+            {"id": "process", "state": "settled"},
+            {"id": "scratch", "state": "settled"},
+            {"id": "retained_paths", "state": "settled"},
+            {"id": "resources", "state": "settled"},
+        ])
+    );
+    Ok(())
+}
+
+/// The task's one committed cleanup record, decoded from its object.
+fn cleanup_object(rig: &Rig) -> Result<serde_json::Value, Box<dyn Error>> {
+    let records = committed_records(rig)?;
+    let row = records
+        .iter()
+        .find(|row| row[0] == "run_cleanup")
+        .ok_or("a cleanup record")?;
+    object_json(rig, &row[2])
+}
+
+/// One direct check of the live verifier over the rig's class: the baseline as the subject, the
+/// protected tree, a fresh job root under the scratch, the class's tools, and `window`.
+fn live_check(
+    rig: &Rig,
+    verifier: &mut LiveVerifier<Slices>,
+    window: CheckWindow,
+    job_root: &Path,
+    cancelled: &AtomicBool,
+) -> Result<Observed, Box<dyn Error>> {
+    let capture = |name: &str| {
+        Snapshot::capture(&rig.profile.directory.join(name), &[], deadline())
+            .map_err(|e| format!("{e:?}"))
+    };
+    let (subject, protected) = (capture("base")?, capture("protected")?);
+    private(job_root)?;
+    let tools = habitat_engine::app::live_verifier::tools(&rig.profile.declared);
+    Ok(verifier.check(CheckPlan {
+        subject: &subject,
+        protected: &protected,
+        job_root,
+        tools: &tools,
+        window,
+        cancelled,
+    }))
+}
+
+/// R21 S20a · the check owns its aggregate: each `check` draws fresh ids, starts ONE aggregate under
+/// the check's cutoff and the plan's own cancellation, builds its three scopes on the unit `start`
+/// returned (the scopes' only source), and finishes the aggregate under the teardown deadline on
+/// every path — so two checks over windows differing in every field hold two different aggregates,
+/// each torn down inside its own window. A refused start still finishes and never launches; a
+/// refused finish is observed `Pending`, and through the runtime the check's cleanup is unsettled.
+#[test]
+fn the_live_verifier_holds_one_fresh_aggregate_per_check_inside_the_check_s_window() -> Outcome_ {
+    let rig = rig(&Shape::default())?;
+    let now = Instant::now();
+    let window = |begun_ms: u64, unix: u64, until_s: u64, teardown_s: u64| CheckWindow {
+        begun: now + Duration::from_millis(begun_ms),
+        begun_unix_ms: unix,
+        until: now + Duration::from_secs(until_s),
+        teardown_until: now + Duration::from_secs(teardown_s),
+    };
+    let (w1, w2) = (window(0, 1_000, 20, 30), window(3, 2_000, 25, 40));
+    let cancelled = AtomicBool::new(false);
+    let flag = std::ptr::from_ref(&cancelled) as usize;
+    let root = |name: &str| rig.scratch.0.join(name);
+    // (A) two checks: two aggregates, each started under its cutoff and finished under its teardown.
+    let (slices, held) = Slices::new();
+    let mut verifier = live_verifier(slices);
+    let first = live_check(&rig, &mut verifier, w1, &root("check-a1"), &cancelled)?;
+    let second = live_check(&rig, &mut verifier, w2, &root("check-a2"), &cancelled)?;
+    let log = taken(&held);
+    let started: Vec<String> = log
+        .iter()
+        .filter_map(|call| match call {
+            Held::Start(id, ..) => Some(id.clone()),
+            Held::Finish(_) => None,
+        })
+        .collect();
+    assert_eq!(started.len(), 2, "{log:?}");
+    assert_ne!(started[0], started[1], "a fresh aggregate per check");
+    for id in &started {
+        assert!(UuidV4::parse(id).is_ok(), "{id} is a v4 UUID");
+    }
+    assert_eq!(
+        log,
+        vec![
+            Held::Start(started[0].clone(), w1.until, flag),
+            Held::Finish(w1.teardown_until),
+            Held::Start(started[1].clone(), w2.until, flag),
+            Held::Finish(w2.teardown_until),
+        ]
+    );
+    // The launcher refused at the class's pins: three distinct scopes on a valid slice reached it
+    // (a reused id or a malformed slice is `Layout` before any launch), and nothing started.
+    for observed in [&first, &second] {
+        assert!(
+            matches!(&observed.run, Ok(run) if matches!(run.outcome, RunOutcome::LauncherFailed)),
+            "{:?}",
+            observed
+                .run
+                .as_ref()
+                .map(|run| format!("{:?}", run.outcome))
+                .map_err(|error| format!("{error:?}"))
+        );
+        assert_eq!(observed.resources, Resources::Settled);
+    }
+    // (B) a refused start: no launch (the job root stays empty), still finished.
+    let (mut slices, held) = Slices::new();
+    slices.start = Some(Err(habitat_engine::worker::aggregate::Error::Busy));
+    let mut verifier = live_verifier(slices);
+    let job_root = root("check-b");
+    let refused = live_check(&rig, &mut verifier, w1, &job_root, &cancelled)?;
+    assert!(matches!(refused.run, Err(workload::Error::Io)));
+    assert_eq!(fs::read_dir(&job_root)?.count(), 0, "nothing launched");
+    assert_eq!(
+        taken(&held).last(),
+        Some(&Held::Finish(w1.teardown_until)),
+        "a refused start is still finished"
+    );
+    assert_eq!(refused.resources, Resources::Settled);
+    // (C) the unit `start` returned is the scopes' only source: a name no slice has is `Layout`.
+    let (mut slices, _) = Slices::new();
+    slices.start = Some(Ok("not-a-slice".to_owned()));
+    let mut verifier = live_verifier(slices);
+    let malformed = live_check(&rig, &mut verifier, w2, &root("check-c"), &cancelled)?;
+    assert!(matches!(malformed.run, Err(workload::Error::Layout)));
+    // (D) a refused finish is observed pending.
+    let (mut slices, _) = Slices::new();
+    slices.finish = Err(habitat_engine::worker::aggregate::Error::Busy);
+    let mut verifier = live_verifier(slices);
+    let unfinished = live_check(&rig, &mut verifier, w1, &root("check-d"), &cancelled)?;
+    assert_eq!(unfinished.resources, Resources::Pending);
+    // (E) through the runtime: the pending aggregate is the cleanup record's, and the check's
+    // cleanup is unsettled, so the task needs settlement (B14a-1c review H1).
+    let principal = owner();
+    let (source, _) = script(vec![Candidate::Replacement(SECOND.to_vec())]);
+    let (mut slices, _) = Slices::new();
+    slices.finish = Err(habitat_engine::worker::aggregate::Error::Busy);
+    let outcome = run(&rig, &principal, source, live_verifier(slices), 5_000)
+        .map_err(|e| format!("{e:?}"))?;
+    assert_eq!(
+        outcome,
+        Outcome::Driven(Driven::NeedsSettlement(StopReason::Unsettled))
+    );
+    let cleanup = cleanup_object(&rig)?;
+    assert_eq!(
+        (&cleanup["aggregate"], &cleanup["obligations"]),
+        (
+            &serde_json::json!("pending"),
+            &serde_json::json!([
+                {"id": "process", "state": "settled"},
+                {"id": "scratch", "state": "settled"},
+                {"id": "retained_paths", "state": "settled"},
+                {"id": "resources", "state": "pending"},
+            ])
+        )
+    );
     Ok(())
 }
 

@@ -97,6 +97,7 @@ impl Verifier for Never {
         super::runtime::Observed {
             run: Err(super::workload::Error::Layout),
             observed: plan.window.begun,
+            resources: super::runtime::Resources::NotHeld,
         }
     }
 }

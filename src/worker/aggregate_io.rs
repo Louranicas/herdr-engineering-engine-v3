@@ -135,7 +135,7 @@ fn same(a: &Metadata, b: &Metadata) -> bool {
 pub(super) fn pin(config: &Config, deadline: Instant) -> Result<(), Error> {
     tick(deadline)?;
     Sha256Digest::parse(&config.busctl_sha256).map_err(|_| Error::Invalid)?;
-    if config.busctl != Path::new("/usr/bin/busctl")
+    if config.busctl != Path::new(super::BUSCTL)
         || config.runtime_dir.as_os_str()
             != std::ffi::OsStr::new(&format!("/run/user/{}", geteuid().as_raw()))
     {

@@ -131,6 +131,8 @@ pub struct Scope {
     pub run_id: String,
     pub aggregate: String,
 }
+/// systemd-run's fixed host path: the one the launcher pins and every scope names.
+pub const SYSTEMD_RUN: &str = "/usr/bin/systemd-run";
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Limits {
     pub cpu_max: String,
@@ -190,7 +192,7 @@ impl Scope {
         tick(deadline)?;
         self.unit()?;
         Sha256Digest::parse(&self.systemd_run_sha256).map_err(|_| Error::Invalid)?;
-        if self.systemd_run != Path::new("/usr/bin/systemd-run")
+        if self.systemd_run != Path::new(SYSTEMD_RUN)
             || self.runtime_dir.as_os_str()
                 != std::ffi::OsStr::new(&format!("/run/user/{}", geteuid().as_raw()))
         {

@@ -166,7 +166,8 @@ impl Run {
 }
 
 /// Execute the same fixed workload with three fresh scopes under one owned aggregate.
-/// The caller retains aggregate lifecycle/accounting ownership.
+/// The caller retains aggregate lifecycle/accounting ownership: the live verifier, per check (R21
+/// S20a).
 /// # Errors
 /// Refuses duplicate scope names, different aggregates and ordinary workload preflight errors.
 pub fn collect_bounded(plan: &Plan<'_>, scopes: &[Scope; 3]) -> Result<Run, Error> {

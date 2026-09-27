@@ -8,14 +8,23 @@
 //! derives the check with [`checked`] and commits the records with the verification, inside one
 //! hold. Two pure functions live here beside it: the class profile's declaration read as the
 //! workload's [`Tools`], and the one derivation of a check's verdict, cost and settlement (R15.3).
+//!
+//! The aggregate slice the three scopes run under is the check's own (R21 S20a): the dispatcher
+//! composes the lifecycle ([`Manager`] over `worker::aggregate`, behind [`Aggregates`]) and each
+//! `check` starts one aggregate under the check's cutoff and finishes it under the teardown
+//! deadline on every path — no owner outlives a check, so none needs a deadline of its own.
 
 use super::class_profile::Declared;
+use super::evidence::fresh_id;
 use super::run_records::OutcomeName;
-use super::runtime::{CheckPlan, Observed, Verifier, declared_criteria};
-use super::workload::{COMPILER_DESTINATION, Plan, Tools, collect_bounded};
+use super::runtime::{CheckPlan, Observed, Resources, Verifier, declared_criteria};
+use super::workload::{self, COMPILER_DESTINATION, Plan, Run, Tools, collect_bounded};
 use crate::store::VerificationVerdict;
+use crate::worker::aggregate::{self, Aggregate, Phase};
 use crate::worker::namespace::{ReadOnlyFile, SHIM_DESTINATION};
-use crate::worker::resources::Scope;
+use crate::worker::resources::{SYSTEMD_RUN, Scope};
+use std::path::PathBuf;
+use std::sync::atomic::AtomicBool;
 use std::time::Instant;
 
 /// bwrap's fixed host path: the namespace door refuses any other
@@ -52,38 +61,169 @@ pub fn tools(declared: &Declared) -> Tools {
     }
 }
 
-/// The production verifier: the fixed workload under three bounded scopes, run against the applied
-/// candidate inside the check window, returned as observed — nothing is published or decided here.
-pub struct LiveVerifier {
-    scopes: [Scope; 3],
+/// One check's aggregate slice (R21 S20a): started once per check, finished once per check.
+pub trait Aggregates {
+    /// Start a fresh aggregate named by `run_id` and return its unit — the one name the check's
+    /// scopes are built on, never re-formatted by the caller.
+    ///
+    /// # Errors
+    /// The aggregate's refusal; `State` while an earlier aggregate is still held.
+    fn start(
+        &mut self,
+        run_id: &str,
+        deadline: Instant,
+        cancelled: &AtomicBool,
+    ) -> Result<String, aggregate::Error>;
+    /// Tear down whatever is held: restore this process to its origin, then stop the empty slice.
+    /// Nothing held is `Ok`.
+    ///
+    /// # Errors
+    /// The teardown's refusal; the aggregate is then still held.
+    fn finish(&mut self, deadline: Instant) -> Result<(), aggregate::Error>;
 }
 
-impl LiveVerifier {
-    /// Over the three scopes the dispatcher owns (B14b); the tools arrive with each check's plan,
-    /// the same value the runtime's own plan described (R17 round 2, decision 2).
+/// The production lifecycle over `worker::aggregate`: busctl at its fixed path under the class's
+/// pin, the engine's own runtime directory, at most one aggregate held.
+#[derive(Debug)]
+pub struct Manager {
+    busctl_sha256: String,
+    runtime_dir: PathBuf,
+    held: Option<Aggregate>,
+}
+
+impl Manager {
     #[must_use]
-    pub const fn new(scopes: [Scope; 3]) -> Self {
-        Self { scopes }
+    pub const fn new(busctl_sha256: String, runtime_dir: PathBuf) -> Self {
+        Self {
+            busctl_sha256,
+            runtime_dir,
+            held: None,
+        }
     }
 }
 
-impl Verifier for LiveVerifier {
-    fn check(&mut self, plan: CheckPlan<'_>) -> Observed {
-        let run = collect_bounded(
+impl Aggregates for Manager {
+    /// `prepare` (read-only), held BEFORE `start` so a start refused midway is still torn down.
+    fn start(
+        &mut self,
+        run_id: &str,
+        deadline: Instant,
+        cancelled: &AtomicBool,
+    ) -> Result<String, aggregate::Error> {
+        if self.held.is_some() {
+            return Err(aggregate::Error::State);
+        }
+        let prepared = Aggregate::prepare(
+            aggregate::Config {
+                busctl: aggregate::BUSCTL.into(),
+                busctl_sha256: self.busctl_sha256.clone(),
+                runtime_dir: self.runtime_dir.clone(),
+                run_id: run_id.to_owned(),
+            },
+            deadline,
+        )?;
+        let held = self.held.insert(prepared);
+        held.start(deadline, cancelled)?;
+        Ok(held.unit().to_owned())
+    }
+
+    /// Nothing held, or held but never started (`Prepared`): nothing to undo. A restore already
+    /// done (`Restored`) or a stop already asked (`StopRequested`) resumes at the stop. A refusal
+    /// keeps the aggregate held, so the next `start` refuses `State` (fail-closed: no second slice
+    /// while this process may still be inside the first). Stated gap: a refused create reply
+    /// (`CreateRequested`) is refused `State` by `restore_origin` and stays held.
+    fn finish(&mut self, deadline: Instant) -> Result<(), aggregate::Error> {
+        let Some(mut held) = self.held.take() else {
+            return Ok(());
+        };
+        let result = match held.phase() {
+            Phase::Prepared | Phase::Stopped => Ok(()),
+            Phase::Restored | Phase::StopRequested => held.stop_if_empty(deadline).map(|_| ()),
+            _ => held
+                .restore_origin(deadline)
+                .and_then(|()| held.stop_if_empty(deadline).map(|_| ())),
+        };
+        if result.is_err() {
+            self.held = Some(held);
+        }
+        result
+    }
+}
+
+/// The production verifier: the fixed workload under three bounded scopes in the check's own
+/// aggregate, run against the applied candidate inside the check window, returned as observed —
+/// nothing is published or decided here.
+pub struct LiveVerifier<A> {
+    systemd_run_sha256: String,
+    runtime_dir: PathBuf,
+    aggregates: A,
+}
+
+impl<A: Aggregates> LiveVerifier<A> {
+    /// Over the class's systemd-run pin, the engine's runtime directory and the aggregate lifecycle
+    /// the dispatcher composes; the tools arrive with each check's plan, the same value the
+    /// runtime's own plan described (R17 round 2, decision 2).
+    #[must_use]
+    pub const fn new(systemd_run_sha256: String, runtime_dir: PathBuf, aggregates: A) -> Self {
+        Self {
+            systemd_run_sha256,
+            runtime_dir,
+            aggregates,
+        }
+    }
+
+    /// Four fresh ids under the cutoff (the aggregate's and three scopes'), the aggregate started
+    /// under the cutoff and the plan's own cancellation, the scopes built on the unit it returned.
+    /// A refusal before the workload is `Io`: the runtime records it as a setup failure.
+    fn bounded(&mut self, plan: &CheckPlan<'_>) -> Result<Run, workload::Error> {
+        let until = plan.window.until;
+        let [aggregate_id, first, second, third] = [(); 4].map(|()| fresh_id(until));
+        let id = |drawn: Result<crate::contracts::receipt::Id, _>| {
+            drawn
+                .map(|id| id.as_str().to_owned())
+                .map_err(|_| workload::Error::Io)
+        };
+        let (first, second, third) = (id(first)?, id(second)?, id(third)?);
+        let unit = self
+            .aggregates
+            .start(&id(aggregate_id)?, until, plan.cancelled)
+            .map_err(|_| workload::Error::Io)?;
+        let scopes = [first, second, third].map(|run_id| Scope {
+            systemd_run: SYSTEMD_RUN.into(),
+            systemd_run_sha256: self.systemd_run_sha256.clone(),
+            runtime_dir: self.runtime_dir.clone(),
+            run_id,
+            aggregate: unit.clone(),
+        });
+        collect_bounded(
             &Plan {
                 source: plan.subject,
                 protected: plan.protected,
                 job_root: plan.job_root,
                 tools: plan.tools,
-                deadline: plan.window.until,
+                deadline: until,
                 teardown_deadline: plan.window.teardown_until,
                 cancelled: plan.cancelled,
             },
-            &self.scopes,
-        );
+            &scopes,
+        )
+    }
+}
+
+impl<A: Aggregates> Verifier for LiveVerifier<A> {
+    /// The run is observed when the workload returns; the aggregate is finished after it, on every
+    /// path, under the teardown deadline.
+    fn check(&mut self, plan: CheckPlan<'_>) -> Observed {
+        let run = self.bounded(&plan);
+        let observed = Instant::now();
+        let resources = match self.aggregates.finish(plan.window.teardown_until) {
+            Ok(()) => Resources::Settled,
+            Err(_) => Resources::Pending,
+        };
         Observed {
             run,
-            observed: Instant::now(),
+            observed,
+            resources,
         }
     }
 }
@@ -97,13 +237,18 @@ pub struct Cleanup {
     pub scratch_released: bool,
     /// The paths the run retained for capture are removed.
     pub retained_removed: bool,
+    /// The check's aggregate as the verifier observed it (R21 S20a): only `Pending` is unsettled.
+    pub resources: Resources,
 }
 
 impl Cleanup {
     /// Settled only when every predicate holds.
     #[must_use]
     pub const fn settled(self) -> bool {
-        self.processes_settled && self.scratch_released && self.retained_removed
+        self.processes_settled
+            && self.scratch_released
+            && self.retained_removed
+            && !matches!(self.resources, Resources::Pending)
     }
 }
 
@@ -156,7 +301,7 @@ pub fn checked(
 
 #[cfg(test)]
 mod tests {
-    use super::{BWRAP, Checked, Cleanup, checked, tools};
+    use super::{Aggregates, BWRAP, Checked, Cleanup, Manager, Resources, checked, tools};
     use crate::app::class_profile::{
         Declared, DeclaredFile, Effect, Grant, HostPin, Reviewed, RuntimeFile,
     };
@@ -282,11 +427,13 @@ mod tests {
             processes_settled: true,
             scratch_released: true,
             retained_removed: true,
+            resources: Resources::Settled,
         };
         let scratch_held = Cleanup {
             processes_settled: true,
             scratch_released: false,
             retained_removed: true,
+            resources: Resources::Settled,
         };
         let at = |ms: u64| begun + Duration::from_millis(ms);
         let expected = [
@@ -345,6 +492,13 @@ mod tests {
                     ..settled
                 },
             ),
+            (
+                "aggregate held",
+                Cleanup {
+                    resources: Resources::Pending,
+                    ..settled
+                },
+            ),
         ] {
             assert!(
                 !checked(OutcomeName::Matched, cleanup, true, begun, at(5)).cleanup_settled,
@@ -361,6 +515,29 @@ mod tests {
                 used_ms: 31,
                 cleanup_settled: true,
             }
+        );
+    }
+
+    /// R21 S20a · the production lifecycle passes the aggregate's own refusal through and holds
+    /// nothing it could not prepare: a runtime directory that is not `/run/user/<euid>` is refused
+    /// `Invalid` by the busctl door's pin before any call runs, in any environment; the finish that
+    /// follows has nothing to undo, and the next start is refused the same way (never `State`).
+    #[test]
+    fn the_manager_refuses_an_unpinned_runtime_directory_and_holds_nothing() {
+        let mut manager = Manager::new(
+            format!("sha256:{}", "0".repeat(64)),
+            "/run/user/not-a-uid".into(),
+        );
+        let flag = std::sync::atomic::AtomicBool::new(false);
+        let deadline = Instant::now() + Duration::from_secs(1);
+        assert_eq!(
+            manager.start("28f10000-0000-4000-8000-0000000000d1", deadline, &flag),
+            Err(crate::worker::aggregate::Error::Invalid)
+        );
+        assert_eq!(manager.finish(deadline), Ok(()));
+        assert_eq!(
+            manager.start("28f10000-0000-4000-8000-0000000000d2", deadline, &flag),
+            Err(crate::worker::aggregate::Error::Invalid)
         );
     }
 }

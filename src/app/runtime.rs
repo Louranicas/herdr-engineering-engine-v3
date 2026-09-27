@@ -224,6 +224,21 @@ pub struct CheckPlan<'a> {
 pub struct Observed {
     pub run: Result<Run, workload::Error>,
     pub observed: Instant,
+    /// What the check's aggregate came to (R21 S20a): the check that holds one observes it.
+    pub resources: Resources,
+}
+
+/// The check's aggregate slice, as the verifier that held it observed it (R21 S20a): the
+/// dispatcher composes the lifecycle and each check owns it, so its settlement is carried with the
+/// run — one source for the cleanup record's "resources" obligation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Resources {
+    /// The verifier holds no aggregate (a double, or no verifier): the record says `unknown`.
+    NotHeld,
+    /// Restored and stopped inside the check's teardown.
+    Settled,
+    /// Held, and not torn down by the teardown deadline: the check's cleanup is unsettled.
+    Pending,
 }
 
 /// The check of an applied candidate: it observes a run of the workload inside the plan's window.
@@ -1381,6 +1396,7 @@ impl<C: CandidateSource, V: Verifier> StoreRuntime<'_, C, V> {
         let committed = self
             .tasks
             .with_store(|store| -> Result<Committed, Error> {
+                let seen = (observed.observed, observed.resources);
                 let run = launched(observed.run)?;
                 let teardown = window.teardown_until.min(self.deadline);
                 let capture = capture_run(store, &run, teardown, self.deadline)?;
@@ -1399,7 +1415,7 @@ impl<C: CandidateSource, V: Verifier> StoreRuntime<'_, C, V> {
                     cleanup,
                     cleanup_record,
                     clock,
-                } = self.settled(&run, teardown, job_root, applied, window, observed.observed)?;
+                } = self.settled(&run, teardown, job_root, applied, window, seen)?;
                 let outcome_record = if complete {
                     Some(RunOutcome::of(&run, &capture_refs).map_err(|_| Error::Identity)?)
                 } else {
@@ -1480,14 +1496,14 @@ impl<C: CandidateSource, V: Verifier> StoreRuntime<'_, C, V> {
         job_root: &Path,
         applied: &Snapshot,
         window: CheckWindow,
-        observed: Instant,
+        (observed, resources): (Instant, Resources),
     ) -> Result<Settled, Error> {
         let seed_verified = self.baseline.readback_source(teardown).is_ok();
         let subjects_verified = applied.readback_source(teardown).is_ok();
         let protected_unchanged = self.protected.readback_source(teardown).is_ok();
         let removed = fs::remove_dir_all(job_root).is_ok() || !job_root.exists();
         let retained_removed = removed && Instant::now() < teardown;
-        let (cleanup, cleanup_record) = cleanup_of(run, retained_removed);
+        let (cleanup, cleanup_record) = cleanup_of(run, retained_removed, resources);
         let clock = clock_of(window, observed, run.decisive)?;
         Ok(Settled {
             seed_verified,
@@ -2421,12 +2437,13 @@ fn capture_run(
 
 /// The run's cleanup as the runtime observed it, and the record of it: the process and scratch
 /// predicates the workload reported, the retained paths the runtime removed, and the aggregate —
-/// observed by the dispatcher that owns it (B14b), `Unknown` here.
-fn cleanup_of(run: &Run, retained_removed: bool) -> (Cleanup, RunCleanup) {
+/// as the verifier that held it observed it (R21 S20a), `Unknown` when none was held.
+fn cleanup_of(run: &Run, retained_removed: bool, resources: Resources) -> (Cleanup, RunCleanup) {
     let cleanup = Cleanup {
         processes_settled: run.process_cleanup_complete,
         scratch_released: run.scratch_released,
         retained_removed,
+        resources,
     };
     let state = |settled: bool| {
         if settled {
@@ -2443,7 +2460,14 @@ fn cleanup_of(run: &Run, retained_removed: bool) -> (Cleanup, RunCleanup) {
         obligation("process", state(run.process_cleanup_complete)),
         obligation("scratch", state(run.scratch_released)),
         obligation("retained_paths", state(retained_removed)),
-        obligation("resources", RecordSettlement::Unknown),
+        obligation(
+            "resources",
+            match resources {
+                Resources::NotHeld => RecordSettlement::Unknown,
+                Resources::Settled => RecordSettlement::Settled,
+                Resources::Pending => RecordSettlement::Pending,
+            },
+        ),
     ];
     let record = RunCleanup::of(state(cleanup.settled()), &obligations, &[]);
     (cleanup, record)
