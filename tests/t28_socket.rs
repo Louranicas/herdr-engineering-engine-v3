@@ -525,6 +525,9 @@ fn a_linked_record_or_a_shared_directory_is_not_a_grant() -> Outcome {
     Ok(())
 }
 
+/// How long a case waits for a started engine's socket before calling the start failed.
+const START_BUDGET: Duration = Duration::from_secs(20);
+
 /// The engine binary under a private runtime root and home, killed by its own handle on drop.
 struct Engine {
     child: Option<Child>,
@@ -532,33 +535,52 @@ struct Engine {
 
 impl Engine {
     fn start(run: &Path, home: &Path) -> Result<Self, Box<dyn Error>> {
-        Self::start_with(run, home, Stdio::null())
+        Self::start_within(run, home, Stdio::null(), START_BUDGET)
     }
 
     /// Start with standard error written to `log`, which the case reads once the socket accepts:
     /// every line `serve` writes before it binds is there by then.
     fn start_logged(run: &Path, home: &Path, log: &Path) -> Result<Self, Box<dyn Error>> {
-        Self::start_with(run, home, Stdio::from(fs::File::create_new(log)?))
+        Self::start_within(
+            run,
+            home,
+            Stdio::from(fs::File::create_new(log)?),
+            START_BUDGET,
+        )
     }
 
-    fn start_with(run: &Path, home: &Path, stderr: Stdio) -> Result<Self, Box<dyn Error>> {
-        let child = Command::new(env!("CARGO_BIN_EXE_habitat-engine"))
-            .arg("serve")
-            .env("XDG_RUNTIME_DIR", run)
-            .env("HOME", home)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(stderr)
-            .spawn()?;
+    /// Start `serve` and wait up to `budget` for a connectable socket. The guard exists before the
+    /// wait, so a start that fails -- the budget spent, or the wait's own error -- returns with the
+    /// engine already killed and reaped by the guard's drop (the t28 serve leak, 2026-09-26: a
+    /// bare `Child` held across the wait is neither killed nor reaped when the wait gives up).
+    fn start_within(
+        run: &Path,
+        home: &Path,
+        stderr: Stdio,
+        budget: Duration,
+    ) -> Result<Self, Box<dyn Error>> {
+        let engine = Self {
+            child: Some(
+                Command::new(env!("CARGO_BIN_EXE_habitat-engine"))
+                    .arg("serve")
+                    .env("XDG_RUNTIME_DIR", run)
+                    .env("HOME", home)
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(stderr)
+                    .spawn()?,
+            ),
+        };
         let socket = run.join(RUNTIME_DIRECTORY).join(SOCKET_NAME);
         let started = Instant::now();
-        let budget = Duration::from_secs(20);
         // Wait on the artifact the engine produces, with a budget: a connectable socket.
         while UnixStream::connect(&socket).is_err() {
-            assert!(started.elapsed() < budget, "no socket within {budget:?}");
+            if started.elapsed() >= budget {
+                return Err(format!("no socket within {budget:?}").into());
+            }
             std::thread::sleep(Duration::from_millis(20));
         }
-        Ok(Self { child: Some(child) })
+        Ok(engine)
     }
 
     /// Send the engine SIGTERM and return its output once it exits, within `budget` (APP-01).
@@ -2467,27 +2489,7 @@ fn a_start_that_cannot_write_is_not_yet_bound() -> Outcome {
 /// Start `serve` in `world` with a full standard error and return once the kernel says it sleeps
 /// writing to it, with the bytes the pipe held.
 fn blocked_on_stderr(world: &World) -> Result<(Blocked, usize), Box<dyn Error>> {
-    let (drain, writer) = std::io::pipe()?;
-    let flags = rustix::fs::fcntl_getfl(&writer)?;
-    rustix::fs::fcntl_setfl(&writer, flags | rustix::fs::OFlags::NONBLOCK)?;
-    let mut filled = 0_usize;
-    for chunk in [4096_usize, 1] {
-        // A pipe holds at most 1 MiB (fs.pipe-max-size's default): 1 << 20 writes is the budget.
-        let mut attempts = 0_usize;
-        loop {
-            assert!(
-                attempts < 1 << 20,
-                "the pipe never filled after {attempts} writes"
-            );
-            attempts += 1;
-            match (&writer).write(&vec![b'x'; chunk]) {
-                Ok(written) => filled += written,
-                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
-                Err(error) => return Err(error.into()),
-            }
-        }
-    }
-    rustix::fs::fcntl_setfl(&writer, flags)?;
+    let (drain, writer, filled) = full_pipe()?;
     let child = Command::new(env!("CARGO_BIN_EXE_habitat-engine"))
         .arg("serve")
         .env("XDG_RUNTIME_DIR", &world.run)
@@ -2520,6 +2522,69 @@ fn blocked_on_stderr(world: &World) -> Result<(Blocked, usize), Box<dyn Error>> 
 struct Blocked {
     _engine: Engine,
     _drain: std::io::PipeReader,
+}
+
+/// A pipe whose buffer is already full, with the bytes it holds: a writer to it blocks until the
+/// read end is read or closed.
+fn full_pipe() -> Result<(std::io::PipeReader, std::io::PipeWriter, usize), Box<dyn Error>> {
+    let (drain, writer) = std::io::pipe()?;
+    let flags = rustix::fs::fcntl_getfl(&writer)?;
+    rustix::fs::fcntl_setfl(&writer, flags | rustix::fs::OFlags::NONBLOCK)?;
+    let mut filled = 0_usize;
+    for chunk in [4096_usize, 1] {
+        // A pipe holds at most 1 MiB (fs.pipe-max-size's default): 1 << 20 writes is the budget.
+        let mut attempts = 0_usize;
+        loop {
+            assert!(
+                attempts < 1 << 20,
+                "the pipe never filled after {attempts} writes"
+            );
+            attempts += 1;
+            match (&writer).write(&vec![b'x'; chunk]) {
+                Ok(written) => filled += written,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
+                Err(error) => return Err(error.into()),
+            }
+        }
+    }
+    rustix::fs::fcntl_setfl(&writer, flags)?;
+    Ok((drain, writer, filled))
+}
+
+/// The t28 serve leak (2026-09-26): a start whose engine never binds must not leave the engine
+/// behind. Given a full standard error, `serve` holds custody and blocks at its first line, so it
+/// never binds; `start_within` returns the error naming its budget, and by then the engine is
+/// killed and reaped -- custody is free. The start runs on its own thread, bounded, so a guard that
+/// forgets to kill fails here by its diagnostic (`Live`) rather than hanging in its wait; closing
+/// the pipe's read end then lets such an engine die of its own write.
+#[test]
+fn a_start_that_never_binds_is_killed_and_reaped() -> Outcome {
+    let world = World::seeing(&["app"])?;
+    let (drain, writer, _) = full_pipe()?;
+    let budget = Duration::from_millis(500);
+    let (run, home) = (world.run.clone(), world.home.clone());
+    let (sender, returned) = std::sync::mpsc::channel();
+    let starter = std::thread::spawn(move || {
+        let outcome = Engine::start_within(&run, &home, Stdio::from(writer), budget)
+            .map(drop)
+            .map_err(|error| error.to_string());
+        let _ = sender.send(outcome);
+    });
+    let outcome = returned.recv_timeout(START_BUDGET);
+    let custody = prepare_settled(&world.run).map(drop);
+    drop(drain);
+    let joined = starter.join();
+    assert!(
+        custody.is_ok(),
+        "the engine outlived its failed start: {custody:?}"
+    );
+    assert_eq!(
+        outcome,
+        Ok(Err(format!("no socket within {budget:?}"))),
+        "start_within's own answer"
+    );
+    assert!(joined.is_ok(), "the starting thread ended without a panic");
+    Ok(())
 }
 
 /// How long a case waits on one reply from a live engine before calling it a hang.
