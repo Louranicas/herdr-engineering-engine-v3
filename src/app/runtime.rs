@@ -975,14 +975,24 @@ pub fn drive<'a, C: CandidateSource, V: Verifier>(
     // Drained, a stop, an error — runs one settle turn, so a child `ready`'s load or an earlier
     // attempt retained is settled and counted there too. It is bounded by the teardown bound of the
     // last work window computed (the share held back for exactly this), the dispatch deadline before
-    // any — an existing bound, none created.
-    if run.is_err() {
+    // any — an existing bound, none created. The turn runs AFTER `ended` has written the exit (B14b-2
+    // review round 2, D3): a stop is recorded before a turn that may wait out its bound, so a kill
+    // during that wait cannot leave it unwritten; and it is handed the engine's drain, so a drain
+    // raised during the wait shortens it — the runtime's own flag is never raised on an exit.
+    let failed = run.is_err();
+    let result = ended(&mut runtime, run);
+    if failed {
         let until = runtime.window.map_or(deadline, |window| {
             teardown_deadline(window, runtime.dispatch.teardown_ms, deadline)
         });
-        runtime.settle_custody(until);
+        settle_custody(
+            &mut *runtime.source,
+            &mut runtime.custody,
+            until,
+            runtime.dispatch.drain,
+        );
     }
-    match ended(&mut runtime, run) {
+    match result {
         Ok(outcome) => Ok(Dispatched {
             outcome,
             custody: runtime.custody,
@@ -1000,6 +1010,28 @@ fn untouched(error: Error) -> Undispatched {
         error,
         custody: Custody::default(),
     }
+}
+
+/// One settle turn over `source`'s retained children (R21 N18), under `until` and `cancel` — no
+/// limit of its own; the counts are added to `custody`, the dispatch's. Asked after every answer
+/// (K5: a success arm does not carry the source's custody) under the attempt's teardown bound and
+/// the runtime's own flag, so the attempt's settle keeps the remainder of the dispatch window (N18
+/// amended by closure C4); and once on every other exit of `drive`, after that exit is written and
+/// handed the engine's drain (D3). A free function over the two fields it changes, handed the flag:
+/// the attempt's caller lends the runtime's own flag beside them, which a `&mut self` method could
+/// not be handed. True when no child is still pending — never a reason to read a source's
+/// unsettled cleanup as settled, since the source's flag cannot tell a retained child from a reaped
+/// leader's live group, which nothing settles.
+fn settle_custody<C: CandidateSource>(
+    source: &mut C,
+    custody: &mut Custody,
+    until: Instant,
+    cancel: &AtomicBool,
+) -> bool {
+    let turn = source.settle_retained(until, cancel);
+    custody.settled = custody.settled.saturating_add(turn.settled);
+    custody.pending = turn.pending;
+    turn.pending == 0
 }
 
 /// What the driver's result comes to for `drive` (R20 round 2 A2; closure H3): a stop is written
@@ -1308,21 +1340,6 @@ impl<C: CandidateSource, V: Verifier> StoreRuntime<'_, C, V> {
             self.deadline,
         )?;
         Ok(())
-    }
-
-    /// One settle turn over the source's retained children (R21 N18), under `until` and the
-    /// runtime's cancel flag — no limit of its own; the counts are added to the dispatch's custody.
-    /// Asked after every answer (K5: a success arm does not carry the source's custody) under the
-    /// attempt's teardown bound, so the attempt's settle keeps the remainder of the dispatch window
-    /// (N18 amended by closure C4), and once on every other exit of `drive`. True when no child is
-    /// still pending — never a reason to read a source's unsettled cleanup as settled, since the
-    /// source's flag cannot tell a retained child from a reaped leader's live group, which nothing
-    /// settles.
-    fn settle_custody(&mut self, until: Instant) -> bool {
-        let custody = self.source.settle_retained(until, &self.cancelled);
-        self.custody.settled = self.custody.settled.saturating_add(custody.settled);
-        self.custody.pending = custody.pending;
-        custody.pending == 0
     }
 
     /// One settle of the current attempt, in one hold with its head read. `used_ms` is `None`
@@ -2133,11 +2150,12 @@ impl<C: CandidateSource, V: Verifier> driver::Runtime for StoreRuntime<'_, C, V>
         // settled only when its own is and no retained child is still pending. Bounded by the
         // attempt's teardown bound — the share held back past its work window — so the settle
         // below keeps the rest of the dispatch window (closure C4).
-        let held = self.settle_custody(teardown_deadline(
-            work_until,
-            self.dispatch.teardown_ms,
-            self.deadline,
-        ));
+        let held = settle_custody(
+            &mut *self.source,
+            &mut self.custody,
+            teardown_deadline(work_until, self.dispatch.teardown_ms, self.deadline),
+            &self.cancelled,
+        );
         match candidate {
             // Exhaustion after begin is truthful (B14a-R2.3): the attempt is not ready to verify.
             Candidate::Exhausted => {

@@ -3343,8 +3343,77 @@ fn a_drain_raised_inside_ready_ends_drained_with_no_attempt_row() -> Outcome_ {
         work_until < until,
         "the work window closes before the dispatch"
     );
-    // Closure C4: the Drained exit runs one custody turn under the window's teardown bound.
+    // Closure C4: the Drained exit runs one custody turn under the window's teardown bound, handed
+    // the engine's drain (B14b-2 review round 2, D3) -- raised here, so the turn may end at once.
     let bound = teardown_bound(work_until, rig.teardown_ms, until);
+    assert_eq!(
+        taken(&readied),
+        vec![
+            ("ready", work_until, false),
+            ("settle_retained", bound, true)
+        ]
+    );
+    Ok(())
+}
+
+/// B14b-2 review round 2, D3 (N18 amended; C4's open Stop-exit item) · on a stop exit the stop is
+/// written before the exit's custody turn. The owner cancels while `ready` runs, the dispatch stops
+/// the task, and the turn that settles the child `ready` retained already reads the task
+/// `cancelled` -- bounded by the attempt's teardown bound and handed the engine's drain (unraised
+/// here), not the runtime's own flag. A turn run before the stop reads `admitted`: a kill during its
+/// wait, which can be minutes on a default reservation, would leave the stop unwritten.
+#[test]
+fn a_stop_exit_writes_the_stop_before_its_custody_turn() -> Outcome_ {
+    let rig = rig(&Shape {
+        work_ms: 3_500,
+        ..Shape::default()
+    })?;
+    let principal = owner();
+    let states = Arc::new(Mutex::new(Vec::new()));
+    let (mut source, asked) = script(vec![Candidate::Replacement(SECOND.to_vec())]);
+    let (seen, observed, cancelling) = (Arc::clone(&states), &rig, &principal);
+    source.ready_hook = Some(Box::new(move |_: &AtomicBool| {
+        record(&seen, state(observed).unwrap_or_else(|e| format!("<{e}>")));
+        cancel(observed, cancelling, "28f10000-0000-4000-8000-0000000000c3");
+    }));
+    let seen = Arc::clone(&states);
+    source.settle_model = Some(Box::new(move |_: Instant| {
+        record(&seen, state(observed).unwrap_or_else(|e| format!("<{e}>")));
+        Custody {
+            settled: 1,
+            pending: 0,
+        }
+    }));
+    let readied = Arc::clone(&source.readied);
+    let (mut verifier, handed) = oracle(vec![]);
+    let drain = AtomicBool::new(false);
+    // The capture's own share is fixed small, as C4's proof fixes it: the default share would not
+    // fit this reservation.
+    let admission = admit(
+        &rig.tasks,
+        &rig.profile,
+        Dispatch {
+            principal: &principal,
+            task: id(TASK),
+            agent_record_id: &rig.agent,
+            selections: &rig.selections,
+            attempts: &rig.attempts,
+            forbidden: &[],
+            teardown_ms: rig.teardown_ms,
+            capture_ms: Some(10),
+            drain: &drain,
+        },
+    )
+    .map_err(|e| format!("{e:?}"))?;
+    let Admission::Ready(admitted) = admission else {
+        return Err("refused at admission".into());
+    };
+    let (origin, until) = admitted.window();
+    let dispatched =
+        drive(&rig.tasks, *admitted, &mut source, &mut verifier).map_err(|e| format!("{e:?}"))?;
+    let work_until = window_end(origin, 3_500, rig.teardown_ms, until);
+    let bound = teardown_bound(work_until, rig.teardown_ms, until);
+    assert!(bound < until);
     assert_eq!(
         taken(&readied),
         vec![
@@ -3352,6 +3421,23 @@ fn a_drain_raised_inside_ready_ends_drained_with_no_attempt_row() -> Outcome_ {
             ("settle_retained", bound, false)
         ]
     );
+    assert_eq!(
+        taken(&states),
+        vec!["admitted".to_owned(), "cancelled".to_owned()],
+        "the task state each call read: the stop is written before the custody turn"
+    );
+    assert_eq!(
+        (dispatched.outcome, dispatched.custody),
+        (
+            Outcome::Driven(Driven::Stopped(StopReason::Cancelled)),
+            Custody {
+                settled: 1,
+                pending: 0
+            }
+        )
+    );
+    assert!(taken(&asked).is_empty(), "no candidate was asked");
+    assert!(taken(&handed).is_empty(), "no check ran");
     Ok(())
 }
 

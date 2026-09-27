@@ -276,7 +276,7 @@ pub struct NativeCandidates {
     adapter: &'static AdapterProfile,
     prompt: ClassPrompt,
     /// Children an exchange left pending, retained so their custody is never dropped (A4); the
-    /// runtime settles them through `settle_retained`, from `StoreRuntime::settle_custody` after
+    /// runtime settles them through `settle_retained`, from `runtime::settle_custody` after
     /// every answer and on every exit of `drive` (R21 N18, K5; closure C4).
     retained: Vec<PendingChild>,
 }
