@@ -288,16 +288,16 @@ fn say_class_profile(home: &Path) -> Result<class_profile::Profile, class_profil
     let class = coordinator::config_path(home, class_profile::CLASS_DIRECTORY);
     let read = class_profile::read(&class);
     match &read {
-        Ok(profile) => eprintln!(
-            "habitat-engine: class profile read from {} ({} workspaces declared)",
+        Ok(profile) => say(format_args!(
+            "class profile read from {} ({} workspaces declared)",
             class.display(),
             profile.declared.workspaces.len()
-        ),
-        Err(why) => eprintln!(
-            "habitat-engine: dispatch unavailable: {} ({})",
+        )),
+        Err(why) => say(format_args!(
+            "dispatch unavailable: {} ({})",
             why.constraint(),
             class.display()
-        ),
+        )),
     }
     read
 }
@@ -309,14 +309,14 @@ fn open_grants(home: &Path) -> Result<Box<dyn Grants + Sync>, ExitCode> {
     match FileGrants::open(&directory) {
         Ok(store) => Ok(Box::new(store)),
         Err(grants::Error::Io(error)) if error.kind() == io::ErrorKind::NotFound => {
-            eprintln!(
-                "habitat-engine: no grant directory at {}; every request is refused forbidden",
+            say(format_args!(
+                "no grant directory at {}; every request is refused forbidden",
                 directory.display()
-            );
+            ));
             Ok(Box::new(NoGrants))
         }
         Err(error) => {
-            eprintln!("habitat-engine: grant directory refused: {error:?}");
+            say(format_args!("grant directory refused: {error:?}"));
             Err(ExitCode::from(EXIT_CONTRACT))
         }
     }
@@ -334,10 +334,10 @@ fn attempts_root(state_root: &Path, deadline: std::time::Instant) -> Option<Path
     match coordinator::prepare_attempts_root(&attempts, deadline) {
         Ok(_) => Some(attempts),
         Err(why) => {
-            eprintln!(
-                "habitat-engine: dispatch unavailable: attempts root {} refused ({why:?})",
+            say(format_args!(
+                "dispatch unavailable: attempts root {} refused ({why:?})",
                 attempts.display()
-            );
+            ));
             None
         }
     }
@@ -356,10 +356,10 @@ fn compose_native(
 ) -> Composed {
     let directory = coordinator::config_path(home, native_provider::NATIVE_DIRECTORY);
     let unavailable = |why: &str| {
-        eprintln!(
-            "habitat-engine: native provider unavailable: {why} ({})",
+        say(format_args!(
+            "native provider unavailable: {why} ({})",
             directory.display()
-        );
+        ));
     };
     let (file, bytes) = match native_provider::read(&directory) {
         Ok(read) => read,
@@ -390,11 +390,11 @@ fn compose_native(
     };
     let installed = match adapter {
         None => {
-            eprintln!(
-                "habitat-engine: native provider read from {}; the class declares no native model, \
+            say(format_args!(
+                "native provider read from {}; the class declares no native model, \
                  so nothing is installed",
                 directory.display()
-            );
+            ));
             Installed {
                 record_id: String::new(),
                 selections: Vec::new(),
@@ -411,15 +411,15 @@ fn compose_native(
             };
             match native_provider::install(tasks, &principal, &file, &bytes, adapter, deadline) {
                 Ok(installed) => {
-                    eprintln!(
-                        "habitat-engine: native provider installed from {} (record {}, revision {})",
+                    say(format_args!(
+                        "native provider installed from {} (record {}, revision {})",
                         directory.display(),
                         installed.record_id,
                         installed
                             .selections
                             .first()
                             .map_or("none", |selection| selection.expected_revision.as_str())
-                    );
+                    ));
                     installed
                 }
                 Err(error) => {
@@ -466,7 +466,7 @@ fn serve(lifetime: Lifetime) -> ExitCode {
         {
             Ok(both) => both,
             Err(error) => {
-                eprintln!("habitat-engine: control socket refused: {error:?}");
+                say(format_args!("control socket refused: {error:?}"));
                 return ExitCode::from(EXIT_CONTRACT);
             }
         };
@@ -474,7 +474,7 @@ fn serve(lifetime: Lifetime) -> ExitCode {
         .map(PathBuf::from)
         .filter(|home| home.is_absolute())
     else {
-        eprintln!("habitat-engine: HOME is unset or relative");
+        say(format_args!("HOME is unset or relative"));
         return ExitCode::from(EXIT_USAGE);
     };
     let store = match open_grants(&home) {
@@ -490,7 +490,7 @@ fn serve(lifetime: Lifetime) -> ExitCode {
     let startup_deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
     let started =
         coordinator::observe_at_start(&state_root, &manifest, now_unix_ms(), startup_deadline);
-    eprintln!("habitat-engine: {}", started.line);
+    say(format_args!("{}", started.line));
     let health = started.health;
     // The route configuration task.preview screens against, read once under custody (B07). Its
     // outcome is said after the task owner's, so a refused ledger's reason stays in the first lines.
@@ -499,25 +499,27 @@ fn serve(lifetime: Lifetime) -> ExitCode {
     let tasks = match started.reconciled.map(coordinator::compose_tasks) {
         Some(Ok(tasks)) => {
             match &routing {
-                Ok(_) => eprintln!(
-                    "habitat-engine: route configuration read from {}",
+                Ok(_) => say(format_args!(
+                    "route configuration read from {}",
                     routes.display()
-                ),
-                Err(why) => eprintln!(
-                    "habitat-engine: task.preview unavailable: {} ({})",
+                )),
+                Err(why) => say(format_args!(
+                    "task.preview unavailable: {} ({})",
                     why.constraint(),
                     routes.display()
-                ),
+                )),
             }
             let profile = say_class_profile(&home);
             Some(tasks.with_routing(routing).with_class_profile(profile))
         }
         Some(Err(why)) => {
-            eprintln!("habitat-engine: task actions unavailable: {why}");
+            say(format_args!("task actions unavailable: {why}"));
             None
         }
         None => {
-            eprintln!("habitat-engine: task actions unavailable: no generation was reconciled");
+            say(format_args!(
+                "task actions unavailable: no generation was reconciled"
+            ));
             None
         }
     };
@@ -529,11 +531,11 @@ fn serve(lifetime: Lifetime) -> ExitCode {
     let listener = match control_socket::bind(&prepared) {
         Ok(listener) => listener,
         Err(error) => {
-            eprintln!("habitat-engine: control socket refused: {error:?}");
+            say(format_args!("control socket refused: {error:?}"));
             return ExitCode::from(EXIT_CONTRACT);
         }
     };
-    eprintln!("habitat-engine: serving {}", prepared.socket().display());
+    say(format_args!("serving {}", prepared.socket().display()));
     let drain = Drain::default();
     let shared = control_socket::Shared {
         grants: store.as_ref(),
@@ -555,7 +557,7 @@ fn serve(lifetime: Lifetime) -> ExitCode {
         &prepared,
         tasks.as_ref().zip(attempts.as_deref()).zip(native),
     ) {
-        eprintln!("habitat-engine: accept failed: {error}");
+        say(format_args!("accept failed: {error}"));
         return ExitCode::from(EXIT_CONTRACT);
     }
     // Drained: the task owner goes first, releasing the ledger's writer lock; then the socket,
@@ -573,7 +575,9 @@ fn serve(lifetime: Lifetime) -> ExitCode {
 /// behind it, raising through it.
 fn drain_signals(lifetime: Lifetime) -> Result<Signals, ExitCode> {
     let signals = Signals::new([SIGTERM, SIGHUP, SIGINT]).map_err(|error| {
-        eprintln!("habitat-engine: SIGTERM, SIGHUP and SIGINT could not be taken ({error})");
+        say(format_args!(
+            "SIGTERM, SIGHUP and SIGINT could not be taken ({error})"
+        ));
         ExitCode::from(EXIT_CONTRACT)
     })?;
     if let Lifetime::UntilStdinCloses = lifetime {
@@ -591,7 +595,7 @@ fn drain_signals(lifetime: Lifetime) -> Result<Signals, ExitCode> {
 /// could never report the parent's death (`/dev/null` reads end of file at once).
 fn watch_stdin() -> Result<(), ExitCode> {
     let refused = |why: String| {
-        eprintln!("habitat-engine: {UNTIL_STDIN_CLOSES} refused: {why}");
+        say(format_args!("{UNTIL_STDIN_CLOSES} refused: {why}"));
         ExitCode::from(EXIT_CONTRACT)
     };
     match rustix::fs::fstat(io::stdin()) {
@@ -614,17 +618,11 @@ fn watch_stdin() -> Result<(), ExitCode> {
                     Err(error) => break format!("unreadable ({error})"),
                 }
             };
-            // Written, never `eprintln!`: a parent that dies may take standard error's reader with
-            // it, and a panic here would end this thread before the drain is raised.
-            let _ = writeln!(
-                io::stderr(),
-                "habitat-engine: standard input {ended}; raising SIGTERM"
-            );
+            // Through `say`, never `eprintln!`: a parent that dies may take standard error's
+            // reader with it, and a panic here would end this thread before the drain is raised.
+            say(format_args!("standard input {ended}; raising SIGTERM"));
             if let Err(error) = signal_hook::low_level::raise(SIGTERM) {
-                let _ = writeln!(
-                    io::stderr(),
-                    "habitat-engine: SIGTERM could not be raised ({error})"
-                );
+                say(format_args!("SIGTERM could not be raised ({error})"));
             }
         });
     match watcher {
@@ -634,8 +632,9 @@ fn watch_stdin() -> Result<(), ExitCode> {
 }
 
 /// Serve until the first drain signal has drained every connection (APP-01). A watcher thread
-/// waits on `signals` and begins the drain, naming the signal it received; closing the handle once
-/// `run` returns ends its wait unsignalled.
+/// waits on `signals` and begins the drain, naming the signal it received; the [`Release`] built
+/// before anything else in the scope ends that wait unsignalled and releases the dispatcher once
+/// `run` ends -- returned or unwound -- so the scope never joins a thread still waiting.
 fn serve_until_signalled(
     signals: &mut Signals,
     listener: &std::os::unix::net::UnixListener,
@@ -645,20 +644,25 @@ fn serve_until_signalled(
     dispatching: Option<((&StoreTasks, &Path), Composed)>,
 ) -> io::Result<()> {
     let tasks = dispatching.as_ref().map(|((tasks, _), _)| *tasks);
-    let report = |line: &str| eprintln!("habitat-engine: {line}");
+    let report = |line: &str| say(format_args!("{line}"));
     let handle = signals.handle();
     std::thread::scope(|scope| {
+        // Whatever ends the accept loop -- its return or a panic unwinding through it -- the
+        // dispatcher is released and the watcher's wait ended before the scope joins them
+        // (closure H4; B14b-2 review round 2, D1).
+        let release = Release {
+            drain,
+            tasks,
+            handle,
+        };
         scope.spawn(|| {
             if let Some(signal) = signals.forever().next() {
-                // Written, never `eprintln!`: a closed pane or a dead parent may have taken
+                // Through `say`, never `eprintln!`: a closed pane or a dead parent may have taken
                 // standard error's reader, and a panic here would leave the drain unbegun.
                 let name = signal_hook::low_level::signal_name(signal).unwrap_or("signal");
-                let _ = writeln!(io::stderr(), "habitat-engine: {name}: draining");
+                say(format_args!("{name}: draining"));
                 if let Err(error) = drain.begin(prepared.socket()) {
-                    let _ = writeln!(
-                        io::stderr(),
-                        "habitat-engine: drain wake-up failed ({error})"
-                    );
+                    say(format_args!("drain wake-up failed ({error})"));
                 }
                 // The drain reaches the dispatcher's wait through the owner of both (B14b-1, D2),
                 // under the store's guard so no wait window can swallow it (closure H5).
@@ -692,35 +696,59 @@ fn serve_until_signalled(
                         }
                         .run(&report),
                     };
-                    eprintln!("habitat-engine: dispatcher stopped: {exit:?}");
+                    say(format_args!("dispatcher stopped: {exit:?}"));
                 });
             }
-            None => eprintln!("habitat-engine: dispatch unavailable: no task owner"),
+            None => say(format_args!("dispatch unavailable: no task owner")),
         }
         let served = control_socket::run(listener, shared, &now_unix_ms, &report);
-        // Whatever ended the accept loop, the dispatcher is released before the scope joins it
-        // (closure H4): the drain marked, the wait woken under the guard.
-        drain.mark();
-        if let Some(tasks) = tasks {
-            tasks.wake();
-        }
-        handle.close();
+        drop(release);
         served
     })
+}
+
+/// What `serve_until_signalled` releases when its accept loop ends, on its drop, so an unwinding
+/// loop releases it too: the drain marked, the dispatcher's wait woken under the store's guard, and
+/// the signal watcher's wait closed. Without it a panic in the loop left the scope joining a
+/// dispatcher that was never released and a watcher still waiting for a signal.
+struct Release<'a> {
+    drain: &'a Drain,
+    tasks: Option<&'a StoreTasks>,
+    handle: signal_hook::iterator::Handle,
+}
+
+impl Drop for Release<'_> {
+    fn drop(&mut self) {
+        self.drain.mark();
+        if let Some(tasks) = self.tasks {
+            tasks.wake();
+        }
+        self.handle.close();
+    }
 }
 
 /// Remove the socket and give up custody, then say so: the last step of a drain.
 fn finish_drained(prepared: control_socket::Prepared) -> ExitCode {
     let socket = prepared.socket().to_path_buf();
     if let Err(error) = prepared.finish() {
-        eprintln!("habitat-engine: drained, but the socket was not removed: {error:?}");
+        say(format_args!(
+            "drained, but the socket was not removed: {error:?}"
+        ));
         return ExitCode::from(EXIT_CONTRACT);
     }
-    eprintln!(
-        "habitat-engine: drained; removed {}; exiting",
+    say(format_args!(
+        "drained; removed {}; exiting",
         socket.display()
-    );
+    ));
     ExitCode::SUCCESS
+}
+
+/// `serve`'s one standard-error door: `line` after the engine's name, the write's error discarded.
+/// A closed pane or a dead parent can take standard error's reader with it, and `eprintln!` panics
+/// on that error -- a drain that exited 101 and left its socket, or a thread that never released
+/// the drain (B14b-2 review round 2, D1). What cannot be said is not a reason to stop serving.
+fn say(line: std::fmt::Arguments<'_>) {
+    let _ = writeln!(io::stderr().lock(), "habitat-engine: {line}");
 }
 
 /// `habitat-engine <action-id> < request`: the wrapper's producer. Sends the request's exact

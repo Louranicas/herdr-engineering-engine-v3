@@ -3327,6 +3327,43 @@ fn serve_drains_on_sighup_like_sigterm() -> Outcome {
     Ok(())
 }
 
+/// B14b-2 review round 2, D1: a closed pane or a dead parent can take the reader of `serve`'s
+/// standard error with it, so every line `serve` writes afterwards meets a write error. A drain
+/// must survive that: exit 0 and the socket removed -- never exit 101 from a line that panics,
+/// never a hang behind a thread the drain left waiting. The ledger is commissioned, so the
+/// dispatcher runs and its lines are written too.
+#[test]
+fn serve_drains_when_its_standard_error_has_no_reader() -> Outcome {
+    for (signal, name) in [
+        (rustix::process::Signal::HUP, "SIGHUP"),
+        (rustix::process::Signal::TERM, "SIGTERM"),
+    ] {
+        let world = World::seeing(&["app"])?;
+        commission(&world.home)?;
+        let mut engine =
+            Engine::start_within(&world.run, &world.home, Stdio::piped(), START_BUDGET)?;
+        drop(
+            engine
+                .child
+                .as_mut()
+                .and_then(|child| child.stderr.take())
+                .ok_or("the engine's standard error is not a pipe")?,
+        );
+        let output = engine.signalled(signal, START_BUDGET)?;
+        assert_eq!(
+            (output.status.code(), output.status.signal()),
+            (Some(0), None),
+            "{name}: the engine did not drain with no reader on its standard error"
+        );
+        let socket = world.run.join(RUNTIME_DIRECTORY).join(SOCKET_NAME);
+        assert!(
+            fs::symlink_metadata(&socket).is_err(),
+            "{name}: the socket file is removed"
+        );
+    }
+    Ok(())
+}
+
 /// Positions of `expected` among the lines of `log`, each found after the one before; a missing or
 /// out-of-order line is an error naming it, with the whole log.
 fn in_order(log: &str, expected: &[String]) -> Outcome {
