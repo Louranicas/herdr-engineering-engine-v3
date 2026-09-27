@@ -261,13 +261,107 @@ fn main() -> ExitCode {
         [command, flag] if command == "serve" && flag == UNTIL_STDIN_CLOSES => {
             serve(Lifetime::UntilStdinCloses)
         }
+        [command, seconds] if command == "commission" => commission_verb(seconds),
         [action] if Catalogue::find(action).is_ok() => request(action),
-        _ => {
-            eprintln!(
-                "habitat-engine: usage: habitat-engine serve [{UNTIL_STDIN_CLOSES}] | \
-                 habitat-engine <action-id> < request"
-            );
-            ExitCode::from(EXIT_USAGE)
+        _ => usage(),
+    }
+}
+
+/// The usage line, said once for every argv no verb takes.
+fn usage() -> ExitCode {
+    eprintln!(
+        "habitat-engine: usage: habitat-engine serve [{UNTIL_STDIN_CLOSES}] | \
+         habitat-engine <action-id> < request | habitat-engine commission <deadline-seconds>"
+    );
+    ExitCode::from(EXIT_USAGE)
+}
+
+/// `habitat-engine commission <deadline-seconds>` (OPS-1; RC02; HO-03; R22-4): the operator's act
+/// that creates the state root under `HOME`, its active-generation manifest and the first ledger,
+/// through the one library door (`coordinator::commission`). IPC01 custody is taken first and held
+/// until the verb exits, so no engine serves while a root is commissioned. The deadline is the
+/// operator's, with no default: a missing, zero or unparsable one is a usage error. On success the
+/// one line on standard output carries only values read back from the placed root.
+fn commission_verb(seconds: &str) -> ExitCode {
+    let refused = |code: u8, why: &str| {
+        eprintln!("habitat-engine: commission refused: {why}");
+        ExitCode::from(code)
+    };
+    let Some(deadline) = habitat_engine::contracts::parse_u64_decimal(seconds)
+        .ok()
+        .filter(|seconds| *seconds > 0)
+        .and_then(|seconds| {
+            std::time::Instant::now().checked_add(std::time::Duration::from_secs(seconds))
+        })
+    else {
+        return usage();
+    };
+    let prepared =
+        match control_socket::runtime_root(std::env::var_os("XDG_RUNTIME_DIR").as_deref())
+            .and_then(|root| control_socket::prepare(&root))
+        {
+            Ok(prepared) => prepared,
+            Err(control_socket::Error::Live) => {
+                return refused(EXIT_CONTRACT, "an engine holds custody (Live)");
+            }
+            Err(error) => return refused(EXIT_CONTRACT, &format!("custody ({error:?})")),
+        };
+    let Some(home) = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .filter(|home| home.is_absolute())
+    else {
+        return refused(EXIT_USAGE, "HOME is unset or relative");
+    };
+    let state_root = coordinator::state_root(&home);
+    let ids = habitat_engine::app::evidence::fresh_id(deadline).and_then(|generation| {
+        habitat_engine::app::evidence::fresh_id(deadline).map(|epoch| (generation, epoch))
+    });
+    let Ok((generation, epoch)) = ids else {
+        return if std::time::Instant::now() >= deadline {
+            refused(EXIT_TIMEOUT, "deadline")
+        } else {
+            refused(EXIT_CONTRACT, "entropy")
+        };
+    };
+    let (Ok(generation), Ok(epoch)) = (
+        habitat_engine::contracts::UuidV4::parse(generation.as_str()),
+        habitat_engine::contracts::UuidV4::parse(epoch.as_str()),
+    ) else {
+        return refused(EXIT_CONTRACT, "a drawn id is not a UuidV4");
+    };
+    let active = coordinator::Active { generation, epoch };
+    let commissioned = coordinator::commission(&state_root, active, deadline);
+    drop(prepared);
+    match commissioned {
+        Ok(commissioned) => {
+            if let Err(error) = writeln!(io::stdout().lock(), "{}", commissioned.line()) {
+                eprintln!(
+                    "habitat-engine: commissioned, but the line could not be written: {error}"
+                );
+                return ExitCode::from(EXIT_CONTRACT);
+            }
+            ExitCode::SUCCESS
+        }
+        Err(coordinator::CommissionError::Deadline) => refused(EXIT_TIMEOUT, "deadline"),
+        Err(coordinator::CommissionError::Exists(path)) => refused(
+            EXIT_CONTRACT,
+            &format!("state root exists at {}", path.display()),
+        ),
+        Err(coordinator::CommissionError::NotCanonical(path)) => refused(
+            EXIT_CONTRACT,
+            &format!(
+                "state root is not its own canonical path ({})",
+                path.display()
+            ),
+        ),
+        Err(coordinator::CommissionError::Store(why)) => {
+            refused(EXIT_CONTRACT, &format!("store refused ({why})"))
+        }
+        Err(coordinator::CommissionError::Io(kind)) => {
+            refused(EXIT_CONTRACT, &format!("io ({kind:?})"))
+        }
+        Err(coordinator::CommissionError::ReadBack(which)) => {
+            refused(EXIT_CONTRACT, &format!("read-back differs ({which})"))
         }
     }
 }

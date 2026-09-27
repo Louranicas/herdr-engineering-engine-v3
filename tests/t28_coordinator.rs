@@ -3,8 +3,8 @@
 //!
 //! Every state root here is a scratch directory; nothing touches `$HOME/.local/state`.
 use habitat_engine::app::coordinator::{
-    self, ACTIVE_MANIFEST, ACTIVE_SCHEMA, Unselected, health_of, leaves_work_outstanding,
-    startup_line,
+    self, ACTIVE_MANIFEST, ACTIVE_SCHEMA, Active, CommissionError, Commissioned, Unselected,
+    commission, health_of, leaves_work_outstanding, startup_line,
 };
 use habitat_engine::app::startup::{Counts, Cursor, CursorEntry, LedgerAccess, Pass};
 use habitat_engine::contracts::UuidV4;
@@ -64,21 +64,19 @@ fn selecting(generation: &str, epoch: &str) -> serde_json::Value {
     json!({"schema": ACTIVE_SCHEMA, "generation": generation, "epoch": epoch})
 }
 
-/// A state root holding a real, empty ledger for the selected generation.
+/// A state root holding a real, empty ledger for the selected generation, made by the one
+/// commissioning door (OPS-1): the manifest every case below reads is the one writer's.
 fn commissioned(scratch: &Scratch) -> Result<PathBuf, Box<dyn Error>> {
     let root = scratch.0.join("state");
-    DirBuilder::new().mode(0o700).create(&root)?;
-    drop(
-        Store::open(
-            &root,
-            UuidV4::parse(GENERATION)?,
-            UuidV4::parse(EPOCH)?,
-            true,
-            Instant::now() + Duration::from_secs(10),
-        )
-        .map_err(|error| format!("{error:?}"))?,
-    );
-    manifest(&root, &selecting(GENERATION, EPOCH), 0o600)?;
+    commission(
+        &root,
+        Active {
+            generation: UuidV4::parse(GENERATION)?,
+            epoch: UuidV4::parse(EPOCH)?,
+        },
+        Instant::now() + Duration::from_secs(10),
+    )
+    .map_err(|error| format!("{error:?}"))?;
     Ok(root)
 }
 
@@ -479,5 +477,238 @@ fn the_writer_lock_is_held_from_reconciliation_to_the_task_owner() -> Outcome {
         second.map(drop)
     );
     drop(started);
+    Ok(())
+}
+
+// ---- OPS-1: `commission`, the operator's act that creates the state root -------------------------
+
+/// The migration chain's length from the repository's own `migrations/*.sql` files: the independent
+/// source a commissioned ledger's `user_version` is compared against (every file is a T04 subject,
+/// so the gate stages them).
+pub(super) fn migration_count() -> Result<u32, Box<dyn Error>> {
+    let directory = Path::new(env!("CARGO_MANIFEST_DIR")).join("migrations");
+    let mut count = 0_u32;
+    for entry in fs::read_dir(&directory)? {
+        if entry?
+            .path()
+            .extension()
+            .is_some_and(|extension| extension == "sql")
+        {
+            count += 1;
+        }
+    }
+    Ok(count)
+}
+
+/// `PRAGMA user_version` of the ledger at `ledger`, read through a raw read-only connection: not the
+/// store's reading of it.
+pub(super) fn raw_user_version(ledger: &Path) -> Result<u32, Box<dyn Error>> {
+    let connection = rusqlite::Connection::open_with_flags(
+        ledger,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NOFOLLOW,
+    )?;
+    Ok(connection.pragma_query_value(None, "user_version", |row| row.get(0))?)
+}
+
+/// The permission bits at `path`, read without following a link.
+fn mode_of(path: &Path) -> Result<u32, Box<dyn Error>> {
+    use std::os::unix::fs::MetadataExt;
+    Ok(fs::symlink_metadata(path)?.mode() & 0o777)
+}
+
+/// The names in `directory` that are commissioning stages (`.<name>.<id>.staged`).
+fn staged_in(directory: &Path) -> Result<Vec<String>, Box<dyn Error>> {
+    let mut staged = Vec::new();
+    for entry in fs::read_dir(directory)? {
+        let name = entry?.file_name().to_string_lossy().into_owned();
+        if name.ends_with(".staged") {
+            staged.push(name);
+        }
+    }
+    Ok(staged)
+}
+
+/// Two fixtures that differ in every id (F129: never only the identity element).
+const COMMISSION_FIXTURES: [(&str, &str); 2] = [
+    (
+        "28c00000-0000-4000-8000-0000000000c1",
+        "28c00000-0000-4000-8000-0000000000c2",
+    ),
+    (
+        "7a1b2c3d-4e5f-4a6b-9c8d-7e6f5a4b3c2d",
+        "0f9e8d7c-6b5a-4f3e-a2d1-c0b9a8f7e6d5",
+    ),
+];
+
+/// OPS-1 case 1 · commissioning creates a private 0700 root, a private 0600 manifest selecting the
+/// generation, and a ledger at the migration chain's length; what it returns is read back from the
+/// placed root, compared as a whole value and a whole line over two fixtures that differ in every
+/// id. The known answers come from outside the code under test: the modes from `symlink_metadata`,
+/// the manifest's bytes from a literal, `user_version` from a raw `PRAGMA` and from the count of
+/// `migrations/*.sql`. The root's missing ancestors are created on the way; no stage is left.
+#[test]
+fn commissioning_creates_a_private_root_a_private_manifest_and_a_current_ledger() -> Outcome {
+    let scratch = Scratch::new()?;
+    let migrations = migration_count()?;
+    for (index, (generation, epoch)) in COMMISSION_FIXTURES.into_iter().enumerate() {
+        let parent = scratch.0.join(format!("home-{index}/.local/state"));
+        let root = parent.join("herdr-engineering-engine-v3");
+        let commissioned = commission(
+            &root,
+            Active {
+                generation: UuidV4::parse(generation)?,
+                epoch: UuidV4::parse(epoch)?,
+            },
+            Instant::now() + Duration::from_secs(10),
+        )
+        .map_err(|error| format!("{error:?}"))?;
+        assert_eq!(
+            commissioned,
+            Commissioned {
+                root: root.clone(),
+                generation: generation.to_owned(),
+                epoch: epoch.to_owned(),
+                user_version: migrations,
+                root_mode: 0o700,
+                manifest_mode: 0o600,
+            }
+        );
+        assert_eq!(
+            commissioned.line(),
+            format!(
+                "commissioned {} generation={generation} epoch={epoch} user_version={migrations} \
+                 root_mode=0700 manifest_mode=0600",
+                root.display()
+            )
+        );
+        assert!(fs::symlink_metadata(&root)?.is_dir());
+        assert_eq!(mode_of(&root)?, 0o700);
+        let manifest_path = root.join(ACTIVE_MANIFEST);
+        assert!(fs::symlink_metadata(&manifest_path)?.is_file());
+        assert_eq!(mode_of(&manifest_path)?, 0o600);
+        assert_eq!(
+            fs::read_to_string(&manifest_path)?,
+            format!(
+                r#"{{"schema":"hee3.active-generation/1","generation":"{generation}","epoch":"{epoch}"}}"#
+            )
+        );
+        let ledger = root
+            .join("generations")
+            .join(generation)
+            .join("ledger.sqlite3");
+        assert_eq!(raw_user_version(&ledger)?, migrations);
+        assert_eq!(staged_in(&parent)?, Vec::<String>::new());
+    }
+    Ok(())
+}
+
+/// OPS-1 case 2 · anything standing at the root is refused by its path and left exactly as it was:
+/// an empty 0700 directory (an operator's `mkdir`, R1.4), a regular file, and a link to an empty
+/// 0700 directory (the link and its target both unchanged). No stage is left beside it.
+#[test]
+fn commissioning_refuses_an_existing_root_by_name_and_changes_nothing() -> Outcome {
+    let scratch = Scratch::new()?;
+    let target = scratch.0.join("target");
+    DirBuilder::new().mode(0o700).create(&target)?;
+    for shape in ["directory", "file", "link"] {
+        let parent = scratch.0.join(shape);
+        DirBuilder::new().mode(0o700).create(&parent)?;
+        let root = parent.join("herdr-engineering-engine-v3");
+        match shape {
+            "directory" => DirBuilder::new().mode(0o700).create(&root)?,
+            "file" => fs::write(&root, b"an operator's file")?,
+            _ => symlink(&target, &root)?,
+        }
+        let before = (
+            fs::symlink_metadata(&root)?.file_type(),
+            fs::read_link(&root).ok(),
+            fs::read(&root).ok(),
+            fs::read_dir(&parent)?.count(),
+            fs::read_dir(&target)?.count(),
+        );
+        let refused = commission(
+            &root,
+            Active {
+                generation: UuidV4::parse(GENERATION)?,
+                epoch: UuidV4::parse(EPOCH)?,
+            },
+            Instant::now() + Duration::from_secs(10),
+        );
+        assert_eq!(
+            refused,
+            Err(CommissionError::Exists(root.clone())),
+            "{shape}"
+        );
+        let after = (
+            fs::symlink_metadata(&root)?.file_type(),
+            fs::read_link(&root).ok(),
+            fs::read(&root).ok(),
+            fs::read_dir(&parent)?.count(),
+            fs::read_dir(&target)?.count(),
+        );
+        assert_eq!(before, after, "{shape}");
+        assert_eq!(staged_in(&parent)?, Vec::<String>::new(), "{shape}");
+    }
+    assert_eq!(
+        fs::read_dir(&target)?.count(),
+        0,
+        "the link's target was never written"
+    );
+    Ok(())
+}
+
+/// OPS-1 case 3 · the producer/consumer seam at the library: what `commission` placed is what
+/// startup reconciles, read as `serve` reads it, and the start line is compared whole.
+#[test]
+fn a_commissioned_root_is_what_startup_reconciles() -> Outcome {
+    let scratch = Scratch::new()?;
+    let (generation, epoch) = COMMISSION_FIXTURES[1];
+    let root = scratch.0.join("herdr-engineering-engine-v3");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    commission(
+        &root,
+        Active {
+            generation: UuidV4::parse(generation)?,
+            epoch: UuidV4::parse(epoch)?,
+        },
+        deadline,
+    )
+    .map_err(|error| format!("{error:?}"))?;
+    let manifest = coordinator::read_manifest(&root);
+    let started = coordinator::observe_at_start(&root, &manifest, CHECKED, deadline);
+    assert_eq!(
+        started.line,
+        format!(
+            "generation {generation} reconciled: attempts=0 writes=0 cleanup=0 cleanup_backlog=0 \
+             recovery=complete database=ready"
+        )
+    );
+    Ok(())
+}
+
+/// OPS-1 case 4 · a deadline already spent commissions nothing: the stage is made, the store's
+/// create door refuses the spent deadline, and the refusal is `Deadline` by its own name (not a
+/// store refusal); no root stands and the stage is removed — the only case that reaches the
+/// cleanup, since every other refusal comes before the stage.
+#[test]
+fn a_spent_deadline_commissions_nothing() -> Outcome {
+    let scratch = Scratch::new()?;
+    let parent = scratch.0.join("home/.local/state");
+    let root = parent.join("herdr-engineering-engine-v3");
+    let refused = commission(
+        &root,
+        Active {
+            generation: UuidV4::parse(GENERATION)?,
+            epoch: UuidV4::parse(EPOCH)?,
+        },
+        Instant::now(),
+    );
+    assert_eq!(refused, Err(CommissionError::Deadline));
+    assert!(fs::symlink_metadata(&root).is_err(), "no root stands");
+    assert_eq!(
+        fs::read_dir(&parent)?.count(),
+        0,
+        "the stage was removed and nothing else was made beside the root"
+    );
     Ok(())
 }

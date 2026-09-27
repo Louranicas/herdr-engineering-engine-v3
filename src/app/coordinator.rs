@@ -4,9 +4,11 @@
 //!
 //! RC02: "one active generation selected by protected manifest". The manifest is
 //! `<state root>/active.json`; the state root must be the operator's private 0700 directory and the
-//! manifest a 0600 regular file of the operator's, read without following a link. This module never
-//! creates either: commissioning a state root is the operator's act (RC02, T18). An engine started
-//! without one serves `health` as `blocked` / `unavailable` and says why on its standard error.
+//! manifest a 0600 regular file of the operator's, read without following a link. `serve` never
+//! creates either: commissioning a state root is the operator's act (RC02, T18), and [`commission`]
+//! is its one door (OPS-1, `habitat-engine commission <deadline-seconds>`) — the one creator of the
+//! state root, its manifest and its first ledger. An engine started without one serves `health` as
+//! `blocked` / `unavailable` and says why on its standard error.
 //!
 //! The mapping from a startup pass to `health` is a total `match` over every reconciliation, so a
 //! new kind of decision cannot reach an operator unclassified: it will not compile until someone
@@ -20,7 +22,7 @@ use crate::contracts::control::{Database, Health, Recovery, Socket};
 use crate::recovery::{Mode, Reconciliation};
 use crate::store::{RecoveryLimits, Store};
 use rustix::fs::{Mode as FileMode, OFlags};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::io::Read;
 use std::os::unix::fs::{DirBuilderExt, MetadataExt};
@@ -72,7 +74,9 @@ pub struct Active<'m> {
     pub epoch: UuidV4<'m>,
 }
 
-#[derive(Deserialize)]
+/// The manifest's one record: the reader decodes it ([`Manifest::active`]) and the writer encodes
+/// it ([`render_manifest`]), so the writer cannot emit a field the reader refuses (OPS-1, I4).
+#[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct Record<'m> {
     schema: &'m str,
@@ -105,6 +109,18 @@ impl Manifest {
             _ => Err(Unselected::Malformed),
         }
     }
+}
+
+/// The manifest's bytes for `active`: [`Record`] encoded, the one writer of the format (OPS-1, I4).
+///
+/// # Errors
+/// The encoder's refusal; a record of three strings has none in practice, and none is hidden.
+fn render_manifest(active: Active<'_>) -> serde_json::Result<Vec<u8>> {
+    serde_json::to_vec(&Record {
+        schema: ACTIVE_SCHEMA,
+        generation: active.generation.as_str(),
+        epoch: active.epoch.as_str(),
+    })
 }
 
 /// Read the active-generation manifest under `state_root`.
@@ -485,18 +501,230 @@ fn place_marked(staged: &Path, root: &Path, id: &str) -> Result<(), RootIdError>
     if read_root_id(staged)? != id {
         return Err(RootIdError::Marker);
     }
+    if root.parent().is_none() {
+        return Err(RootIdError::Custody);
+    }
+    place_staged(staged, root).map_err(|error| RootIdError::Io(error.kind()))
+}
+
+/// Rename `staged` onto `root` only if nothing is there (`RENAME_NOREPLACE`), then sync `root`'s
+/// parent: the one rename-into-place door, shared by the attempts root (`place_marked`) and the
+/// state root ([`commission`]). A root that appeared meanwhile is `AlreadyExists`, never replaced.
+///
+/// # Errors
+/// The rename's or the parent sync's failure; `InvalidInput` for a root with no parent.
+fn place_staged(staged: &Path, root: &Path) -> std::io::Result<()> {
     rustix::fs::renameat_with(
         rustix::fs::CWD,
         staged,
         rustix::fs::CWD,
         root,
         rustix::fs::RenameFlags::NOREPLACE,
-    )
-    .map_err(|errno| RootIdError::Io(std::io::Error::from(errno).kind()))?;
-    let parent = root.parent().ok_or(RootIdError::Custody)?;
-    File::open(parent)
-        .and_then(|parent| parent.sync_all())
-        .map_err(|error| RootIdError::Io(error.kind()))
+    )?;
+    let parent = root
+        .parent()
+        .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::InvalidInput))?;
+    File::open(parent)?.sync_all()
+}
+
+/// Why [`commission`] created nothing, or left nothing it created in place (OPS-1).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum CommissionError {
+    /// Something already stands at the state root: a directory (even an empty one), a file or a
+    /// link. It is never altered; the operator removes it by hand (R1.4).
+    Exists(PathBuf),
+    /// The state root is relative, or its parent is not its own canonical path.
+    NotCanonical(PathBuf),
+    /// The operator's deadline was spent before the ledger was created or read back.
+    Deadline,
+    /// The store refused to create or to re-open the ledger, by its error's `Debug` rendering
+    /// (`store::Error` holds I/O and SQLite errors, which are not comparable).
+    Store(String),
+    /// A directory, the manifest or the rename failed, by its kind.
+    Io(std::io::ErrorKind),
+    /// The state root read back differs from what was written, by what differs.
+    ReadBack(&'static str),
+}
+
+/// A commissioned state root, every value read back from it after it was placed (OPS-1 step 7):
+/// none is copied from the input or written as a literal.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Commissioned {
+    /// The state root.
+    pub root: PathBuf,
+    /// The generation the manifest selects, read back through [`read_manifest`].
+    pub generation: String,
+    /// The epoch the manifest selects, read back through [`read_manifest`].
+    pub epoch: String,
+    /// The ledger's migration version, read back through [`Store::open_inspection`].
+    pub user_version: u32,
+    /// The root's permission bits, read back.
+    pub root_mode: u32,
+    /// The manifest's permission bits, read back.
+    pub manifest_mode: u32,
+}
+
+impl Commissioned {
+    /// The one line `habitat-engine commission` prints on success.
+    #[must_use]
+    pub fn line(&self) -> String {
+        format!(
+            "commissioned {} generation={} epoch={} user_version={} root_mode={:04o} \
+             manifest_mode={:04o}",
+            self.root.display(),
+            self.generation,
+            self.epoch,
+            self.user_version,
+            self.root_mode,
+            self.manifest_mode
+        )
+    }
+}
+
+/// Commission the state root at `state_root` for `active` (OPS-1; RC02; HO-03): the operator's act
+/// that creates the state root, its active-generation manifest and the generation's first ledger.
+/// `serve` never creates any of them. The root is born complete: a 0700 directory is staged beside
+/// it, the ledger created in it through the store's one create door ([`Store::open`] with `create`,
+/// migrations applied to `CURRENT`), the manifest written LAST through the custody door, and the
+/// stage renamed onto the root only if nothing stands there (`place_staged`, `RENAME_NOREPLACE`).
+/// A crash leaves only an inert `.staged` directory. The result is read back from the placed root:
+/// the manifest through [`read_manifest`], the ledger through [`Store::open_inspection`]. The one
+/// `deadline` is the operator's; nothing here adds a bound (R22-4).
+///
+/// The caller holds IPC01 custody (`control_socket::prepare`) across the call, so no engine serves
+/// while a root is commissioned.
+///
+/// # Errors
+/// [`CommissionError::Exists`] when anything stands at `state_root`; [`CommissionError::NotCanonical`]
+/// for a relative root or a parent that is not its own canonical path; [`CommissionError::Deadline`]
+/// for a spent deadline; [`CommissionError::Store`] for the store's refusal;
+/// [`CommissionError::Io`] for a directory, manifest or rename that failed;
+/// [`CommissionError::ReadBack`] when the placed root does not read back as written.
+pub fn commission(
+    state_root: &Path,
+    active: Active<'_>,
+    deadline: Instant,
+) -> Result<Commissioned, CommissionError> {
+    let root = state_root.to_path_buf();
+    let (Some(parent), Some(name)) = (
+        state_root.parent(),
+        state_root.file_name().and_then(|name| name.to_str()),
+    ) else {
+        return Err(CommissionError::NotCanonical(root));
+    };
+    if !state_root.is_absolute() {
+        return Err(CommissionError::NotCanonical(root));
+    }
+    // 1. The parent: its missing ancestors created (at the umask's default: RC02 constrains the
+    //    root, not `~/.local`), then required to be its own canonical path.
+    std::fs::create_dir_all(parent).map_err(|error| CommissionError::Io(error.kind()))?;
+    let resolved = parent
+        .canonicalize()
+        .map_err(|error| CommissionError::Io(error.kind()))?;
+    if resolved != parent {
+        return Err(CommissionError::NotCanonical(root));
+    }
+    // 2. Nothing may stand at the root: `read_manifest` cannot decide this (it says `Absent` for a
+    //    root with no manifest), so the custody door's own open does. A directory, a file or a link
+    //    (even a dangling one: `NOFOLLOW`) is `Exists`.
+    match PrivateDirectory::open(state_root) {
+        Err(DirectoryError::NotFound) => {}
+        Err(DirectoryError::Io(error)) => return Err(CommissionError::Io(error.kind())),
+        Ok(_) | Err(DirectoryError::Custody) => return Err(CommissionError::Exists(root)),
+    }
+    // 3. The stage beside the root, private, named by the generation it will hold.
+    let staged = parent.join(format!(".{name}.{}.staged", active.generation.as_str()));
+    std::fs::DirBuilder::new()
+        .mode(0o700)
+        .create(&staged)
+        .map_err(|error| CommissionError::Io(error.kind()))?;
+    let placed = stage_and_place(&staged, state_root, active, deadline);
+    if placed.is_err() {
+        // Best effort: the stage is never read or renamed once refused, so a leftover is inert.
+        let _ = std::fs::remove_dir_all(&staged);
+    }
+    placed?;
+    read_back(state_root, active, deadline)
+}
+
+/// OPS-1 steps 4-6: the ledger created in the stage through the store's one create door, the
+/// manifest written LAST through the custody door, and the stage placed onto the root.
+fn stage_and_place(
+    staged: &Path,
+    state_root: &Path,
+    active: Active<'_>,
+    deadline: Instant,
+) -> Result<(), CommissionError> {
+    drop(
+        Store::open(staged, active.generation, active.epoch, true, deadline)
+            .map_err(store_refused)?,
+    );
+    let manifest = render_manifest(active)
+        .map_err(|error| CommissionError::Io(std::io::Error::from(error).kind()))?;
+    PrivateDirectory::open(staged)
+        .map_err(|error| match error {
+            DirectoryError::NotFound => CommissionError::Io(std::io::ErrorKind::NotFound),
+            DirectoryError::Custody => CommissionError::ReadBack("stage custody"),
+            DirectoryError::Io(error) => CommissionError::Io(error.kind()),
+        })?
+        .create_new(ACTIVE_MANIFEST, &manifest)
+        .map_err(|error| match error {
+            FileError::Io(error) => CommissionError::Io(error.kind()),
+            FileError::NotFound => CommissionError::Io(std::io::ErrorKind::NotFound),
+            FileError::Custody | FileError::TooLarge => {
+                CommissionError::Io(std::io::ErrorKind::AlreadyExists)
+            }
+        })?;
+    place_staged(staged, state_root).map_err(|error| match error.kind() {
+        std::io::ErrorKind::AlreadyExists => CommissionError::Exists(state_root.to_path_buf()),
+        kind => CommissionError::Io(kind),
+    })
+}
+
+/// OPS-1 step 7: the placed root read back through the readers `serve` uses, and every value the
+/// verb reports taken from it — the ids from [`read_manifest`], the version from a store open, the
+/// modes from the placed paths (the reader has already refused any but 0700 and 0600).
+fn read_back(
+    state_root: &Path,
+    active: Active<'_>,
+    deadline: Instant,
+) -> Result<Commissioned, CommissionError> {
+    let manifest = read_manifest(state_root).map_err(|unselected| match unselected {
+        Unselected::Absent => CommissionError::ReadBack("manifest absent"),
+        Unselected::Custody => CommissionError::ReadBack("manifest custody"),
+        Unselected::Malformed => CommissionError::ReadBack("manifest malformed"),
+    })?;
+    let selected = manifest
+        .active()
+        .map_err(|_| CommissionError::ReadBack("manifest malformed"))?;
+    if selected != active {
+        return Err(CommissionError::ReadBack("manifest ids"));
+    }
+    let user_version =
+        Store::open_inspection(state_root, selected.generation, selected.epoch, deadline)
+            .map_err(store_refused)?
+            .schema_version();
+    let mode = |path: &Path| {
+        std::fs::symlink_metadata(path)
+            .map(|meta| meta.mode() & 0o777)
+            .map_err(|error| CommissionError::Io(error.kind()))
+    };
+    Ok(Commissioned {
+        root: state_root.to_path_buf(),
+        generation: selected.generation.as_str().to_owned(),
+        epoch: selected.epoch.as_str().to_owned(),
+        user_version,
+        root_mode: mode(state_root)?,
+        manifest_mode: mode(&state_root.join(ACTIVE_MANIFEST))?,
+    })
+}
+
+/// A store refusal as commissioning names it: a spent deadline by its own name.
+fn store_refused(error: crate::store::Error) -> CommissionError {
+    match error {
+        crate::store::Error::Deadline => CommissionError::Deadline,
+        other => CommissionError::Store(format!("{other:?}")),
+    }
 }
 
 /// Hand the ledger startup reconciled, still open and still locked, to the task owner. Nothing is

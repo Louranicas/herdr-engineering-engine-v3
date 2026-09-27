@@ -718,20 +718,21 @@ impl World {
 const GENERATION: &str = "28c00000-0000-4000-8000-0000000000a1";
 const EPOCH: &str = "28c00000-0000-4000-8000-0000000000a2";
 
-/// Commission an empty ledger and its active-generation manifest under `home`'s state root, as the
-/// operator's commissioning would (RC02); a scratch home, never the operator's own. Returns the
-/// ledger file.
+/// Commission an empty ledger and its active-generation manifest under `home`'s state root through
+/// the operator's one door (`coordinator::commission`, OPS-1), so every serve case here reads a
+/// manifest the one writer produced; a scratch home, never the operator's own. Returns the ledger
+/// file.
 fn commission(home: &Path) -> Result<PathBuf, Box<dyn Error>> {
-    let state = home.join(".local/state/herdr-engineering-engine-v3");
-    DirBuilder::new()
-        .mode(0o700)
-        .recursive(true)
-        .create(&state)?;
-    drop(ledger(&state)?);
-    let body = serde_json::to_vec(
-        &json!({"schema": "hee3.active-generation/1", "generation": GENERATION, "epoch": EPOCH}),
-    )?;
-    write_grant(&state, "active.json", &body, 0o600)?;
+    let state = habitat_engine::app::coordinator::state_root(home);
+    habitat_engine::app::coordinator::commission(
+        &state,
+        habitat_engine::app::coordinator::Active {
+            generation: UuidV4::parse(GENERATION)?,
+            epoch: UuidV4::parse(EPOCH)?,
+        },
+        Instant::now() + Duration::from_secs(10),
+    )
+    .map_err(|error| format!("{error:?}"))?;
     Ok(state
         .join("generations")
         .join(GENERATION)
@@ -3548,7 +3549,8 @@ fn serve_accepts_exactly_its_one_flag() -> Outcome {
                 Some(2),
                 format!(
                     "habitat-engine: usage: habitat-engine serve [{UNTIL_STDIN_CLOSES}] | \
-                     habitat-engine <action-id> < request\n"
+                     habitat-engine <action-id> < request | habitat-engine commission \
+                     <deadline-seconds>\n"
                 )
             ),
             "{argv:?}"
@@ -3855,5 +3857,208 @@ fn a_frame_in_flight_when_the_drain_begins_is_answered_and_run_returns() -> Outc
             .any(|line| line == "draining: no connection is admitted"),
         "the drain is reported"
     );
+    Ok(())
+}
+
+// ---- OPS-1: `habitat-engine commission <deadline-seconds>` through `main` -------------------------
+
+/// `habitat-engine <argv>` under `run` and `home`, its output once it exits (budgeted, F102).
+fn engine_verb(run: &Path, home: &Path, argv: &[&str]) -> Result<Output, Box<dyn Error>> {
+    let child = Command::new(env!("CARGO_BIN_EXE_habitat-engine"))
+        .args(argv)
+        .env("XDG_RUNTIME_DIR", run)
+        .env("HOME", home)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    exits_within(child, Duration::from_secs(60))
+}
+
+/// The ledger file and the manifest under a commissioned `state` root, for the generation `active`
+/// names, as the verb's read-back names them.
+fn commissioned_ids(state: &Path) -> Result<(String, String), Box<dyn Error>> {
+    let manifest = habitat_engine::app::coordinator::read_manifest(state)
+        .map_err(|error| format!("{error:?}"))?;
+    let active = manifest.active().map_err(|error| format!("{error:?}"))?;
+    Ok((
+        active.generation.as_str().to_owned(),
+        active.epoch.as_str().to_owned(),
+    ))
+}
+
+/// OPS-1 case 5 · the producer/consumer seam through `main`: `commission 60` exits 0 and prints
+/// exactly one line, asserted whole against the ids read back through the manifest reader and the
+/// migration chain's length from `migrations/*.sql`; `serve` then starts over that root and its
+/// first standard-error line is the reconciled line, whole.
+#[test]
+fn commission_through_main_is_what_serve_reconciles() -> Outcome {
+    let world = World::new()?;
+    let state = habitat_engine::app::coordinator::state_root(&world.home);
+    let output = engine_verb(&world.run, &world.home, &["commission", "60"])?;
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8(output.stderr)?, "");
+    let (generation, epoch) = commissioned_ids(&state)?;
+    let migrations = super::coordinator::migration_count()?;
+    assert_eq!(
+        String::from_utf8(output.stdout)?,
+        format!(
+            "commissioned {} generation={generation} epoch={epoch} user_version={migrations} \
+             root_mode=0700 manifest_mode=0600\n",
+            state.display()
+        )
+    );
+    assert_eq!(
+        super::coordinator::raw_user_version(
+            &state
+                .join("generations")
+                .join(&generation)
+                .join("ledger.sqlite3")
+        )?,
+        migrations
+    );
+    let log = world.home.join("engine.log");
+    let engine = Engine::start_logged(&world.run, &world.home, &log)?;
+    let _output = engine.terminate(Duration::from_secs(20))?;
+    let stderr = fs::read_to_string(&log)?;
+    assert_eq!(
+        stderr.lines().next(),
+        Some(
+            format!(
+                "habitat-engine: generation {generation} reconciled: attempts=0 writes=0 \
+                 cleanup=0 cleanup_backlog=0 recovery=complete database=ready"
+            )
+            .as_str()
+        ),
+        "{stderr}"
+    );
+    Ok(())
+}
+
+/// OPS-1 case 6 · IPC01 first: while an engine serves (over an uncommissioned home), `commission`
+/// refuses by the custody rule's own line, exit 6, and creates no state root.
+#[test]
+fn commission_refuses_while_an_engine_serves() -> Outcome {
+    let world = World::new()?;
+    let state = habitat_engine::app::coordinator::state_root(&world.home);
+    let engine = Engine::start(&world.run, &world.home)?;
+    let output = engine_verb(&world.run, &world.home, &["commission", "60"])?;
+    drop(engine);
+    assert_eq!(
+        (
+            output.status.code(),
+            String::from_utf8(output.stdout)?,
+            String::from_utf8(output.stderr)?
+        ),
+        (
+            Some(6),
+            String::new(),
+            "habitat-engine: commission refused: an engine holds custody (Live)\n".to_owned()
+        )
+    );
+    assert!(
+        fs::symlink_metadata(&state).is_err(),
+        "no state root was created"
+    );
+    Ok(())
+}
+
+/// The sha256 of the file at `path` (a before/after comparison: any digest serves).
+fn file_sha256(path: &Path) -> Result<String, Box<dyn Error>> {
+    Ok(request_sha256(&fs::read(path)?))
+}
+
+/// OPS-1 case 7 · a second `commission` refuses the root by its path, exit 6, and leaves the first
+/// commissioning's manifest bytes, ledger digest and root listing exactly as they were.
+#[test]
+fn a_second_commission_refuses_the_root_by_name() -> Outcome {
+    let world = World::new()?;
+    let state = habitat_engine::app::coordinator::state_root(&world.home);
+    let first = engine_verb(&world.run, &world.home, &["commission", "60"])?;
+    assert_eq!(
+        first.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+    let (generation, _) = commissioned_ids(&state)?;
+    let ledger = state
+        .join("generations")
+        .join(&generation)
+        .join("ledger.sqlite3");
+    let listing = |root: &Path| -> Result<Vec<String>, Box<dyn Error>> {
+        let mut names = fs::read_dir(root)?
+            .map(|entry| entry.map(|entry| entry.file_name().to_string_lossy().into_owned()))
+            .collect::<Result<Vec<_>, _>>()?;
+        names.sort();
+        Ok(names)
+    };
+    let before = (
+        fs::read(state.join("active.json"))?,
+        file_sha256(&ledger)?,
+        listing(&state)?,
+    );
+    let second = engine_verb(&world.run, &world.home, &["commission", "60"])?;
+    assert_eq!(
+        (
+            second.status.code(),
+            String::from_utf8(second.stdout)?,
+            String::from_utf8(second.stderr)?
+        ),
+        (
+            Some(6),
+            String::new(),
+            format!(
+                "habitat-engine: commission refused: state root exists at {}\n",
+                state.display()
+            )
+        )
+    );
+    let after = (
+        fs::read(state.join("active.json"))?,
+        file_sha256(&ledger)?,
+        listing(&state)?,
+    );
+    assert_eq!(before, after);
+    Ok(())
+}
+
+/// OPS-1 case 8 · the deadline is the operator's, with no default (R22-4): a missing, zero or
+/// unparsable one is a usage error, exit 2, with the whole usage line naming the verb, and nothing
+/// is created.
+#[test]
+fn commission_without_a_deadline_is_a_usage_error() -> Outcome {
+    let world = World::new()?;
+    let state = habitat_engine::app::coordinator::state_root(&world.home);
+    for argv in [
+        &["commission"][..],
+        &["commission", "0"],
+        &["commission", "x"],
+        &["commission", "07"],
+    ] {
+        let output = engine_verb(&world.run, &world.home, argv)?;
+        assert_eq!(
+            (
+                output.status.code(),
+                String::from_utf8(output.stdout)?,
+                String::from_utf8(output.stderr)?
+            ),
+            (
+                Some(2),
+                String::new(),
+                "habitat-engine: usage: habitat-engine serve [--until-stdin-closes] | \
+                 habitat-engine <action-id> < request | habitat-engine commission \
+                 <deadline-seconds>\n"
+                    .to_owned()
+            ),
+            "{argv:?}"
+        );
+        assert!(fs::symlink_metadata(&state).is_err(), "{argv:?}");
+    }
     Ok(())
 }

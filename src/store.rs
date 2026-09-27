@@ -969,6 +969,14 @@ impl Store {
         )
     }
 
+    /// The migration version this ledger records, as its open read it back (A25): the value
+    /// `commission` reads back after creating a ledger (OPS-1 step 7). Every open but
+    /// [`Store::upgrade`]'s refuses a version other than this binary's.
+    #[must_use]
+    pub const fn schema_version(&self) -> u32 {
+        self.schema_version
+    }
+
     /// Open existing durable state for inspection only, including reconciliation mode.
     /// This preserves the same sole lock and schema checks; WAL/profile effects
     /// remain possible, but mutations, artifact publication and dispatch are denied.
