@@ -197,12 +197,17 @@ use habitat_engine::app::control_socket::{
 };
 use habitat_engine::app::coordinator;
 use habitat_engine::app::grants::{self, FileGrants};
+use habitat_engine::app::native_provider::{self, Installed, NativeFileError, NativeProvider};
+use habitat_engine::app::tasks::StoreTasks;
 use habitat_engine::app::{class_profile, dispatcher, routing};
 use habitat_engine::contracts::control::{FrameReader, MAX_FRAME_BYTES, ReadError};
+use habitat_engine::worker::aggregate;
 use habitat_engine::worker::namespace_shim::{self, NamespaceExec};
+use habitat_engine::worker::native::{self, Systemd};
 use signal_hook::consts::SIGTERM;
 use signal_hook::iterator::Signals;
 use std::io::{self, Read, Write};
+use std::os::unix::fs::{DirBuilderExt, MetadataExt};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -300,6 +305,138 @@ fn open_grants(home: &Path) -> Result<Box<dyn Grants + Sync>, ExitCode> {
     }
 }
 
+/// The attempts root under `state_root`, created 0700 when absent and read back as this user's
+/// private directory: the shared plan and every attempt are materialised under it, and the plan
+/// refuses a root whose parent does not exist (`plan_root_not_canonical`) — which would stop the
+/// owner's task for the machine's missing directory. When it cannot be had, dispatch is said
+/// unavailable once and no dispatcher runs.
+fn attempts_root(state_root: &Path) -> Option<PathBuf> {
+    let attempts = coordinator::attempts_root(state_root);
+    let created = std::fs::DirBuilder::new().mode(0o700).create(&attempts);
+    let refused = match created {
+        Err(error) if error.kind() != io::ErrorKind::AlreadyExists => Some(error.to_string()),
+        _ => match std::fs::symlink_metadata(&attempts) {
+            Ok(meta)
+                if meta.is_dir()
+                    && meta.mode() & 0o777 == 0o700
+                    && meta.uid() == rustix::process::geteuid().as_raw() =>
+            {
+                None
+            }
+            Ok(_) => Some("not this user's private directory".to_owned()),
+            Err(error) => Some(error.to_string()),
+        },
+    };
+    match refused {
+        None => Some(attempts),
+        Some(why) => {
+            eprintln!(
+                "habitat-engine: dispatch unavailable: attempts root {} refused ({why})",
+                attempts.display()
+            );
+            None
+        }
+    }
+}
+
+/// The native provider (B14b-2; R21 N3, N12): the operator's file read under custody, the class's
+/// adapter row, the agent record installed as the operator inside the startup window, and the
+/// provider over the user manager's pinned busctl door and the engine's runtime root. Every absence
+/// or refusal is said once; the dispatcher then runs over `NoProvider`.
+fn compose_native(
+    home: &Path,
+    tasks: &StoreTasks,
+    runtime_root: &Path,
+    deadline: std::time::Instant,
+) -> Option<(NativeProvider<Systemd>, Installed)> {
+    let directory = coordinator::config_path(home, native_provider::NATIVE_DIRECTORY);
+    let unavailable = |why: &str| {
+        eprintln!(
+            "habitat-engine: native provider unavailable: {why} ({})",
+            directory.display()
+        );
+    };
+    let (file, bytes) = match native_provider::read(&directory) {
+        Ok(read) => read,
+        Err(NativeFileError::NotInstalled) => {
+            unavailable("not installed");
+            return None;
+        }
+        Err(error) => {
+            unavailable(&format!("refused: {error:?}"));
+            return None;
+        }
+    };
+    // No class profile: the dispatcher says so itself (`unavailable: no class profile`).
+    let profile = tasks.class_profile().ok()?;
+    // A class with no native row installs nothing: `open` names it for every task it would serve.
+    let adapter = match &profile.declared.native {
+        None => None,
+        Some(row) => {
+            let Some(adapter) = native::adapter(&row.adapter) else {
+                unavailable(&format!(
+                    "the class's adapter row {} is unknown",
+                    row.adapter
+                ));
+                return None;
+            };
+            Some(adapter)
+        }
+    };
+    let installed = match adapter {
+        None => {
+            eprintln!(
+                "habitat-engine: native provider read from {}; the class declares no native model, \
+                 so nothing is installed",
+                directory.display()
+            );
+            Installed {
+                record_id: String::new(),
+                selections: Vec::new(),
+            }
+        }
+        Some(adapter) => {
+            let euid = rustix::process::geteuid().as_raw();
+            let principal = match control_socket::admit_peer(euid, euid) {
+                Ok(principal) => principal,
+                Err(why) => {
+                    unavailable(&why);
+                    return None;
+                }
+            };
+            match native_provider::install(tasks, &principal, &file, &bytes, adapter, deadline) {
+                Ok(installed) => {
+                    eprintln!(
+                        "habitat-engine: native provider installed from {} (record {}, revision {})",
+                        directory.display(),
+                        installed.record_id,
+                        installed
+                            .selections
+                            .first()
+                            .map_or("none", |selection| selection.expected_revision.as_str())
+                    );
+                    installed
+                }
+                Err(error) => {
+                    unavailable(&format!("install refused: {error:?}"));
+                    return None;
+                }
+            }
+        }
+    };
+    let systemd = Systemd(aggregate::Config {
+        busctl: aggregate::BUSCTL.into(),
+        busctl_sha256: profile.declared.busctl_sha256.clone(),
+        runtime_dir: runtime_root.to_path_buf(),
+        // Read only by `Aggregate::prepare`; the MainPID door never parses it.
+        run_id: String::new(),
+    });
+    Some((
+        NativeProvider::new(file, systemd, runtime_root.to_path_buf()),
+        installed,
+    ))
+}
+
 /// `habitat-engine serve`: take single-instance custody of IPC01, reconcile the active
 /// generation, compose the task owner over the ledger startup left open, and only then bind and
 /// serve until SIGTERM (IPC01: acquire custody before recovery; bind after ready). SIGTERM drains
@@ -316,11 +453,12 @@ fn serve() -> ExitCode {
             return ExitCode::from(EXIT_CONTRACT);
         }
     };
-    let prepared =
+    // The runtime root is kept: the native provider's aggregate and scopes are pinned to it.
+    let (runtime_root, prepared) =
         match control_socket::runtime_root(std::env::var_os("XDG_RUNTIME_DIR").as_deref())
-            .and_then(|root| control_socket::prepare(&root))
+            .and_then(|root| control_socket::prepare(&root).map(|prepared| (root, prepared)))
         {
-            Ok(prepared) => prepared,
+            Ok(both) => both,
             Err(error) => {
                 eprintln!("habitat-engine: control socket refused: {error:?}");
                 return ExitCode::from(EXIT_CONTRACT);
@@ -342,12 +480,10 @@ fn serve() -> ExitCode {
     // served is the one reconciled, over the ledger startup opened.
     let state_root = coordinator::state_root(&home);
     let manifest = coordinator::read_manifest(&state_root);
-    let started = coordinator::observe_at_start(
-        &state_root,
-        &manifest,
-        now_unix_ms(),
-        std::time::Instant::now() + std::time::Duration::from_secs(30),
-    );
+    // The one startup window: reconciliation and the native install both run inside it.
+    let startup_deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    let started =
+        coordinator::observe_at_start(&state_root, &manifest, now_unix_ms(), startup_deadline);
     eprintln!("habitat-engine: {}", started.line);
     let health = started.health;
     // The route configuration task.preview screens against, read once under custody (B07). Its
@@ -379,6 +515,11 @@ fn serve() -> ExitCode {
             None
         }
     };
+    // The native provider (B14b-2): read the operator's file, install its agent record, and compose
+    // the provider the dispatcher opens per dispatch — or say once why there is none.
+    let native = tasks
+        .as_ref()
+        .and_then(|tasks| compose_native(&home, tasks, &runtime_root, startup_deadline));
     let listener = match control_socket::bind(&prepared) {
         Ok(listener) => listener,
         Err(error) => {
@@ -396,18 +537,18 @@ fn serve() -> ExitCode {
             .map(|tasks| tasks as &(dyn habitat_engine::actions::control::Tasks + Sync)),
         drain: &drain,
     };
-    // The dispatcher (B14b-1): one thread beside the accept loop, over the same task owner, with
-    // no provider until B14b-2 — it runs the free checks, stops by name, and reports its named
-    // unavailable state when a task passes them.
-    let attempts = coordinator::attempts_root(&state_root);
+    // The dispatcher (B14b-1): one thread beside the accept loop, over the same task owner and the
+    // native provider when one composed (B14b-2) — else it runs the free checks, stops by name, and
+    // reports its named unavailable state when a task passes them.
+    let attempts = attempts_root(&state_root);
     if let Err(error) = serve_until_signalled(
         &mut signals,
         &listener,
         shared,
         &drain,
         &prepared,
-        tasks.as_ref(),
-        &attempts,
+        tasks.as_ref().zip(attempts.as_deref()),
+        native,
     ) {
         eprintln!("habitat-engine: accept failed: {error}");
         return ExitCode::from(EXIT_CONTRACT);
@@ -427,9 +568,10 @@ fn serve_until_signalled(
     shared: control_socket::Shared<'_>,
     drain: &Drain,
     prepared: &control_socket::Prepared,
-    tasks: Option<&habitat_engine::app::tasks::StoreTasks>,
-    attempts: &Path,
+    dispatching: Option<(&StoreTasks, &Path)>,
+    native: Option<(NativeProvider<Systemd>, Installed)>,
 ) -> io::Result<()> {
+    let tasks = dispatching.map(|(tasks, _)| tasks);
     let report = |line: &str| eprintln!("habitat-engine: {line}");
     let handle = signals.handle();
     std::thread::scope(|scope| {
@@ -448,18 +590,29 @@ fn serve_until_signalled(
         });
         // The dispatcher runs over the task owner (the one class profile is read inside it);
         // without one, its absence is said once, like the other unavailable doors.
-        match tasks {
-            Some(tasks) => {
+        match dispatching {
+            Some((tasks, attempts)) => {
                 scope.spawn(move || {
-                    let exit = dispatcher::Dispatcher {
-                        tasks,
-                        attempts,
-                        provider: &mut dispatcher::NoProvider,
-                        agent_record_id: "",
-                        selections: &[],
-                        drain: drain.flag(),
-                    }
-                    .run(&report);
+                    let exit = match native {
+                        Some((mut provider, installed)) => dispatcher::Dispatcher {
+                            tasks,
+                            attempts,
+                            provider: &mut provider,
+                            agent_record_id: &installed.record_id,
+                            selections: &installed.selections,
+                            drain: drain.flag(),
+                        }
+                        .run(&report),
+                        None => dispatcher::Dispatcher {
+                            tasks,
+                            attempts,
+                            provider: &mut dispatcher::NoProvider,
+                            agent_record_id: "",
+                            selections: &[],
+                            drain: drain.flag(),
+                        }
+                        .run(&report),
+                    };
                     eprintln!("habitat-engine: dispatcher stopped: {exit:?}");
                 });
             }

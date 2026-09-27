@@ -263,7 +263,43 @@ fn roster(
 /// declared by a composed profile.
 fn installed(root: &Path, shape: &Shape<'_>) -> Result<Profile, Box<dyn Error>> {
     let class = root.join("class");
-    private(&class)?;
+    let text = class_directory(&class, shape)?;
+    Ok(Profile {
+        declared: class_profile::compose(text.as_bytes()).map_err(|error| format!("{error:?}"))?,
+        directory: class,
+        digest: PROFILE_DIGEST.to_owned(),
+    })
+}
+
+/// The class `installed` composes, as `serve` reads it through `main` (R21 S21): the rig's class
+/// directory with the class's `Cargo.toml` in the baseline, and its `profile.toml` text under
+/// `hee3.class-profile/2` with the native row naming `manifest_sha256` and the `/2` adapter.
+pub(super) fn native_class_text(
+    class: &Path,
+    manifest_sha256: &str,
+) -> Result<String, Box<dyn Error>> {
+    let text = class_directory(
+        class,
+        &Shape {
+            base_cargo: true,
+            ..Shape::default()
+        },
+    )?;
+    let v1 = "schema = \"hee3.class-profile/1\"\n";
+    assert_eq!(text.matches(v1).count(), 1, "one schema line");
+    Ok(format!(
+        "{}\n[native]\nmodel = \"{NATIVE_MODEL}\"\nmanifest_sha256 = \"{manifest_sha256}\"\nadapter = \"{}\"\n",
+        text.replacen(v1, "schema = \"hee3.class-profile/2\"\n", 1),
+        FULL_FILE.id
+    ))
+}
+
+/// The workspace the rig's class declares, as a task spec names it.
+pub(super) const CLASS_WORKSPACE: &str = WORKSPACE;
+
+/// Populate `class` (created 0700) as the rig's class directory and return its profile text.
+fn class_directory(class: &Path, shape: &Shape<'_>) -> Result<String, Box<dyn Error>> {
+    private(class)?;
     let (base, protected) = (class.join("base"), class.join("protected"));
     private(&base)?;
     private(&base.join("src"))?;
@@ -336,11 +372,7 @@ fn installed(root: &Path, shape: &Shape<'_>) -> Result<Profile, Box<dyn Error>> 
     if let Some(name) = shape.removed {
         fs::remove_dir_all(class.join(name))?;
     }
-    Ok(Profile {
-        declared: class_profile::compose(text.as_bytes()).map_err(|error| format!("{error:?}"))?,
-        directory: class,
-        digest: PROFILE_DIGEST.to_owned(),
-    })
+    Ok(text)
 }
 
 fn rig(shape: &Shape<'_>) -> Result<Rig, Box<dyn Error>> {

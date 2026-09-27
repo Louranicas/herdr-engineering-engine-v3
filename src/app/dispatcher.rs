@@ -6,10 +6,11 @@
 //! loop the round-1 review named is unrepresentable here, because the classification is an
 //! exhaustive `match` with no catch-all arm and the read never returns a task that has an attempt row.
 //!
-//! What this half does not do (B14b-2): configure the native provider and install its roster record;
-//! record the attempt's workspace root in the ledger. The drain does not reach an in-flight exchange
-//! or check — one waits for it under the attempt's own deadline (R21 D8, reversing R20 round 2 D5:
-//! the wake is B19/B21's, the engine unit's stop timeout APP-22's). With no provider installed the
+//! B14b-2 composes the production provider in `serve` (`native_provider::NativeProvider`, its roster
+//! record installed once at start) and records each attempt's root in the ledger at begin. The
+//! drain does not reach an in-flight exchange or check — one waits for it under the attempt's own
+//! deadline (R21 D8, reversing R20 round 2 D5: the wake is B19/B21's, the engine unit's stop
+//! timeout APP-22's). With no provider installed the
 //! dispatcher enters the named state `unavailable: no native provider`, reports it once, stops
 //! picking and leaves the task `admitted` — P2c-R1.5's "stop it `dispatch_unavailable`" revisited:
 //! the task is the owner's and the missing configuration the operator's.
@@ -285,8 +286,9 @@ pub struct Dispatcher<'a, P> {
     /// The attempts root under the state root (`coordinator::attempts_root`).
     pub attempts: &'a Path,
     pub provider: &'a mut P,
-    /// The roster inputs a begin needs (B14a-1c): the rig's in B14b-1's proofs; in production
-    /// empty until B14b-2's roster decision (no task reaches `begin` with no provider).
+    /// The roster inputs a begin needs (B14a-1c): the rig's in the proofs; in production the native
+    /// install's record and selection (R21 N3), fixed at `serve` start — empty with no provider,
+    /// when no task reaches `begin`.
     pub agent_record_id: &'a str,
     pub selections: &'a [Selection],
     /// The engine's drain (`Drain::flag`): ends the wait, and is read by the runtime between attempts.

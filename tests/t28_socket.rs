@@ -1585,6 +1585,102 @@ fn serve_dispatches_an_admitted_task_and_stops_it_by_name_through_main() -> Outc
     Ok(())
 }
 
+/// R21 S21 (N3, N12), through `main` · with the operator's native file installed beside a `/2`
+/// class, `serve` installs the native agent record and dispatches over the native provider: the
+/// file names a unit no manager has (`hee3-t28-absent.service`, independent of the host), so the
+/// provider's `open` refuses at the daemon, the dispatcher says its named state once, and the task
+/// stays `admitted` for the operator to fix — never stopped for the operator's configuration.
+#[test]
+fn with_an_operator_file_naming_an_absent_unit_the_engine_says_so_and_the_task_stays_admitted()
+-> Outcome {
+    const KEY: &str = "28c00000-0000-4000-8000-0000000000d2";
+    let manifest = format!("sha256:{}", "7".repeat(64));
+    let world = World::granting(&["task"], &["read", "durable admission"])?;
+    let (run, scope) = (&world.run, &world.scope);
+    commission(&world.home)?;
+    let config = world.home.join(".config/herdr-engineering-engine-v3");
+    let classes = config.join("classes");
+    DirBuilder::new()
+        .mode(0o700)
+        .recursive(true)
+        .create(&classes)?;
+    let class = classes.join("rust-library-change-1");
+    let text = super::runtime::native_class_text(&class, &manifest)?;
+    write_grant(&class, "profile.toml", text.as_bytes(), 0o600)?;
+    let native = config.join("native");
+    DirBuilder::new().mode(0o700).create(&native)?;
+    let operator = format!(
+        "schema = \"hee3.native/1\"\ndirectory = \"/srv/hee/native\"\n\n[client]\n\
+         path = \"/usr/bin/curl\"\nsha256 = \"sha256:{c}\"\nbytes = 218440\n\n[install]\n\
+         manifest = {{ path = \"/srv/models/manifests/m\", sha256 = \"{manifest}\", bytes = 1005 }}\n\
+         blobs = \"/srv/models/blobs\"\n\n[daemon]\nunit = \"hee3-t28-absent.service\"\n\
+         scope = \"user\"\nexecutable = {{ sha256 = \"sha256:{e}\", bytes = 32276424 }}\n\n\
+         [roster]\nidempotency_key = \"28c00000-0000-4000-8000-0000000000e1\"\n\
+         endpoint_ref = \"28c00000-0000-4000-8000-0000000000e2\"\n",
+        c = "a".repeat(64),
+        e = "b".repeat(64),
+    );
+    write_grant(&native, "native.toml", operator.as_bytes(), 0o600)?;
+    let log = world.home.join("engine.log");
+    let engine = Engine::start_logged(run, &world.home, &log)?;
+    // The class's workspace and criteria, so admission admits and a provider is opened.
+    let mut spec = super::tasks::spec();
+    spec["workspace_id"] = json!(super::runtime::CLASS_WORKSPACE);
+    spec["criteria"] = json!(habitat_engine::check::consistency::U64_CRITERIA);
+    let submitted = reply_of(&wrapper(
+        run,
+        scope,
+        &strs(&[
+            "task.submit".to_owned(),
+            format!("@idempotency_key={KEY}"),
+            format!("spec:={spec}"),
+        ]),
+    )?)?;
+    assert_eq!(submitted["kind"], json!("result"), "{submitted}");
+    let task = submitted["body"]["task"]["task_id"]
+        .as_str()
+        .ok_or("task id")?
+        .to_owned();
+    // Poll the artifact with a budget (F102/F137): the dispatcher's named state in the log.
+    let said = "habitat-engine: dispatcher: unavailable: daemon identity";
+    let started = Instant::now();
+    let stderr = loop {
+        let stderr = fs::read_to_string(&log)?;
+        if stderr.lines().any(|line| line == said) {
+            break stderr;
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(20),
+            "no {said:?} within 20 s:\n{stderr}"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    let got = reply_of(&wrapper(
+        run,
+        scope,
+        &strs(&getting(&json!({"task_id": task}))),
+    )?)?;
+    assert_eq!(got["body"]["task"]["state"], json!("admitted"), "{got}");
+    let _output = engine.terminate(Duration::from_secs(20))?;
+    let installed = format!(
+        "habitat-engine: native provider installed from {}",
+        native.display()
+    );
+    assert_eq!(
+        (
+            stderr.lines().filter(|line| *line == said).count(),
+            stderr
+                .lines()
+                .filter(|line| line.starts_with(&installed))
+                .count(),
+            stderr.contains("Unavailable(Daemon(Identity))"),
+        ),
+        (1, 1, true),
+        "{stderr}"
+    );
+    Ok(())
+}
+
 #[test]
 fn an_unwritable_ledger_leaves_task_actions_unavailable() -> Outcome {
     let world = World::granting(&["app", "task"], &["read", "durable admission"])?;
