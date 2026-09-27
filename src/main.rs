@@ -330,11 +330,13 @@ fn open_grants(home: &Path) -> Result<Box<dyn Grants + Sync>, ExitCode> {
 /// (`NotCanonical`: a root reached through a link, B14b-2 closure D5), for the same reason. A root
 /// that exists without its marker is refused, never re-created. When it cannot be had, dispatch is
 /// said unavailable once and no dispatcher runs. `deadline` is the startup's own, passed through:
-/// it bounds only drawing a new root's id.
-fn attempts_root(state_root: &Path, deadline: std::time::Instant) -> Option<PathBuf> {
+/// it bounds only drawing a new root's id. The id the door returns is kept with the root and
+/// carried into every dispatch, where a begin compares the marker it reads against it (B14b-2
+/// review round 2, D9) — never discarded and re-acquired as if it were new.
+fn attempts_root(state_root: &Path, deadline: std::time::Instant) -> Option<AttemptsRoot> {
     let attempts = coordinator::attempts_root(state_root);
     match coordinator::prepare_attempts_root(&attempts, deadline) {
-        Ok(_) => Some(attempts),
+        Ok(id) => Some(AttemptsRoot { path: attempts, id }),
         Err(why) => {
             say(format_args!(
                 "dispatch unavailable: attempts root {} refused ({why:?})",
@@ -343,6 +345,14 @@ fn attempts_root(state_root: &Path, deadline: std::time::Instant) -> Option<Path
             None
         }
     }
+}
+
+/// The attempts root `serve` prepared at its start, and the id its one door returned for it
+/// (B14b-2 review round 2, D9): both are handed to the dispatcher, which carries the id into every
+/// dispatch.
+struct AttemptsRoot {
+    path: PathBuf,
+    id: String,
 }
 
 /// The native provider (B14b-2; R21 N3, N12): the operator's file read under custody, the class's
@@ -557,7 +567,7 @@ fn serve(lifetime: Lifetime) -> ExitCode {
         shared,
         &drain,
         &prepared,
-        tasks.as_ref().zip(attempts.as_deref()).zip(native),
+        tasks.as_ref().zip(attempts.as_ref()).zip(native),
     ) {
         say(format_args!("accept failed: {error}"));
         return ExitCode::from(EXIT_CONTRACT);
@@ -643,7 +653,7 @@ fn serve_until_signalled(
     shared: control_socket::Shared<'_>,
     drain: &Drain,
     prepared: &control_socket::Prepared,
-    dispatching: Option<((&StoreTasks, &Path), Composed)>,
+    dispatching: Option<((&StoreTasks, &AttemptsRoot), Composed)>,
 ) -> io::Result<()> {
     let tasks = dispatching.as_ref().map(|((tasks, _), _)| *tasks);
     let report = |line: &str| say(format_args!("{line}"));
@@ -676,12 +686,13 @@ fn serve_until_signalled(
         // The dispatcher runs over the task owner (the one class profile is read inside it);
         // without one, its absence is said once, like the other unavailable doors.
         match dispatching {
-            Some(((tasks, attempts), native)) => {
+            Some(((tasks, root), native)) => {
                 scope.spawn(move || {
                     let exit = match native {
                         Ok((mut provider, installed)) => dispatcher::Dispatcher {
                             tasks,
-                            attempts,
+                            attempts: &root.path,
+                            root_id: &root.id,
                             provider: &mut provider,
                             agent_record_id: &installed.record_id,
                             selections: &installed.selections,
@@ -690,7 +701,8 @@ fn serve_until_signalled(
                         .run(&report),
                         Err(why) => dispatcher::Dispatcher {
                             tasks,
-                            attempts,
+                            attempts: &root.path,
+                            root_id: &root.id,
                             provider: &mut dispatcher::NoProvider(why),
                             agent_record_id: "",
                             selections: &[],

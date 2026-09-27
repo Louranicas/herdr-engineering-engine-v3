@@ -4510,6 +4510,7 @@ fn a_restart_reads_the_root_by_its_marker_not_its_inode() -> Result<(), Box<dyn 
             Err(RootIdError::Io(std::io::ErrorKind::PermissionDenied)),
             Presence::Unreadable,
         ),
+        (Err(RootIdError::Changed), Presence::Unreadable),
     ];
     for (observed, expected) in table {
         assert_eq!(root_presence(recorded, observed), expected, "{observed:?}");

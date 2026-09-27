@@ -349,6 +349,10 @@ pub enum RootIdError {
     Entropy,
     /// Any other I/O failure, by its kind.
     Io(std::io::ErrorKind),
+    /// The root at the path carries another id than the one `serve` prepared at its start: read
+    /// at a begin and compared with the id the dispatch carries (B14b-2 review round 2, D9). The
+    /// root was replaced under a running engine; no attempt begins under it.
+    Changed,
 }
 
 /// The attempts root's identity, read through the custody door (B14b-2 closure C18): the root must

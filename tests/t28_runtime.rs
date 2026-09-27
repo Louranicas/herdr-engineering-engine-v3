@@ -126,6 +126,8 @@ struct Rig {
     tasks: StoreTasks,
     profile: Profile,
     attempts: PathBuf,
+    /// The id the door prepared `attempts` with, as `serve` carries it into every dispatch.
+    root_id: String,
     agent: String,
     selections: Vec<Selection>,
     reserved_work_ms: u64,
@@ -410,8 +412,9 @@ fn rig(shape: &Shape<'_>) -> Result<Rig, Box<dyn Error>> {
         .map_err(|error| format!("{error:?}"))?;
     let profile = installed(&scratch.0, shape)?;
     let attempts = scratch.0.join("attempts");
-    // Created and marked through the one door, as `serve` makes it (B14b-2 closure C18).
-    habitat_engine::app::coordinator::prepare_attempts_root(&attempts, deadline())
+    // Created and marked through the one door, as `serve` makes it (B14b-2 closure C18); its id is
+    // kept, as `serve` keeps it (B14b-2 review round 2, D9).
+    let root_id = habitat_engine::app::coordinator::prepare_attempts_root(&attempts, deadline())
         .map_err(|e| format!("{e:?}"))?;
     // The dispatcher reads the class profile from the task owner (R20 round 2 A11): install it there.
     let tasks = StoreTasks::new(store, EPOCH.to_owned()).with_class_profile(Ok(profile.clone()));
@@ -420,6 +423,7 @@ fn rig(shape: &Shape<'_>) -> Result<Rig, Box<dyn Error>> {
         scratch,
         profile,
         attempts,
+        root_id,
         agent,
         selections,
         reserved_work_ms: shape.work_ms,
@@ -672,6 +676,7 @@ fn run<C: CandidateSource, V: Verifier>(
             agent_record_id: &rig.agent,
             selections: &rig.selections,
             attempts: &rig.attempts,
+            root_id: &rig.root_id,
             forbidden: &[],
             teardown_ms: rig.teardown_ms,
             capture_ms: Some(capture_ms),
@@ -932,6 +937,7 @@ fn run_dispatcher_owned<P: dispatcher::Provider + Send + 'static>(
             let exit = dispatcher::Dispatcher {
                 tasks: &rig.tasks,
                 attempts: &rig.attempts,
+                root_id: &rig.root_id,
                 provider: &mut provider,
                 agent_record_id: &rig.agent,
                 selections: &selections,
@@ -1501,6 +1507,7 @@ fn a_task_drained_before_its_first_attempt_is_picked_again_after_the_drain() -> 
             agent_record_id: &rig.agent,
             selections: &rig.selections,
             attempts: &rig.attempts,
+            root_id: &rig.root_id,
             forbidden: &[],
             teardown_ms: rig.teardown_ms,
             capture_ms: Some(5_000),
@@ -1850,6 +1857,7 @@ fn each_attempt_is_asked_from_its_own_charge_start() -> Outcome_ {
             agent_record_id: &rig.agent,
             selections: &rig.selections,
             attempts: &rig.attempts,
+            root_id: &rig.root_id,
             forbidden: &[],
             teardown_ms: rig.teardown_ms,
             capture_ms: Some(5_000),
@@ -1906,6 +1914,7 @@ fn admitted_with<'a>(
             agent_record_id: &rig.agent,
             selections: &rig.selections,
             attempts: &rig.attempts,
+            root_id: &rig.root_id,
             forbidden: &[],
             teardown_ms: rig.teardown_ms,
             capture_ms: Some(5_000),
@@ -2370,6 +2379,7 @@ fn a_child_pending_to_its_bound_leaves_the_task_needs_settlement_not_entropy() -
             agent_record_id: &rig.agent,
             selections: &rig.selections,
             attempts: &rig.attempts,
+            root_id: &rig.root_id,
             forbidden: &[],
             teardown_ms: rig.teardown_ms,
             // The captures run under the owner's reservation less the teardown share, as `serve`
@@ -3405,6 +3415,7 @@ fn a_stop_exit_writes_the_stop_before_its_custody_turn() -> Outcome_ {
             agent_record_id: &rig.agent,
             selections: &rig.selections,
             attempts: &rig.attempts,
+            root_id: &rig.root_id,
             forbidden: &[],
             teardown_ms: rig.teardown_ms,
             // The captures run under the owner's reservation less the teardown share, as `serve`
@@ -3447,6 +3458,47 @@ fn a_stop_exit_writes_the_stop_before_its_custody_turn() -> Outcome_ {
                 pending: 0
             }
         )
+    );
+    assert!(taken(&asked).is_empty(), "no candidate was asked");
+    assert!(taken(&handed).is_empty(), "no check ran");
+    Ok(())
+}
+
+/// B14b-2 review round 2, D9 · a begin under an attempts root replaced since `serve` prepared it is
+/// refused by name. After admission and before the drive, the root at the path is moved aside and a
+/// second root, marked by the one door with another id, is renamed onto the path: the begin's read
+/// finds a well-formed marker that is not the id the dispatch carries. The error is the reader's
+/// kind, `AttemptsRoot(Changed)`, never erased, inside `PreDispatch` (no attempt row yet: the
+/// dispatcher's stop, closure H3); the source is never asked ready (the root is read first), and no
+/// attempt row, roster observation, candidate or check exists.
+#[test]
+fn a_begin_under_a_swapped_attempts_root_is_refused_by_name() -> Outcome_ {
+    let rig = rig(&Shape::default())?;
+    let (mut source, asked) = script(vec![Candidate::Replacement(SECOND.to_vec())]);
+    let readied = Arc::clone(&source.readied);
+    let (mut verifier, handed) = oracle(vec![matched(7)]);
+    let principal = owner();
+    let drain = AtomicBool::new(false);
+    let admitted = admitted(&rig, &principal, &drain)?;
+    let other = rig.scratch.0.join("attempts-other");
+    let other_id = habitat_engine::app::coordinator::prepare_attempts_root(&other, deadline())
+        .map_err(|e| format!("{e:?}"))?;
+    assert_ne!(other_id, rig.root_id, "two roots, two ids");
+    fs::rename(&rig.attempts, rig.scratch.0.join("attempts-first"))?;
+    fs::rename(&other, &rig.attempts)?;
+    let error = drive(&rig.tasks, *admitted, &mut source, &mut verifier)
+        .err()
+        .map(|undispatched| format!("{:?}", undispatched.error));
+    assert_eq!(error.as_deref(), Some("PreDispatch(AttemptsRoot(Changed))"));
+    assert_eq!(count(&rig, "SELECT count(*) FROM attempts")?, 0);
+    assert_eq!(count(&rig, "SELECT count(*) FROM roster_observations")?, 0);
+    assert_eq!(
+        taken(&readied)
+            .into_iter()
+            .map(|(label, _, _)| label)
+            .collect::<Vec<_>>(),
+        vec!["settle_retained"],
+        "the source was never asked ready; only the exit's custody turn ran"
     );
     assert!(taken(&asked).is_empty(), "no candidate was asked");
     assert!(taken(&handed).is_empty(), "no check ran");

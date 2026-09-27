@@ -17,6 +17,7 @@
 //! `dispatch_unavailable`" revisited: the task is the owner's and the missing configuration the
 //! operator's.
 
+use super::coordinator::RootIdError;
 use super::runtime::{
     Admission, Admitted, CandidateSource, Dispatch, Error as RuntimeError, Outcome, Verifier,
     admit, drive,
@@ -268,7 +269,23 @@ pub fn classify(result: &Result<Outcome, RuntimeError>) -> Step {
         Err(RuntimeError::ConcurrentWriter) => Step::TaskLeft("concurrent writer"),
         Err(RuntimeError::Identity) => Step::TaskLeft("identity"),
         Err(RuntimeError::Entropy) => Step::TaskLeft("entropy"),
-        Err(RuntimeError::AttemptsRoot) => Step::TaskLeft("attempts root unreadable"),
+        // Replaced under the running engine (B14b-2 review round 2, D9), told apart from a root
+        // whose id cannot be read: every reader's kind is listed, so a new one is a compile error.
+        // At attempt 1 it is raised before any attempt row, so it arrives inside `PreDispatch` (the
+        // dispatcher's); bare, at attempt ≥ 2, the task is the recovery's — and still no later task
+        // can begin under a replaced root, so the dispatcher stops by name there too.
+        Err(RuntimeError::AttemptsRoot(RootIdError::Changed)) => {
+            Step::DispatcherStops("attempts root changed")
+        }
+        Err(RuntimeError::AttemptsRoot(
+            RootIdError::Absent
+            | RootIdError::Custody
+            | RootIdError::NotCanonical
+            | RootIdError::Unmarked
+            | RootIdError::Marker
+            | RootIdError::Entropy
+            | RootIdError::Io(_),
+        )) => Step::TaskLeft("attempts root unreadable"),
         // Raised only in `admit`, so it reaches here inside `PreDispatch`; bare, it is still before
         // any attempt row: the dispatcher's (R21 closure C13).
         Err(RuntimeError::PlanRoot(_)) => {
@@ -384,6 +401,9 @@ pub struct Dispatcher<'a, P> {
     pub tasks: &'a StoreTasks,
     /// The attempts root under the state root (`coordinator::attempts_root`).
     pub attempts: &'a Path,
+    /// The attempts root's id as `serve` prepared it at its start (B14b-2 review round 2, D9):
+    /// carried into every dispatch, so a begin compares the marker it reads against it.
+    pub root_id: &'a str,
     pub provider: &'a mut P,
     /// The roster inputs a begin needs (B14a-1c): the rig's in the proofs; in production the native
     /// install's record and selection (R21 N3), fixed at `serve` start — empty with no provider,
@@ -405,6 +425,7 @@ fn run<P: Provider>(dispatcher: Dispatcher<'_, P>, report: &(dyn Fn(&str) + Sync
     let Dispatcher {
         tasks,
         attempts,
+        root_id,
         provider,
         agent_record_id,
         selections,
@@ -457,6 +478,7 @@ fn run<P: Provider>(dispatcher: Dispatcher<'_, P>, report: &(dyn Fn(&str) + Sync
                 agent_record_id,
                 selections,
                 attempts,
+                root_id,
                 forbidden: &[],
                 teardown_ms,
                 capture_ms: None,
@@ -483,26 +505,7 @@ fn run<P: Provider>(dispatcher: Dispatcher<'_, P>, report: &(dyn Fn(&str) + Sync
             },
         };
         let step = classify(&result);
-        // A provider not ready is reported by its refusal's name (closure C4).
-        let cause = match &result {
-            Ok(Outcome::NotReady(error)) => format!(": {}", error.name()),
-            _ => String::new(),
-        };
-        report(&format!(
-            "dispatcher: task {} -> {step:?}{cause}{}{}",
-            next.task,
-            result
-                .as_ref()
-                .err()
-                .map(|error| format!(" ({error:?})"))
-                .unwrap_or_default(),
-            custody
-                .map(|custody| format!(
-                    ", custody: settled={} pending={}",
-                    custody.settled, custody.pending
-                ))
-                .unwrap_or_default()
-        ));
+        report(&step_line(&next.task, step, &result, custody));
         handled = Some(next.task.clone());
         if let Step::DispatcherStops(why) = step {
             return Exit::Stopped(why);
@@ -510,10 +513,39 @@ fn run<P: Provider>(dispatcher: Dispatcher<'_, P>, report: &(dyn Fn(&str) + Sync
     }
 }
 
+/// The line one dispatch's step is reported by: the task, its step, a provider not ready by its
+/// refusal's name (closure C4), an error whole, and the custody a driven dispatch came to.
+fn step_line(
+    task: &str,
+    step: Step,
+    result: &Result<Outcome, RuntimeError>,
+    custody: Option<super::runtime::Custody>,
+) -> String {
+    let cause = match result {
+        Ok(Outcome::NotReady(error)) => format!(": {}", error.name()),
+        _ => String::new(),
+    };
+    format!(
+        "dispatcher: task {task} -> {step:?}{cause}{}{}",
+        result
+            .as_ref()
+            .err()
+            .map(|error| format!(" ({error:?})"))
+            .unwrap_or_default(),
+        custody
+            .map(|custody| format!(
+                ", custody: settled={} pending={}",
+                custody.settled, custody.pending
+            ))
+            .unwrap_or_default()
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::{NativeWhy, NoNative, Step, Unavailable, classify, teardown_share};
     use crate::app::candidates::ClassPromptError;
+    use crate::app::coordinator::RootIdError;
     use crate::app::runtime::{Error as RuntimeError, Outcome, Refusal};
     use crate::store::{Error as StoreError, ResolveRefusal};
     use crate::task::LoopRefusal;
@@ -573,7 +605,17 @@ mod tests {
             (Err(RuntimeError::Identity), Step::TaskLeft("identity")),
             (Err(RuntimeError::Entropy), Step::TaskLeft("entropy")),
             (
-                Err(RuntimeError::AttemptsRoot),
+                Err(RuntimeError::AttemptsRoot(RootIdError::Changed)),
+                Step::DispatcherStops("attempts root changed"),
+            ),
+            (
+                Err(RuntimeError::AttemptsRoot(RootIdError::Unmarked)),
+                Step::TaskLeft("attempts root unreadable"),
+            ),
+            (
+                Err(RuntimeError::AttemptsRoot(RootIdError::Io(
+                    std::io::ErrorKind::PermissionDenied,
+                ))),
                 Step::TaskLeft("attempts root unreadable"),
             ),
             (
@@ -586,6 +628,16 @@ mod tests {
                 Err(RuntimeError::Policy(LoopRefusal::GenerationExhausted)),
                 Step::TaskLeft("policy"),
             ),
+        ]
+        .into_iter()
+        .chain(store_cases())
+        .collect()
+    }
+
+    /// The store kinds the classification is pinned over: those that stop the dispatcher against
+    /// those that leave the task to recovery.
+    fn store_cases() -> Vec<(Result<Outcome, RuntimeError>, Step)> {
+        vec![
             (
                 Err(RuntimeError::Store(StoreError::UncertainCommit)),
                 Step::DispatcherStops("uncertain commit: the ledger is poisoned"),

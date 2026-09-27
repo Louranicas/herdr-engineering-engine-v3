@@ -319,6 +319,9 @@ pub struct Dispatch<'a> {
     pub agent_record_id: &'a str,
     pub selections: &'a [Selection],
     pub attempts: &'a Path,
+    /// The id `serve` prepared the attempts root with at its start (B14b-2 review round 2, D9): a
+    /// begin reads the root's marker again and refuses one that is not this id.
+    pub root_id: &'a str,
     pub forbidden: &'a [FileIdentity],
     /// Kept back from each work deadline for teardown.
     pub teardown_ms: u64,
@@ -474,9 +477,10 @@ pub enum Error {
     Entropy,
     /// The driver's own policy refused (criteria cardinality, or an undeclared bit).
     Policy(LoopRefusal),
-    /// The attempts root's id could not be read at a begin (B14b-2 closure C18): it is recorded
-    /// with every bound attempt, so no attempt begins without it.
-    AttemptsRoot,
+    /// The attempts root's id could not be read at a begin, by the reader's kind (B14b-2 closure
+    /// C18), or it is not the id the dispatch carries from `serve` start, `Changed` (B14b-2 review
+    /// round 2, D9): it is recorded with every bound attempt, so no attempt begins without it.
+    AttemptsRoot(coordinator::RootIdError),
     /// A `.plan` root left by an earlier dispatch could not be removed (R21 closure C13), by the
     /// workspace owner's refusal. Only ever raised in `admit`, so always the dispatcher's
     /// ([`Error::PreDispatch`]), never a stop of the task.
@@ -2033,9 +2037,14 @@ impl<C: CandidateSource, V: Verifier> driver::Runtime for StoreRuntime<'_, C, V>
         );
         // The root's id, read once per begin through its one reader, before the provider is asked,
         // and recorded with the attempt (B14b-2 closure C18): a restart reads its leaves only under
-        // a root that still carries it.
+        // a root that still carries it. It must be the id `serve` prepared the root with, which the
+        // dispatch carries (B14b-2 review round 2, D9): a root replaced under the running engine is
+        // refused by name, never recorded as if it were the one prepared.
         let root_id =
-            coordinator::read_root_id(self.dispatch.attempts).map_err(|_| Error::AttemptsRoot)?;
+            coordinator::read_root_id(self.dispatch.attempts).map_err(Error::AttemptsRoot)?;
+        if root_id != self.dispatch.root_id {
+            return Err(Error::AttemptsRoot(coordinator::RootIdError::Changed).into());
+        }
         // The first attempt's settle charges the preparation too (B14a-R2.5).
         let charged_from = if self.attempts.is_empty() {
             self.origin
