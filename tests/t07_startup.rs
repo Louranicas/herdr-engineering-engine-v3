@@ -3195,6 +3195,43 @@ fn host_keeps_a_real_writable_workspace_at_the_verification_boundary() {
     }
 }
 
+/// R21 closure C14 (FT3-05) · each workspace removal takes the remainder of the one startup window:
+/// the host's own deadline, capped by `WORKSPACE_REMOVAL_BUDGET`, never a fresh budget per removal.
+/// A host whose window has already closed refuses the removal by the workspace owner's deadline
+/// refusal and leaves the workspace whole; the same workspace under an open window is removed.
+#[test]
+fn a_workspace_removal_takes_the_remainder_of_the_startup_window() {
+    let area = Area::new("removal-window");
+    let workspace = area.path.join(ATTEMPT);
+    DirBuilder::new().mode(0o700).create(&workspace).unwrap();
+    fs::write(workspace.join("output"), b"12345").unwrap();
+    let (dev, ino) = root_identity(&area.path);
+    let recorded = [AttemptRoot {
+        attempt: ATTEMPT.into(),
+        root: area.path.to_str().unwrap().into(),
+        dev,
+        ino,
+    }];
+    let subject = Subject {
+        task: TASK,
+        attempt: ATTEMPT,
+        generation: 1,
+        workspace_ref: None,
+        session: None,
+    };
+    let mut closed = Host::new(Instant::now());
+    closed.record_paths(&recorded);
+    assert_eq!(
+        closed.clean(&subject, "workspace"),
+        Err("remove: Deadline".to_owned())
+    );
+    assert_eq!(fs::read(workspace.join("output")).unwrap(), b"12345");
+    let mut open = Host::new(deadline());
+    open.record_paths(&recorded);
+    assert_eq!(open.clean(&subject, "workspace"), Ok(()));
+    assert!(!workspace.exists());
+}
+
 /// `T07-AP-66` · nothing bound for the attempt: the host infers no convention and
 /// answers not-read, unreconciled and unrecorded.
 #[test]

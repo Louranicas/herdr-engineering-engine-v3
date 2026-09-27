@@ -406,7 +406,7 @@ const WALK_ENTRY_LIMIT: usize = 4096;
 const WALK_DEPTH_LIMIT: usize = 16;
 
 /// How long one workspace removal may walk. The owner's entry and depth bounds cap the work;
-/// this caps the wall time of an effect that `Physical::clean` has no deadline for.
+/// this caps the wall time of one removal, inside the host's own startup deadline (closure C14).
 const WORKSPACE_REMOVAL_BUDGET: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// The private-directory rule through its one door ([`private_directory_verdict`], R21 closure C9).
@@ -579,10 +579,13 @@ impl Physical for Host {
         }
         // The workspace owner removes it, descriptor-relative: the path is opened once, its
         // custody read from that descriptor, and the name re-checked before the final unlink
-        // (review N6; this shell used to check the path and then remove the path).
+        // (review N6; this shell used to check the path and then remove the path). Each removal
+        // takes the remainder of the one startup window, capped by the per-removal budget — never
+        // a fresh budget of its own (R21 closure C14, FT3-05).
         crate::worker::workspace::remove_owned(
             &path,
-            std::time::Instant::now() + WORKSPACE_REMOVAL_BUDGET,
+            self.deadline
+                .min(std::time::Instant::now() + WORKSPACE_REMOVAL_BUDGET),
         )
         .map_err(|error| format!("remove: {error:?}"))
     }
