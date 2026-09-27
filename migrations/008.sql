@@ -16,7 +16,15 @@
 -- without a binding is refused by the key rather than by a validate clause. The root is absolute and
 -- 2 to 4096 bytes (bytes, not characters). A new table: nothing existing is rebuilt, so there is
 -- nothing to preserve, and an attempt begun before this migration has no row.
+--
+-- `root_dev` and `root_ino` (R21 closure C10, M2) are the root directory's device and inode as the
+-- runtime read them at the begin, each a `u64` stored bit for bit as SQLite's signed INTEGER. A
+-- restart reads the leaves only under the SAME directory: a root moved away and recreated at its
+-- path is another directory, whose empty leaves say nothing about the attempt's, so it reads as not
+-- read, never as released.
 CREATE TABLE attempt_paths (
     attempt_id TEXT PRIMARY KEY REFERENCES attempt_bindings(attempt_id),
-    root TEXT NOT NULL CHECK(length(CAST(root AS BLOB)) BETWEEN 2 AND 4096 AND substr(root,1,1)='/')
+    root TEXT NOT NULL CHECK(length(CAST(root AS BLOB)) BETWEEN 2 AND 4096 AND substr(root,1,1)='/'),
+    root_dev INTEGER NOT NULL,
+    root_ino INTEGER NOT NULL
 ) STRICT;

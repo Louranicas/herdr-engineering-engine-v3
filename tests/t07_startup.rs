@@ -400,6 +400,14 @@ impl Drop for Area {
     }
 }
 
+/// A directory's (device, inode), read from the filesystem as the runtime reads the attempts root
+/// at a begin (R21 closure C10): the identity a ledger records beside a root.
+fn root_identity(path: &Path) -> (u64, u64) {
+    use std::os::unix::fs::MetadataExt;
+    let meta = fs::symlink_metadata(path).unwrap();
+    (meta.dev(), meta.ino())
+}
+
 struct Rig {
     area: Area,
     store: Option<Store>,
@@ -555,6 +563,8 @@ impl Rig {
                     protected: digest,
                     profile: digest,
                     root,
+                    root_dev: root_identity(root).0,
+                    root_ino: root_identity(root).1,
                 },
                 deadline(),
             ),
@@ -3126,9 +3136,12 @@ fn host_workspace_guards_refuse_links_modes_and_unknown_targets() {
     DirBuilder::new().mode(0o755).create(&open).unwrap();
     let mut host = Host::new(deadline());
     let root = area.path.to_str().unwrap().to_owned();
+    let (dev, ino) = root_identity(&area.path);
     host.record_paths(&["link", "open", "real"].map(|attempt| AttemptRoot {
         attempt: attempt.into(),
         root: root.clone(),
+        dev,
+        ino,
     }));
     let subject = |attempt: &'static str| Subject {
         task: TASK,
@@ -3535,9 +3548,12 @@ fn workspace_walk_refuses_past_its_depth_bound() {
             fs::create_dir(&path).unwrap();
         }
         fs::write(path.join("leaf"), b"1234").unwrap();
+        let (dev, ino) = root_identity(&root);
         [AttemptRoot {
             attempt: ATTEMPT.into(),
             root: root.to_str().unwrap().to_owned(),
+            dev,
+            ino,
         }]
     };
     let subject = Subject {
@@ -3581,9 +3597,12 @@ fn workspace_walk_refuses_past_its_entry_bound() {
         for index in 0..files {
             fs::write(workspace.join(format!("f{index}")), b"1").unwrap();
         }
+        let (dev, ino) = root_identity(&root);
         [AttemptRoot {
             attempt: ATTEMPT.into(),
             root: root.to_str().unwrap().to_owned(),
+            dev,
+            ino,
         }]
     };
     let subject = Subject {
@@ -3610,8 +3629,9 @@ fn workspace_walk_refuses_past_its_entry_bound() {
 }
 
 /// B14b-2 S15 (R21 N14, N16) · the pass hands the inventory's roots to the world once, after the
-/// clock and before any readback, whole: the bound attempt's root as the ledger recorded it. Two
-/// ledgers under two roots, so the value handed is the ledger's, not a constant.
+/// clock and before any readback, whole: the bound attempt's root as the ledger recorded it, with the
+/// (device, inode) the begin read (R21 closure C10). Two ledgers under two roots, so the value
+/// handed is the ledger's, not a constant.
 #[test]
 fn record_paths_hands_the_inventory_s_roots_after_the_clock_and_before_any_readback() {
     for label in ["roots-a", "roots-b"] {
@@ -3626,6 +3646,8 @@ fn record_paths_hands_the_inventory_s_roots_after_the_clock_and_before_any_readb
                 Call::RecordPaths(vec![AttemptRoot {
                     attempt: ATTEMPT.into(),
                     root: area.path.to_str().unwrap().into(),
+                    dev: root_identity(&area.path).0,
+                    ino: root_identity(&area.path).1,
                 }])
             ],
             "{:?}",
@@ -3636,10 +3658,11 @@ fn record_paths_hands_the_inventory_s_roots_after_the_clock_and_before_any_readb
 }
 
 /// B14b-2 S15 (R21 N15, N17) · three states from a recorded root and its two leaves. The pure rule
-/// over every presence triple, as a literal table; then one `Host` over real directories: the root
-/// absent (nothing known, nothing released), both leaves present (each remaining, `job_root` has
-/// a reader), the job root cleaned, the workspace cleaned (complete and released, the root kept),
-/// and the paths replaced by an empty hand-over (nothing read).
+/// over every presence triple, as a literal table; then one `Host` over real directories: a recorded
+/// root absent (nothing known, nothing released — whatever identity was recorded beside it), both
+/// leaves present (each remaining, `job_root` has a reader), the job root cleaned, the workspace
+/// cleaned (complete and released, the root kept), and the paths replaced by an empty hand-over
+/// (nothing read).
 #[test]
 fn the_host_reads_three_states_from_the_root_and_its_two_leaves() {
     use Presence::{Absent as A, Present as P, Unreadable as U};
@@ -3692,18 +3715,27 @@ fn the_host_reads_three_states_from_the_root_and_its_two_leaves() {
         workspace_ref: None,
         session: None,
     };
+    // The ledger records a root's identity at the begin, when the root exists (R21 closure C10).
+    DirBuilder::new().mode(0o700).create(&root).unwrap();
+    let (dev, ino) = root_identity(&root);
+    let recorded = |at: &Path| {
+        [AttemptRoot {
+            attempt: ATTEMPT.into(),
+            root: at.to_str().unwrap().into(),
+            dev,
+            ino,
+        }]
+    };
     let mut host = Host::new(deadline());
-    host.record_paths(&[AttemptRoot {
-        attempt: ATTEMPT.into(),
-        root: root.to_str().unwrap().into(),
-    }]);
+    host.record_paths(&recorded(&area.path.join("absent")));
     let read = |host: &mut Host| (host.cleanup(&subject), host.workspace(&subject));
     assert_eq!(
         read(&mut host),
         (CleanupReadback::NotRead, WorkspaceReadback::NotRead)
     );
+    host.record_paths(&recorded(&root));
     let (workspace, job) = (root.join(ATTEMPT), root.join(format!("{ATTEMPT}.check")));
-    for directory in [&root, &workspace, &job] {
+    for directory in [&workspace, &job] {
         DirBuilder::new().mode(0o700).create(directory).unwrap();
     }
     fs::write(workspace.join("output"), b"abc").unwrap();
@@ -3764,6 +3796,55 @@ fn the_private_directory_rule_is_one_table_reachable_by_argument() {
         })
         .collect();
     assert_eq!(said, table.to_vec());
+}
+
+/// R21 closure C10 (M2) · a moved and recreated root never reads Released, across restarts. The
+/// ledger recorded the attempt's root and its (device, inode) at the begin; the operator then moves
+/// the root away (the workspace inside it) and a directory is recreated at the path, 0700 and
+/// empty. A restart's `Host` finds both leaves absent under the NEW directory — which, read without
+/// the recorded identity, is complete and released while the workspace lives on elsewhere. It must
+/// read not-read on both, and remove nothing. Then the pure rule, whole.
+#[test]
+fn a_root_moved_and_recreated_reads_not_read_across_restarts() {
+    use habitat_engine::app::startup::root_presence;
+    let area = Area::new("moved");
+    let root = area.path.join("attempts");
+    DirBuilder::new().mode(0o700).create(&root).unwrap();
+    let mut r = Rig::bound_ready(&root);
+    let workspace = root.join(ATTEMPT);
+    DirBuilder::new().mode(0o700).create(&workspace).unwrap();
+    fs::write(workspace.join("output"), b"12345").unwrap();
+    let moved = area.path.join("attempts.moved");
+    fs::rename(&root, &moved).unwrap();
+    DirBuilder::new().mode(0o700).create(&root).unwrap();
+    let pass = r.pass(&mut Host::new(deadline()));
+    let entry = only(&pass);
+    assert_eq!(
+        (&entry.handed.cleanup, &entry.handed.workspace),
+        (&CleanupReadback::NotRead, &WorkspaceReadback::NotRead)
+    );
+    retained(
+        entry,
+        Rule::R11CleanupReadback,
+        &Unknown::CleanupUnverified,
+        &ProcessCustody::Unobserved,
+    );
+    assert!(moved.join(ATTEMPT).join("output").exists() && root.exists());
+    let recorded = (2049, 131_073);
+    let gone = || Err(std::io::Error::from(std::io::ErrorKind::NotFound));
+    let denied = || Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied));
+    let table: [(std::io::Result<(u64, u64)>, Presence); 6] = [
+        (Ok((2049, 131_073)), Presence::Present),
+        (Ok((2049, 131_074)), Presence::Unreadable),
+        (Ok((2050, 131_073)), Presence::Unreadable),
+        (Ok((131_073, 2049)), Presence::Unreadable),
+        (gone(), Presence::Absent),
+        (denied(), Presence::Unreadable),
+    ];
+    for (observed, expected) in table {
+        let label = format!("{observed:?}");
+        assert_eq!(root_presence(recorded, observed), expected, "{label}");
+    }
 }
 
 /// T07-AP-79 · a ledger that changed between the inspection read and the writable read is

@@ -641,13 +641,17 @@ pub struct Submission<'a> {
 /// the class profile it was dispatched under. Every digest is required: the row cannot be partial.
 /// `root` (B14b-2, R21 N13/N17) is the directory the attempt's leaves are materialised under,
 /// recorded in the same transaction (migration 8); the leaves are derived from it once, by
-/// [`attempt_leaves`].
+/// [`attempt_leaves`]. `root_dev`/`root_ino` (R21 closure C10) are that directory's device and inode
+/// as the caller read them at this begin, recorded beside it so a restart reads the leaves only
+/// under the same directory.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Binding<'a> {
     pub baseline: Sha256Digest<'a>,
     pub protected: Sha256Digest<'a>,
     pub profile: Sha256Digest<'a>,
     pub root: &'a Path,
+    pub root_dev: u64,
+    pub root_ino: u64,
 }
 
 /// An attempt's two leaves under its recorded root (B14b-2, R21 N13/N17): the workspace

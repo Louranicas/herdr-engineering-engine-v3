@@ -220,6 +220,7 @@ pub fn classify(result: &Result<Outcome, RuntimeError>) -> Step {
         Err(RuntimeError::ConcurrentWriter) => Step::TaskLeft("concurrent writer"),
         Err(RuntimeError::Identity) => Step::TaskLeft("identity"),
         Err(RuntimeError::Entropy) => Step::TaskLeft("entropy"),
+        Err(RuntimeError::AttemptsRoot) => Step::TaskLeft("attempts root unreadable"),
         Err(RuntimeError::Policy(_)) => Step::TaskLeft("policy"),
         Err(RuntimeError::Store(error)) => store_step(error),
     }
@@ -496,6 +497,10 @@ mod tests {
             ),
             (Err(RuntimeError::Identity), Step::TaskLeft("identity")),
             (Err(RuntimeError::Entropy), Step::TaskLeft("entropy")),
+            (
+                Err(RuntimeError::AttemptsRoot),
+                Step::TaskLeft("attempts root unreadable"),
+            ),
             (
                 Err(RuntimeError::Policy(LoopRefusal::GenerationExhausted)),
                 Step::TaskLeft("policy"),

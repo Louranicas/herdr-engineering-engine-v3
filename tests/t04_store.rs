@@ -50,10 +50,11 @@ const MIGRATION_6_BODY: &str =
 /// block).
 const MIGRATION_7_BODY: &str =
     "sha256:4a1dd33f751fb2766aef7caf93b668ec786a6e933c18fbe1133504b56736b773";
-/// Migration 8's body digest (B14b-2), by `awk` after the end marker piped to `sha256sum` and
-/// independently by Python's hashlib; the same `awk` rule reproduces `MIGRATION_7_BODY`.
+/// Migration 8's body digest (B14b-2; amended in place by R21 closure C10 before it landed, adding
+/// `root_dev`/`root_ino`), by `awk` after the end marker piped to `sha256sum` and independently by
+/// Python's hashlib; the same `awk` rule reproduced the pre-amendment `d4096a2c…` value.
 const MIGRATION_8_BODY: &str =
-    "sha256:d4096a2ca6f33f064b0f10951dcd909f400e2f04a2df4c5052158c07bdeb818d";
+    "sha256:7fc58812c69431697c706af46f5e259dedef221543c07090282e67e6d592146a";
 static NEXT_ROOT: AtomicU64 = AtomicU64::new(0);
 
 struct Area {
@@ -3743,8 +3744,10 @@ fn migration_seven_admits_the_worker_settle_kind_and_kept_the_key() {
 /// B14b-2 (R21 N13, N17; D6) · migration 8 adds `attempt_paths`: one root per BOUND attempt (its key
 /// references `attempt_bindings`, so a root without a binding is refused by the key, not by a
 /// clause), absolute, 2 to 4096 BYTES (a 2 049-character root of two-byte characters is 4 097 bytes
-/// and refused). A migration-7 ledger holding an attempt upgrades behind a backup and gains no row
-/// for it: no root is invented for an attempt begun before the table existed.
+/// and refused). The root's device and inode (R21 closure C10) are each required, and any `u64` fits
+/// bit for bit (a value past `i64::MAX` is stored negative). A migration-7 ledger holding an attempt
+/// upgrades behind a backup and gains no row for it: no root is invented for an attempt begun before
+/// the table existed.
 #[test]
 fn migration_8_adds_attempt_paths_and_a_seven_ledger_upgrades_with_none() {
     let area = Area::new();
@@ -3768,21 +3771,37 @@ fn migration_8_adds_attempt_paths_and_a_seven_ledger_upgrades_with_none() {
     let digest = format!("sha256:{}", "1".repeat(64));
     let two_byte = format!("/{}", "\u{e9}".repeat(2048));
     let longest = format!("/{}", "r".repeat(4095));
-    let cases: [(&str, bool, &str, Option<&str>); 7] = [
-        ("an unbound attempt", false, "/r1", Some("FOREIGN KEY")),
-        ("relative", true, "r1", Some("CHECK")),
-        ("the bare root", true, "/", Some("CHECK")),
+    let cases: [(&str, bool, &str, &str, Option<&str>); 10] = [
+        (
+            "an unbound attempt",
+            false,
+            "/r1",
+            "2049,7",
+            Some("FOREIGN KEY"),
+        ),
+        ("relative", true, "r1", "2049,7", Some("CHECK")),
+        ("the bare root", true, "/", "2049,7", Some("CHECK")),
         (
             "4 097 bytes in 2 049 characters",
             true,
             &two_byte,
+            "2049,7",
             Some("CHECK"),
         ),
-        ("absolute", true, "/r1", None),
-        ("4 096 bytes", true, &longest, None),
-        ("empty", true, "", Some("CHECK")),
+        ("absolute", true, "/r1", "2049,7", None),
+        ("4 096 bytes", true, &longest, "2049,7", None),
+        ("empty", true, "", "2049,7", Some("CHECK")),
+        ("no device", true, "/r1", "NULL,7", Some("NOT NULL")),
+        ("no inode", true, "/r1", "2049,NULL", Some("NOT NULL")),
+        (
+            "u64s past i64::MAX, bit for bit",
+            true,
+            "/r1",
+            "-1,-9223372036854775808",
+            None,
+        ),
     ];
-    for (case, bound, root, refused) in cases {
+    for (case, bound, root, identity, refused) in cases {
         let binding = if bound {
             format!(
                 "INSERT INTO attempt_bindings(attempt_id,task_id,baseline_digest,protected_digest,\
@@ -3792,8 +3811,8 @@ fn migration_8_adds_attempt_paths_and_a_seven_ledger_upgrades_with_none() {
             String::new()
         };
         let result = db.execute_batch(&format!(
-            "SAVEPOINT s; {binding} INSERT INTO attempt_paths(attempt_id,root) VALUES('{ATTEMPT}','{root}'); \
-             ROLLBACK TO s; RELEASE s;"
+            "SAVEPOINT s; {binding} INSERT INTO attempt_paths(attempt_id,root,root_dev,root_ino) \
+             VALUES('{ATTEMPT}','{root}',{identity}); ROLLBACK TO s; RELEASE s;"
         ));
         match refused {
             None => assert!(result.is_ok(), "{case}: {result:?}"),

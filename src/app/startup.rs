@@ -213,6 +213,20 @@ pub fn presence(read: &io::Result<()>) -> Presence {
     }
 }
 
+/// What one read of an attempt's recorded root says (R21 closure C10, M2): present only when the
+/// directory standing at the path is the one recorded at the begin, by (device, inode). Another
+/// directory there — the root moved away and recreated — is `Unreadable`: its leaves say nothing
+/// about the attempt's, so nothing is known and nothing is released. A failed read is
+/// [`presence`]'s. Pure, so every arm is reachable by argument.
+#[must_use]
+pub fn root_presence(recorded: (u64, u64), observed: io::Result<(u64, u64)>) -> Presence {
+    match observed {
+        Ok(found) if found == recorded => Presence::Present,
+        Ok(_) => Presence::Unreadable,
+        Err(error) => presence(&Err(error)),
+    }
+}
+
 /// What an attempt's recorded root and its two leaves say (R21 N15, N17): the cleanup readback,
 /// and the workspace leaf as it may be read (the caller walks a present one for its size). A root
 /// that is absent or unreadable says nothing about its leaves: `NotRead` and an unread workspace,
@@ -342,8 +356,9 @@ pub struct PiLink {
 /// root is `NotRead`/`Unreconciled`/`Unrecorded`.
 pub struct Host {
     /// Attempt id → the leaves derived from the root the ledger recorded for it (R21 N14-N17),
-    /// set only by [`Physical::record_paths`] through `store::attempt_leaves`.
-    paths: BTreeMap<String, AttemptPaths>,
+    /// set only by [`Physical::record_paths`] through `store::attempt_leaves`, with the root's
+    /// recorded (device, inode) (R21 closure C10).
+    paths: BTreeMap<String, (AttemptPaths, (u64, u64))>,
     /// Attempt id → the dispatch acknowledgement the application retained.
     pub acknowledgements: BTreeMap<String, Acknowledgement>,
     /// Attempt id → a live Pi session transport for it.
@@ -372,13 +387,14 @@ impl Host {
     /// One read of the attempt's recorded root and both leaves, decided by [`leaves_readback`];
     /// `None` for an attempt with no recorded root.
     fn leaves(&self, attempt: &str) -> Option<(&AttemptPaths, (CleanupReadback, Presence))> {
-        let paths = self.paths.get(attempt)?;
+        let (paths, recorded) = self.paths.get(attempt)?;
         let read = |path: &Path| presence(&fs::symlink_metadata(path).map(|_| ()));
         let (root, _) = paths.workspace_parts();
+        let observed = fs::symlink_metadata(root).map(|meta| (meta.dev(), meta.ino()));
         Some((
             paths,
             leaves_readback(
-                read(root),
+                root_presence(*recorded, observed),
                 read(&paths.workspace()),
                 read(&paths.job_root()),
             ),
@@ -551,7 +567,7 @@ impl Physical for Host {
         }
     }
     fn clean(&mut self, subject: &Subject<'_>, target: &str) -> Result<(), String> {
-        let paths = self.paths.get(subject.attempt);
+        let paths = self.paths.get(subject.attempt).map(|(paths, _)| paths);
         let path = match target {
             "workspace" => paths.map(AttemptPaths::workspace),
             "job_root" => paths.map(AttemptPaths::job_root),
@@ -576,7 +592,10 @@ impl Physical for Host {
             .map(|root| {
                 (
                     root.attempt.clone(),
-                    store::attempt_leaves(Path::new(&root.root), &root.attempt),
+                    (
+                        store::attempt_leaves(Path::new(&root.root), &root.attempt),
+                        (root.dev, root.ino),
+                    ),
                 )
             })
             .collect();

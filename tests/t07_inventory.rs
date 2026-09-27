@@ -839,7 +839,8 @@ fn rostered() -> Rig {
 /// under the one selected set and budget: two open attempts (a `repair_pending` one and a running
 /// one) differing in id and root both carry theirs; once the task is terminal and a batch of one is
 /// taken, only the batch's attempt carries its root and the other is absent. The whole-ledger
-/// inventory carries both.
+/// inventory carries both. Each root carries its recorded device and inode (R21 closure C10), the
+/// second's past `i64::MAX`, so the read is the store's bit-for-bit inverse.
 #[test]
 fn the_startup_inventory_carries_each_selected_attempt_s_root() {
     use habitat_engine::store::AttemptRoot;
@@ -849,19 +850,23 @@ fn the_startup_inventory_carries_each_selected_attempt_s_root() {
     let first = AttemptRoot {
         attempt: ATTEMPT.to_owned(),
         root: "/r1".to_owned(),
+        dev: 2049,
+        ino: 7,
     };
     let second = AttemptRoot {
         attempt: SECOND.to_owned(),
         root: "/srv/hee/r2".to_owned(),
+        dev: u64::MAX,
+        ino: 1 << 63,
     };
     let pins = (agent.as_str(), selections.as_slice());
-    bound_begin(&mut r, pins, (ATTEMPT, START), "/r1");
+    bound_begin(&mut r, pins, (ATTEMPT, START), ("/r1", (2049, 7)));
     settle_to_repair(&mut r, ATTEMPT, "1", SETTLE);
     bound_begin(
         &mut r,
         pins,
         (SECOND, "07000000-0000-4000-8000-000000000010"),
-        "/srv/hee/r2",
+        ("/srv/hee/r2", (u64::MAX, 1 << 63)),
     );
     let open = startup_read(&mut r, 0);
     assert_eq!(
@@ -897,12 +902,13 @@ fn the_startup_inventory_carries_each_selected_attempt_s_root() {
     assert_eq!(r.snapshot().roots, vec![first, second]);
 }
 
-/// A bound begin of `TASK` at its current revision under `root`, pinned by the fixture's record.
+/// A bound begin of `TASK` at its current revision under `root` with the root's (device, inode),
+/// pinned by the fixture's record.
 fn bound_begin(
     r: &mut Rig,
     (agent, selections): (&str, &[habitat_engine::contracts::roster::Selection]),
     (attempt, event): (&str, &str),
-    root: &str,
+    (root, (root_dev, root_ino)): (&str, (u64, u64)),
 ) {
     use habitat_engine::store::{Binding, RosterStart};
     let expected = generation(&r.revision());
@@ -925,6 +931,8 @@ fn bound_begin(
                 protected: Sha256Digest::parse(DIGEST).unwrap(),
                 profile: Sha256Digest::parse(DIGEST).unwrap(),
                 root: std::path::Path::new(root),
+                root_dev,
+                root_ino,
             },
             deadline(),
         )

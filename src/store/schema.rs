@@ -120,7 +120,7 @@ const MIGRATIONS: [Migration; 8] = [
     // Additive: nothing is rebuilt, so nothing is preserved.
     Migration {
         sql: include_str!("../../migrations/008.sql"),
-        body: "sha256:d4096a2ca6f33f064b0f10951dcd909f400e2f04a2df4c5052158c07bdeb818d",
+        body: "sha256:7fc58812c69431697c706af46f5e259dedef221543c07090282e67e6d592146a",
         preserves: &[],
     },
 ];

@@ -105,10 +105,13 @@ pub struct RecoveryInventory {
 
 /// One attempt's recorded root (B14b-2, R21 N14): the directory its workspace and job root were
 /// materialised under. The leaves are derived from it by [`super::attempt_leaves`], never stored.
+/// `dev`/`ino` (R21 closure C10) are the directory's device and inode as recorded at the begin.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AttemptRoot {
     pub attempt: String,
     pub root: String,
+    pub dev: u64,
+    pub ino: u64,
 }
 
 impl RecoveryInventory {
@@ -279,7 +282,7 @@ const ATTEMPT_COLUMNS: &str =
 const VERIFICATION_COLUMNS: &str = "SELECT attempt_id,event_id,subject_digest,evidence_digest,verdict,used_ms,cleanup_settled FROM verifications";
 const INSTANCE_COLUMNS: &str = "SELECT id,task_id,attempt_id,agent_record_id,agent_record_version,revision,body FROM roster_instances";
 const PIN_COLUMNS: &str = "SELECT attempt_id,record_id,record_version,body FROM roster_pins";
-const ROOT_COLUMNS: &str = "SELECT attempt_id,root FROM attempt_paths";
+const ROOT_COLUMNS: &str = "SELECT attempt_id,root,root_dev,root_ino FROM attempt_paths";
 
 /// One task row, validated: the one reader of `tasks` for both inventories.
 fn durable_task_row(row: &Row<'_>) -> Result<DurableTask> {
@@ -432,6 +435,8 @@ fn root_row(row: &Row<'_>) -> Result<AttemptRoot> {
     let r = AttemptRoot {
         attempt: row.get(0)?,
         root: row.get(1)?,
+        dev: row.get::<_, i64>(2)?.cast_unsigned(),
+        ino: row.get::<_, i64>(3)?.cast_unsigned(),
     };
     uuid(&r.attempt)?;
     Ok(r)

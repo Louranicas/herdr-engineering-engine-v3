@@ -43,7 +43,7 @@ use crate::worker::host;
 use crate::worker::resources::TERM_GRACE;
 use crate::worker::workspace::{self, FileIdentity, Snapshot};
 use std::fs;
-use std::os::unix::fs::DirBuilderExt;
+use std::os::unix::fs::{DirBuilderExt, MetadataExt};
 use std::path::Path;
 use std::sync::atomic::AtomicBool;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -459,6 +459,9 @@ pub enum Error {
     Entropy,
     /// The driver's own policy refused (criteria cardinality, or an undeclared bit).
     Policy(LoopRefusal),
+    /// The attempts root could not be read at a begin (R21 closure C10): its (device, inode) is
+    /// recorded with every bound attempt, so no attempt begins without it.
+    AttemptsRoot,
 }
 
 impl From<store::Error> for Error {
@@ -1969,6 +1972,9 @@ impl<C: CandidateSource, V: Verifier> driver::Runtime for StoreRuntime<'_, C, V>
             fresh(self.deadline)?,
             fresh(self.deadline)?,
         );
+        // The root's identity, read once per begin, before the provider is asked, and recorded with
+        // the attempt (R21 closure C10): a restart reads its leaves only under the same directory.
+        let root = fs::symlink_metadata(self.dispatch.attempts).map_err(|_| Error::AttemptsRoot)?;
         // The first attempt's settle charges the preparation too (B14a-R2.5).
         let charged_from = if self.attempts.is_empty() {
             self.origin
@@ -1983,6 +1989,8 @@ impl<C: CandidateSource, V: Verifier> driver::Runtime for StoreRuntime<'_, C, V>
             protected: Sha256Digest::parse(protected).map_err(|_| Error::Identity)?,
             profile: Sha256Digest::parse(profile).map_err(|_| Error::Identity)?,
             root: self.dispatch.attempts,
+            root_dev: root.dev(),
+            root_ino: root.ino(),
         };
         // The id the readiness's bytes are published under, and the observation's evidence ref.
         let staging = fresh(self.deadline)?;
