@@ -2170,8 +2170,7 @@ fn binding() -> Binding<'static> {
         protected: Sha256Digest::parse(BIND_PROT).unwrap(),
         profile: Sha256Digest::parse(BIND_PROF).unwrap(),
         root: Path::new("/t05/attempts"),
-        root_dev: 2049,
-        root_ino: 131_073,
+        root_id: uuid("7a05c0de-0000-4000-8000-000000000001"),
     }
 }
 
@@ -2242,9 +2241,8 @@ fn a_bound_task_refuses_an_unbound_attempt() {
 }
 
 /// B14b-2 (R21 N13, N17; X074) · a bound begin records its root in the same transaction and returns
-/// the leaves it derived from THAT root and attempt: two begins differing in root, root identity
-/// (R21 closure C10; the second's device and inode past `i64::MAX`, read back bit for bit) and
-/// attempt, each row and each leaf pair asserted whole. A root migration 8's CHECK would refuse (relative, bare, not
+/// the leaves it derived from THAT root and attempt: two begins differing in root, root id
+/// (B14b-2 closure C18) and attempt, each row and each leaf pair asserted whole. A root migration 8's CHECK would refuse (relative, bare, not
 /// UTF-8, 4097 bytes) is refused `Invalid` by name before any row.
 #[test]
 fn a_bound_begin_records_its_root_and_returns_the_leaves_it_derived() {
@@ -2298,8 +2296,7 @@ fn a_bound_begin_records_its_root_and_returns_the_leaves_it_derived() {
             again,
             &Binding {
                 root: Path::new("/srv/hee/other-root"),
-                root_dev: u64::MAX,
-                root_ino: (1 << 63) + 5,
+                root_id: uuid("fedcba98-7654-4321-b987-6543210fedcb"),
                 ..binding()
             },
             deadline(),
@@ -2311,14 +2308,12 @@ fn a_bound_begin_records_its_root_and_returns_the_leaves_it_derived() {
             (
                 "00000000-0000-4000-8000-000000000006".to_owned(),
                 "/t05/attempts".to_owned(),
-                2049,
-                131_073
+                "7a05c0de-0000-4000-8000-000000000001".to_owned(),
             ),
             (
                 "00000000-0000-4000-8000-0000000000b2".to_owned(),
                 "/srv/hee/other-root".to_owned(),
-                -1,
-                i64::MIN + 5
+                "fedcba98-7654-4321-b987-6543210fedcb".to_owned(),
             ),
         ]
     );
@@ -2342,14 +2337,12 @@ fn a_bound_begin_records_its_root_and_returns_the_leaves_it_derived() {
     );
 }
 
-/// Every `attempt_paths` row, in key order, the device and inode as SQLite stores them (signed).
-fn paths_rows(area: &Area) -> Vec<(String, String, i64, i64)> {
+/// Every `attempt_paths` row, in key order, as SQLite stores it.
+fn paths_rows(area: &Area) -> Vec<(String, String, String)> {
     area.inspect()
-        .prepare("SELECT attempt_id,root,root_dev,root_ino FROM attempt_paths ORDER BY attempt_id")
+        .prepare("SELECT attempt_id,root,root_id FROM attempt_paths ORDER BY attempt_id")
         .unwrap()
-        .query_map([], |row| {
-            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
-        })
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
         .unwrap()
         .collect::<rusqlite::Result<_>>()
         .unwrap()

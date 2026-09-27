@@ -50,11 +50,12 @@ const MIGRATION_6_BODY: &str =
 /// block).
 const MIGRATION_7_BODY: &str =
     "sha256:4a1dd33f751fb2766aef7caf93b668ec786a6e933c18fbe1133504b56736b773";
-/// Migration 8's body digest (B14b-2; amended in place by R21 closure C10 before it landed, adding
-/// `root_dev`/`root_ino`), by `awk` after the end marker piped to `sha256sum` and independently by
-/// Python's hashlib; the same `awk` rule reproduced the pre-amendment `d4096a2c…` value.
+/// Migration 8's body digest (B14b-2; amended in place before it landed, first by R21 closure C10,
+/// adding `root_dev`/`root_ino`, then by closure C18, replacing them with `root_id`), by `awk` after
+/// the end marker piped to `sha256sum` and independently by Python's hashlib; the same `awk` rule
+/// reproduced the pre-amendment `d4096a2c…` and `7fc58812…` values.
 const MIGRATION_8_BODY: &str =
-    "sha256:7fc58812c69431697c706af46f5e259dedef221543c07090282e67e6d592146a";
+    "sha256:fa362c16347ca2d02e6575461639bacdc1c74b9dced7c1e7b650137872ac211e";
 static NEXT_ROOT: AtomicU64 = AtomicU64::new(0);
 
 struct Area {
@@ -3744,12 +3745,14 @@ fn migration_seven_admits_the_worker_settle_kind_and_kept_the_key() {
 /// B14b-2 (R21 N13, N17; D6) · migration 8 adds `attempt_paths`: one root per BOUND attempt (its key
 /// references `attempt_bindings`, so a root without a binding is refused by the key, not by a
 /// clause), absolute, 2 to 4096 BYTES (a 2 049-character root of two-byte characters is 4 097 bytes
-/// and refused). The root's device and inode (R21 closure C10) are each required, and any `u64` fits
-/// bit for bit (a value past `i64::MAX` is stored negative). A migration-7 ledger holding an attempt
+/// and refused). The root's id (B14b-2 closure C18) is required and is one canonical lowercase
+/// `UuidV4`: the column's CHECK agrees with `UuidV4::parse` on every id case (a second door on one
+/// rule, compared here rather than trusted). A migration-7 ledger holding an attempt
 /// upgrades behind a backup and gains no row for it: no root is invented for an attempt begun before
 /// the table existed.
 #[test]
 fn migration_8_adds_attempt_paths_and_a_seven_ledger_upgrades_with_none() {
+    const ID: &str = "'0d7e1c2a-9b3f-4c5d-8e6f-7a8b9c0d1e2f'";
     let area = Area::new();
     let mut store = area.open();
     let active = running(&mut store);
@@ -3768,64 +3771,63 @@ fn migration_8_adds_attempt_paths_and_a_seven_ledger_upgrades_with_none() {
         rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_NOFOLLOW,
     )
     .unwrap();
-    let digest = format!("sha256:{}", "1".repeat(64));
     let two_byte = format!("/{}", "\u{e9}".repeat(2048));
     let longest = format!("/{}", "r".repeat(4095));
-    let cases: [(&str, bool, &str, &str, Option<&str>); 10] = [
-        (
-            "an unbound attempt",
-            false,
-            "/r1",
-            "2049,7",
-            Some("FOREIGN KEY"),
-        ),
-        ("relative", true, "r1", "2049,7", Some("CHECK")),
-        ("the bare root", true, "/", "2049,7", Some("CHECK")),
+    let cases: [(&str, bool, &str, &str, Option<&str>); 8] = [
+        ("an unbound attempt", false, "/r1", ID, Some("FOREIGN KEY")),
+        ("relative", true, "r1", ID, Some("CHECK")),
+        ("the bare root", true, "/", ID, Some("CHECK")),
         (
             "4 097 bytes in 2 049 characters",
             true,
             &two_byte,
-            "2049,7",
+            ID,
             Some("CHECK"),
         ),
-        ("absolute", true, "/r1", "2049,7", None),
-        ("4 096 bytes", true, &longest, "2049,7", None),
-        ("empty", true, "", "2049,7", Some("CHECK")),
-        ("no device", true, "/r1", "NULL,7", Some("NOT NULL")),
-        ("no inode", true, "/r1", "2049,NULL", Some("NOT NULL")),
-        (
-            "u64s past i64::MAX, bit for bit",
-            true,
-            "/r1",
-            "-1,-9223372036854775808",
-            None,
-        ),
+        ("absolute", true, "/r1", ID, None),
+        ("4 096 bytes", true, &longest, ID, None),
+        ("empty", true, "", ID, Some("CHECK")),
+        ("no root id", true, "/r1", "NULL", Some("NOT NULL")),
     ];
-    for (case, bound, root, identity, refused) in cases {
-        let binding = if bound {
-            format!(
-                "INSERT INTO attempt_bindings(attempt_id,task_id,baseline_digest,protected_digest,\
-                 profile_digest) VALUES('{ATTEMPT}','{TASK}','{digest}','{digest}','{digest}');"
-            )
-        } else {
-            String::new()
-        };
-        let result = db.execute_batch(&format!(
-            "SAVEPOINT s; {binding} INSERT INTO attempt_paths(attempt_id,root,root_dev,root_ino) \
-             VALUES('{ATTEMPT}','{root}',{identity}); ROLLBACK TO s; RELEASE s;"
-        ));
+    for (case, bound, root, id, refused) in cases {
+        let result = insert_path(&db, bound, root, id);
         match refused {
             None => assert!(result.is_ok(), "{case}: {result:?}"),
-            Some(clause) => {
-                assert!(
-                    result.as_ref().err().is_some_and(|error| error
-                        .to_string()
-                        .contains(&format!("{clause} constraint failed"))),
-                    "{case}: {result:?}"
-                );
-                db.execute_batch("ROLLBACK TO s; RELEASE s;").unwrap();
-            }
+            Some(clause) => assert!(
+                result
+                    .as_ref()
+                    .err()
+                    .is_some_and(|error| error.contains(&format!("{clause} constraint failed"))),
+                "{case}: {result:?}"
+            ),
         }
+    }
+    // The id cases, a bound attempt under a valid root: accepted exactly when `UuidV4::parse` accepts.
+    let ids = [
+        ("0d7e1c2a-9b3f-4c5d-8e6f-7a8b9c0d1e2f", true),
+        ("ffffffff-ffff-4fff-bfff-ffffffffffff", true),
+        ("0D7E1C2A-9B3F-4C5D-8E6F-7A8B9C0D1E2F", false),
+        ("0d7e1c2a-9b3f-1c5d-8e6f-7a8b9c0d1e2f", false),
+        ("0d7e1c2a-9b3f-4c5d-ce6f-7a8b9c0d1e2f", false),
+        ("0d7e1c2a-9b3f-4c5d-8e6f-7a8b9c0d1e2", false),
+        ("0d7e1c2a-9b3f-4c5d-8e6f-7a8b9c0d1e2f0", false),
+        ("0d7e1c2a09b3f04c5d08e6f07a8b9c0d1e2f", false),
+        ("0d7e1c2a-9b3f-4c5d-8e6f-7a8b9c0d1e2\u{e9}", false),
+        ("", false),
+    ];
+    for (id, accepted) in ids {
+        let result = insert_path(&db, true, "/r1", &format!("'{id}'"));
+        assert_eq!(
+            (
+                result
+                    .as_ref()
+                    .copied()
+                    .map_err(|error| error.contains("CHECK constraint failed")),
+                UuidV4::parse(id).is_ok()
+            ),
+            (if accepted { Ok(()) } else { Err(true) }, accepted),
+            "{id:?}: {result:?}"
+        );
     }
     db.close().unwrap();
     assert_eq!(count(&area, "attempt_paths"), 0, "every case rolled back");
@@ -3852,6 +3854,33 @@ fn migration_8_adds_attempt_paths_and_a_seven_ledger_upgrades_with_none() {
     );
     assert_eq!(user_version(&area.inspect()), 8);
     drop(area.open());
+}
+
+/// One `attempt_paths` insert for `ATTEMPT` inside a rolled-back savepoint (behind a binding row when
+/// `bound`), `id` an SQL literal: the error's text, or nothing.
+fn insert_path(
+    db: &Connection,
+    bound: bool,
+    root: &str,
+    id: &str,
+) -> std::result::Result<(), String> {
+    let digest = format!("sha256:{}", "1".repeat(64));
+    let binding = if bound {
+        format!(
+            "INSERT INTO attempt_bindings(attempt_id,task_id,baseline_digest,protected_digest,\
+             profile_digest) VALUES('{ATTEMPT}','{TASK}','{digest}','{digest}','{digest}');"
+        )
+    } else {
+        String::new()
+    };
+    let result = db.execute_batch(&format!(
+        "SAVEPOINT s; {binding} INSERT INTO attempt_paths(attempt_id,root,root_id) \
+         VALUES('{ATTEMPT}','{root}',{id}); ROLLBACK TO s; RELEASE s;"
+    ));
+    result.map_err(|error| {
+        db.execute_batch("ROLLBACK TO s; RELEASE s;").unwrap();
+        error.to_string()
+    })
 }
 
 /// B09b pin (review of d60df83, gap 2): two records in one observation naming one artifact id for

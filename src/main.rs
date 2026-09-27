@@ -200,7 +200,7 @@ use habitat_engine::app::dispatcher::NoNative;
 use habitat_engine::app::grants::{self, FileGrants};
 use habitat_engine::app::native_provider::{self, Installed, NativeFileError, NativeProvider};
 use habitat_engine::app::tasks::StoreTasks;
-use habitat_engine::app::{class_profile, custody, dispatcher, routing};
+use habitat_engine::app::{class_profile, dispatcher, routing};
 use habitat_engine::contracts::control::{FrameReader, MAX_FRAME_BYTES, ReadError};
 use habitat_engine::worker::aggregate;
 use habitat_engine::worker::namespace_shim::{self, NamespaceExec};
@@ -208,7 +208,6 @@ use habitat_engine::worker::native::{self, Systemd};
 use signal_hook::consts::SIGTERM;
 use signal_hook::iterator::Signals;
 use std::io::{self, Read, Write};
-use std::os::unix::fs::{DirBuilderExt, MetadataExt};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -306,33 +305,20 @@ fn open_grants(home: &Path) -> Result<Box<dyn Grants + Sync>, ExitCode> {
     }
 }
 
-/// The attempts root under `state_root`, created 0700 when absent and read back as this user's
-/// private directory: the shared plan and every attempt are materialised under it, and the plan
-/// refuses a root whose parent does not exist (`plan_root_not_canonical`) — which would stop the
-/// owner's task for the machine's missing directory. When it cannot be had, dispatch is said
-/// unavailable once and no dispatcher runs.
-fn attempts_root(state_root: &Path) -> Option<PathBuf> {
+/// The attempts root under `state_root`, created 0700 and marked when absent and read back as this
+/// user's private directory through its one door (`coordinator::prepare_attempts_root`, B14b-2
+/// closure C18): the shared plan and every attempt are materialised under it, and the plan refuses
+/// a root whose parent does not exist (`plan_root_not_canonical`) — which would stop the owner's
+/// task for the machine's missing directory. A root that exists without its marker is refused,
+/// never re-created. When it cannot be had, dispatch is said unavailable once and no dispatcher
+/// runs. `deadline` is the startup's own, passed through: it bounds only drawing a new root's id.
+fn attempts_root(state_root: &Path, deadline: std::time::Instant) -> Option<PathBuf> {
     let attempts = coordinator::attempts_root(state_root);
-    let created = std::fs::DirBuilder::new().mode(0o700).create(&attempts);
-    let refused = match created {
-        Err(error) if error.kind() != io::ErrorKind::AlreadyExists => Some(error.to_string()),
-        _ => match std::fs::symlink_metadata(&attempts) {
-            Ok(meta) => custody::private_directory_verdict(
-                meta.is_dir(),
-                meta.uid(),
-                rustix::process::geteuid().as_raw(),
-                meta.mode(),
-            )
-            .err()
-            .map(|why| format!("not this user's private directory: {why:?}")),
-            Err(error) => Some(error.to_string()),
-        },
-    };
-    match refused {
-        None => Some(attempts),
-        Some(why) => {
+    match coordinator::prepare_attempts_root(&attempts, deadline) {
+        Ok(_) => Some(attempts),
+        Err(why) => {
             eprintln!(
-                "habitat-engine: dispatch unavailable: attempts root {} refused ({why})",
+                "habitat-engine: dispatch unavailable: attempts root {} refused ({why:?})",
                 attempts.display()
             );
             None
@@ -545,7 +531,7 @@ fn serve() -> ExitCode {
     // The dispatcher (B14b-1): one thread beside the accept loop, over the same task owner and the
     // native provider when one composed (B14b-2) — else it runs the free checks, stops by name, and
     // reports its named unavailable state when a task passes them.
-    let attempts = attempts_root(&state_root);
+    let attempts = attempts_root(&state_root, startup_deadline);
     if let Err(error) = serve_until_signalled(
         &mut signals,
         &listener,

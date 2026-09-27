@@ -264,7 +264,7 @@ impl Store {
                 tx.execute("INSERT INTO attempt_bindings(attempt_id,task_id,baseline_digest,protected_digest,profile_digest) VALUES(?,?,?,?,?)",params![attempt.id,input.task.as_str(),binding.baseline.as_str(),binding.protected.as_str(),binding.profile.as_str()])?;
             }
             if let (Some(root),Some(binding))=(root,binding) {
-                tx.execute("INSERT INTO attempt_paths(attempt_id,root,root_dev,root_ino) VALUES(?,?,?,?)",params![attempt.id,root,binding.root_dev.cast_signed(),binding.root_ino.cast_signed()])?;
+                tx.execute("INSERT INTO attempt_paths(attempt_id,root,root_id) VALUES(?,?,?)",params![attempt.id,root,binding.root_id.as_str()])?;
             }
             let paths=binding.map(|binding|attempt_leaves(binding.root,&attempt.id));
             let instance=Instance { id,generation:"1".to_owned(),revision:"1".to_owned(),agent_record_id:input.agent_record_id.to_owned(),agent_record_version:agent.record.head.record_version.clone(),task_id:input.task.as_str().to_owned(),attempt_id:attempt.id.clone(),attempt_generation:attempt.generation.clone(),session_id:input.session.as_str().to_owned(),workspace_ref:input.workspace.as_str().to_owned(),started:now,lease_expires_monotonic_ms:lease,state:InstanceState::Starting,usage_ms:None };

@@ -11,6 +11,7 @@
 
 use super::capture;
 use super::class_profile::{Profile, Workspace};
+use super::coordinator;
 use super::evidence::{Evidence as Sink, digest, fresh_id};
 use super::live_verifier::{Cleanup, checked};
 use super::plan;
@@ -45,7 +46,7 @@ use crate::worker::host;
 use crate::worker::resources::TERM_GRACE;
 use crate::worker::workspace::{self, FileIdentity, Snapshot};
 use std::fs;
-use std::os::unix::fs::{DirBuilderExt, MetadataExt};
+use std::os::unix::fs::DirBuilderExt;
 use std::path::Path;
 use std::sync::atomic::AtomicBool;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -473,8 +474,8 @@ pub enum Error {
     Entropy,
     /// The driver's own policy refused (criteria cardinality, or an undeclared bit).
     Policy(LoopRefusal),
-    /// The attempts root could not be read at a begin (R21 closure C10): its (device, inode) is
-    /// recorded with every bound attempt, so no attempt begins without it.
+    /// The attempts root's id could not be read at a begin (B14b-2 closure C18): it is recorded
+    /// with every bound attempt, so no attempt begins without it.
     AttemptsRoot,
     /// A `.plan` root left by an earlier dispatch could not be removed (R21 closure C13), by the
     /// workspace owner's refusal. Only ever raised in `admit`, so always the dispatcher's
@@ -2013,9 +2014,11 @@ impl<C: CandidateSource, V: Verifier> driver::Runtime for StoreRuntime<'_, C, V>
             fresh(self.deadline)?,
             fresh(self.deadline)?,
         );
-        // The root's identity, read once per begin, before the provider is asked, and recorded with
-        // the attempt (R21 closure C10): a restart reads its leaves only under the same directory.
-        let root = fs::symlink_metadata(self.dispatch.attempts).map_err(|_| Error::AttemptsRoot)?;
+        // The root's id, read once per begin through its one reader, before the provider is asked,
+        // and recorded with the attempt (B14b-2 closure C18): a restart reads its leaves only under
+        // a root that still carries it.
+        let root_id =
+            coordinator::read_root_id(self.dispatch.attempts).map_err(|_| Error::AttemptsRoot)?;
         // The first attempt's settle charges the preparation too (B14a-R2.5).
         let charged_from = if self.attempts.is_empty() {
             self.origin
@@ -2030,8 +2033,7 @@ impl<C: CandidateSource, V: Verifier> driver::Runtime for StoreRuntime<'_, C, V>
             protected: Sha256Digest::parse(protected).map_err(|_| Error::Identity)?,
             profile: Sha256Digest::parse(profile).map_err(|_| Error::Identity)?,
             root: self.dispatch.attempts,
-            root_dev: root.dev(),
-            root_ino: root.ino(),
+            root_id: UuidV4::parse(&root_id).map_err(|_| Error::Identity)?,
         };
         // The id the readiness's bytes are published under, and the observation's evidence ref.
         let staging = fresh(self.deadline)?;

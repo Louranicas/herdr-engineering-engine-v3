@@ -12,6 +12,8 @@
 //! new kind of decision cannot reach an operator unclassified: it will not compile until someone
 //! decides whether it leaves work outstanding.
 
+use crate::app::custody::{DirectoryError, FileError, PrivateDirectory};
+use crate::app::evidence::fresh_id;
 use crate::app::startup::{self, Counts, Host, LedgerAccess, Pass};
 use crate::contracts::UuidV4;
 use crate::contracts::control::{Database, Health, Recovery, Socket};
@@ -21,7 +23,7 @@ use rustix::fs::{Mode as FileMode, OFlags};
 use serde::Deserialize;
 use std::fs::File;
 use std::io::Read;
-use std::os::unix::fs::MetadataExt;
+use std::os::unix::fs::{DirBuilderExt, MetadataExt};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -318,6 +320,130 @@ pub fn state_root(home: &Path) -> PathBuf {
 #[must_use]
 pub fn attempts_root(state_root: &Path) -> PathBuf {
     state_root.join("attempts")
+}
+
+/// The attempts root's identity marker (B14b-2 closure C18): one file in the root.
+pub const ROOT_ID_MARKER: &str = ".hee3-root-id";
+/// The largest marker read.
+pub const MAX_ROOT_ID_BYTES: u64 = 64;
+
+/// Why an attempts root's identity could not be had (B14b-2 closure C18).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RootIdError {
+    /// Nothing is at the root's path.
+    Absent,
+    /// The root is not this user's private 0700 directory, or its marker is not this user's
+    /// regular 0600 file reached without following a link.
+    Custody,
+    /// The root exists and carries no marker. It is refused, never marked after the fact and
+    /// never re-created: what stands there is not a root this engine made.
+    Unmarked,
+    /// The marker is over [`MAX_ROOT_ID_BYTES`] or is not one `UuidV4`.
+    Marker,
+    /// No identity could be drawn before the caller's deadline.
+    Entropy,
+    /// Any other I/O failure, by its kind.
+    Io(std::io::ErrorKind),
+}
+
+/// The attempts root's identity, read through the custody door (B14b-2 closure C18): the root must
+/// be this user's private 0700 directory, opened without following a link, and its
+/// [`ROOT_ID_MARKER`] this user's regular 0600 file, read without following a link under
+/// [`MAX_ROOT_ID_BYTES`], holding exactly one `UuidV4`. The one reader: the runtime records what it
+/// returns at every begin, and a restart compares what it returns with what the ledger recorded.
+///
+/// # Errors
+/// [`RootIdError::Absent`] when nothing is at `root`; [`RootIdError::Unmarked`] for a root with no
+/// marker; [`RootIdError::Custody`], [`RootIdError::Marker`] or [`RootIdError::Io`] otherwise.
+pub fn read_root_id(root: &Path) -> Result<String, RootIdError> {
+    let directory = PrivateDirectory::open(root).map_err(|error| match error {
+        DirectoryError::NotFound => RootIdError::Absent,
+        DirectoryError::Custody => RootIdError::Custody,
+        DirectoryError::Io(error) => RootIdError::Io(error.kind()),
+    })?;
+    let bytes = directory
+        .read(ROOT_ID_MARKER, MAX_ROOT_ID_BYTES)
+        .map_err(|error| match error {
+            FileError::NotFound => RootIdError::Unmarked,
+            FileError::Custody => RootIdError::Custody,
+            FileError::TooLarge => RootIdError::Marker,
+            FileError::Io(error) => RootIdError::Io(error.kind()),
+        })?;
+    let id = String::from_utf8(bytes).map_err(|_| RootIdError::Marker)?;
+    UuidV4::parse(&id).map_err(|_| RootIdError::Marker)?;
+    Ok(id)
+}
+
+/// The attempts root at `root`, created when absent and marked by this door alone (B14b-2 closure
+/// C18). A root is born marked: a directory is staged 0700 beside it, its marker (a fresh `UuidV4`
+/// from the one id door, under the caller's `deadline`) written once and read back through
+/// [`read_root_id`], and the directory renamed onto `root` only if nothing is there, so no crash
+/// leaves a root without its marker. A root that exists is read, never re-marked: the id it returns
+/// is the one written when the root was created, however many times the engine starts. A leftover
+/// staged directory (a crash between the stage and the rename) is never renamed and never read.
+///
+/// # Errors
+/// Those of [`read_root_id`] for a root that exists (an unmarked one is [`RootIdError::Unmarked`]);
+/// [`RootIdError::Entropy`] when no id can be drawn; [`RootIdError::Custody`] for a root with no
+/// parent or a name that is not UTF-8; [`RootIdError::Io`] for a stage or a rename that failed.
+pub fn prepare_attempts_root(root: &Path, deadline: Instant) -> Result<String, RootIdError> {
+    match read_root_id(root) {
+        Err(RootIdError::Absent) => {}
+        read => return read,
+    }
+    let (Some(parent), Some(name)) = (root.parent(), root.file_name().and_then(|n| n.to_str()))
+    else {
+        return Err(RootIdError::Custody);
+    };
+    let id = fresh_id(deadline).map_err(|_| RootIdError::Entropy)?;
+    let id = id.as_str();
+    let staged = parent.join(format!(".{name}.{id}.staged"));
+    std::fs::DirBuilder::new()
+        .mode(0o700)
+        .create(&staged)
+        .map_err(|error| RootIdError::Io(error.kind()))?;
+    let placed = place_marked(&staged, root, id);
+    if placed.is_err() {
+        // Best effort: the staged directory is never read, so a leftover is inert.
+        let _ = std::fs::remove_file(staged.join(ROOT_ID_MARKER));
+        let _ = std::fs::remove_dir(&staged);
+    }
+    placed?;
+    match read_root_id(root) {
+        Ok(read) if read == id => Ok(read),
+        Ok(_) => Err(RootIdError::Marker),
+        Err(error) => Err(error),
+    }
+}
+
+/// Mark `staged` with `id`, read the marker back, and rename `staged` onto `root` only if nothing is
+/// there; the parent is synced after the rename.
+fn place_marked(staged: &Path, root: &Path, id: &str) -> Result<(), RootIdError> {
+    let directory = PrivateDirectory::open(staged).map_err(|error| match error {
+        DirectoryError::NotFound | DirectoryError::Custody => RootIdError::Custody,
+        DirectoryError::Io(error) => RootIdError::Io(error.kind()),
+    })?;
+    directory
+        .create_new(ROOT_ID_MARKER, id.as_bytes())
+        .map_err(|error| match error {
+            FileError::NotFound | FileError::Custody | FileError::TooLarge => RootIdError::Custody,
+            FileError::Io(error) => RootIdError::Io(error.kind()),
+        })?;
+    if read_root_id(staged)? != id {
+        return Err(RootIdError::Marker);
+    }
+    rustix::fs::renameat_with(
+        rustix::fs::CWD,
+        staged,
+        rustix::fs::CWD,
+        root,
+        rustix::fs::RenameFlags::NOREPLACE,
+    )
+    .map_err(|errno| RootIdError::Io(std::io::Error::from(errno).kind()))?;
+    let parent = root.parent().ok_or(RootIdError::Custody)?;
+    File::open(parent)
+        .and_then(|parent| parent.sync_all())
+        .map_err(|error| RootIdError::Io(error.kind()))
 }
 
 /// Hand the ledger startup reconciled, still open and still locked, to the task owner. Nothing is

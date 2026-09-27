@@ -17,14 +17,15 @@
 -- 2 to 4096 bytes (bytes, not characters). A new table: nothing existing is rebuilt, so there is
 -- nothing to preserve, and an attempt begun before this migration has no row.
 --
--- `root_dev` and `root_ino` (R21 closure C10, M2) are the root directory's device and inode as the
--- runtime read them at the begin, each a `u64` stored bit for bit as SQLite's signed INTEGER. A
--- restart reads the leaves only under the SAME directory: a root moved away and recreated at its
--- path is another directory, whose empty leaves say nothing about the attempt's, so it reads as not
--- read, never as released.
+-- `root_id` (B14b-2 closure C18, superseding R21 closure C10's device and inode) is the id the
+-- attempts root's marker `.hee3-root-id` held at the begin: one canonical lowercase UuidV4, written
+-- once by the door that created the root and never rewritten. A restart reads the leaves only under
+-- a root whose marker still holds it: a root moved away and recreated at its path carries another
+-- id, whose empty leaves say nothing about the attempt's, so it reads as not read, never as
+-- released. Unlike a device number, the marker survives a reboot.
 CREATE TABLE attempt_paths (
     attempt_id TEXT PRIMARY KEY REFERENCES attempt_bindings(attempt_id),
     root TEXT NOT NULL CHECK(length(CAST(root AS BLOB)) BETWEEN 2 AND 4096 AND substr(root,1,1)='/'),
-    root_dev INTEGER NOT NULL,
-    root_ino INTEGER NOT NULL
+    root_id TEXT NOT NULL CHECK(length(CAST(root_id AS BLOB)) = 36 AND root_id GLOB
+        '[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f]-4[0-9a-f][0-9a-f][0-9a-f]-[89ab][0-9a-f][0-9a-f][0-9a-f]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]')
 ) STRICT;

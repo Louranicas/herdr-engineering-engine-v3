@@ -839,8 +839,8 @@ fn rostered() -> Rig {
 /// under the one selected set and budget: two open attempts (a `repair_pending` one and a running
 /// one) differing in id and root both carry theirs; once the task is terminal and a batch of one is
 /// taken, only the batch's attempt carries its root and the other is absent. The whole-ledger
-/// inventory carries both. Each root carries its recorded device and inode (R21 closure C10), the
-/// second's past `i64::MAX`, so the read is the store's bit-for-bit inverse.
+/// inventory carries both. Each root carries its recorded root id (B14b-2 closure C18), the two
+/// differing, so the read is the store's inverse.
 #[test]
 fn the_startup_inventory_carries_each_selected_attempt_s_root() {
     use habitat_engine::store::AttemptRoot;
@@ -850,23 +850,26 @@ fn the_startup_inventory_carries_each_selected_attempt_s_root() {
     let first = AttemptRoot {
         attempt: ATTEMPT.to_owned(),
         root: "/r1".to_owned(),
-        dev: 2049,
-        ino: 7,
+        root_id: "0700c0de-0000-4000-8000-000000000001".to_owned(),
     };
     let second = AttemptRoot {
         attempt: SECOND.to_owned(),
         root: "/srv/hee/r2".to_owned(),
-        dev: u64::MAX,
-        ino: 1 << 63,
+        root_id: "ffffffff-ffff-4fff-bfff-ffffffffffff".to_owned(),
     };
     let pins = (agent.as_str(), selections.as_slice());
-    bound_begin(&mut r, pins, (ATTEMPT, START), ("/r1", (2049, 7)));
+    bound_begin(
+        &mut r,
+        pins,
+        (ATTEMPT, START),
+        ("/r1", "0700c0de-0000-4000-8000-000000000001"),
+    );
     settle_to_repair(&mut r, ATTEMPT, "1", SETTLE);
     bound_begin(
         &mut r,
         pins,
         (SECOND, "07000000-0000-4000-8000-000000000010"),
-        ("/srv/hee/r2", (u64::MAX, 1 << 63)),
+        ("/srv/hee/r2", "ffffffff-ffff-4fff-bfff-ffffffffffff"),
     );
     let open = startup_read(&mut r, 0);
     assert_eq!(
@@ -919,14 +922,14 @@ fn a_rooted_tail_attempt_takes_a_batch_slot_before_an_older_rootless_one() {
         &mut r,
         pins,
         (ATTEMPT, START),
-        ("/srv/hee/pre-8", (2049, 7)),
+        ("/srv/hee/pre-8", "0700c0de-0000-4000-8000-000000000002"),
     );
     settle_to_repair(&mut r, ATTEMPT, "1", SETTLE);
     bound_begin(
         &mut r,
         pins,
         (ROOTED, "07000000-0000-4000-8000-000000000013"),
-        ("/srv/hee/rooted", (64_769, 42)),
+        ("/srv/hee/rooted", "0700c0de-0000-4000-9000-000000000003"),
     );
     settle_to_repair(&mut r, ROOTED, "2", "07000000-0000-4000-8000-000000000014");
     let evidence = r.evidence.clone();
@@ -971,8 +974,7 @@ fn a_rooted_tail_attempt_takes_a_batch_slot_before_an_older_rootless_one() {
             vec![AttemptRoot {
                 attempt: ROOTED.to_owned(),
                 root: "/srv/hee/rooted".to_owned(),
-                dev: 64_769,
-                ino: 42,
+                root_id: "0700c0de-0000-4000-9000-000000000003".to_owned(),
             }]
         )
     );
@@ -983,13 +985,54 @@ fn a_rooted_tail_attempt_takes_a_batch_slot_before_an_older_rootless_one() {
     );
 }
 
-/// A bound begin of `TASK` at its current revision under `root` with the root's (device, inode),
-/// pinned by the fixture's record.
+/// B14b-2 closure C18 · a recorded root id is one `UuidV4` by one door: migration 8's CHECK, which
+/// SQLite enforces on every write and the store's `integrity_check` on every open. A closed ledger
+/// whose row was rewritten past the CHECK (the same id in upper case) is refused `Corrupt` at open;
+/// the row as the begin wrote it reads back whole first.
+#[test]
+fn a_recorded_root_id_that_is_not_a_uuid_v4_is_refused_at_open() {
+    use habitat_engine::store::AttemptRoot;
+    const ROOT_ID: &str = "0700c0de-0000-4000-a000-00000000000b";
+    let mut r = Rig::admitted();
+    let (agent, selections) = roster_fixture(&mut r);
+    bound_begin(
+        &mut r,
+        (agent.as_str(), selections.as_slice()),
+        (ATTEMPT, START),
+        ("/srv/hee/c18", ROOT_ID),
+    );
+    assert_eq!(
+        startup_read(&mut r, 0).inventory.roots,
+        vec![AttemptRoot {
+            attempt: ATTEMPT.to_owned(),
+            root: "/srv/hee/c18".to_owned(),
+            root_id: ROOT_ID.to_owned(),
+        }]
+    );
+    drop(r.store.take());
+    let db = Connection::open(r.area.db()).unwrap();
+    db.execute_batch("PRAGMA ignore_check_constraints=ON")
+        .unwrap();
+    assert_eq!(
+        db.execute(
+            "UPDATE attempt_paths SET root_id=? WHERE attempt_id=?",
+            [ROOT_ID.to_uppercase().as_str(), ATTEMPT],
+        )
+        .unwrap(),
+        1
+    );
+    db.close().unwrap();
+    let reopened = Store::open(&r.area.path, id(GEN), id(EPOCH), false, deadline());
+    assert!(matches!(reopened, Err(Error::Corrupt)), "{reopened:?}");
+}
+
+/// A bound begin of `TASK` at its current revision under `root` with the root's id, pinned by the
+/// fixture's record.
 fn bound_begin(
     r: &mut Rig,
     (agent, selections): (&str, &[habitat_engine::contracts::roster::Selection]),
     (attempt, event): (&str, &str),
-    (root, (root_dev, root_ino)): (&str, (u64, u64)),
+    (root, root_id): (&str, &str),
 ) {
     use habitat_engine::store::{Binding, RosterStart};
     let expected = generation(&r.revision());
@@ -1012,8 +1055,7 @@ fn bound_begin(
                 protected: Sha256Digest::parse(DIGEST).unwrap(),
                 profile: Sha256Digest::parse(DIGEST).unwrap(),
                 root: std::path::Path::new(root),
-                root_dev,
-                root_ino,
+                root_id: id(root_id),
             },
             deadline(),
         )

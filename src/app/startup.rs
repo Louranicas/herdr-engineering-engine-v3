@@ -10,6 +10,7 @@
 //! any effect, every effect is read back afterwards, and a record whose content
 //! already exists is found rather than written again.
 
+use crate::app::coordinator::{self, RootIdError};
 use crate::app::custody::private_directory_verdict;
 use crate::contracts::UuidV4;
 use crate::contracts::roster::{Instance, ReceiptTime};
@@ -213,17 +214,18 @@ pub fn presence(read: &io::Result<()>) -> Presence {
     }
 }
 
-/// What one read of an attempt's recorded root says (R21 closure C10, M2): present only when the
-/// directory standing at the path is the one recorded at the begin, by (device, inode). Another
-/// directory there — the root moved away and recreated — is `Unreadable`: its leaves say nothing
-/// about the attempt's, so nothing is known and nothing is released. A failed read is
-/// [`presence`]'s. Pure, so every arm is reachable by argument.
+/// What one read of an attempt's recorded root says (B14b-2 closure C18, superseding R21 closure
+/// C10's (device, inode)): present only when the root's marker, read through
+/// [`coordinator::read_root_id`], holds the id recorded at the begin. Another id there — the root
+/// moved away and recreated — or no marker, or one that cannot be read, is `Unreadable`: its
+/// leaves say nothing about the attempt's, so nothing is known and nothing is released. Only a root
+/// with nothing at its path is `Absent`. Pure, so every arm is reachable by argument.
 #[must_use]
-pub fn root_presence(recorded: (u64, u64), observed: io::Result<(u64, u64)>) -> Presence {
+pub fn root_presence(recorded: &str, observed: Result<&str, RootIdError>) -> Presence {
     match observed {
         Ok(found) if found == recorded => Presence::Present,
-        Ok(_) => Presence::Unreadable,
-        Err(error) => presence(&Err(error)),
+        Err(RootIdError::Absent) => Presence::Absent,
+        Ok(_) | Err(_) => Presence::Unreadable,
     }
 }
 
@@ -357,8 +359,8 @@ pub struct PiLink {
 pub struct Host {
     /// Attempt id → the leaves derived from the root the ledger recorded for it (R21 N14-N17),
     /// set only by [`Physical::record_paths`] through `store::attempt_leaves`, with the root's
-    /// recorded (device, inode) (R21 closure C10).
-    paths: BTreeMap<String, (AttemptPaths, (u64, u64))>,
+    /// recorded id (B14b-2 closure C18).
+    paths: BTreeMap<String, (AttemptPaths, String)>,
     /// Attempt id → the dispatch acknowledgement the application retained.
     pub acknowledgements: BTreeMap<String, Acknowledgement>,
     /// Attempt id → a live Pi session transport for it.
@@ -390,11 +392,11 @@ impl Host {
         let (paths, recorded) = self.paths.get(attempt)?;
         let read = |path: &Path| presence(&fs::symlink_metadata(path).map(|_| ()));
         let (root, _) = paths.workspace_parts();
-        let observed = fs::symlink_metadata(root).map(|meta| (meta.dev(), meta.ino()));
+        let observed = coordinator::read_root_id(root);
         Some((
             paths,
             leaves_readback(
-                root_presence(*recorded, observed),
+                root_presence(recorded, observed.as_deref().map_err(|error| *error)),
                 read(&paths.workspace()),
                 read(&paths.job_root()),
             ),
@@ -597,7 +599,7 @@ impl Physical for Host {
                     root.attempt.clone(),
                     (
                         store::attempt_leaves(Path::new(&root.root), &root.attempt),
-                        (root.dev, root.ino),
+                        root.root_id.clone(),
                     ),
                 )
             })

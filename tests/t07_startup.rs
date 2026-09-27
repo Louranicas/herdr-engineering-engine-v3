@@ -374,7 +374,9 @@ impl Area {
             std::process::id(),
             NEXT.fetch_add(1, Ordering::Relaxed)
         ));
-        DirBuilder::new().mode(0o700).create(&path).unwrap();
+        // Every area is itself an attempts root, created and marked by the one door (closure C18):
+        // a test may record it as a root.
+        marked_root(&path);
         Self { path }
     }
     fn store(&self) -> PathBuf {
@@ -439,12 +441,15 @@ impl Drop for Area {
     }
 }
 
-/// A directory's (device, inode), read from the filesystem as the runtime reads the attempts root
-/// at a begin (R21 closure C10): the identity a ledger records beside a root.
-fn root_identity(path: &Path) -> (u64, u64) {
-    use std::os::unix::fs::MetadataExt;
-    let meta = fs::symlink_metadata(path).unwrap();
-    (meta.dev(), meta.ino())
+/// A root's id as its marker holds it (B14b-2 closure C18): the id a ledger records beside a root,
+/// read here from the file itself, not through the door that wrote it.
+fn root_id(path: &Path) -> String {
+    fs::read_to_string(path.join(habitat_engine::app::coordinator::ROOT_ID_MARKER)).unwrap()
+}
+
+/// `path` created as an attempts root through the one door, marked (B14b-2 closure C18).
+fn marked_root(path: &Path) {
+    habitat_engine::app::coordinator::prepare_attempts_root(path, deadline()).unwrap();
 }
 
 struct Rig {
@@ -491,10 +496,7 @@ impl Rig {
         let evidence = store
             .publish(b"retained fixture evidence", id(STAGE), deadline())
             .unwrap();
-        DirBuilder::new()
-            .mode(0o700)
-            .create(area.attempts())
-            .unwrap();
+        marked_root(&area.attempts());
         Self {
             area,
             store: Some(store),
@@ -626,7 +628,7 @@ impl Rig {
         agent
     }
     /// One bound, rostered begin of `ids.task`'s first attempt, recorded under `root` with the
-    /// root's real (device, inode) (R21 closure C10), selecting the ledger's roster record.
+    /// root's real id (B14b-2 closure C18), selecting the ledger's roster record.
     fn begin_bound(&mut self, identity: &str, ids: &Begin<'_>, lease_ms: u64, root: &Path) {
         let (record_id, record_version) = self.agent(identity);
         let selections = [Selection {
@@ -650,7 +652,7 @@ impl Rig {
             lease_ms,
         };
         let digest = Sha256Digest::parse(DIGEST).unwrap();
-        let (root_dev, root_ino) = root_identity(root);
+        let root_id = root_id(root);
         self.store()
             .begin_bound_attempt(
                 start,
@@ -659,8 +661,7 @@ impl Rig {
                     protected: digest,
                     profile: digest,
                     root,
-                    root_dev,
-                    root_ino,
+                    root_id: id(&root_id),
                 },
                 deadline(),
             )
@@ -3205,12 +3206,11 @@ fn a_workspace_removal_takes_the_remainder_of_the_startup_window() {
     let workspace = area.path.join(ATTEMPT);
     DirBuilder::new().mode(0o700).create(&workspace).unwrap();
     fs::write(workspace.join("output"), b"12345").unwrap();
-    let (dev, ino) = root_identity(&area.path);
+    let root_id = root_id(&area.path);
     let recorded = [AttemptRoot {
         attempt: ATTEMPT.into(),
         root: area.path.to_str().unwrap().into(),
-        dev,
-        ino,
+        root_id: root_id.clone(),
     }];
     let subject = Subject {
         task: TASK,
@@ -3266,12 +3266,11 @@ fn host_workspace_guards_refuse_links_modes_and_unknown_targets() {
     DirBuilder::new().mode(0o755).create(&open).unwrap();
     let mut host = Host::new(deadline());
     let root = area.path.to_str().unwrap().to_owned();
-    let (dev, ino) = root_identity(&area.path);
+    let root_id = root_id(&area.path);
     host.record_paths(&["link", "open", "real"].map(|attempt| AttemptRoot {
         attempt: attempt.into(),
         root: root.clone(),
-        dev,
-        ino,
+        root_id: root_id.clone(),
     }));
     let subject = |attempt: &'static str| Subject {
         task: TASK,
@@ -3669,7 +3668,7 @@ fn workspace_walk_refuses_past_its_depth_bound() {
     // Each fixture is a recorded root holding the attempt's workspace `<root>/<attempt>`.
     let build = |name: &str, levels: usize| {
         let root = area.path.join(name);
-        DirBuilder::new().mode(0o700).create(&root).unwrap();
+        marked_root(&root);
         let workspace = root.join(ATTEMPT);
         DirBuilder::new().mode(0o700).create(&workspace).unwrap();
         let mut path = workspace;
@@ -3678,12 +3677,10 @@ fn workspace_walk_refuses_past_its_depth_bound() {
             fs::create_dir(&path).unwrap();
         }
         fs::write(path.join("leaf"), b"1234").unwrap();
-        let (dev, ino) = root_identity(&root);
         [AttemptRoot {
             attempt: ATTEMPT.into(),
             root: root.to_str().unwrap().to_owned(),
-            dev,
-            ino,
+            root_id: root_id(&root),
         }]
     };
     let subject = Subject {
@@ -3721,18 +3718,16 @@ fn workspace_walk_refuses_past_its_entry_bound() {
     // Each fixture is a recorded root holding the attempt's workspace `<root>/<attempt>`.
     let build = |name: &str, files: usize| {
         let root = area.path.join(name);
-        DirBuilder::new().mode(0o700).create(&root).unwrap();
+        marked_root(&root);
         let workspace = root.join(ATTEMPT);
         DirBuilder::new().mode(0o700).create(&workspace).unwrap();
         for index in 0..files {
             fs::write(workspace.join(format!("f{index}")), b"1").unwrap();
         }
-        let (dev, ino) = root_identity(&root);
         [AttemptRoot {
             attempt: ATTEMPT.into(),
             root: root.to_str().unwrap().to_owned(),
-            dev,
-            ino,
+            root_id: root_id(&root),
         }]
     };
     let subject = Subject {
@@ -3760,7 +3755,7 @@ fn workspace_walk_refuses_past_its_entry_bound() {
 
 /// B14b-2 S15 (R21 N14, N16) · the pass hands the inventory's roots to the world once, after the
 /// clock and before any readback, whole: the bound attempt's root as the ledger recorded it, with the
-/// (device, inode) the begin read (R21 closure C10). Two ledgers under two roots, so the value
+/// id the begin read (B14b-2 closure C18). Two ledgers under two roots, so the value
 /// handed is the ledger's, not a constant.
 #[test]
 fn record_paths_hands_the_inventory_s_roots_after_the_clock_and_before_any_readback() {
@@ -3776,8 +3771,7 @@ fn record_paths_hands_the_inventory_s_roots_after_the_clock_and_before_any_readb
                 Call::RecordPaths(vec![AttemptRoot {
                     attempt: ATTEMPT.into(),
                     root: area.path.to_str().unwrap().into(),
-                    dev: root_identity(&area.path).0,
-                    ino: root_identity(&area.path).1,
+                    root_id: root_id(&area.path),
                 }])
             ],
             "{:?}",
@@ -3921,8 +3915,7 @@ fn the_world_reads_nothing_for_an_attempt_it_was_handed_no_root_for() {
         vec![&Call::RecordPaths(vec![AttemptRoot {
             attempt: ATTEMPT.into(),
             root: r.area.attempts().to_str().unwrap().into(),
-            dev: root_identity(&r.area.attempts()).0,
-            ino: root_identity(&r.area.attempts()).1,
+            root_id: root_id(&r.area.attempts()),
         }])]
     );
     assert_eq!(
@@ -4018,15 +4011,14 @@ fn the_host_reads_three_states_from_the_root_and_its_two_leaves() {
         workspace_ref: None,
         session: None,
     };
-    // The ledger records a root's identity at the begin, when the root exists (R21 closure C10).
-    DirBuilder::new().mode(0o700).create(&root).unwrap();
-    let (dev, ino) = root_identity(&root);
+    // The ledger records a root's id at the begin, when the root exists (B14b-2 closure C18).
+    marked_root(&root);
+    let recorded_id = root_id(&root);
     let recorded = |at: &Path| {
         [AttemptRoot {
             attempt: ATTEMPT.into(),
             root: at.to_str().unwrap().into(),
-            dev,
-            ino,
+            root_id: recorded_id.clone(),
         }]
     };
     let mut host = Host::new(deadline());
@@ -4083,7 +4075,7 @@ fn the_host_reads_each_attempt_under_its_own_recorded_root()
     let (first, second) = (area.path.join("first"), area.path.join("second"));
     let private = |path: &Path| DirBuilder::new().mode(0o700).create(path);
     for root in [&first, &second] {
-        private(root)?;
+        marked_root(root);
     }
     // ATTEMPT under `first`: both leaves present, three bytes written.
     private(&first.join(ATTEMPT))?;
@@ -4098,12 +4090,10 @@ fn the_host_reads_each_attempt_under_its_own_recorded_root()
     fs::write(second.join(ATTEMPT).join("decoy"), b"decoy")?;
     let recorded =
         |attempt: &str, root: &Path| -> Result<AttemptRoot, Box<dyn std::error::Error>> {
-            let (dev, ino) = root_identity(root);
             Ok(AttemptRoot {
                 attempt: attempt.into(),
                 root: root.to_str().ok_or("a UTF-8 root")?.into(),
-                dev,
-                ino,
+                root_id: root_id(root),
             })
         };
     let subject = |attempt| Subject {
@@ -4180,25 +4170,177 @@ fn the_private_directory_rule_is_one_table_reachable_by_argument() {
     assert_eq!(said, table.to_vec());
 }
 
-/// R21 closure C10 (M2) · a moved and recreated root never reads Released, across restarts. The
-/// ledger recorded the attempt's root and its (device, inode) at the begin; the operator then moves
-/// the root away (the workspace inside it) and a directory is recreated at the path, 0700 and
-/// empty. A restart's `Host` finds both leaves absent under the NEW directory — which, read without
-/// the recorded identity, is complete and released while the workspace lives on elsewhere. It must
-/// read not-read on both, and remove nothing. Then the pure rule, whole.
+/// B14b-2 closure C18 · the attempts root is marked once, by the door that creates it: an absent
+/// root is created 0700 holding one 0600 marker, a `UuidV4` of 36 bytes the door returns, with
+/// nothing staged left beside it; a second call returns the same id and leaves the marker as it was
+/// (never rewritten). Two roots made by the door carry different ids. The marker's bytes and mode
+/// are read here from the filesystem, not through the door.
 #[test]
-fn a_root_moved_and_recreated_reads_not_read_across_restarts() {
+fn the_attempts_root_is_marked_once_by_the_door_that_creates_it()
+-> Result<(), Box<dyn std::error::Error>> {
+    use habitat_engine::app::coordinator::{
+        ROOT_ID_MARKER, RootIdError, prepare_attempts_root, read_root_id,
+    };
+    use std::os::unix::fs::MetadataExt;
+    let area = Area::new("marked");
+    let (first, second) = (area.path.join("first"), area.path.join("second"));
+    assert_eq!(read_root_id(&first), Err(RootIdError::Absent));
+    let id = prepare_attempts_root(&first, deadline());
+    let marker = first.join(ROOT_ID_MARKER);
+    let written = fs::read_to_string(&marker)?;
+    assert_eq!(id.as_deref(), Ok(written.as_str()));
+    assert!(
+        UuidV4::parse(&written).is_ok() && written.len() == 36,
+        "{written:?}"
+    );
+    let (root_meta, marker_meta) = (
+        fs::symlink_metadata(&first)?,
+        fs::symlink_metadata(&marker)?,
+    );
+    assert_eq!(
+        (
+            root_meta.is_dir(),
+            root_meta.mode() & 0o7777,
+            marker_meta.is_file(),
+            marker_meta.mode() & 0o7777
+        ),
+        (true, 0o700, true, 0o600)
+    );
+    let mut beside: Vec<String> = fs::read_dir(&area.path)?
+        .map(|entry| entry.map(|entry| entry.file_name().to_string_lossy().into_owned()))
+        .collect::<Result<_, _>>()?;
+    beside.sort();
+    // The area is itself a root the door made, so its own marker sits beside `first`.
+    assert_eq!(
+        beside,
+        [ROOT_ID_MARKER, "first"],
+        "nothing staged is left beside the root"
+    );
+    assert_eq!(
+        prepare_attempts_root(&first, deadline()),
+        Ok(written.clone())
+    );
+    assert_eq!(read_root_id(&first), Ok(written.clone()));
+    let again = fs::symlink_metadata(&marker)?;
+    assert_eq!(
+        (
+            again.ino(),
+            again.mtime(),
+            again.mtime_nsec(),
+            fs::read_to_string(&marker)?
+        ),
+        (
+            marker_meta.ino(),
+            marker_meta.mtime(),
+            marker_meta.mtime_nsec(),
+            written.clone()
+        ),
+        "the marker is never rewritten"
+    );
+    let other = prepare_attempts_root(&second, deadline());
+    assert!(
+        matches!(&other, Ok(other) if UuidV4::parse(other).is_ok() && *other != written),
+        "{other:?}"
+    );
+    Ok(())
+}
+
+/// B14b-2 closure C18 · each refusal of the attempts root's door is named, the same through the
+/// reader and the creator: a root that exists without a marker is `Unmarked` and stays unmarked
+/// (never marked after the fact, never re-created); a marker reached through a link, a marker that
+/// is not 0600, or a root that is not 0700 is `Custody`; a marker over 64 bytes, in upper case, or
+/// with a trailing newline is `Marker`. A planted 36-byte lowercase `UuidV4` in a 0600 file reads.
+#[test]
+fn the_attempts_root_door_names_each_refusal() -> Result<(), Box<dyn std::error::Error>> {
+    use habitat_engine::app::coordinator::{
+        ROOT_ID_MARKER, RootIdError, prepare_attempts_root, read_root_id,
+    };
+    const ID: &str = "0d7e1c2a-9b3f-4c5d-8e6f-7a8b9c0d1e2f";
+    let area = Area::new("refusals");
+    let bare = area.path.join("bare");
+    DirBuilder::new().mode(0o700).create(&bare)?;
+    assert_eq!(
+        (
+            prepare_attempts_root(&bare, deadline()),
+            read_root_id(&bare)
+        ),
+        (Err(RootIdError::Unmarked), Err(RootIdError::Unmarked))
+    );
+    assert!(
+        !bare.join(ROOT_ID_MARKER).exists(),
+        "never marked after the fact"
+    );
+    let planted = |name: &str, content: &[u8]| -> Result<PathBuf, Box<dyn std::error::Error>> {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        let root = area.path.join(name);
+        DirBuilder::new().mode(0o700).create(&root)?;
+        fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(root.join(ROOT_ID_MARKER))?
+            .write_all(content)?;
+        Ok(root)
+    };
+    let fits = planted("fits", ID.as_bytes())?;
+    let linked = area.path.join("linked");
+    DirBuilder::new().mode(0o700).create(&linked)?;
+    std::os::unix::fs::symlink(fits.join(ROOT_ID_MARKER), linked.join(ROOT_ID_MARKER))?;
+    let shared = planted("shared", ID.as_bytes())?;
+    fs::set_permissions(&shared, fs::Permissions::from_mode(0o755))?;
+    let wide = planted("wide", ID.as_bytes())?;
+    fs::set_permissions(wide.join(ROOT_ID_MARKER), fs::Permissions::from_mode(0o644))?;
+    let long = planted("long", format!("{ID}{}", " ".repeat(29)).as_bytes())?;
+    let upper = planted("upper", ID.to_uppercase().as_bytes())?;
+    let newline = planted("newline", format!("{ID}\n").as_bytes())?;
+    for (root, expected) in [
+        (&linked, Err(RootIdError::Custody)),
+        (&shared, Err(RootIdError::Custody)),
+        (&wide, Err(RootIdError::Custody)),
+        (&long, Err(RootIdError::Marker)),
+        (&upper, Err(RootIdError::Marker)),
+        (&newline, Err(RootIdError::Marker)),
+        (&fits, Ok(ID.to_owned())),
+    ] {
+        assert_eq!(
+            (read_root_id(root), prepare_attempts_root(root, deadline())),
+            (expected.clone(), expected),
+            "{}",
+            root.display()
+        );
+    }
+    Ok(())
+}
+
+/// B14b-2 closure C18 (superseding R21 closure C10's (device, inode)) · a restart reads an
+/// attempt's root by the marker the door wrote in it, never by where it sits on disk. Two fixtures,
+/// differing in every field:
+/// - **moved**: the root is moved away with the attempt's workspace inside it, and a root is
+///   recreated at the path through the door, so it carries a NEW id. Its leaves are absent, which
+///   read without the recorded id would be complete and released while the workspace lives on
+///   elsewhere: it reads not-read on both, is retained under R11, and nothing is removed.
+/// - **re-homed**: the same marker is moved into a new directory put at the path, so the root's
+///   inode changes and its content does not — what a reboot does to `st_dev` on this dm-crypt host,
+///   which under C10 read not-read forever and retained the workspace. Its leaves are absent: it
+///   reads complete and released.
+#[test]
+fn a_restart_reads_the_root_by_its_marker_not_its_inode() -> Result<(), Box<dyn std::error::Error>>
+{
+    use habitat_engine::app::coordinator::{ROOT_ID_MARKER, RootIdError, prepare_attempts_root};
     use habitat_engine::app::startup::root_presence;
-    let area = Area::new("moved");
-    let root = area.path.join("attempts");
-    DirBuilder::new().mode(0o700).create(&root).unwrap();
+    use std::os::unix::fs::MetadataExt;
+    let moved_area = Area::new("moved");
+    let root = moved_area.path.join("attempts");
+    let recorded = prepare_attempts_root(&root, deadline()).map_err(|e| format!("{e:?}"))?;
     let mut r = Rig::bound_ready_at(&root);
     let workspace = root.join(ATTEMPT);
-    DirBuilder::new().mode(0o700).create(&workspace).unwrap();
-    fs::write(workspace.join("output"), b"12345").unwrap();
-    let moved = area.path.join("attempts.moved");
-    fs::rename(&root, &moved).unwrap();
-    DirBuilder::new().mode(0o700).create(&root).unwrap();
+    DirBuilder::new().mode(0o700).create(&workspace)?;
+    fs::write(workspace.join("output"), b"12345")?;
+    let moved = moved_area.path.join("attempts.moved");
+    fs::rename(&root, &moved)?;
+    let recreated = prepare_attempts_root(&root, deadline()).map_err(|e| format!("{e:?}"))?;
+    assert_ne!(recreated, recorded, "the recreated root has a new id");
     let pass = r.pass(&mut Host::new(deadline()));
     let entry = only(&pass);
     assert_eq!(
@@ -4212,21 +4354,53 @@ fn a_root_moved_and_recreated_reads_not_read_across_restarts() {
         &ProcessCustody::Unobserved,
     );
     assert!(moved.join(ATTEMPT).join("output").exists() && root.exists());
-    let recorded = (2049, 131_073);
-    let gone = || Err(std::io::Error::from(std::io::ErrorKind::NotFound));
-    let denied = || Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied));
-    let table: [(std::io::Result<(u64, u64)>, Presence); 6] = [
-        (Ok((2049, 131_073)), Presence::Present),
-        (Ok((2049, 131_074)), Presence::Unreadable),
-        (Ok((2050, 131_073)), Presence::Unreadable),
-        (Ok((131_073, 2049)), Presence::Unreadable),
-        (gone(), Presence::Absent),
-        (denied(), Presence::Unreadable),
+    let rehomed_area = Area::new("re-homed");
+    let root = rehomed_area.path.join("root");
+    prepare_attempts_root(&root, deadline()).map_err(|e| format!("{e:?}"))?;
+    let mut r = Rig::bound_ready_at(&root);
+    let before = fs::symlink_metadata(&root)?.ino();
+    let staged = rehomed_area.path.join("root.new");
+    DirBuilder::new().mode(0o700).create(&staged)?;
+    fs::rename(root.join(ROOT_ID_MARKER), staged.join(ROOT_ID_MARKER))?;
+    fs::remove_dir(&root)?;
+    fs::rename(&staged, &root)?;
+    assert_ne!(
+        fs::symlink_metadata(&root)?.ino(),
+        before,
+        "the fixture moved the inode"
+    );
+    let pass = r.pass(&mut Host::new(deadline()));
+    let entry = only(&pass);
+    assert_eq!(
+        (&entry.handed.cleanup, &entry.handed.workspace),
+        (&CleanupReadback::Complete, &WorkspaceReadback::Released)
+    );
+    // The pure rule, whole: only the recorded id is present, and only nothing at the path is absent.
+    let recorded = "0d7e1c2a-9b3f-4c5d-8e6f-7a8b9c0d1e2f";
+    let table = [
+        (Ok(recorded), Presence::Present),
+        (
+            Ok("0d7e1c2a-9b3f-4c5d-8e6f-7a8b9c0d1e20"),
+            Presence::Unreadable,
+        ),
+        (
+            Ok("ffffffff-ffff-4fff-bfff-ffffffffffff"),
+            Presence::Unreadable,
+        ),
+        (Err(RootIdError::Absent), Presence::Absent),
+        (Err(RootIdError::Unmarked), Presence::Unreadable),
+        (Err(RootIdError::Custody), Presence::Unreadable),
+        (Err(RootIdError::Marker), Presence::Unreadable),
+        (Err(RootIdError::Entropy), Presence::Unreadable),
+        (
+            Err(RootIdError::Io(std::io::ErrorKind::PermissionDenied)),
+            Presence::Unreadable,
+        ),
     ];
     for (observed, expected) in table {
-        let label = format!("{observed:?}");
-        assert_eq!(root_presence(recorded, observed), expected, "{label}");
+        assert_eq!(root_presence(recorded, observed), expected, "{observed:?}");
     }
+    Ok(())
 }
 
 /// T07-AP-79 · a ledger that changed between the inspection read and the writable read is

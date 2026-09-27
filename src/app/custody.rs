@@ -12,7 +12,7 @@
 
 use rustix::fs::{Mode, OFlags, openat};
 use std::fs::File;
-use std::io::{self, Read};
+use std::io::{self, Read, Write};
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 
@@ -125,6 +125,36 @@ impl PrivateDirectory {
             return Err(FileError::TooLarge);
         }
         Ok(bytes)
+    }
+
+    /// Create the file `name` in this directory, once: it must not exist (nothing is replaced and
+    /// no link is followed), it is created this user's 0600 regular file, `bytes` are written whole
+    /// and synced, and the directory is synced after it. Read it back through [`Self::read`]: a
+    /// umask can leave the file narrower than asked.
+    ///
+    /// # Errors
+    ///
+    /// [`FileError::Custody`] for a name that is not a plain file name, or anything already there
+    /// (a file, a link, a directory); [`FileError::Io`] otherwise.
+    pub fn create_new(&self, name: &str, bytes: &[u8]) -> Result<(), FileError> {
+        if name.is_empty() || name.contains('/') || name == "." || name == ".." {
+            return Err(FileError::Custody);
+        }
+        let mut file = match openat(
+            &self.directory,
+            name,
+            OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::from_raw_mode(0o600),
+        ) {
+            Ok(fd) => File::from(fd),
+            Err(rustix::io::Errno::EXIST | rustix::io::Errno::LOOP) => {
+                return Err(FileError::Custody);
+            }
+            Err(errno) => return Err(FileError::Io(io_error(errno))),
+        };
+        file.write_all(bytes).map_err(FileError::Io)?;
+        file.sync_all().map_err(FileError::Io)?;
+        self.directory.sync_all().map_err(FileError::Io)
     }
 }
 

@@ -242,7 +242,7 @@ def has_t06(root):
 
 # Reviewed current T07 inventory target: 52 controls (51 + B14-P2c's workspace case; the earlier 43-control
 # inventory is superseded; this recipe does not accept it).
-T07_TARGET_COUNTS = {"t07_inventory": 54}
+T07_TARGET_COUNTS = {"t07_inventory": 55}
 T07_INPUTS = ("src/store/recovery.rs", "tests/t07_inventory.rs")
 # Reviewed T08 native adapter extension: one registered offline-client target
 # with 27 controls (26 + R21 closure C6) and no library-unit namespace. The Rust tests copy the
@@ -265,7 +265,7 @@ RECOVERY_INPUTS = ("src/recovery.rs", "tests/recovery.rs")
 # reads/writes. The pure policy src/recovery.rs stays pinned by RECOVERY_INPUTS and
 # the inventory reader src/store/recovery.rs by T07_INPUTS; both are read by this
 # battery too, and a file is pinned once by the battery that owns it.
-T07_STARTUP_TARGET_COUNTS = {"t07_startup": 115}
+T07_STARTUP_TARGET_COUNTS = {"t07_startup": 117}
 T07_STARTUP_INPUTS = ("src/app/startup.rs", "src/store/reconciliation.rs", "tests/t07_startup.rs")
 # Reviewed T08 contract battery (the count is the pin below), no library-unit
 # namespace. The inputs are what tests/t08_contract.rs and its child module

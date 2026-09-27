@@ -116,11 +116,11 @@ const MIGRATIONS: [Migration; 8] = [
             columns: "*",
         }],
     },
-    // B14b-2 (R21 N13, N17): one root per bound attempt, in a new table keyed by its binding.
-    // Additive: nothing is rebuilt, so nothing is preserved.
+    // B14b-2 (R21 N13, N17; closure C18's root id): one root per bound attempt, in a new table
+    // keyed by its binding. Additive: nothing is rebuilt, so nothing is preserved.
     Migration {
         sql: include_str!("../../migrations/008.sql"),
-        body: "sha256:7fc58812c69431697c706af46f5e259dedef221543c07090282e67e6d592146a",
+        body: "sha256:fa362c16347ca2d02e6575461639bacdc1c74b9dced7c1e7b650137872ac211e",
         preserves: &[],
     },
 ];
