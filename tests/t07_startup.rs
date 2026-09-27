@@ -3054,11 +3054,12 @@ fn host_reads_a_reaped_real_child_as_absent() {
     );
 }
 
-/// `T07-AP-65` · a real workspace directory: cleanup reads back partial and the
-/// workspace writable with its bytes; the effect removes it under the owner
-/// guard; the readback after is complete and the next pass finds R12.
+/// `T07-AP-65` · a real workspace directory of a task at its verification boundary: cleanup reads
+/// back partial and the workspace writable with its bytes, and the workspace is kept, pass after
+/// pass (R21 closure C11: a partial readback beside a writable workspace is never cleaned; the
+/// verifying task still owns its materialised candidate). Before C11 this pinned the removal.
 #[test]
-fn host_cleans_a_real_workspace_directory_and_reads_it_back() {
+fn host_keeps_a_real_writable_workspace_at_the_verification_boundary() {
     let area = Area::new("workspace");
     // The ledger recorded `area` as the attempt's root (B14b-2): the host reads `<root>/<attempt>`,
     // handed to it by the pass, never inserted by a caller.
@@ -3069,37 +3070,35 @@ fn host_cleans_a_real_workspace_directory_and_reads_it_back() {
     fs::write(workspace.join("output"), b"12345").unwrap();
     fs::write(workspace.join("nested").join("more"), b"67").unwrap();
     let mut host = Host::new(deadline());
-    let pass = r.pass(&mut host);
-    let entry = only(&pass);
-    assert_eq!(
-        entry.handed.cleanup,
-        CleanupReadback::Partial {
-            remaining: vec!["workspace".into()]
-        }
-    );
-    assert_eq!(
-        entry.handed.workspace,
-        WorkspaceReadback::Writable { bytes: 7 }
-    );
-    assert!(matches!(
-        entry.action,
-        Some(Action::CleanupPerformed {
-            readback: CleanupReadback::Complete,
-            ledger_settled: false,
-            ..
-        })
-    ));
-    assert!(!workspace.exists());
-    let next = r.pass(&mut host);
-    assert_eq!(next.attempts[0].handed.cleanup, CleanupReadback::Complete);
-    assert_eq!(
-        next.attempts[0].handed.workspace,
-        WorkspaceReadback::Released
-    );
-    assert_eq!(
-        next.attempts[0].decision.rule,
-        Rule::R12VerificationBoundary
-    );
+    for boot in 0..2 {
+        let pass = r.pass(&mut host);
+        let entry = only(&pass);
+        assert_eq!(
+            entry.handed.cleanup,
+            CleanupReadback::Partial {
+                remaining: vec!["workspace".into()]
+            },
+            "boot {boot}"
+        );
+        assert_eq!(
+            entry.handed.workspace,
+            WorkspaceReadback::Writable { bytes: 7 },
+            "boot {boot}"
+        );
+        assert_eq!(entry.decision.rule, Rule::R12VerificationBoundary);
+        assert_eq!(
+            entry.action,
+            Some(Action::VerificationOutstanding {
+                task_state: TaskState::Verifying
+            }),
+            "boot {boot}"
+        );
+        assert_eq!(fs::read(workspace.join("output")).unwrap(), b"12345");
+        assert_eq!(
+            fs::read(workspace.join("nested").join("more")).unwrap(),
+            b"67"
+        );
+    }
 }
 
 /// `T07-AP-66` · nothing bound for the attempt: the host infers no convention and
@@ -3655,6 +3654,90 @@ fn record_paths_hands_the_inventory_s_roots_after_the_clock_and_before_any_readb
         );
         assert_eq!(world.calls_of("record_paths").len(), 1);
     }
+}
+
+/// R21 closure C11 (FT3-01) · a cleanup readback that is partial beside a still-writable workspace
+/// is never cleaned. That is the one combination the `Host` produces for a materialised workspace
+/// (`leaves_readback` answers complete only when both leaves are absent), so a writable workspace
+/// goes through the rule the task's state names before any cleanup: a task still at its
+/// verification boundary keeps it (R12), and a terminal task's is refused through `lease_refusal`
+/// (R09, T07 obligation 9). Two fixtures that differ in task state, remaining leaves and bytes;
+/// neither calls `clean`, and the world's obligations are untouched.
+#[test]
+fn a_partial_readback_beside_a_writable_workspace_is_never_cleaned() {
+    let area = Area::new("partial-verifying");
+    let mut r = Rig::bound_ready(&area.path);
+    let mut world = World::new()
+        .with_obligations(&["workspace"])
+        .with_workspace(WorkspaceReadback::Writable { bytes: 4096 });
+    let pass = r.pass(&mut world);
+    let entry = only(&pass);
+    assert_eq!(
+        (&entry.handed.cleanup, &entry.handed.workspace),
+        (
+            &CleanupReadback::Partial {
+                remaining: vec!["workspace".into()]
+            },
+            &WorkspaceReadback::Writable { bytes: 4096 }
+        )
+    );
+    assert_eq!(entry.decision.rule, Rule::R12VerificationBoundary);
+    assert_eq!(
+        entry.decision.reconciliation,
+        Reconciliation::VerificationOutstanding {
+            task_state: TaskState::Verifying,
+            verification: Verification::None,
+            evidence: Evidence::Unassessed,
+            acceptance_prepared: false,
+        }
+    );
+    assert_eq!(
+        entry.action,
+        Some(Action::VerificationOutstanding {
+            task_state: TaskState::Verifying
+        })
+    );
+    assert!(world.calls_of("clean").is_empty(), "{:?}", world.calls);
+    assert_eq!(world.obligations[ATTEMPT], vec!["workspace".to_owned()]);
+
+    let area = Area::new("partial-failed");
+    let mut r = Rig::bound_ready(&area.path);
+    r.verify(VerificationVerdict::Failed, true);
+    r.stop();
+    assert_eq!(r.area.task_row().0, "failed");
+    let mut world = World::new()
+        .with_obligations(&["workspace", "job_root"])
+        .with_workspace(WorkspaceReadback::Writable { bytes: 8192 });
+    let pass = r.pass(&mut world);
+    let entry = only_cleanup(&pass);
+    assert_eq!(
+        (&entry.handed.cleanup, &entry.handed.workspace),
+        (
+            &CleanupReadback::Partial {
+                remaining: vec!["workspace".into(), "job_root".into()]
+            },
+            &WorkspaceReadback::Writable { bytes: 8192 }
+        )
+    );
+    assert_eq!(entry.decision.rule, Rule::R09WorkspaceReuse);
+    assert_eq!(
+        entry.decision.reconciliation,
+        Reconciliation::WorkspaceReuseRefused {
+            reason: ReuseRefusal::ClockUnavailable,
+            process: ProcessCustody::Unobserved,
+        }
+    );
+    assert_eq!(
+        entry.action,
+        Some(Action::ReuseRefused {
+            reason: ReuseRefusal::ClockUnavailable
+        })
+    );
+    assert!(world.calls_of("clean").is_empty(), "{:?}", world.calls);
+    assert_eq!(
+        world.obligations[ATTEMPT],
+        vec!["workspace".to_owned(), "job_root".to_owned()]
+    );
 }
 
 /// B14b-2 S15 (R21 N15, N17) · three states from a recorded root and its two leaves. The pure rule

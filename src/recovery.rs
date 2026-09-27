@@ -1177,16 +1177,24 @@ fn settled(
             Rule::R11CleanupReadback,
             retain(Unknown::CleanupUnverified, task, observed),
         ),
-        CleanupReadback::Partial { remaining } => decide(
-            Rule::R11CleanupReadback,
-            Reconciliation::CleanupCandidate {
-                what: remaining
-                    .iter()
-                    .map(|name| CleanupTarget::Remaining { name: name.clone() })
-                    .collect(),
-                process: observed.process.clone(),
-            },
-        ),
+        CleanupReadback::Partial { remaining } => {
+            // A workspace still writable is itself a remaining obligation, and it is never cleaned
+            // here: the task's state decides it, as it does after a complete readback (R21
+            // closure C11). Partial beside Writable is what a materialised workspace reads as.
+            if let WorkspaceReadback::Writable { .. } = observed.workspace {
+                return boundary(task, attempt, observed);
+            }
+            decide(
+                Rule::R11CleanupReadback,
+                Reconciliation::CleanupCandidate {
+                    what: remaining
+                        .iter()
+                        .map(|name| CleanupTarget::Remaining { name: name.clone() })
+                        .collect(),
+                    process: observed.process.clone(),
+                },
+            )
+        }
         CleanupReadback::Complete => {
             if attempt.cleanup != Cleanup::Settled {
                 return decide(
@@ -1199,59 +1207,65 @@ fn settled(
                     },
                 );
             }
-            match task.state {
-                TaskState::Verifying | TaskState::RepairPending => decide(
-                    Rule::R12VerificationBoundary,
-                    Reconciliation::VerificationOutstanding {
-                        task_state: task.state,
-                        verification: attempt.verification,
-                        evidence: attempt.evidence,
-                        acceptance_prepared: matches!(
-                            task.candidate,
-                            AcceptanceCandidate::Prepared { .. }
-                        ),
-                    },
-                ),
-                TaskState::Failed
-                | TaskState::Cancelled
-                | TaskState::Abandoned
-                | TaskState::Blocked => {
-                    // A workspace still writable is never released, however complete the
-                    // cleanup readback: the unsettled path refuses it through `lease_refusal`,
-                    // and this path now goes through the same rule (T07 obligation 9).
-                    if let WorkspaceReadback::Writable { bytes } = observed.workspace {
-                        return decide(
-                            Rule::R09WorkspaceReuse,
-                            Reconciliation::WorkspaceReuseRefused {
-                                reason: lease_refusal(attempt.lease, observed.clock, bytes),
-                                process: observed.process.clone(),
-                            },
-                        );
-                    }
-                    decide(
-                        Rule::R11CleanupReadback,
-                        Reconciliation::WorkspaceReleasable {
-                            cleanup_readback: observed.cleanup.clone(),
-                            process: observed.process.clone(),
-                            task_state: task.state,
-                        },
-                    )
-                }
-                TaskState::Admitted
-                | TaskState::Queued
-                | TaskState::Running
-                | TaskState::CancellationRequested
-                | TaskState::Accepted
-                | TaskState::EffectUnknown => decide(
-                    Rule::R14UnexpectedState,
-                    retain(
-                        Unknown::TaskStateUnexpected { state: task.state },
-                        task,
-                        observed,
-                    ),
-                ),
-            }
+            boundary(task, attempt, observed)
         }
+    }
+}
+
+/// R09, R12, R14: the task's state decides a settled attempt whose cleanup readback left nothing for
+/// R11 to perform: complete and settled in the ledger, or partial beside a still-writable workspace
+/// (R21 closure C11). A task at its verification boundary keeps its workspace; a terminal task's
+/// writable workspace is refused through `lease_refusal` and otherwise releasable.
+fn boundary(
+    task: &TaskFacts<'_>,
+    attempt: &AttemptFacts<'_>,
+    observed: &Observations<'_>,
+) -> Decision {
+    match task.state {
+        TaskState::Verifying | TaskState::RepairPending => decide(
+            Rule::R12VerificationBoundary,
+            Reconciliation::VerificationOutstanding {
+                task_state: task.state,
+                verification: attempt.verification,
+                evidence: attempt.evidence,
+                acceptance_prepared: matches!(task.candidate, AcceptanceCandidate::Prepared { .. }),
+            },
+        ),
+        TaskState::Failed | TaskState::Cancelled | TaskState::Abandoned | TaskState::Blocked => {
+            // A workspace still writable is never released or cleaned, whatever the
+            // cleanup readback: the unsettled path refuses it through `lease_refusal`,
+            // and this path goes through the same rule (T07 obligation 9).
+            if let WorkspaceReadback::Writable { bytes } = observed.workspace {
+                return decide(
+                    Rule::R09WorkspaceReuse,
+                    Reconciliation::WorkspaceReuseRefused {
+                        reason: lease_refusal(attempt.lease, observed.clock, bytes),
+                        process: observed.process.clone(),
+                    },
+                );
+            }
+            decide(
+                Rule::R11CleanupReadback,
+                Reconciliation::WorkspaceReleasable {
+                    cleanup_readback: observed.cleanup.clone(),
+                    process: observed.process.clone(),
+                    task_state: task.state,
+                },
+            )
+        }
+        TaskState::Admitted
+        | TaskState::Queued
+        | TaskState::Running
+        | TaskState::CancellationRequested
+        | TaskState::Accepted
+        | TaskState::EffectUnknown => decide(
+            Rule::R14UnexpectedState,
+            retain(
+                Unknown::TaskStateUnexpected { state: task.state },
+                task,
+                observed,
+            ),
+        ),
     }
 }
 
