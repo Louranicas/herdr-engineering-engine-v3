@@ -3236,12 +3236,12 @@ fn an_empty_check_window_is_recorded_as_a_timeout_at_no_cost() -> Outcome_ {
 }
 
 /// B14a-1c review M4b · a work reservation spent before the next attempt can begin stops the task
-/// by policy instead of failing with a zero lease. The first attempt sleeps past its work window,
+/// by policy instead of failing with a zero lease. The first attempt is held past its work window,
 /// so its candidate is refused at the deadline; what remains is below the teardown share.
 #[test]
 fn a_spent_work_reservation_stops_the_task_by_policy() -> Outcome_ {
     let rig = rig(&Shape {
-        work_ms: 1_500,
+        work_ms: SPENT_WORK_MS,
         ..Shape::default()
     })?;
     let principal = owner();
@@ -3249,9 +3249,9 @@ fn a_spent_work_reservation_stops_the_task_by_policy() -> Outcome_ {
         Candidate::Replacement(FIRST.to_vec()),
         Candidate::Replacement(SECOND.to_vec()),
     ]);
-    source.hook = Some(Box::new(|| std::thread::sleep(Duration::from_millis(700))));
-    let (verifier, handed) = oracle(vec![]);
-    let outcome = run(&rig, &principal, source, verifier, 10).map_err(|e| format!("{e:?}"))?;
+    let (mut verifier, handed) = oracle(vec![]);
+    let drain = AtomicBool::new(false);
+    let outcome = spent_by_the_first_attempt(&rig, &principal, &drain, &mut source, &mut verifier)?;
     assert_eq!(
         outcome,
         Outcome::Driven(Driven::Stopped(StopReason::Policy(
@@ -3291,13 +3291,68 @@ fn teardown_bound(work_until: Instant, teardown_ms: u64, until: Instant) -> Inst
     until.min(work_until + Duration::from_millis(teardown_ms))
 }
 
+/// The work reservation of the two spent-reservation proofs (B14b-2 closure D8b). Its work window,
+/// the reservation less the 1 000 ms teardown share, runs 2 500 ms from the dispatch origin, which
+/// includes preparation, so a loaded run's captures cannot spend it before attempt 1 begins (1 500
+/// left 500 ms, and a fixed 10 ms capture share was refused `ProtectedCapture` under load).
+const SPENT_WORK_MS: u64 = 3_500;
+
+/// Dispatch the rig's task with its first attempt's work window spent by construction (B14b-2
+/// closure D8b), never by a fixed sleep racing preparation. The task is admitted as `serve` admits
+/// it — the capture share derived, the reservation less the teardown share — and the source's hook
+/// holds its answer until the attempt's work window, by the design's rule over the admitted window
+/// ([`window_end`]), has closed. Attempt 1 is charged from the origin, so at least the whole window
+/// is charged and what the reservation holds after it is under the teardown share, whatever the
+/// captures took.
+fn spent_by_the_first_attempt(
+    rig: &Rig,
+    principal: &Principal,
+    drain: &AtomicBool,
+    source: &mut Script<'_>,
+    verifier: &mut Oracle<'_>,
+) -> Result<Outcome, Box<dyn Error>> {
+    let admission = admit(
+        &rig.tasks,
+        &rig.profile,
+        Dispatch {
+            principal,
+            task: id(TASK),
+            agent_record_id: &rig.agent,
+            selections: &rig.selections,
+            attempts: &rig.attempts,
+            root_id: &rig.root_id,
+            forbidden: &[],
+            teardown_ms: rig.teardown_ms,
+            capture_ms: None,
+            drain,
+        },
+    )
+    .map_err(|e| format!("{e:?}"))?;
+    let admitted = match admission {
+        Admission::Ready(admitted) => admitted,
+        Admission::Refused(refusal) => {
+            return Err(format!("refused at admission: {refusal:?}").into());
+        }
+    };
+    let (origin, until) = admitted.window();
+    let work_until = window_end(origin, rig.reserved_work_ms, rig.teardown_ms, until);
+    // Strictly past the window's end, so the candidate arrives after it closed on any load.
+    let held_until = work_until + Duration::from_millis(1);
+    source.hook = Some(Box::new(move || {
+        std::thread::sleep(held_until.saturating_duration_since(Instant::now()));
+    }));
+    let dispatched =
+        drive(&rig.tasks, *admitted, source, verifier).map_err(|e| format!("{e:?}"))?;
+    Ok(dispatched.outcome)
+}
+
 /// Closure C3 (FT2-03) · a work reservation spent before the next attempt is refused before the
 /// provider is asked: the second begin reads the head before `ready`, finds no work window past the
 /// teardown share, and stops the task by policy — the source was asked ready once, for attempt 1.
 #[test]
 fn a_spent_reservation_is_refused_before_the_provider_is_asked() -> Outcome_ {
     let rig = rig(&Shape {
-        work_ms: 1_500,
+        work_ms: SPENT_WORK_MS,
         ..Shape::default()
     })?;
     let principal = owner();
@@ -3305,10 +3360,10 @@ fn a_spent_reservation_is_refused_before_the_provider_is_asked() -> Outcome_ {
         Candidate::Replacement(FIRST.to_vec()),
         Candidate::Replacement(SECOND.to_vec()),
     ]);
-    source.hook = Some(Box::new(|| std::thread::sleep(Duration::from_millis(700))));
     let readied = Arc::clone(&source.readied);
-    let (verifier, handed) = oracle(vec![]);
-    let outcome = run(&rig, &principal, source, verifier, 10).map_err(|e| format!("{e:?}"))?;
+    let (mut verifier, handed) = oracle(vec![]);
+    let drain = AtomicBool::new(false);
+    let outcome = spent_by_the_first_attempt(&rig, &principal, &drain, &mut source, &mut verifier)?;
     assert_eq!(
         outcome,
         Outcome::Driven(Driven::Stopped(StopReason::Policy(
