@@ -144,6 +144,9 @@ struct Shape<'a> {
     verify_ms: u64,
     /// The compiler pin the profile declares, when not the toolchain rustc's own digest.
     compiler_sha256: Option<&'a str>,
+    /// The baseline also holds the class's `Cargo.toml` (K4: the native prompt reads it from the
+    /// baseline snapshot); the rig's other proofs keep the one-file baseline they pin.
+    base_cargo: bool,
 }
 
 impl Default for Shape<'_> {
@@ -158,6 +161,7 @@ impl Default for Shape<'_> {
             teardown_ms: 1_000,
             verify_ms: 300_000,
             compiler_sha256: None,
+            base_cargo: false,
         }
     }
 }
@@ -264,6 +268,9 @@ fn installed(root: &Path, shape: &Shape<'_>) -> Result<Profile, Box<dyn Error>> 
     private(&base)?;
     private(&base.join("src"))?;
     file(&base.join("src/lib.rs"), BASE_LIB)?;
+    if shape.base_cargo {
+        file(&base.join("Cargo.toml"), EVAL_CARGO)?;
+    }
     private(&protected)?;
     file(&protected.join("oracle.txt"), b"frozen oracle\n")?;
     // The class's real protected tree, so the live verifier's workload passes its preflight (R15):
@@ -1696,9 +1703,19 @@ fn admitted<'a>(
     principal: &'a Principal,
     drain: &'a AtomicBool,
 ) -> Result<Box<Admitted<'a>>, Box<dyn Error>> {
+    admitted_with(rig, principal, drain, &rig.profile)
+}
+
+/// The rig's task admitted under `profile` (the class a provider reads through `Admitted`).
+fn admitted_with<'a>(
+    rig: &'a Rig,
+    principal: &'a Principal,
+    drain: &'a AtomicBool,
+    profile: &'a Profile,
+) -> Result<Box<Admitted<'a>>, Box<dyn Error>> {
     let admission = admit(
         &rig.tasks,
-        &rig.profile,
+        profile,
         Dispatch {
             principal,
             task: id(TASK),
@@ -3385,6 +3402,26 @@ fn native_source(
     answers: &[(&str, &str)],
     context_length: u64,
 ) -> Result<NativeCandidates, Box<dyn Error>> {
+    let profile = native_fixture(rig, stand_in, answers, context_length)?;
+    let prompt = ClassPrompt::new(EVAL_TASK, EVAL_CARGO, BASE_LIB, &closure_pins()?)
+        .map_err(|e| format!("{e:?}"))?;
+    // The first attempt's prompt is the rendering over no history; pinned here as the runtime's own.
+    assert!(
+        render(&prompt, None)
+            .map_err(|e| format!("{e:?}"))?
+            .starts_with(std::str::from_utf8(EVAL_TASK)?)
+    );
+    Ok(NativeCandidates::new(profile, FULL_FILE, prompt))
+}
+
+/// The native install under the rig's scratch (`native/`) and the scenario the fake answers from:
+/// one generate answer per attempt, the `/2` row's request, the resident model at `context_length`.
+fn native_fixture(
+    rig: &Rig,
+    stand_in: &DaemonStandIn,
+    answers: &[(&str, &str)],
+    context_length: u64,
+) -> Result<habitat_engine::worker::native::Profile, Box<dyn Error>> {
     let root = rig.scratch.0.join("native");
     let (profile, mut scenario) =
         t08_rig::fixture(&root, stand_in, NATIVE_MODEL, NATIVE_LOADED, "", (552, 258));
@@ -3406,15 +3443,7 @@ fn native_source(
             .collect(),
     );
     fs::write(root.join("scenario.json"), serde_json::to_vec(&scenario)?)?;
-    let prompt = ClassPrompt::new(EVAL_TASK, EVAL_CARGO, BASE_LIB, &closure_pins()?)
-        .map_err(|e| format!("{e:?}"))?;
-    // The first attempt's prompt is the rendering over no history; pinned here as the runtime's own.
-    assert!(
-        render(&prompt, None)
-            .map_err(|e| format!("{e:?}"))?
-            .starts_with(std::str::from_utf8(EVAL_TASK)?)
-    );
-    Ok(NativeCandidates::new(profile, FULL_FILE, prompt))
+    Ok(profile)
 }
 
 fn stop_body(rig: &Rig) -> Result<serde_json::Value, Box<dyn Error>> {
@@ -3803,5 +3832,182 @@ fn the_install_is_idempotent_and_an_edit_is_one_revision() -> Outcome_ {
         "a repeat of the edit applies nothing"
     );
     assert_eq!(count(&rig, "SELECT count(*) FROM roster_records")?, 2);
+    Ok(())
+}
+
+/// The daemon stand-in's unit name, as the operator file declares it and the seam double is asked.
+const STAND_IN_UNIT: &str = "hee3-t08-stand-in.service";
+
+/// A `MainPid` double (R21 N7): records the unit, the deadline and the flag's address it was handed
+/// (F101), and answers with its scripted pid — the stand-in's own in the gate.
+struct StandInPid {
+    pid: Result<u32, habitat_engine::worker::native::Error>,
+    seen: AskedPid,
+}
+
+/// What the `MainPid` double was handed, per call: the unit, the deadline, the flag's address.
+type AskedPid = Arc<Mutex<Vec<(String, Instant, usize)>>>;
+
+impl habitat_engine::worker::native::MainPid for StandInPid {
+    fn main_pid(
+        &mut self,
+        unit: &str,
+        deadline: Instant,
+        cancelled: &AtomicBool,
+    ) -> Result<u32, habitat_engine::worker::native::Error> {
+        record(
+            &self.seen,
+            (
+                unit.to_owned(),
+                deadline,
+                std::ptr::from_ref(cancelled) as usize,
+            ),
+        );
+        self.pid
+    }
+}
+
+/// The operator file over the native fixture `profile` (its client, manifest, blobs, directory and
+/// daemon executable) and the stand-in's unit, with the manifest pin `manifest_sha256`.
+fn operator_file(
+    profile: &habitat_engine::worker::native::Profile,
+    manifest_sha256: &str,
+) -> Result<native_provider::NativeFile, Box<dyn Error>> {
+    let text = format!(
+        "schema = \"hee3.native/1\"\ndirectory = \"{}\"\n\n[client]\npath = \"{}\"\nsha256 = \"{}\"\nbytes = {}\n\n\
+         [install]\nmanifest = {{ path = \"{}\", sha256 = \"{manifest_sha256}\", bytes = {} }}\nblobs = \"{}\"\n\n\
+         [daemon]\nunit = \"{STAND_IN_UNIT}\"\nscope = \"user\"\nexecutable = {{ sha256 = \"{}\", bytes = {} }}\n\n\
+         [roster]\nidempotency_key = \"28f10000-0000-4000-8000-0000000000a1\"\n\
+         endpoint_ref = \"28f10000-0000-4000-8000-0000000000a2\"\n",
+        profile.directory.display(),
+        profile.client.path.display(),
+        profile.client.sha256,
+        profile.client.bytes,
+        profile.manifest.path.display(),
+        profile.manifest.bytes,
+        profile.blobs.display(),
+        profile.daemon.executable_sha256,
+        profile.daemon.executable_bytes,
+    );
+    Ok(native_provider::compose(text.as_bytes()).map_err(|e| format!("{e:?}"))?)
+}
+
+/// The rig's class with its native row (R21 N8): the fixture's model, `manifest_sha256`, the `/2`
+/// adapter row. A declared value: the `/2` schema's reading is `class_profile`'s own proof (S16).
+fn native_class(rig: &Rig, manifest_sha256: &str) -> Profile {
+    let mut profile = rig.profile.clone();
+    profile.declared.native = Some(class_profile::Native {
+        model: NATIVE_MODEL.to_owned(),
+        manifest_sha256: manifest_sha256.to_owned(),
+        adapter: FULL_FILE.id.to_owned(),
+    });
+    profile
+}
+
+/// The provider over `file` and a pid double answering `pid`, with the engine's runtime directory.
+fn native_provider(
+    file: native_provider::NativeFile,
+    pid: Result<u32, habitat_engine::worker::native::Error>,
+) -> (native_provider::NativeProvider<StandInPid>, AskedPid) {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    (
+        native_provider::NativeProvider::new(
+            file,
+            StandInPid {
+                pid,
+                seen: Arc::clone(&seen),
+            },
+            format!("/run/user/{}", rustix::process::geteuid().as_raw()).into(),
+        ),
+        seen,
+    )
+}
+
+/// What `open` said, by the dispatcher's name for it.
+fn opened_name<S, V>(opened: Result<(S, V), dispatcher::Unavailable>) -> &'static str {
+    opened.err().map_or("opened", dispatcher::Unavailable::name)
+}
+
+/// R21 D2 (i)(ii)(v)(vi) as amended (N1, N6, N7, N22; S20a) · the production provider opens over
+/// the stand-in: the daemon resolved through the `MainPid` seam under the dispatch deadline and the
+/// dispatch's drain, the prompt read from the closure's pins and the admitted baseline — and the
+/// source it opened drives the task to acceptance through the runtime. Each refusal is the
+/// dispatcher's named state: a class with no native row, an operator manifest pin the class does
+/// not name, a daemon the seam cannot give, a baseline without the class's `Cargo.toml`.
+#[test]
+fn the_native_provider_opens_over_the_stand_in_and_names_each_refusal() -> Outcome_ {
+    let principal = owner();
+    let next = habitat_engine::store::Dispatchable {
+        task: TASK.to_owned(),
+        generation: "1".to_owned(),
+        owner: owner(),
+        cancellation: false,
+    };
+    let stand_in = DaemonStandIn::spawn();
+    let pid = stand_in.daemon().pid;
+    let bench = rig(&Shape {
+        base_cargo: true,
+        ..Shape::default()
+    })?;
+    let fixture = native_fixture(&bench, &stand_in, &[(REFERENCE_LIB, "stop")], 4096)?;
+    let manifest = fixture.manifest.sha256.clone();
+    let class = native_class(&bench, &manifest);
+    let drain = AtomicBool::new(false);
+    let admitted = admitted_with(&bench, &principal, &drain, &class)?;
+    let (_, until) = admitted.window();
+    // The operator's manifest pin is not the class's: refused before the daemon is asked.
+    let other = format!("sha256:{}", "5".repeat(64));
+    let (mut provider, seen) = native_provider(operator_file(&fixture, &other)?, Ok(pid));
+    assert_eq!(
+        opened_name(dispatcher::Provider::open(&mut provider, &next, &admitted)),
+        "unavailable: native manifest"
+    );
+    assert!(taken(&seen).is_empty(), "the daemon was not asked");
+    // No daemon from the seam: its refusal, by name, asked once as the dispatch asks.
+    let flag = std::ptr::from_ref(admitted.drain()) as usize;
+    let (mut provider, seen) = native_provider(
+        operator_file(&fixture, &manifest)?,
+        Err(habitat_engine::worker::native::Error::Identity),
+    );
+    assert_eq!(
+        opened_name(dispatcher::Provider::open(&mut provider, &next, &admitted)),
+        "unavailable: daemon identity"
+    );
+    assert_eq!(taken(&seen), vec![(STAND_IN_UNIT.to_owned(), until, flag)]);
+    // The stand-in: opened, and the source drives the task to acceptance.
+    let (mut provider, seen) = native_provider(operator_file(&fixture, &manifest)?, Ok(pid));
+    let (mut source, _live) = dispatcher::Provider::open(&mut provider, &next, &admitted)
+        .map_err(dispatcher::Unavailable::name)?;
+    assert_eq!(taken(&seen), vec![(STAND_IN_UNIT.to_owned(), until, flag)]);
+    let (mut verifier, handed) = oracle(vec![matched(7)]);
+    let outcome = drive(&bench.tasks, *admitted, &mut source, &mut verifier)
+        .map_err(|e| format!("{e:?}"))?
+        .outcome;
+    assert_eq!(outcome, Outcome::Driven(Driven::Accepted));
+    assert_eq!(state(&bench)?, "accepted");
+    assert_eq!(taken(&handed)[0].1, REFERENCE_LIB.as_bytes());
+    // A class with no native row, and a baseline without the class's `Cargo.toml`.
+    for (base_cargo, native, expected) in [
+        (true, false, "unavailable: class declares no native model"),
+        (false, true, "unavailable: prompt cargo"),
+    ] {
+        let rig = rig(&Shape {
+            base_cargo,
+            ..Shape::default()
+        })?;
+        let fixture = native_fixture(&rig, &stand_in, &[(REFERENCE_LIB, "stop")], 4096)?;
+        let manifest = fixture.manifest.sha256.clone();
+        let class = if native {
+            native_class(&rig, &manifest)
+        } else {
+            rig.profile.clone()
+        };
+        let admitted = admitted_with(&rig, &principal, &drain, &class)?;
+        let (mut provider, _) = native_provider(operator_file(&fixture, &manifest)?, Ok(pid));
+        assert_eq!(
+            opened_name(dispatcher::Provider::open(&mut provider, &next, &admitted)),
+            expected
+        );
+    }
     Ok(())
 }

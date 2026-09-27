@@ -875,22 +875,29 @@ pub fn resolve(
         executable_bytes: pin.executable_bytes,
     })
 }
-fn subject(profile: &Profile, deadline: Instant, cancelled: &AtomicBool) -> Result<(), Error> {
-    for path in [
-        &profile.manifest.path,
-        &profile.blobs,
-        &profile.client.path,
-        &profile.directory,
-    ] {
-        canonical(path)?;
-    }
-    let directory = fs::metadata(&profile.directory).map_err(|_| Error::Subject)?;
+/// The client's working directory as the adapter requires it (R21 N11): canonical, a directory, the
+/// process euid's, mode exactly 0700 — the one check, run by `subject` before every exchange and by
+/// the provider at `open`.
+///
+/// # Errors
+/// `Subject` for a path that is not canonical or cannot be read; `Profile` for a directory that is
+/// not one, not this euid's, or not 0700.
+pub fn working_directory(path: &Path) -> Result<(), Error> {
+    canonical(path)?;
+    let directory = fs::metadata(path).map_err(|_| Error::Subject)?;
     if !directory.is_dir()
         || directory.uid() != rustix::process::geteuid().as_raw()
         || directory.mode() & 0o777 != 0o700
     {
         return Err(Error::Profile);
     }
+    Ok(())
+}
+fn subject(profile: &Profile, deadline: Instant, cancelled: &AtomicBool) -> Result<(), Error> {
+    for path in [&profile.manifest.path, &profile.blobs, &profile.client.path] {
+        canonical(path)?;
+    }
+    working_directory(&profile.directory)?;
     hash_file(&profile.client, deadline, cancelled)?;
     hash_file(&profile.manifest, deadline, cancelled)?;
     let m: Manifest = parse(&small(&profile.manifest.path)?)?;

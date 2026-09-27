@@ -51,14 +51,59 @@ pub enum Unavailable {
     NoNativeProvider,
     /// The task owner has no class profile (not installed, or refused at read).
     NoClassProfile,
+    /// The class declares no native model row (R21 D1): the native provider does not serve it.
+    ClassNotNative,
+    /// The operator's native file does not fit the class, by the declaration that does not.
+    Native(NativeWhy),
+    /// The daemon could not be resolved (R21 N6, N7): the resolver's refusal.
+    Daemon(crate::worker::native::Error),
+    /// The reviewed closure did not yield the class's candidate inputs (R21 N22).
+    Closure,
+    /// The class prompt refused an input, by the class profile's name for it (R21 N22).
+    Prompt(super::candidates::ClassPromptError),
+}
+
+/// Which of the operator's native declarations does not fit the class (R21 D1, N11).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NativeWhy {
+    /// The operator's manifest pin is not the one the class's native row names.
+    Manifest,
+    /// The class's adapter row is not one this build knows.
+    Adapter,
+    /// The client's working directory is not canonical, the engine's, and 0700.
+    Directory,
 }
 
 impl Unavailable {
+    /// The state's name, whole: one literal per variant and payload, so a new one is a compile
+    /// error here.
     #[must_use]
     pub const fn name(self) -> &'static str {
+        use super::candidates::ClassPromptError as Input;
+        use crate::worker::native::Error as Native;
         match self {
             Self::NoNativeProvider => "unavailable: no native provider (B14b-2)",
             Self::NoClassProfile => "unavailable: no class profile",
+            Self::ClassNotNative => "unavailable: class declares no native model",
+            Self::Native(NativeWhy::Manifest) => "unavailable: native manifest",
+            Self::Native(NativeWhy::Adapter) => "unavailable: native adapter",
+            Self::Native(NativeWhy::Directory) => "unavailable: native directory",
+            Self::Daemon(Native::Profile) => "unavailable: daemon profile",
+            Self::Daemon(Native::Subject) => "unavailable: daemon subject",
+            Self::Daemon(Native::Deadline) => "unavailable: daemon deadline",
+            Self::Daemon(Native::Cancelled) => "unavailable: daemon cancelled",
+            Self::Daemon(Native::Json) => "unavailable: daemon json",
+            Self::Daemon(Native::Identity) => "unavailable: daemon identity",
+            Self::Daemon(Native::Usage) => "unavailable: daemon usage",
+            Self::Daemon(Native::Response) => "unavailable: daemon response",
+            Self::Daemon(Native::Process) => "unavailable: daemon process",
+            Self::Daemon(Native::Contract(_)) => "unavailable: daemon contract",
+            Self::Daemon(Native::Census(_)) => "unavailable: daemon census",
+            Self::Daemon(Native::Candidates(_)) => "unavailable: daemon candidates",
+            Self::Closure => "unavailable: reviewed closure",
+            Self::Prompt(Input::Task) => "unavailable: prompt task",
+            Self::Prompt(Input::Cargo) => "unavailable: prompt cargo",
+            Self::Prompt(Input::Base) => "unavailable: prompt base",
         }
     }
 }
@@ -359,11 +404,13 @@ fn run<P: Provider>(dispatcher: Dispatcher<'_, P>, report: &(dyn Fn(&str) + Sync
 
 #[cfg(test)]
 mod tests {
-    use super::{Step, Unavailable, classify, teardown_share};
+    use super::{NativeWhy, Step, Unavailable, classify, teardown_share};
+    use crate::app::candidates::ClassPromptError;
     use crate::app::runtime::{Error as RuntimeError, Outcome, Refusal};
     use crate::store::{Error as StoreError, ResolveRefusal};
     use crate::task::LoopRefusal;
     use crate::task::driver::{self, StopReason};
+    use crate::worker::native::Error as Native;
 
     /// Every result the classification is pinned over, with its step.
     fn cases() -> Vec<(Result<Outcome, RuntimeError>, Step)> {
@@ -477,5 +524,69 @@ mod tests {
             Unavailable::NoClassProfile.name(),
             "unavailable: no class profile"
         );
+        // R21 D2 · the native provider's states, every variant and payload by its whole name.
+        let native = |why| Unavailable::Daemon(why);
+        let names = [
+            (
+                Unavailable::ClassNotNative,
+                "unavailable: class declares no native model",
+            ),
+            (
+                Unavailable::Native(NativeWhy::Manifest),
+                "unavailable: native manifest",
+            ),
+            (
+                Unavailable::Native(NativeWhy::Adapter),
+                "unavailable: native adapter",
+            ),
+            (
+                Unavailable::Native(NativeWhy::Directory),
+                "unavailable: native directory",
+            ),
+            (native(Native::Profile), "unavailable: daemon profile"),
+            (native(Native::Subject), "unavailable: daemon subject"),
+            (native(Native::Deadline), "unavailable: daemon deadline"),
+            (native(Native::Cancelled), "unavailable: daemon cancelled"),
+            (native(Native::Json), "unavailable: daemon json"),
+            (native(Native::Identity), "unavailable: daemon identity"),
+            (native(Native::Usage), "unavailable: daemon usage"),
+            (native(Native::Response), "unavailable: daemon response"),
+            (native(Native::Process), "unavailable: daemon process"),
+            (
+                native(Native::Contract(crate::worker::ContractError::Identity)),
+                "unavailable: daemon contract",
+            ),
+            (
+                native(Native::Census(
+                    crate::worker::process::CensusError::Deadline,
+                )),
+                "unavailable: daemon census",
+            ),
+            (
+                native(Native::Candidates(
+                    crate::worker::process::DescendantBound {
+                        found: 65,
+                        limit: 64,
+                    },
+                )),
+                "unavailable: daemon candidates",
+            ),
+            (Unavailable::Closure, "unavailable: reviewed closure"),
+            (
+                Unavailable::Prompt(ClassPromptError::Task),
+                "unavailable: prompt task",
+            ),
+            (
+                Unavailable::Prompt(ClassPromptError::Cargo),
+                "unavailable: prompt cargo",
+            ),
+            (
+                Unavailable::Prompt(ClassPromptError::Base),
+                "unavailable: prompt base",
+            ),
+        ];
+        for (state, name) in names {
+            assert_eq!(state.name(), name, "{state:?}");
+        }
     }
 }

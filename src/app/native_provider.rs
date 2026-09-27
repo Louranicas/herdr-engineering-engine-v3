@@ -13,17 +13,28 @@
 //!
 //! [`install`] is the one roster write the file drives (N12): the native agent record, created once
 //! under the file's request key and revised in place when the file changes, once per `serve` start.
+//!
+//! [`NativeProvider`] is the dispatcher's production [`Provider`] (R21 D2 as amended by N1, N6,
+//! N7, N22 and S20a): per dispatch it checks the file against the class's native row, resolves the
+//! daemon, reads the class prompt from the reviewed closure and the admitted baseline, and composes
+//! the live verifier over the check-scoped aggregate lifecycle.
 
+use super::candidates::{ClassPrompt, NativeCandidates};
+use super::class_profile;
 use super::custody::{DirectoryError, FileError, PrivateDirectory};
+use super::dispatcher::{NativeWhy, Provider, Unavailable};
 use super::evidence::fresh_id;
+use super::live_verifier::{LiveVerifier, Manager};
+use super::runtime::Admitted;
 use super::tasks::StoreTasks;
 use crate::contracts::roster::{
     Kind, Locality, MAX_TTL_MS, RosterDefinitionV1, RosterHeadV1, Selection, Update,
 };
 use crate::contracts::{OPERATOR_ROLE, Sha256Digest, UuidV4};
-use crate::store::{Error as StoreError, Principal, RequestSource, Store};
+use crate::store::{Dispatchable, Error as StoreError, Principal, RequestSource, Store};
 use crate::worker::namespace;
-use crate::worker::native::AdapterProfile;
+use crate::worker::native::{self, AdapterProfile, DaemonPin, FilePin, MainPid};
+use crate::worker::workspace::{Content, Snapshot};
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -347,6 +358,119 @@ pub fn install(
         }],
         record_id: head.record_id,
     })
+}
+
+/// The production provider (R21 D2): the operator's file, where a unit's main pid comes from
+/// (`native::Systemd` in `serve`, a double in the gate), and the engine's runtime directory the
+/// aggregate and the scopes are pinned to.
+pub struct NativeProvider<M> {
+    file: NativeFile,
+    main_pid: M,
+    runtime_dir: PathBuf,
+}
+
+impl<M: MainPid> NativeProvider<M> {
+    #[must_use]
+    pub const fn new(file: NativeFile, main_pid: M, runtime_dir: PathBuf) -> Self {
+        Self {
+            file,
+            main_pid,
+            runtime_dir,
+        }
+    }
+}
+
+/// A host file's pin as the adapter reads it, from the operator's declaration.
+fn file_pin(pin: &Pin) -> FilePin {
+    FilePin {
+        path: pin.path.clone(),
+        sha256: pin.sha256.clone(),
+        bytes: pin.bytes,
+    }
+}
+
+/// The bytes of one file in the admitted baseline, by its baseline-relative path; empty when the
+/// baseline holds no such file, which the class prompt refuses by the input's name.
+fn baseline_file(baseline: &Snapshot, path: &str) -> Vec<u8> {
+    baseline
+        .entries()
+        .find(|entry| entry.path == path)
+        .and_then(|entry| match &entry.content {
+            Content::File { bytes, .. } => Some(bytes.clone()),
+            Content::Directory => None,
+        })
+        .unwrap_or_default()
+}
+
+impl<M: MainPid> Provider for NativeProvider<M> {
+    type Source = NativeCandidates;
+    type Verifier = LiveVerifier<Manager>;
+
+    /// In order, each refusal the dispatcher's named state (the task stays `admitted`, N2):
+    /// 1. the class's native row, else `ClassNotNative`;
+    /// 2. the operator's manifest pin equal to the row's, and the row's adapter known;
+    /// 3. the daemon resolved under the dispatch deadline and the dispatch's drain (N6, N7);
+    /// 4. the client's working directory (N11);
+    /// 5. the class prompt: the reviewed closure's pins and task text, the admitted baseline's
+    ///    `Cargo.toml` and `src/lib.rs` (N22);
+    /// 6. the live verifier over the class's systemd-run pin and a check-scoped aggregate
+    ///    lifecycle over the class's busctl pin (S20a).
+    fn open(
+        &mut self,
+        _next: &Dispatchable,
+        admitted: &Admitted<'_>,
+    ) -> Result<(NativeCandidates, LiveVerifier<Manager>), Unavailable> {
+        let class = admitted.profile();
+        let declared = &class.declared;
+        let row = declared
+            .native
+            .as_ref()
+            .ok_or(Unavailable::ClassNotNative)?;
+        if self.file.install.manifest.sha256 != row.manifest_sha256 {
+            return Err(Unavailable::Native(NativeWhy::Manifest));
+        }
+        let adapter =
+            native::adapter(&row.adapter).ok_or(Unavailable::Native(NativeWhy::Adapter))?;
+        let (_, deadline) = admitted.window();
+        let daemon = native::resolve(
+            &DaemonPin {
+                unit: self.file.daemon.unit.clone(),
+                executable_sha256: self.file.daemon.executable.sha256.clone(),
+                executable_bytes: self.file.daemon.executable.bytes,
+            },
+            &mut self.main_pid,
+            deadline,
+            admitted.drain(),
+        )
+        .map_err(Unavailable::Daemon)?;
+        native::working_directory(&self.file.directory)
+            .map_err(|_| Unavailable::Native(NativeWhy::Directory))?;
+        let (pins, task) =
+            class_profile::candidate_inputs(class).map_err(|_| Unavailable::Closure)?;
+        let prompt = ClassPrompt::new(
+            &task,
+            &baseline_file(admitted.baseline(), "Cargo.toml"),
+            &baseline_file(admitted.baseline(), "src/lib.rs"),
+            &pins,
+        )
+        .map_err(Unavailable::Prompt)?;
+        let profile = native::Profile {
+            model: row.model.clone(),
+            manifest: file_pin(&self.file.install.manifest),
+            blobs: self.file.install.blobs.clone(),
+            client: file_pin(&self.file.client),
+            daemon,
+            directory: self.file.directory.clone(),
+        };
+        Ok((
+            NativeCandidates::new(profile, adapter, prompt),
+            LiveVerifier::new(
+                declared.systemd_run_sha256.clone(),
+                self.runtime_dir.clone(),
+                Manager::new(declared.busctl_sha256.clone(), self.runtime_dir.clone()),
+            ),
+        ))
+    }
 }
 
 #[cfg(test)]
