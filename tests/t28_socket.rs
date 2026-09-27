@@ -528,6 +528,24 @@ fn a_linked_record_or_a_shared_directory_is_not_a_grant() -> Outcome {
 /// How long a case waits for a started engine's socket before calling the start failed.
 const START_BUDGET: Duration = Duration::from_secs(20);
 
+/// `serve`'s one flag: it drains when its standard input closes.
+const UNTIL_STDIN_CLOSES: &str = "--until-stdin-closes";
+
+/// `habitat-engine serve --until-stdin-closes` under a private runtime root and home, its standard
+/// input a pipe whose write end the spawned `Child` keeps. However this process ends -- a drop, an
+/// exit without unwinding, a kill -- the kernel closes that end and the engine drains (the t28
+/// serve leak, 2026-09-26: a test process that died on EPIPE left an engine serving for 12.4 h).
+fn serve_command(run: &Path, home: &Path) -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_habitat-engine"));
+    command
+        .args(["serve", UNTIL_STDIN_CLOSES])
+        .env("XDG_RUNTIME_DIR", run)
+        .env("HOME", home)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null());
+    command
+}
+
 /// The engine binary under a private runtime root and home, killed by its own handle on drop.
 struct Engine {
     child: Option<Child>,
@@ -560,27 +578,44 @@ impl Engine {
         budget: Duration,
     ) -> Result<Self, Box<dyn Error>> {
         let engine = Self {
-            child: Some(
-                Command::new(env!("CARGO_BIN_EXE_habitat-engine"))
-                    .arg("serve")
-                    .env("XDG_RUNTIME_DIR", run)
-                    .env("HOME", home)
-                    .stdin(Stdio::null())
-                    .stdout(Stdio::null())
-                    .stderr(stderr)
-                    .spawn()?,
-            ),
+            child: Some(serve_command(run, home).stderr(stderr).spawn()?),
         };
+        engine.serving(run, budget)
+    }
+
+    /// This engine once the socket under `run` accepts, within `budget`; else the error naming the
+    /// budget, or the exit of an engine that ended first, and the engine killed and reaped by the
+    /// guard's drop.
+    fn serving(mut self, run: &Path, budget: Duration) -> Result<Self, Box<dyn Error>> {
         let socket = run.join(RUNTIME_DIRECTORY).join(SOCKET_NAME);
         let started = Instant::now();
         // Wait on the artifact the engine produces, with a budget: a connectable socket.
         while UnixStream::connect(&socket).is_err() {
+            let child = self.child.as_mut().ok_or("the engine was already taken")?;
+            if let Some(status) = child.try_wait()? {
+                return Err(
+                    format!("the engine ended ({status}) before its socket accepted").into(),
+                );
+            }
             if started.elapsed() >= budget {
                 return Err(format!("no socket within {budget:?}").into());
             }
             std::thread::sleep(Duration::from_millis(20));
         }
-        Ok(engine)
+        Ok(self)
+    }
+
+    /// Close the parent's end of the engine's standard input and return the engine's output once
+    /// it exits, within `budget`.
+    fn close_stdin(mut self, budget: Duration) -> Result<Output, Box<dyn Error>> {
+        let mut child = self.child.take().ok_or("the engine was already taken")?;
+        drop(
+            child
+                .stdin
+                .take()
+                .ok_or("the engine's standard input is not a pipe")?,
+        );
+        exits_within(child, budget)
     }
 
     /// Send the engine SIGTERM and return its output once it exits, within `budget` (APP-01).
@@ -2193,14 +2228,7 @@ fn a_second_engine_is_refused_and_a_killed_one_is_replaced() -> Outcome {
     let (run, home, scope) = (&world.run, &world.home, &world.scope);
     let engine = Engine::start(run, home)?;
     // A second engine is refused while the first serves; after a kill, the stale socket clears.
-    let second = Command::new(env!("CARGO_BIN_EXE_habitat-engine"))
-        .arg("serve")
-        .env("XDG_RUNTIME_DIR", run)
-        .env("HOME", home)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .spawn()?;
+    let second = serve_command(run, home).stderr(Stdio::piped()).spawn()?;
     // A second engine that wrongly starts serves forever: wait on it with a budget, or this case
     // would hang instead of fail (a planted mutant found exactly that).
     let second = exits_within(second, Duration::from_secs(10))?;
@@ -2490,12 +2518,7 @@ fn a_start_that_cannot_write_is_not_yet_bound() -> Outcome {
 /// writing to it, with the bytes the pipe held.
 fn blocked_on_stderr(world: &World) -> Result<(Blocked, usize), Box<dyn Error>> {
     let (drain, writer, filled) = full_pipe()?;
-    let child = Command::new(env!("CARGO_BIN_EXE_habitat-engine"))
-        .arg("serve")
-        .env("XDG_RUNTIME_DIR", &world.run)
-        .env("HOME", &world.home)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
+    let child = serve_command(&world.run, &world.home)
         .stderr(writer)
         .spawn()?;
     let pid = child.id();
@@ -3259,6 +3282,266 @@ fn sigterm_drains_releases_the_ledger_unlinks_the_socket_and_exits_zero() -> Out
                 socket.display()
             )),
         "{stderr}"
+    );
+    Ok(())
+}
+
+/// Positions of `expected` among the lines of `log`, each found after the one before; a missing or
+/// out-of-order line is an error naming it, with the whole log.
+fn in_order(log: &str, expected: &[String]) -> Outcome {
+    let mut lines = log.lines();
+    for line in expected {
+        if !lines.any(|seen| seen == line) {
+            return Err(format!("{line:?} is missing or out of order in:\n{log}").into());
+        }
+    }
+    Ok(())
+}
+
+/// The text of `log`, or a line saying it could not be read: for a diagnostic, never a verdict.
+fn read_or_absent(log: &Path) -> String {
+    fs::read_to_string(log)
+        .unwrap_or_else(|error| format!("<{} unreadable: {error}>", log.display()))
+}
+
+/// The lines a drain through the one door writes, in order, ending in the socket's removal.
+fn drain_lines(signal: &str, socket: &Path) -> Vec<String> {
+    vec![
+        format!("habitat-engine: {signal}: draining"),
+        format!(
+            "habitat-engine: drained; removed {}; exiting",
+            socket.display()
+        ),
+    ]
+}
+
+/// The t28 serve leak's engine rule: `serve --until-stdin-closes` drains when the parent's end of
+/// its standard input closes. The watcher raises SIGTERM, so the drain is the one APP-01 already
+/// holds: exit 0, the drain's lines in order, the socket removed.
+#[test]
+fn serve_until_stdin_closes_drains_when_its_parent_end_closes() -> Outcome {
+    let world = World::seeing(&["app"])?;
+    let log = world.home.join("engine.log");
+    let engine = Engine::start_logged(&world.run, &world.home, &log)?;
+    let socket = world.run.join(RUNTIME_DIRECTORY).join(SOCKET_NAME);
+    let output = engine.close_stdin(START_BUDGET)?;
+    let stderr = fs::read_to_string(&log)?;
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    let mut expected = vec!["habitat-engine: standard input closed; raising SIGTERM".to_owned()];
+    expected.extend(drain_lines("SIGTERM", &socket));
+    in_order(&stderr, &expected)?;
+    assert!(
+        fs::symlink_metadata(&socket).is_err(),
+        "the socket file is removed"
+    );
+    Ok(())
+}
+
+/// `--until-stdin-closes` over a standard input that is not a pipe could never see a parent die:
+/// `/dev/null` (a systemd unit's) reads end of file at once, a file at its end. It is refused by
+/// name with the contract's exit code, before custody is taken, and names what stdin is.
+#[test]
+fn serve_until_stdin_closes_refuses_a_stdin_that_is_not_a_pipe() -> Outcome {
+    let world = World::seeing(&["app"])?;
+    let file = world.home.join("stdin");
+    fs::write(&file, b"")?;
+    for (stdin, kind) in [
+        (Stdio::null(), "CharacterDevice"),
+        (Stdio::from(fs::File::open(&file)?), "RegularFile"),
+    ] {
+        let child = serve_command(&world.run, &world.home)
+            .stdin(stdin)
+            .stderr(Stdio::piped())
+            .spawn()?;
+        let output = exits_within(child, START_BUDGET)?;
+        assert_eq!(
+            (
+                output.status.code(),
+                String::from_utf8_lossy(&output.stderr).into_owned()
+            ),
+            (
+                Some(6),
+                format!(
+                    "habitat-engine: {UNTIL_STDIN_CLOSES} refused: standard input is not a pipe \
+                     ({kind})\n"
+                )
+            )
+        );
+        assert!(
+            fs::symlink_metadata(world.run.join(RUNTIME_DIRECTORY)).is_err(),
+            "{kind}: refused before custody was taken"
+        );
+    }
+    Ok(())
+}
+
+/// `serve` takes exactly `[serve]` or `[serve, --until-stdin-closes]`; any other word after it is
+/// the usage error, never a serve that ignores it.
+#[test]
+fn serve_accepts_exactly_its_one_flag() -> Outcome {
+    let world = World::seeing(&["app"])?;
+    for argv in [
+        &["serve", "--until-stdin-close"][..],
+        &["serve", "--until-stdin-closes", "--until-stdin-closes"],
+        &["--until-stdin-closes", "serve"],
+        &["serve", "tools.list"],
+    ] {
+        let child = Command::new(env!("CARGO_BIN_EXE_habitat-engine"))
+            .args(argv)
+            .env("XDG_RUNTIME_DIR", &world.run)
+            .env("HOME", &world.home)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()?;
+        let output = exits_within(child, START_BUDGET)?;
+        assert_eq!(
+            (
+                output.status.code(),
+                String::from_utf8_lossy(&output.stderr).into_owned()
+            ),
+            (
+                Some(2),
+                format!(
+                    "habitat-engine: usage: habitat-engine serve [{UNTIL_STDIN_CLOSES}] | \
+                     habitat-engine <action-id> < request\n"
+                )
+            ),
+            "{argv:?}"
+        );
+    }
+    Ok(())
+}
+
+/// Without the flag nothing watches standard input (the default is unchanged): an engine whose
+/// stdin reached end of file before it started binds, answers, and drains only on SIGTERM.
+#[test]
+fn serve_without_its_flag_does_not_watch_its_stdin() -> Outcome {
+    let world = World::seeing(&["app"])?;
+    let log = world.home.join("engine.log");
+    let mut engine = Engine {
+        child: Some(
+            Command::new(env!("CARGO_BIN_EXE_habitat-engine"))
+                .arg("serve")
+                .env("XDG_RUNTIME_DIR", &world.run)
+                .env("HOME", &world.home)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::null())
+                .stderr(Stdio::from(fs::File::create_new(&log)?))
+                .spawn()?,
+        ),
+    };
+    drop(engine.child.as_mut().and_then(|child| child.stdin.take()));
+    let engine = engine
+        .serving(&world.run, START_BUDGET)
+        .map_err(|error| format!("{error}; its log:\n{}", read_or_absent(&log)))?;
+    let health = reply_of(&wrapper(&world.run, &world.scope, &["health"])?)?;
+    assert_eq!(health["body"]["socket"], json!("owned"), "{health}");
+    let output = engine.terminate(START_BUDGET)?;
+    let stderr = fs::read_to_string(&log)?;
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    let socket = world.run.join(RUNTIME_DIRECTORY).join(SOCKET_NAME);
+    in_order(&stderr, &drain_lines("SIGTERM", &socket))?;
+    assert!(
+        !stderr.contains("standard input"),
+        "nothing watched stdin:\n{stderr}"
+    );
+    Ok(())
+}
+
+/// The middle parent of the incident shape: it starts `serve --until-stdin-closes` holding the
+/// pipe's write end, waits for the socket, prints the engine's pid, then dies by SIGKILL -- no
+/// unwinding, no drop, no exit handler.
+const MIDDLE: &str = r#"
+import os, signal, subprocess, sys, time
+engine, run, home, log, socket, budget = sys.argv[1:7]
+with open(log, "wb") as stderr:
+    child = subprocess.Popen([engine, "serve", "--until-stdin-closes"], stdin=subprocess.PIPE,
+                             stdout=subprocess.DEVNULL, stderr=stderr,
+                             env=dict(os.environ, XDG_RUNTIME_DIR=run, HOME=home))
+started = time.monotonic()
+while not os.path.exists(socket):
+    if time.monotonic() - started >= int(budget):
+        child.kill()
+        child.wait()
+        sys.exit(f"no socket within {budget}s")
+    time.sleep(0.02)
+print(child.pid, flush=True)
+os.kill(os.getpid(), signal.SIGKILL)
+"#;
+
+/// The outer of the incident shape, a child subreaper so the orphan is adopted here and reaped
+/// here -- never by conmon or a gate that would count it as a leaked descendant. It prints one
+/// line: the middle's status and the orphan's exit code, or that it still ran after the budget
+/// (then it is killed and reaped here).
+const OUTER: &str = r#"
+import ctypes, os, signal, subprocess, sys, time
+if ctypes.CDLL(None, use_errno=True).prctl(36, 1, 0, 0, 0) != 0:
+    sys.exit("PR_SET_CHILD_SUBREAPER refused")
+middle, budget = sys.argv[1], int(sys.argv[7])
+parent = subprocess.Popen([sys.executable, "-W", "error", "-c", middle, *sys.argv[2:8]],
+                          stdout=subprocess.PIPE)
+line = parent.stdout.readline()
+parent.stdout.close()
+parent.wait()
+if not line.strip():
+    sys.exit(f"the middle printed no pid (exit {parent.returncode})")
+pid = int(line)
+started = time.monotonic()
+while True:
+    reaped, status = os.waitpid(pid, os.WNOHANG)
+    if reaped:
+        print(f"middle={parent.returncode} engine={os.waitstatus_to_exitcode(status)}")
+        break
+    if time.monotonic() - started >= budget:
+        os.kill(pid, signal.SIGKILL)
+        os.waitpid(pid, 0)
+        print(f"middle={parent.returncode} engine=still running after {budget}s")
+        break
+    time.sleep(0.02)
+"#;
+
+/// The incident, reproduced in its shape: the engine's parent dies without unwinding (SIGKILL
+/// here; an EPIPE exit on 2026-09-26) and the orphan drains on its own -- exit 0, the socket
+/// removed -- because the kernel closed the dead parent's end of its standard input.
+#[test]
+fn an_orphaned_serve_drains_when_its_parent_is_killed() -> Outcome {
+    let world = World::seeing(&["app"])?;
+    let log = world.home.join("engine.log");
+    let socket = world.run.join(RUNTIME_DIRECTORY).join(SOCKET_NAME);
+    let budget = START_BUDGET.as_secs().to_string();
+    let child = Command::new("python3")
+        .args([
+            "-W",
+            "error",
+            "-c",
+            OUTER,
+            MIDDLE,
+            env!("CARGO_BIN_EXE_habitat-engine"),
+        ])
+        .args([&world.run, &world.home, &log, &socket])
+        .arg(&budget)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    let output = exits_within(child, START_BUDGET * 3)?;
+    let stderr = read_or_absent(&log);
+    assert_eq!(
+        (
+            output.status.code(),
+            String::from_utf8_lossy(&output.stdout).into_owned()
+        ),
+        (Some(0), "middle=-9 engine=0\n".to_owned()),
+        "{}\n{stderr}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let mut expected = vec!["habitat-engine: standard input closed; raising SIGTERM".to_owned()];
+    expected.extend(drain_lines("SIGTERM", &socket));
+    in_order(&stderr, &expected)?;
+    assert!(
+        fs::symlink_metadata(&socket).is_err(),
+        "the socket file is removed"
     );
     Ok(())
 }

@@ -227,6 +227,19 @@ const EXIT_REFUSED: u8 = 7;
 /// Where the reviewed grant records live, under the operator's configuration root (RC02).
 const GRANTS_DIRECTORY: &str = "grants";
 
+/// `serve`'s one flag: drain when standard input, a pipe whose write end the parent holds, closes.
+const UNTIL_STDIN_CLOSES: &str = "--until-stdin-closes";
+
+/// What ends `serve`.
+#[derive(Clone, Copy)]
+enum Lifetime {
+    /// SIGTERM alone (the default; a systemd unit's stdin is `/dev/null` and its cgroup owns it).
+    Signalled,
+    /// SIGTERM, or the end of standard input, which the kernel delivers on any death of the
+    /// parent holding the pipe's write end -- an unwound exit, an abort, SIGKILL.
+    UntilStdinCloses,
+}
+
 fn main() -> ExitCode {
     let Ok(args) = arguments() else {
         eprintln!("habitat-engine: invalid or overbound arguments");
@@ -241,11 +254,15 @@ fn main() -> ExitCode {
         });
     }
     match args.as_slice() {
-        [command] if command == "serve" => serve(),
+        [command] if command == "serve" => serve(Lifetime::Signalled),
+        [command, flag] if command == "serve" && flag == UNTIL_STDIN_CLOSES => {
+            serve(Lifetime::UntilStdinCloses)
+        }
         [action] if Catalogue::find(action).is_ok() => request(action),
         _ => {
             eprintln!(
-                "habitat-engine: usage: habitat-engine serve | habitat-engine <action-id> < request"
+                "habitat-engine: usage: habitat-engine serve [{UNTIL_STDIN_CLOSES}] | \
+                 habitat-engine <action-id> < request"
             );
             ExitCode::from(EXIT_USAGE)
         }
@@ -434,15 +451,11 @@ type Composed = Result<(NativeProvider<Systemd>, Installed), NoNative>;
 /// (APP-01): nothing more is admitted, each open connection finishes the frame it is serving, the
 /// ledger's writer lock is released, the socket is removed and the engine exits 0. A stale socket
 /// left by a killed engine is cleared at the next start; a live or starting one refuses the start.
-fn serve() -> ExitCode {
-    // APP-01: SIGTERM is taken before anything else, so one that arrives during startup is held
-    // and drains the engine once it serves, rather than killing it mid-reconciliation.
-    let mut signals = match Signals::new([SIGTERM]) {
+/// With `--until-stdin-closes` the end of standard input raises that same SIGTERM (`watch_stdin`).
+fn serve(lifetime: Lifetime) -> ExitCode {
+    let mut signals = match drain_signals(lifetime) {
         Ok(signals) => signals,
-        Err(error) => {
-            eprintln!("habitat-engine: SIGTERM could not be taken ({error})");
-            return ExitCode::from(EXIT_CONTRACT);
-        }
+        Err(code) => return code,
     };
     // The runtime root is kept: the native provider's aggregate and scopes are pinned to it.
     let (runtime_root, prepared) =
@@ -548,6 +561,72 @@ fn serve() -> ExitCode {
     drop(tasks);
     drop(listener);
     finish_drained(prepared)
+}
+
+/// The one drain door, taken before anything else (APP-01): SIGTERM is held from here, so one that
+/// arrives during startup drains the engine once it serves rather than killing it mid-
+/// reconciliation. Under `--until-stdin-closes` the parent-death watcher starts right behind it,
+/// raising through it.
+fn drain_signals(lifetime: Lifetime) -> Result<Signals, ExitCode> {
+    let signals = Signals::new([SIGTERM]).map_err(|error| {
+        eprintln!("habitat-engine: SIGTERM could not be taken ({error})");
+        ExitCode::from(EXIT_CONTRACT)
+    })?;
+    if let Lifetime::UntilStdinCloses = lifetime {
+        watch_stdin()?;
+    }
+    Ok(signals)
+}
+
+/// `serve --until-stdin-closes`: standard input must be a pipe, whose write end the parent holds. A
+/// detached thread reads it (discarding what it reads) to end of file -- which the kernel delivers
+/// on any death of the parent, unwound or not -- and then raises SIGTERM, so the parent's death
+/// drains the engine through the one door APP-01 already holds, not a second path: during startup
+/// the signal is held, once serving it drains. Detached, so the serve scope never joins a thread
+/// blocked in `read`. Any other standard input is refused by name with the contract's code: it
+/// could never report the parent's death (`/dev/null` reads end of file at once).
+fn watch_stdin() -> Result<(), ExitCode> {
+    let refused = |why: String| {
+        eprintln!("habitat-engine: {UNTIL_STDIN_CLOSES} refused: {why}");
+        ExitCode::from(EXIT_CONTRACT)
+    };
+    match rustix::fs::fstat(io::stdin()) {
+        Ok(stat) => match rustix::fs::FileType::from_raw_mode(stat.st_mode) {
+            rustix::fs::FileType::Fifo => {}
+            other => return Err(refused(format!("standard input is not a pipe ({other:?})"))),
+        },
+        Err(error) => return Err(refused(format!("standard input unreadable ({error})"))),
+    }
+    let watcher = std::thread::Builder::new()
+        .name("stdin-watch".into())
+        .spawn(|| {
+            let mut sink = [0_u8; 512];
+            let ended = loop {
+                match io::stdin().read(&mut sink) {
+                    Ok(0) => break "closed".to_owned(),
+                    Ok(_) => {}
+                    Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+                    // Unreadable is as blind as closed: the parent can no longer be observed.
+                    Err(error) => break format!("unreadable ({error})"),
+                }
+            };
+            // Written, never `eprintln!`: a parent that dies may take standard error's reader with
+            // it, and a panic here would end this thread before the drain is raised.
+            let _ = writeln!(
+                io::stderr(),
+                "habitat-engine: standard input {ended}; raising SIGTERM"
+            );
+            if let Err(error) = signal_hook::low_level::raise(SIGTERM) {
+                let _ = writeln!(
+                    io::stderr(),
+                    "habitat-engine: SIGTERM could not be raised ({error})"
+                );
+            }
+        });
+    match watcher {
+        Ok(_detached) => Ok(()),
+        Err(error) => Err(refused(format!("its watcher could not start ({error})"))),
+    }
 }
 
 /// Serve until the first SIGTERM has drained every connection (APP-01). A watcher thread waits on
