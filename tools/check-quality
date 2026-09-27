@@ -1197,7 +1197,7 @@ def rust_test_partitions(root):
         # The contract battery spawns its daemon stand-in and client per case.
         separate.append(("tests-t08-contract", ["--test", "t08_contract"]))
     selected = {arguments[1] for _, arguments in separate}
-    # The 18 T06 targets (449 controls, the Store/workspace/terminal/driver
+    # The T06 targets (listed in T06_TARGET_COUNTS: the Store/workspace/terminal/driver
     # suites) run in their own command. Evidence: the retained 795-control run
     # of 2026-09-21T05:36 needed 148 s for its release test command with the
     # tests still parallel and its scratch on tmpfs; the recipe now runs the

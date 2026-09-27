@@ -3081,18 +3081,6 @@ Neither mode admits a module or qualifies protected collection.
 | Julia sensitivity | Assertion, warning, skip, Broken, bounds, deprecation and empty-result controls each fail at the intended detector |
 | Julia formatting | Pinned JuliaFormatter 2.12.5; authored bodies only, exact managed comments preserved; missing-indentation and valid-neighbor controls |
 | Process custody | Standalone supervisor controls include stream limits, deadlines, descendant settlement, interrupted/setup-failure cleanup and incomplete-cleanup refusal |
-| One composer controls | `tests/one_composer.py` prints `run=42 failures=0 errors=0 transforms=4/4`: whole-line cases over the census's pure judge, disposable git worlds for the shell, and each of the four transforms replaced by the identity must fail its named killer |
-| One composer site sweep | `tools/check-one-composer-sites` neuters each of the census's 18 refusal sites in turn and requires its named case to fail for that site: `sites=18 killed=18 wrong_reason=0 survived=0` |
-| One composer | `tools/check-one-composer --repo ROOT` counts every implementation of the task driver's `Runtime` trait in the committed non-test Rust and requires exactly one, `StoreRuntime` in `src/app/runtime.rs`; the one test double in a `[[test]]` root is named and excluded: `runtime_impls=1 excluded_test_sites=1`, then `verdict=PASS` |
-
-The `one-composer` step reads its world from git, not from the copied subject.
-It requires the repository root to be a git work tree with a `HEAD`, and no
-`*.rs` or `Cargo.toml` may be modified, staged or untracked there. A gate run
-from a non-git copy, or over uncommitted Rust, therefore fails at that step
-(`world_unmeasured` or `world_dirty`, naming each path). Every `.rs` in the
-copied subject must also equal its committed blob (`subject_uncovered`,
-`subject_differs`). The separate required-input tracking check keeps its own
-`git_tracking=unmeasured` tolerance outside a git work tree; this step does not.
 
 The retained T25 foundation [full development run](../evidence/implementation/T25/runs/20260915T122619433485Z/results.json)
 passed 27 recorded commands, including 17 process controls and eight integration
@@ -3307,7 +3295,8 @@ The current engine declares 25 integration targets, two binary targets and one
 library group. Its 27 ordinary Rust summaries total 795 controls, plus the five
 finite transport controls and two doctests per feature/profile. The library
 namespaces contain 68 Store, 35 roster Store, 13 staging, 22 u64 oracle, six
-capture, six durable-control, two repair and eight namespace controls. Missing,
+capture, six durable-control (retired at B14c-1, 2026-09-28, with `app::durable_control`),
+two repair and eight namespace controls. Missing,
 extra, duplicated, filtered or misattributed summaries refuse success. These
 counts describe a source-bound development inventory; repeated profiles do not
 earn new module-case credit.
@@ -3410,7 +3399,8 @@ not charged to the main command. A missing, renamed or duplicated registered
 target is refused with the differing names printed
 (`missing=[...] extra=[...] duplicate=[...]`).
 
-The eighteen T06 targets now run in their own finite `tests-t06` command
+The T06 targets (eighteen when this was written; seventeen since B14c-1
+retired `t06_durable_control` on 2026-09-28) run in their own finite `tests-t06` command
 between the main and numerical-process commands. The retained 795-control run
 of 2026-09-21T05:36 needed 148 seconds for its release test command with the
 tests still parallel and its scratch on tmpfs; the current recipe runs the
@@ -3490,6 +3480,10 @@ printed. Every bound is as derived above: 3,300-second total (1,800 before 2026-
 active window, 300-second cleanup reserve, 180-second command ceiling, 8 MiB
 streams.
 
+*Superseded 2026-09-28: the fixed frontend package was retired at B14c-1 with
+the rest of the development lane (see the retirement paragraph above); the
+paragraph below is kept as the record of what it held.*
+
 The fixed frontend package's 98 controls (its own library group plus the
 `recovery_inspect`, `recovery_cancel`, `recovery_crash` and `recovery_pi_queue`
 targets) belong to its separate app-owned package evidence and are not part of
@@ -3498,3 +3492,11 @@ methods to that separate package; it is not composed into this subject and
 changes no root-census number. Neither the quality recipe nor passing private
 controls close original T07/T08 criteria, module qualification or operational
 deployment.
+
+**B14c-1 delta (2026-09-28).** Removing `app::durable_control` and its
+`t06_durable_control` target takes one summary group and its one control out of
+the T06 command (seventeen `t06_` targets in `Cargo.toml`, 41 `[[test]]` in all)
+and six library-unit controls out of the library group. The totals above are
+earlier dated snapshots and were not re-derived here; the pins in
+`tools/check-quality` (`T06_TARGET_COUNTS`, the library-unit namespace table)
+are the current expectation.

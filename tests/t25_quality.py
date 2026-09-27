@@ -2416,6 +2416,11 @@ class IncludeCensusControls(unittest.TestCase):
             self.assertEqual(quality.include_census(root, ["docs/x.md"], deadline), (1, ["docs/x.md"]))
             with self.assertRaisesRegex(ValueError, r"Undeclared include input: docs/x\.md \(from checks/c\.rs:1\)"):
                 quality.include_census(root, [], deadline)
+            # Every target kind names a root (B14c-1 review): a reader that drops the lib, a bin or an
+            # example loses that directory here, where the live tree's examples under tests/ would hide it.
+            (root / "Cargo.toml").write_text('[lib]\nname = "a"\npath = "core/l.rs"\n[[bin]]\nname = "m"\npath = "cli/m.rs"\n'
+                                             '[[example]]\nname = "e"\npath = "demo/e.rs"\n[[test]]\nname = "c"\npath = "checks/c.rs"\n')
+            self.assertEqual(quality.rust_source_roots(root), ["checks", "cli", "core", "demo"])
             (root / "Cargo.toml").write_text('[[test]]\nname = "c"\n')
             with self.assertRaisesRegex(ValueError, r"Cargo target without a path in \[\[test\]\]: c"):
                 quality.rust_source_roots(root)
