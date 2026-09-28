@@ -10,9 +10,10 @@
 use super::t08_rig::{self, DaemonStandIn};
 use habitat_engine::actions::control::{TaskRequest, Tasks};
 use habitat_engine::app::backup_target::{
-    BACKUP_FILE, BACKUP_SCHEMA, BackupTarget, BackupUnready, Declared, DeviceWhy, FreeSpace,
-    MAX_BACKUP_BYTES, MAX_MOUNT_TABLE_BYTES, MountTable, NoDevice, Side, Statvfs, TableWhy,
-    USAGE_ENTRY_BOUND, Usage, backup_usage, device_decision, read_target,
+    BACKUP_FILE, BACKUP_SCHEMA, BackupTarget, BackupUnready, Declared, DeviceWhy, Devices,
+    FreeSpace, MAX_BACKUP_BYTES, MAX_BLOCK_DEVICES, MAX_MOUNT_TABLE_BYTES, MAX_TOPOLOGY_BYTES,
+    MountTable, NoDevice, Side, Statvfs, TableWhy, Topology, TopologyWhy, USAGE_ENTRY_BOUND,
+    Unresolvable, Usage, backup_usage, device_decision, read_target,
 };
 use habitat_engine::app::candidates::{
     ClassPrompt, FilePins, NativeCandidates, Outcome as CandidateOutcome, Settle, render,
@@ -152,24 +153,35 @@ struct Rig {
 /// A space double (F101: a model that records what it was asked): the state root's filesystem
 /// answers `state_free`, any other path `backup_free` — each settable while the dispatcher runs, so a
 /// proof can spend a reserve between picks — and the destination's usage is the real walk of it plus
-/// `used_offset`, a proof's stand-in for backups it cannot write. Every path asked is kept in order.
+/// `used_offset`, a proof's stand-in for backups it cannot write. With `backup_capacity` set, the
+/// destination's free space is that capacity less the bytes really written under it (the usage
+/// walk), so a backup consumes it as a disk would (R2-2). Every path asked is kept in order, and
+/// every answer with its path.
 struct Space {
     state: PathBuf,
     state_free: AtomicU64,
     backup_free: AtomicU64,
+    backup_capacity: Option<u64>,
     used_offset: u64,
     asked: Mutex<Vec<PathBuf>>,
+    answered: Mutex<Vec<(PathBuf, u64)>>,
     used_asked: Mutex<Vec<PathBuf>>,
 }
 
 impl FreeSpace for Space {
     fn free(&self, path: &Path) -> std::io::Result<u64> {
         record(&self.asked, path.to_path_buf());
-        Ok(if path == self.state {
+        let free = if path == self.state {
             self.state_free.load(Ordering::SeqCst)
+        } else if let Some(capacity) = self.backup_capacity {
+            let written = backup_usage(path, USAGE_ENTRY_BOUND)
+                .map_err(|why| std::io::Error::other(format!("{why:?}")))?;
+            capacity.saturating_sub(written)
         } else {
             self.backup_free.load(Ordering::SeqCst)
-        })
+        };
+        record(&self.answered, (path.to_path_buf(), free));
+        Ok(free)
     }
 
     fn used(&self, destination: &Path) -> Result<u64, Usage> {
@@ -195,18 +207,55 @@ pub(super) fn escaped(path: &Path) -> String {
         .collect()
 }
 
+/// The LUKS device behind this host's `/var` and `/var/home` btrfs, as the mount table names it.
+pub(crate) const LUKS: &str = "/dev/mapper/luks-97a2c76e-e11a-4782-8bfe-4370fadfa706";
+
+/// This host's block topology in [`Topology::parse`]'s format, every device verbatim
+/// (`final-fix/host-blocktopo-format-20260929.txt`: `readlink` of each `/sys/class/block` entry, its
+/// `partition` attribute, `dm/name` and `slaves`, read 2026-09-29 — the world's record, not a
+/// description of it, F113): the LUKS `dm-0` over `nvme0n1p3`, `/boot`'s `nvme0n1p2` on the same
+/// `NVMe` disk, the STORAGE-10TB `sdb1` on `sdb`, the USB `sdc1`, the SATA `sda`'s partitions, and
+/// the virtual `zram0`.
+pub(crate) const HOST_BLOCKTOPO: &str = "\
+dm-0 ../../devices/virtual/block/dm-0 whole dm:luks-97a2c76e-e11a-4782-8bfe-4370fadfa706 slave:nvme0n1p3
+nvme0n1 ../../devices/pci0000:00/0000:00:01.2/0000:04:00.0/nvme/nvme0/nvme0n1 whole
+nvme0n1p1 ../../devices/pci0000:00/0000:00:01.2/0000:04:00.0/nvme/nvme0/nvme0n1/nvme0n1p1 part
+nvme0n1p2 ../../devices/pci0000:00/0000:00:01.2/0000:04:00.0/nvme/nvme0/nvme0n1/nvme0n1p2 part
+nvme0n1p3 ../../devices/pci0000:00/0000:00:01.2/0000:04:00.0/nvme/nvme0/nvme0n1/nvme0n1p3 part
+sda ../../devices/pci0000:00/0000:00:02.1/0000:05:00.0/0000:06:08.0/0000:09:00.0/0000:0a:0d.0/0000:11:00.0/ata3/host2/target2:0:0/2:0:0:0/block/sda whole
+sda1 ../../devices/pci0000:00/0000:00:02.1/0000:05:00.0/0000:06:08.0/0000:09:00.0/0000:0a:0d.0/0000:11:00.0/ata3/host2/target2:0:0/2:0:0:0/block/sda/sda1 part
+sda2 ../../devices/pci0000:00/0000:00:02.1/0000:05:00.0/0000:06:08.0/0000:09:00.0/0000:0a:0d.0/0000:11:00.0/ata3/host2/target2:0:0/2:0:0:0/block/sda/sda2 part
+sda5 ../../devices/pci0000:00/0000:00:02.1/0000:05:00.0/0000:06:08.0/0000:09:00.0/0000:0a:0d.0/0000:11:00.0/ata3/host2/target2:0:0/2:0:0:0/block/sda/sda5 part
+sda6 ../../devices/pci0000:00/0000:00:02.1/0000:05:00.0/0000:06:08.0/0000:09:00.0/0000:0a:0d.0/0000:11:00.0/ata3/host2/target2:0:0/2:0:0:0/block/sda/sda6 part
+sda7 ../../devices/pci0000:00/0000:00:02.1/0000:05:00.0/0000:06:08.0/0000:09:00.0/0000:0a:0d.0/0000:11:00.0/ata3/host2/target2:0:0/2:0:0:0/block/sda/sda7 part
+sdb ../../devices/pci0000:00/0000:00:02.1/0000:05:00.0/0000:06:08.0/0000:09:00.0/0000:0a:0d.0/0000:11:00.0/ata4/host3/target3:0:0/3:0:0:0/block/sdb whole
+sdb1 ../../devices/pci0000:00/0000:00:02.1/0000:05:00.0/0000:06:08.0/0000:09:00.0/0000:0a:0d.0/0000:11:00.0/ata4/host3/target3:0:0/3:0:0:0/block/sdb/sdb1 part
+sdc ../../devices/pci0000:00/0000:00:02.1/0000:05:00.0/0000:06:08.0/0000:09:00.0/0000:0a:0c.0/0000:10:00.0/usb2/2-5/2-5:1.0/host12/target12:0:0/12:0:0:0/block/sdc whole
+sdc1 ../../devices/pci0000:00/0000:00:02.1/0000:05:00.0/0000:06:08.0/0000:09:00.0/0000:0a:0c.0/0000:10:00.0/usb2/2-5/2-5:1.0/host12/target12:0:0/12:0:0:0/block/sdc/sdc1 part
+zram0 ../../devices/virtual/block/zram0 whole
+";
+
+/// This host's block topology, parsed.
+fn host_topology() -> Result<Topology, TopologyWhy> {
+    Topology::parse(HOST_BLOCKTOPO.as_bytes(), MAX_BLOCK_DEVICES)
+}
+
 /// A mount table declaring the scratch's root on this host's LUKS btrfs and `destination` on the
-/// STORAGE-10TB ext4 disk (the shapes measured on the host, 2026-09-28): two devices, chosen by
-/// argument (F95), while the scratch really holds both on one.
-fn two_devices(destination: &Path) -> Result<MountTable, TableWhy> {
-    MountTable::parse(
-        format!(
-            "1 0 0:35 / / rw,relatime - btrfs /dev/mapper/luks-97a2c76e rw\n\
-             2 1 8:17 / {} rw,relatime - ext4 /dev/sdb1 rw\n",
-            escaped(destination)
-        )
-        .as_bytes(),
-    )
+/// STORAGE-10TB ext4 disk (the shapes measured on the host, 2026-09-28), over this host's block
+/// topology: two devices on two disks, chosen by argument (F95), while the scratch really holds
+/// both on one.
+fn two_devices(destination: &Path) -> Devices {
+    Devices {
+        mounts: MountTable::parse(
+            format!(
+                "1 0 0:35 / / rw,relatime - btrfs {LUKS} rw\n\
+                 2 1 8:17 / {} rw,relatime - ext4 /dev/sdb1 rw\n",
+                escaped(destination)
+            )
+            .as_bytes(),
+        ),
+        topology: host_topology(),
+    }
 }
 
 /// The rig's backup target through the one reader, over a mount table placing the destination on
@@ -584,8 +633,10 @@ fn rig_spaced(shape: &Shape<'_>, state_free: u64, backup_free: u64) -> Result<Ri
             state: state.clone(),
             state_free: AtomicU64::new(state_free),
             backup_free: AtomicU64::new(backup_free),
+            backup_capacity: None,
             used_offset: 0,
             asked: Mutex::new(Vec::new()),
+            answered: Mutex::new(Vec::new()),
             used_asked: Mutex::new(Vec::new()),
         },
         clock: Box::new(dispatcher::Monotonic),
@@ -1292,6 +1343,62 @@ fn a_dispatcher_that_ignores_its_stop_fails_the_proof_by_name() -> Outcome_ {
         assert!(
             released.elapsed() < guard,
             "the left thread still holds the rig after {:?} (budget {guard:?}): {} holders",
+            released.elapsed(),
+            Arc::strong_count(&rig)
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    Ok(())
+}
+
+/// OPS12 round 2 (R2-5), the helper's own control for its WALL budget (every other proof's): a
+/// dispatcher that ignores its stop fails the proof by name at a 1 ms wall budget instead of hanging
+/// it, and the helper raised the stop. The provider holds `open` until the proof opens its gate or
+/// its own 20 s guard passes, so a helper that waited without a budget (`recv()`) would return the
+/// dispatcher's exit after the guard and the proof would fail by name, never hang (F102). The
+/// thread left behind ends by itself once the gate opens (budgeted).
+#[test]
+fn a_dispatcher_that_ignores_its_stop_fails_a_wall_budget_by_name() -> Outcome_ {
+    let rig = Arc::new(rig(&Shape::default())?);
+    let stop = Arc::new(AtomicBool::new(false));
+    let (entered, _elapsed) = mpsc::channel();
+    let (release, gate) = mpsc::channel::<()>();
+    let (woke, _opened) = mpsc::channel();
+    let returned = Arc::new(AtomicBool::new(false));
+    let guard = Duration::from_secs(20);
+    let result = run_dispatcher_budgeted(
+        Arc::clone(&rig),
+        Sleeper {
+            entered,
+            gate,
+            guard,
+            returned: Arc::clone(&returned),
+            woke,
+        },
+        Arc::clone(&stop),
+        rig.selections.clone(),
+        Budget::Wall(Duration::from_millis(1)),
+    );
+    let message = result
+        .err()
+        .ok_or("the proof passed a dispatcher that ignored its stop")?;
+    assert!(
+        message.starts_with("the dispatcher did not end within 1ms: "),
+        "{message}"
+    );
+    assert!(
+        !returned.load(Ordering::SeqCst),
+        "the helper answered after the provider returned"
+    );
+    assert!(stop.load(Ordering::SeqCst), "the helper raised the stop");
+    // The left thread may be in `open` or may have drained before it: its gate is released either
+    // way (a gate nothing holds any more is not an error).
+    let _ = release.send(());
+    let released = Instant::now();
+    while Arc::strong_count(&rig) > 1 {
+        assert!(
+            released.elapsed() < Duration::from_secs(60),
+            "the left thread still holds the rig after {:?}: {} holders",
             released.elapsed(),
             Arc::strong_count(&rig)
         );
@@ -5342,7 +5449,8 @@ fn first_begin(rig: &Rig, task: &str) -> Result<u64, Box<dyn Error>> {
 /// OPS-2 case 4 (RC01 "before any dispatch") · a new dispatcher's first pick backs up before the
 /// task is admitted: the destination holds exactly one backup, it reads back through the store's
 /// own inspection door, its cutoff precedes the attempt's begin, the free-space door was asked for
-/// the state root then the destination, and the lines are asserted whole and in order — the
+/// the state root then the destination before the backup and both again after it (R2-2), and the
+/// lines are asserted whole and in order — the
 /// backup's (derived from the backup as read back) before the task's.
 #[test]
 fn the_first_pick_backs_up_before_admission_and_the_backup_reads_back() -> Outcome_ {
@@ -5382,7 +5490,15 @@ fn the_first_pick_backs_up_before_admission_and_the_backup_reads_back() -> Outco
             ),
         ]
     );
-    assert_eq!(asked(&rig), vec![rig.state.clone(), rig.backups.clone()]);
+    assert_eq!(
+        asked(&rig),
+        vec![
+            rig.state.clone(),
+            rig.backups.clone(),
+            rig.state.clone(),
+            rig.backups.clone(),
+        ]
+    );
     Ok(())
 }
 
@@ -5651,8 +5767,8 @@ fn record_text(destination: &Path, deadline: u64) -> String {
 }
 
 /// A mount table of `(mount point, fstype, source, major:minor)` rows, ids from 1 in order, each
-/// line as the kernel writes it (its fields escaped).
-fn mounts(rows: &[(&Path, &str, &str, &str)]) -> Result<MountTable, TableWhy> {
+/// line as the kernel writes it (its fields escaped), over this host's block topology.
+fn mounts(rows: &[(&Path, &str, &str, &str)]) -> Devices {
     let lines: Vec<String> = rows
         .iter()
         .enumerate()
@@ -5664,7 +5780,10 @@ fn mounts(rows: &[(&Path, &str, &str, &str)]) -> Result<MountTable, TableWhy> {
             )
         })
         .collect();
-    MountTable::parse(lines.concat().as_bytes())
+    Devices {
+        mounts: MountTable::parse(lines.concat().as_bytes()),
+        topology: host_topology(),
+    }
 }
 
 /// OPS-2 · the operator's backup record (RC01/RC02; HO-03 "a required config field with no
@@ -5684,9 +5803,9 @@ fn the_backup_record_is_read_whole_with_no_defaults() -> Outcome_ {
     let other_destination = root.join("backups-two");
     private(&other_destination)?;
     let other = mounts(&[
-        (Path::new("/"), "btrfs", "/dev/mapper/luks-97a2c76e", "0:35"),
+        (Path::new("/"), "btrfs", LUKS, "0:35"),
         (&destination, "ext4", "/dev/sdb1", "8:17"),
-        (&other_destination, "xfs", "/dev/nvme1n1p1", "259:5"),
+        (&other_destination, "xfs", "/dev/sdc1", "8:33"),
     ]);
     let other = &other;
     let record = record_text;
@@ -5795,9 +5914,9 @@ fn the_backup_destination_must_be_canonical_private_and_on_another_device() -> O
     // A table under which every destination here would pass the device rule: each refusal below
     // is the reader's own, not the rule's.
     let other = &mounts(&[
-        (Path::new("/"), "btrfs", "/dev/mapper/luks-97a2c76e", "0:35"),
+        (Path::new("/"), "btrfs", LUKS, "0:35"),
         (root, "ext4", "/dev/sdb1", "8:17"),
-        (&state, "btrfs", "/dev/mapper/luks-97a2c76e", "0:35"),
+        (&state, "btrfs", LUKS, "0:35"),
     ]);
     let record = record_text;
     // Not canonical: relative, and reached through a link.
@@ -5953,6 +6072,57 @@ fn every_backup_refusal_line_is_whole() {
     }
 }
 
+/// OPS12 round 2 (R2-3) · the budget refusal the gate reports names the operator's recovery under
+/// the destination it read — retention is T18's, so the budget stays enforced and fails closed —
+/// whole, over two fixtures differing in every field; no other refusal gains a recovery, and with
+/// no target read the budget line is the renderer's own.
+#[test]
+fn the_budget_refusal_names_the_operator_s_recovery() {
+    use dispatcher::{BackupWhy, Fs, Headroom};
+    for (why, destination, line) in [
+        (
+            BackupWhy::Budget {
+                used: 137_438_953_000,
+                backup: 1_306_624,
+                budget: 137_438_953_472,
+            },
+            "/var/mnt/STORAGE-10TB/herdr-engineering-engine-v3-backups",
+            "unavailable: backup budget (used=137438953000 backup=1306624 budget=137438953472); \
+             recovery: prune the oldest backups under \
+             /var/mnt/STORAGE-10TB/herdr-engineering-engine-v3-backups by hand (retention is \
+             T18's)",
+        ),
+        (
+            BackupWhy::Budget {
+                used: 0,
+                backup: 9,
+                budget: 8,
+            },
+            "/b",
+            "unavailable: backup budget (used=0 backup=9 budget=8); recovery: prune the oldest \
+             backups under /b by hand (retention is T18's)",
+        ),
+        (
+            BackupWhy::Headroom(Headroom {
+                fs: Fs::Backup,
+                free: 3,
+                reserve: 4,
+            }),
+            "/b",
+            "unavailable: headroom (backup: free=3 reserve=4)",
+        ),
+        (BackupWhy::Id, "/b", "unavailable: backup failed (id)"),
+    ] {
+        assert_eq!(why.line_at(Some(Path::new(destination))), line, "{why:?}");
+    }
+    let budget = BackupWhy::Budget {
+        used: 1,
+        backup: 2,
+        budget: 3,
+    };
+    assert_eq!(budget.line_at(None), budget.line());
+}
+
 /// Closure R1 (a) · every refusal RC02's device rule reports, whole, through the one renderer:
 /// one source and one filesystem with both mount ids (two fixtures differing in every field), each
 /// filesystem without a device on each side, an unresolved path on each side, and each reason the
@@ -6031,6 +6201,107 @@ fn every_device_refusal_line_is_whole() {
                 TableWhy::Malformed { line: 3 },
             ))),
             "unavailable: no backup target (mount table malformed (line 3))",
+        ),
+    ] {
+        assert_eq!(why.line(), line, "{why:?}");
+        assert_eq!(
+            dispatcher::Unavailable::Backup(why).name(),
+            "unavailable: backup",
+            "{why:?}"
+        );
+    }
+}
+
+/// OPS12 round 2 (R2-1) · every refusal the disk step reports, whole, through the one renderer:
+/// one disk with both mount ids (two fixtures differing in every field), each reason a disk is
+/// unresolved on alternating sides, and each reason the block topology could not be used — the
+/// unreadable one by its kind, the device bound with its number (two fixtures), the byte bound,
+/// the malformed one with its line.
+#[test]
+fn every_disk_refusal_line_is_whole() {
+    use dispatcher::BackupWhy;
+    for (why, line) in [
+        (
+            BackupWhy::Target(BackupUnready::Device(DeviceWhy::SameDisk {
+                state: 219,
+                destination: 146,
+            })),
+            "unavailable: no backup target (same device (one disk: state mount 219, \
+             destination mount 146))",
+        ),
+        (
+            BackupWhy::Target(BackupUnready::Device(DeviceWhy::SameDisk {
+                state: 8,
+                destination: 3_001,
+            })),
+            "unavailable: no backup target (same device (one disk: state mount 8, \
+             destination mount 3001))",
+        ),
+        (
+            BackupWhy::Target(BackupUnready::Device(DeviceWhy::DiskUnresolved {
+                side: Side::Destination,
+                why: Unresolvable::Virtual,
+            })),
+            "unavailable: no backup target (disk unresolved (destination: virtual device))",
+        ),
+        (
+            BackupWhy::Target(BackupUnready::Device(DeviceWhy::DiskUnresolved {
+                side: Side::State,
+                why: Unresolvable::Source,
+            })),
+            "unavailable: no backup target (disk unresolved (state: no block device))",
+        ),
+        (
+            BackupWhy::Target(BackupUnready::Device(DeviceWhy::DiskUnresolved {
+                side: Side::Destination,
+                why: Unresolvable::Unlisted,
+            })),
+            "unavailable: no backup target (disk unresolved (destination: unlisted device))",
+        ),
+        (
+            BackupWhy::Target(BackupUnready::Device(DeviceWhy::DiskUnresolved {
+                side: Side::State,
+                why: Unresolvable::NoParent,
+            })),
+            "unavailable: no backup target (disk unresolved (state: partition without a \
+             disk))",
+        ),
+        (
+            BackupWhy::Target(BackupUnready::Device(DeviceWhy::DiskUnresolved {
+                side: Side::Destination,
+                why: Unresolvable::NoDisk,
+            })),
+            "unavailable: no backup target (disk unresolved (destination: no disk))",
+        ),
+        (
+            BackupWhy::Target(BackupUnready::Device(DeviceWhy::Topology(
+                TopologyWhy::Unreadable(std::io::ErrorKind::InvalidInput),
+            ))),
+            "unavailable: no backup target (block topology unreadable (InvalidInput))",
+        ),
+        (
+            BackupWhy::Target(BackupUnready::Device(DeviceWhy::Topology(
+                TopologyWhy::TooMany { bound: 4096 },
+            ))),
+            "unavailable: no backup target (block topology too large (over 4096 devices))",
+        ),
+        (
+            BackupWhy::Target(BackupUnready::Device(DeviceWhy::Topology(
+                TopologyWhy::TooMany { bound: 7 },
+            ))),
+            "unavailable: no backup target (block topology too large (over 7 devices))",
+        ),
+        (
+            BackupWhy::Target(BackupUnready::Device(DeviceWhy::Topology(
+                TopologyWhy::TooLarge,
+            ))),
+            "unavailable: no backup target (block topology too large (over 1048576 bytes))",
+        ),
+        (
+            BackupWhy::Target(BackupUnready::Device(DeviceWhy::Topology(
+                TopologyWhy::Malformed { line: 12 },
+            ))),
+            "unavailable: no backup target (block topology malformed (line 12))",
         ),
     ] {
         assert_eq!(why.line(), line, "{why:?}");
@@ -6170,31 +6441,44 @@ fn table(text: &str) -> Result<MountTable, String> {
     MountTable::parse(text.as_bytes()).map_err(|why| format!("{why:?}"))
 }
 
-/// Closure R1 (a) · RC02's device rule decided over the mount SOURCE of each path's containing
-/// mount, on this host's own table (block R F1/F-H1/H1). The state root is in the `/home` subvolume
-/// (mount 219); a destination anywhere else on the `/var` subvolume of the same LUKS device —
-/// `/var/tmp`, `/var/lib`, `/var/mnt`, which `st_dev` (57 against 59) passed — is refused naming
-/// both mounts, and so is one in the state root's own subvolume. STORAGE-10TB (`/dev/sdb1`) and
-/// `/boot` (`/dev/nvme0n1p2`) are other devices and pass. With STORAGE-10TB unmounted (its line
-/// gone) its bare mount point is `/var`'s, and the destination under it is refused.
+/// Closure R1 (a), OPS12 round 2 (R2-1) · RC02's device rule decided over the mount SOURCE of each
+/// path's containing mount and the physical disk under it, on this host's own table and block
+/// topology (block R F1/F-H1/H1). The state root is in the `/home` subvolume (mount 219); a
+/// destination anywhere else on the `/var` subvolume of the same LUKS device — `/var/tmp`,
+/// `/var/lib`, `/var/mnt`, which `st_dev` (57 against 59) passed — is refused naming both mounts,
+/// and so is one in the state root's own subvolume. STORAGE-10TB (`/dev/sdb1`, on disk `sdb`) is
+/// another disk and passes. `/boot` (`/dev/nvme0n1p2`) is another device node but the SAME disk
+/// as the LUKS device (`dm-0` over `nvme0n1p3`, both on `nvme0n1`): refused as one disk — it
+/// passed before R2-1, and a disk failure takes both. With STORAGE-10TB unmounted (its line gone)
+/// its bare mount point is `/var`'s, and the destination under it is refused.
 #[test]
 fn rc02_s_device_rule_refuses_this_host_s_btrfs_subvolumes_and_passes_its_second_disk() -> Outcome_
 {
     let host = table(HOST_MOUNTINFO)?;
+    let topology = host_topology();
     let state = Path::new("/var/home/Louranicas/.local/state/herdr-engineering-engine-v3");
     let rule = |table: &MountTable, destination: &str| {
         device_decision(
             table.containing(state),
             table.containing(Path::new(destination)),
+            &topology,
         )
     };
     assert_eq!(host.containing(state).map(|mount| mount.id), Some(219));
-    for accepted in [
-        "/var/mnt/STORAGE-10TB/herdr-engineering-engine-v3-backups",
-        "/boot/hee3-backups",
-    ] {
-        assert_eq!(rule(&host, accepted), Ok(()), "{accepted}");
-    }
+    assert_eq!(
+        rule(
+            &host,
+            "/var/mnt/STORAGE-10TB/herdr-engineering-engine-v3-backups"
+        ),
+        Ok(())
+    );
+    assert_eq!(
+        rule(&host, "/boot/hee3-backups"),
+        Err(DeviceWhy::SameDisk {
+            state: 219,
+            destination: 146,
+        })
+    );
     for (destination, mount) in [
         ("/var/tmp/hee3-backups", 75),
         ("/var/lib/hee3-backups", 75),
@@ -6242,11 +6526,13 @@ fn rc02_s_device_rule_refuses_this_host_s_btrfs_subvolumes_and_passes_its_second
 fn rc02_s_device_rule_refuses_every_filesystem_without_a_device() -> Outcome_ {
     let toolbox = table(TOOLBOX_MOUNTINFO)?;
     let host = table(HOST_MOUNTINFO)?;
+    let topology = host_topology();
     let home = Path::new("/var/home/Louranicas/.local/state/herdr-engineering-engine-v3");
     let decide = |table: &MountTable, state: &Path, destination: &str| {
         device_decision(
             table.containing(state),
             table.containing(Path::new(destination)),
+            &topology,
         )
     };
     assert_eq!(
@@ -6350,10 +6636,12 @@ fn the_mount_table_resolves_the_deepest_mount_by_components() -> Outcome_ {
         )
     );
     assert_eq!(table("")?.containing(Path::new("/")), None);
+    let topology = host_topology();
     assert_eq!(
         device_decision(
             mounts.containing(Path::new("/pool-a/s")),
             mounts.containing(Path::new("/pool-b/d")),
+            &topology,
         ),
         Err(DeviceWhy::SameFilesystem {
             state: 7,
@@ -6363,11 +6651,11 @@ fn the_mount_table_resolves_the_deepest_mount_by_components() -> Outcome_ {
     // Unresolved, on each side: an empty table, and a table with no mount for the destination.
     let only = table("1 0 8:1 /x /s rw - ext4 /dev/sda1 rw\n")?;
     assert_eq!(
-        device_decision(None, only.containing(Path::new("/s/d"))),
+        device_decision(None, only.containing(Path::new("/s/d")), &topology),
         Err(DeviceWhy::Unresolved(Side::State))
     );
     assert_eq!(
-        device_decision(only.containing(Path::new("/s/x")), None),
+        device_decision(only.containing(Path::new("/s/x")), None, &topology),
         Err(DeviceWhy::Unresolved(Side::Destination))
     );
     Ok(())
@@ -6454,12 +6742,12 @@ fn the_backup_reader_decides_rc02_over_the_canonical_state_root() -> Outcome_ {
     private(&destination)?;
     let directory = backup_record(root, "record", record_text(&destination, 60).as_bytes())?;
     let one_source = mounts(&[
-        (Path::new("/"), "btrfs", "/dev/mapper/luks-97a2c76e", "0:35"),
-        (&state, "btrfs", "/dev/mapper/luks-97a2c76e", "0:35"),
-        (&destination, "btrfs", "/dev/mapper/luks-97a2c76e", "0:35"),
+        (Path::new("/"), "btrfs", LUKS, "0:35"),
+        (&state, "btrfs", LUKS, "0:35"),
+        (&destination, "btrfs", LUKS, "0:35"),
     ]);
     let memory = mounts(&[
-        (Path::new("/"), "btrfs", "/dev/mapper/luks-97a2c76e", "0:35"),
+        (Path::new("/"), "btrfs", LUKS, "0:35"),
         (&destination, "tmpfs", "tmpfs", "0:45"),
     ]);
     let linked_state = root.join("state-link");
@@ -6506,8 +6794,20 @@ fn the_backup_reader_decides_rc02_over_the_canonical_state_root() -> Outcome_ {
         (
             "unreadable table",
             &state,
-            Err(TableWhy::Unreadable(std::io::ErrorKind::PermissionDenied)),
+            Devices {
+                mounts: Err(TableWhy::Unreadable(std::io::ErrorKind::PermissionDenied)),
+                topology: host_topology(),
+            },
             DeviceWhy::Table(TableWhy::Unreadable(std::io::ErrorKind::PermissionDenied)),
+        ),
+        (
+            "unreadable topology",
+            &state,
+            Devices {
+                topology: Err(TopologyWhy::Unreadable(std::io::ErrorKind::InvalidInput)),
+                ..two_devices(&destination)
+            },
+            DeviceWhy::Topology(TopologyWhy::Unreadable(std::io::ErrorKind::InvalidInput)),
         ),
     ] {
         assert_eq!(
@@ -6523,6 +6823,448 @@ fn the_backup_reader_decides_rc02_over_the_canonical_state_root() -> Outcome_ {
             deadline: Duration::from_secs(60),
             state_root: state.clone(),
         })
+    );
+    Ok(())
+}
+
+// ---- OPS12 round 2 (R2-1): RC02's device rule down to the physical disk ---------------------------
+
+/// Devices this host lacks, declared beside its own (each shape sysfs gives it): a loop device, an
+/// md array over two SATA/USB partitions, an LVM volume over `sda2`, a partition whose disk is
+/// unlisted, a partition whose link names no parent, two device-mapper devices stacked on each other
+/// (a cycle), one over an unlisted slave, two device-mapper devices sharing one name, and one whose
+/// name carries an escaped space.
+const DECLARED_BLOCKTOPO: &str = "\
+loop0 ../../devices/virtual/block/loop0 whole
+md0 ../../devices/virtual/block/md0 whole slave:sda1 slave:sdc1
+dm-1 ../../devices/virtual/block/dm-1 whole dm:vg-lv slave:sda2
+sdd1 ../../devices/pci0000:00/0000:00:02.1/ata5/host4/target4:0:0/4:0:0:0/block/sdd/sdd1 part
+nvme9n1p1 nvme9n1p1 part
+dm-3 ../../devices/virtual/block/dm-3 whole slave:dm-4
+dm-4 ../../devices/virtual/block/dm-4 whole slave:dm-3
+dm-5 ../../devices/virtual/block/dm-5 whole slave:sde1
+dm-6 ../../devices/virtual/block/dm-6 whole dm:twin slave:sdb1
+dm-7 ../../devices/virtual/block/dm-7 whole dm:twin slave:sdc1
+dm-8 ../../devices/virtual/block/dm-8 whole dm:my\\040vol slave:sdc1
+";
+
+/// The disk rule's world for the two `rc02_s_disk_rule_*` proofs: a declared table over this
+/// host's topology plus [`DECLARED_BLOCKTOPO`] (F95), and the decision over it for a state path and
+/// a destination path.
+fn disk_rule(state: &str, destination: &str) -> Result<Result<(), DeviceWhy>, String> {
+    let mounts = table(&format!(
+        "1 0 0:35 / / rw - btrfs {LUKS} rw\n\
+         2 1 259:2 / /boot rw - ext4 /dev/nvme0n1p2 rw\n\
+         3 1 8:17 / /storage rw - ext4 /dev/sdb1 rw\n\
+         4 1 7:0 / /loop rw - ext4 /dev/loop0 rw\n\
+         5 1 8:33 / /usb rw - ext4 /dev/sdc1 rw\n\
+         6 1 9:0 / /md rw - ext4 /dev/md0 rw\n\
+         7 1 253:1 / /lv rw - xfs /dev/mapper/vg-lv rw\n\
+         8 1 8:5 / /label rw - ext4 /dev/disk/by-label/x rw\n\
+         9 1 253:2 / /orphan rw - ext4 /dev/mapper/nothing rw\n\
+         10 1 8:49 / /unlisted rw - ext4 /dev/sdd1 rw\n\
+         11 1 253:3 / /cycle rw - ext4 /dev/dm-3 rw\n\
+         12 1 253:5 / /ghost rw - ext4 /dev/dm-5 rw\n\
+         13 1 251:0 / /zram rw - ext4 /dev/zram0 rw\n\
+         14 1 253:6 / /twin rw - ext4 /dev/mapper/twin rw\n\
+         15 1 259:9 / /orphan-part rw - ext4 /dev/nvme9n1p1 rw\n\
+         16 1 8:80 / /unknown rw - ext4 /dev/sdq1 rw\n\
+         17 1 253:8 / /spaced rw - ext4 /dev/mapper/my\\040vol rw\n"
+    ))?;
+    let topology = Topology::parse(
+        format!("{HOST_BLOCKTOPO}{DECLARED_BLOCKTOPO}").as_bytes(),
+        MAX_BLOCK_DEVICES,
+    );
+    Ok(device_decision(
+        mounts.containing(Path::new(state)),
+        mounts.containing(Path::new(destination)),
+        &topology,
+    ))
+}
+
+/// OPS12 round 2 (R2-1) · RC02's separate device survives a disk failure, so the rule carries each
+/// side's mount source to the top-level physical disks under it and refuses any shared disk, the
+/// state side judged first ([`disk_rule`]'s world). Refused as one disk: `/boot`'s partition
+/// against the LUKS device on the same `NVMe` disk; an md array against a partition of one of its
+/// disks; an LVM volume against that array; a device-mapper name with a space (matched through
+/// both escapes) against its own slave's partition. Passing: the LUKS device, `/boot`, the md array
+/// and the LVM volume each against the STORAGE-10TB disk, and two partitions on two disks.
+#[test]
+fn rc02_s_disk_rule_refuses_a_shared_disk_and_passes_separate_ones() -> Outcome_ {
+    for (state_path, destination_path, expected) in [
+        (
+            "/s",
+            "/boot/b",
+            Err(DeviceWhy::SameDisk {
+                state: 1,
+                destination: 2,
+            }),
+        ),
+        (
+            "/md/s",
+            "/usb/b",
+            Err(DeviceWhy::SameDisk {
+                state: 6,
+                destination: 5,
+            }),
+        ),
+        (
+            "/lv/s",
+            "/md/b",
+            Err(DeviceWhy::SameDisk {
+                state: 7,
+                destination: 6,
+            }),
+        ),
+        (
+            "/spaced/s",
+            "/usb/b",
+            Err(DeviceWhy::SameDisk {
+                state: 17,
+                destination: 5,
+            }),
+        ),
+        ("/s", "/storage/b", Ok(())),
+        ("/boot/s", "/storage/b", Ok(())),
+        ("/md/s", "/storage/b", Ok(())),
+        ("/lv/s", "/storage/b", Ok(())),
+        ("/storage/s", "/usb/b", Ok(())),
+    ] {
+        assert_eq!(
+            disk_rule(state_path, destination_path)?,
+            expected,
+            "{state_path} -> {destination_path}"
+        );
+    }
+    Ok(())
+}
+
+/// OPS12 round 2 (R2-1) · a source the rule cannot carry to a physical disk is refused, each by
+/// its own site's reason ([`disk_rule`]'s world): a loop or zram device on either side (`virtual
+/// device`); a source that names no listed device — a by-label link, a device-mapper name nothing
+/// carries, one two devices carry, a name the topology lacks (`no block device`); a partition whose
+/// disk, or a slave, is unlisted (`unlisted device`); a partition whose link names no parent
+/// (`partition without a disk`); a cycle (`no disk`).
+#[test]
+fn rc02_s_disk_rule_names_why_a_source_reaches_no_disk() -> Outcome_ {
+    let unresolved = |side, why| Err(DeviceWhy::DiskUnresolved { side, why });
+    let (state, destination) = (Side::State, Side::Destination);
+    for (state_path, destination_path, expected) in [
+        (
+            "/s",
+            "/loop/b",
+            unresolved(destination, Unresolvable::Virtual),
+        ),
+        (
+            "/loop/s",
+            "/storage/b",
+            unresolved(state, Unresolvable::Virtual),
+        ),
+        (
+            "/zram/s",
+            "/loop/b",
+            unresolved(state, Unresolvable::Virtual),
+        ),
+        (
+            "/s",
+            "/label/b",
+            unresolved(destination, Unresolvable::Source),
+        ),
+        (
+            "/s",
+            "/orphan/b",
+            unresolved(destination, Unresolvable::Source),
+        ),
+        (
+            "/s",
+            "/twin/b",
+            unresolved(destination, Unresolvable::Source),
+        ),
+        ("/unknown/s", "/s", unresolved(state, Unresolvable::Source)),
+        (
+            "/s",
+            "/unlisted/b",
+            unresolved(destination, Unresolvable::Unlisted),
+        ),
+        ("/ghost/s", "/s", unresolved(state, Unresolvable::Unlisted)),
+        (
+            "/s",
+            "/orphan-part/b",
+            unresolved(destination, Unresolvable::NoParent),
+        ),
+        (
+            "/s",
+            "/cycle/b",
+            unresolved(destination, Unresolvable::NoDisk),
+        ),
+    ] {
+        assert_eq!(
+            disk_rule(state_path, destination_path)?,
+            expected,
+            "{state_path} -> {destination_path}"
+        );
+    }
+    Ok(())
+}
+
+/// OPS12 round 2 (R2-1) · the topology is consulted only at the disk step: a topology that could
+/// not be read never masks a refusal that needs none (a tmpfs destination, one source), and
+/// refuses by its own reason once the disk step is reached.
+#[test]
+fn an_unreadable_topology_refuses_only_at_the_disk_step() -> Outcome_ {
+    let mounts = table(&format!(
+        "1 0 0:35 / / rw - btrfs {LUKS} rw\n\
+         2 1 0:45 / /tmp rw - tmpfs tmpfs rw\n\
+         3 1 8:17 / /storage rw - ext4 /dev/sdb1 rw\n\
+         4 1 0:35 / /var rw - btrfs {LUKS} rw\n"
+    ))?;
+    let unreadable = Err(TopologyWhy::TooMany { bound: 4096 });
+    let decide = |destination: &str| {
+        device_decision(
+            mounts.containing(Path::new("/s")),
+            mounts.containing(Path::new(destination)),
+            &unreadable,
+        )
+    };
+    assert_eq!(
+        (decide("/tmp/b"), decide("/var/b"), decide("/storage/b")),
+        (
+            Err(DeviceWhy::NoDevice {
+                side: Side::Destination,
+                kind: NoDevice::Tmpfs,
+            }),
+            Err(DeviceWhy::SameSource {
+                state: 1,
+                destination: 4,
+            }),
+            Err(DeviceWhy::Topology(TopologyWhy::TooMany { bound: 4096 })),
+        )
+    );
+    Ok(())
+}
+
+/// OPS12 round 2 (R2-1) · a declared topology the parser cannot read line by line is refused naming
+/// its first bad line: no link, no kind, an unknown kind, an unknown field, two device-mapper names,
+/// an empty one, an empty slave, a name with a slash, an empty name, an empty link, a bad escape, a
+/// blank line inside the text, and a device named twice. Its device count is bounded at the parse
+/// (`bound` devices read, one more refused naming the bound).
+#[test]
+fn a_malformed_topology_is_refused_naming_its_line() -> Outcome_ {
+    let good = "sda ../../devices/pci0000:00/block/sda whole\n";
+    for (case, bad) in [
+        ("no link", "sdb"),
+        ("no kind", "sdb ../x"),
+        ("kind", "sdb ../x disk"),
+        ("field", "sdb ../x whole holder:dm-0"),
+        ("two dm names", "sdb ../x whole dm:a dm:b"),
+        ("empty dm name", "sdb ../x whole dm:"),
+        ("empty slave", "sdb ../x whole slave:"),
+        ("slash", "sd/b ../x whole"),
+        ("empty name", " ../x whole"),
+        ("empty link", "sdb  whole"),
+        ("escape", "sdb ../x\\08y whole"),
+        ("blank", ""),
+        ("twice", "sda ../y part"),
+    ] {
+        let text = format!("{good}{bad}\n{good}");
+        assert_eq!(
+            Topology::parse(text.as_bytes(), MAX_BLOCK_DEVICES),
+            Err(TopologyWhy::Malformed { line: 2 }),
+            "{case}"
+        );
+    }
+    let three = "sda ../a whole\nsdb ../b whole\nsdc ../c whole\n";
+    assert_eq!(
+        Topology::parse(three.as_bytes(), 2),
+        Err(TopologyWhy::TooMany { bound: 2 })
+    );
+    let read = Topology::parse(three.as_bytes(), 3).map_err(|why| format!("{why:?}"))?;
+    assert_eq!(Topology::parse(b"", 0), Ok(Topology::default()));
+    assert_ne!(read, Topology::default());
+    Ok(())
+}
+
+/// OPS12 round 2 (R2-1) · a declared topology (a test build's `HEE3_TEST_BLOCKTOPO`) is read under
+/// its bound at acquisition: exactly `MAX_TOPOLOGY_BYTES` (1 MiB, typed here) is read and parsed
+/// whole, one byte more is refused by name, a missing file is unreadable by its kind.
+/// `MAX_BLOCK_DEVICES` is 4096, typed here.
+#[test]
+fn the_declared_topology_is_read_under_its_bound() -> Outcome_ {
+    assert_eq!((MAX_TOPOLOGY_BYTES, MAX_BLOCK_DEVICES), (1_048_576, 4096));
+    let scratch = Scratch::new()?;
+    let line = |length: usize| {
+        let (prefix, suffix) = ("sda ../", " whole\n");
+        format!(
+            "{prefix}{}{suffix}",
+            "m".repeat(length - prefix.len() - suffix.len())
+        )
+    };
+    for (name, length, read) in [("exact", 1_048_576, true), ("over", 1_048_577, false)] {
+        let text = line(length);
+        assert_eq!(text.len(), length);
+        let path = scratch.0.join(name);
+        fs::write(&path, &text)?;
+        let got = Topology::read_text(&path);
+        if read {
+            let parsed = Topology::parse(text.as_bytes(), MAX_BLOCK_DEVICES)
+                .map_err(|why| format!("{why:?}"))?;
+            assert_eq!(got, Ok(parsed));
+        } else {
+            assert_eq!(got, Err(TopologyWhy::TooLarge));
+        }
+    }
+    assert_eq!(
+        Topology::read_text(&scratch.0.join("absent")),
+        Err(TopologyWhy::Unreadable(std::io::ErrorKind::NotFound))
+    );
+    Ok(())
+}
+
+/// Build a sysfs tree at `sys` as the kernel lays it out: each `class/block/<name>` a link to its
+/// `devices/...` directory, which holds `partition` for a partition, `dm/name` for a device-mapper
+/// device, and a `slaves` directory of links.
+fn sysfs_device(
+    sys: &Path,
+    name: &str,
+    under: &str,
+    partition: bool,
+    dm_name: Option<&[u8]>,
+    slaves: &[&str],
+) -> Outcome_ {
+    let directory = sys.join("devices").join(under);
+    fs::create_dir_all(&directory)?;
+    if partition {
+        fs::write(directory.join("partition"), "1\n")?;
+    }
+    if let Some(dm_name) = dm_name {
+        fs::create_dir_all(directory.join("dm"))?;
+        fs::write(directory.join("dm/name"), dm_name)?;
+    }
+    if !slaves.is_empty() {
+        fs::create_dir_all(directory.join("slaves"))?;
+        for slave in slaves {
+            std::os::unix::fs::symlink(
+                format!("../../../../pci0/block/{slave}"),
+                directory.join("slaves").join(slave),
+            )?;
+        }
+    }
+    fs::create_dir_all(sys.join("class/block"))?;
+    std::os::unix::fs::symlink(
+        format!("../../devices/{under}"),
+        sys.join("class/block").join(name),
+    )?;
+    Ok(())
+}
+
+/// OPS12 round 2 (R2-1) · the production reader reads sysfs's facts and judges none: over a sysfs
+/// tree built as the kernel lays it out (a disk, its partition, a LUKS device over the partition),
+/// the topology read equals the one its declared text parses to, whole; and the rule over it
+/// refuses the LUKS device against its own disk's partition. Bounded at acquisition: `bound`
+/// devices read and one more refused, `bound` slaves of one device read and one more refused; a
+/// device-mapper name of 256 bytes read and 257 refused as `InvalidData`; a device name that is not
+/// UTF-8 refused as `InvalidData`; no `class/block` unreadable by its kind.
+#[test]
+fn the_topology_reader_reads_sysfs_facts_under_its_bounds() -> Outcome_ {
+    let scratch = Scratch::new()?;
+    let sys = scratch.0.join("sys");
+    sysfs_device(&sys, "sdz", "pci0/block/sdz", false, None, &[])?;
+    sysfs_device(&sys, "sdz1", "pci0/block/sdz/sdz1", true, None, &[])?;
+    sysfs_device(
+        &sys,
+        "dm-9",
+        "virtual/block/dm-9",
+        false,
+        Some(b"crypt\n"),
+        &["sdz1"],
+    )?;
+    let declared = Topology::parse(
+        b"dm-9 ../../devices/virtual/block/dm-9 whole dm:crypt slave:sdz1\n\
+          sdz ../../devices/pci0/block/sdz whole\n\
+          sdz1 ../../devices/pci0/block/sdz/sdz1 part\n",
+        MAX_BLOCK_DEVICES,
+    );
+    let read = Topology::read(&sys, 3);
+    assert_eq!(read, declared);
+    let mounts = table(
+        "1 0 253:9 / / rw - ext4 /dev/mapper/crypt rw\n2 1 8:1 / /p rw - ext4 /dev/sdz1 rw\n",
+    )?;
+    assert_eq!(
+        device_decision(
+            mounts.containing(Path::new("/s")),
+            mounts.containing(Path::new("/p/b")),
+            &read,
+        ),
+        Err(DeviceWhy::SameDisk {
+            state: 1,
+            destination: 2,
+        })
+    );
+    assert_eq!(
+        Topology::read(&sys, 2),
+        Err(TopologyWhy::TooMany { bound: 2 })
+    );
+    // A fourth slave over three devices: the devices are within a bound of 3, the slaves are not.
+    let slaves = sys.join("devices/virtual/block/dm-9/slaves");
+    for slave in ["sdy1", "sdx1", "sdw1"] {
+        std::os::unix::fs::symlink("../../../../pci0/block/x", slaves.join(slave))?;
+    }
+    assert_eq!(
+        Topology::read(&sys, 3),
+        Err(TopologyWhy::TooMany { bound: 3 })
+    );
+    let four = Topology::read(&sys, 4);
+    assert_eq!(
+        four,
+        Topology::parse(
+            b"dm-9 ../../devices/virtual/block/dm-9 whole dm:crypt slave:sdw1 slave:sdx1 \
+              slave:sdy1 slave:sdz1\n\
+              sdz ../../devices/pci0/block/sdz whole\n\
+              sdz1 ../../devices/pci0/block/sdz/sdz1 part\n",
+            MAX_BLOCK_DEVICES,
+        )
+    );
+    // The device-mapper name's bound: 256 bytes read (no newline), 257 refused — over the tree
+    // with its one real slave again.
+    for slave in ["sdy1", "sdx1", "sdw1"] {
+        fs::remove_file(slaves.join(slave))?;
+    }
+    let name_file = sys.join("devices/virtual/block/dm-9/dm/name");
+    fs::write(&name_file, "n".repeat(256))?;
+    let long = Topology::read(&sys, 4).map_err(|why| format!("{why:?}"))?;
+    let mapped = table(&format!(
+        "1 0 253:9 / / rw - ext4 /dev/mapper/{} rw\n2 1 8:1 / /p rw - ext4 /dev/sdz1 rw\n",
+        "n".repeat(256)
+    ))?;
+    assert_eq!(
+        device_decision(
+            mapped.containing(Path::new("/s")),
+            mapped.containing(Path::new("/p/b")),
+            &Ok(long),
+        ),
+        Err(DeviceWhy::SameDisk {
+            state: 1,
+            destination: 2,
+        })
+    );
+    fs::write(&name_file, "n".repeat(257))?;
+    assert_eq!(
+        Topology::read(&sys, 4),
+        Err(TopologyWhy::Unreadable(std::io::ErrorKind::InvalidData))
+    );
+    fs::write(&name_file, "crypt\n")?;
+    std::os::unix::fs::symlink(
+        "../../devices/pci0/block/sdz",
+        sys.join("class/block")
+            .join(<std::ffi::OsStr as std::os::unix::ffi::OsStrExt>::from_bytes(b"sd\xff")),
+    )?;
+    assert_eq!(
+        Topology::read(&sys, 8),
+        Err(TopologyWhy::Unreadable(std::io::ErrorKind::InvalidData))
+    );
+    assert_eq!(
+        Topology::read(&scratch.0.join("no-sys"), 8),
+        Err(TopologyWhy::Unreadable(std::io::ErrorKind::NotFound))
     );
     Ok(())
 }
@@ -6630,7 +7372,8 @@ fn freshness_is_measured_from_the_backup_s_cutoff_not_its_completion() -> Outcom
 /// is due: the first task spends a reserve while it runs, and the second pick — fresh, one dispatch
 /// into the batch, no backup due — stops by name with both numbers, the task left `admitted`. Two
 /// fixtures that differ in every field: the state root one byte short (the destination then never
-/// asked), and the destination seven short (both asked).
+/// asked), and the destination seven short (both asked). The first pick's backup is followed by a
+/// second measurement of both (R2-2), so each fixture's measurements are pinned in order.
 #[test]
 fn headroom_is_checked_before_every_dispatch_not_only_before_a_backup() -> Outcome_ {
     const STATE: u64 = 96 * 1024 * 1024 * 1024;
@@ -6706,7 +7449,14 @@ fn headroom_is_checked_before_every_dispatch_not_only_before_a_backup() -> Outco
                 ]
             )
         );
-        let mut expected = vec![rig.state.clone(), rig.backups.clone()];
+        // The first pick measures both before its backup and again after it (R2-2); the second,
+        // no backup due, measures until the short filesystem.
+        let mut expected = vec![
+            rig.state.clone(),
+            rig.backups.clone(),
+            rig.state.clone(),
+            rig.backups.clone(),
+        ];
         expected.extend(
             [rig.state.clone(), rig.backups.clone()][..second_asked]
                 .iter()
@@ -6722,6 +7472,84 @@ fn headroom_is_checked_before_every_dispatch_not_only_before_a_backup() -> Outco
             )?,
             0
         );
+    }
+    Ok(())
+}
+
+/// OPS12 round 2 (R2-2) · when a backup is due, RC01's headroom is checked again AFTER the backup
+/// writes and before the dispatch: the destination's free space is a disk's (a capacity less the
+/// bytes really under it), so the backup consumes it. With one byte of margin above the 256-GiB
+/// reserve the first pick's backup takes the destination below it: the backup is reported
+/// complete, then the pick stops by name with the post-backup number — the capacity less the bytes
+/// `find` counts under the destination — and no provider is opened, the task left `admitted`.
+/// With a roomy capacity the same post-backup check passes and the task is dispatched. Both
+/// fixtures record every measurement with its answer (F101): state, destination, then both again.
+#[test]
+fn headroom_is_checked_again_after_a_due_backup_writes() -> Outcome_ {
+    const BACKUP: u64 = 256 * 1024 * 1024 * 1024;
+    for capacity in [BACKUP + 1, ROOMY] {
+        let mut rig = rig(&Shape::default())?;
+        rig.space.backup_capacity = Some(capacity);
+        let rig = Arc::new(rig);
+        let stop = Arc::new(AtomicBool::new(false));
+        let pairs = if capacity == ROOMY {
+            let (source, _) = script(vec![Candidate::Replacement(SECOND.to_vec())]);
+            let (mut verifier, _) = oracle(vec![matched(7)]);
+            let flag = Arc::clone(&stop);
+            verifier.hook = Some(Box::new(move || flag.store(true, Ordering::SeqCst)));
+            vec![(source, verifier)]
+        } else {
+            Vec::new()
+        };
+        let (provider, opened) = provider_of(pairs, &stop);
+        let (exit, lines) = run_dispatcher_owned(
+            Arc::clone(&rig),
+            provider,
+            Arc::clone(&stop),
+            rig.selections.clone(),
+            DISPATCHER_BUDGET,
+        )?;
+        let children = backup_children(&rig)?;
+        assert_eq!(children.len(), 1, "one backup: {children:?}");
+        let written = found_bytes(&rig.backups)?;
+        assert!(written > 1, "the backup wrote {written} bytes");
+        let after = capacity - written;
+        assert_eq!(
+            taken(&rig.space.answered),
+            vec![
+                (rig.state.clone(), ROOMY),
+                (rig.backups.clone(), capacity),
+                (rig.state.clone(), ROOMY),
+                (rig.backups.clone(), after),
+            ]
+        );
+        if capacity == ROOMY {
+            assert_eq!(exit, dispatcher::Exit::Drained, "{lines:?}");
+            assert_eq!(taken(&opened), vec![TASK.to_owned()]);
+            assert_eq!(state(&rig)?, "accepted");
+        } else {
+            assert_eq!(
+                (exit, lines),
+                (
+                    dispatcher::Exit::Unavailable(dispatcher::Unavailable::Backup(
+                        dispatcher::BackupWhy::Headroom(dispatcher::Headroom {
+                            fs: dispatcher::Fs::Backup,
+                            free: after,
+                            reserve: BACKUP,
+                        })
+                    )),
+                    vec![
+                        backup_line(&rig, &children[0], "Never")?,
+                        format!(
+                            "dispatcher: unavailable: headroom (backup: free={after} \
+                             reserve=274877906944)"
+                        ),
+                    ]
+                )
+            );
+            assert!(taken(&opened).is_empty());
+            assert_eq!(state(&rig)?, "admitted");
+        }
     }
     Ok(())
 }
@@ -6813,7 +7641,9 @@ fn a_backup_past_rc01_s_budget_refuses_by_name_and_one_at_it_is_taken() -> Outco
                     )),
                     vec![format!(
                         "dispatcher: unavailable: backup budget (used={used} backup={backup} \
-                         budget=137438953472)"
+                         budget=137438953472); recovery: prune the oldest backups under {} by \
+                         hand (retention is T18's)",
+                        rig.backups.display()
                     )]
                 )
             );

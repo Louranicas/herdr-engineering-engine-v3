@@ -564,11 +564,11 @@ struct Dispatching<'a> {
 
 /// RC01's backup target (OPS-2), read once from the operator's record and said in one line: where
 /// the backups go, or why dispatch is unavailable. RC02's device rule is decided over this process's
-/// real mount table here (`mount_table`); the reader takes the table as an argument, so its rule is
-/// chosen by argument in the proofs.
+/// real mount table and the host's block topology here (`devices`); the reader takes both as an
+/// argument, so its rule is chosen by argument in the proofs.
 fn read_backup_target(home: &Path, state_root: &Path) -> Result<BackupTarget, BackupUnready> {
     let directory = coordinator::config_path(home, backup_target::BACKUP_DIRECTORY);
-    let read = backup_target::read_target(&directory, state_root, &mount_table());
+    let read = backup_target::read_target(&directory, state_root, &devices());
     match &read {
         Ok(target) => say(format_args!(
             "backup target read from {} (destination {})",
@@ -1031,10 +1031,61 @@ impl backup_target::FreeSpace for Undeclared {
     }
 }
 
-/// RC02's mount table as a release build reads it: this process's own, always.
+/// RC02's mount table and block topology as a release build reads them: this process's own table
+/// and the host's sysfs, always.
 #[cfg(not(feature = "headroom-seam"))]
-fn mount_table() -> Result<backup_target::MountTable, backup_target::TableWhy> {
-    backup_target::MountTable::read(Path::new(backup_target::MOUNT_TABLE))
+fn devices() -> backup_target::Devices {
+    backup_target::Devices {
+        mounts: backup_target::MountTable::read(Path::new(backup_target::MOUNT_TABLE)),
+        topology: backup_target::Topology::read(
+            Path::new(backup_target::SYSFS),
+            backup_target::MAX_BLOCK_DEVICES,
+        ),
+    }
+}
+
+/// RC02's mount table in a test build (feature `headroom-seam`, `mount_table`) and its block
+/// topology (`block_topology`), read together.
+#[cfg(feature = "headroom-seam")]
+fn devices() -> backup_target::Devices {
+    backup_target::Devices {
+        mounts: mount_table(),
+        topology: block_topology(),
+    }
+}
+
+/// The test build's mount-table seam (Closure R1).
+#[cfg(feature = "headroom-seam")]
+const MOUNTS_SEAM: &str = "HEE3_TEST_MOUNTINFO";
+
+/// RC02's block topology in a test build (feature `headroom-seam`; OPS12 round 2, R2-1): read from
+/// the file `HEE3_TEST_BLOCKTOPO` names when it is set, and said so once, through the same bounded
+/// reader and parser the proofs use; the host's sysfs otherwise — except when the mount table is
+/// declared and the topology is not, which is refused by name and said: a declared table names
+/// devices the machine running the proof does not have, and its topology is never the host's.
+#[cfg(feature = "headroom-seam")]
+fn block_topology() -> Result<backup_target::Topology, backup_target::TopologyWhy> {
+    const TOPOLOGY_SEAM: &str = "HEE3_TEST_BLOCKTOPO";
+    if let Some(path) = std::env::var_os(TOPOLOGY_SEAM) {
+        say(format_args!(
+            "block topology declared by the test seam: {TOPOLOGY_SEAM}=\"{}\"",
+            path.display()
+        ));
+        return backup_target::Topology::read_text(Path::new(&path));
+    }
+    if std::env::var_os(MOUNTS_SEAM).is_some() {
+        say(format_args!(
+            "block topology not declared by the test seam ({TOPOLOGY_SEAM}) while {MOUNTS_SEAM} \
+             declares the mount table: refused"
+        ));
+        return Err(backup_target::TopologyWhy::Unreadable(
+            io::ErrorKind::InvalidInput,
+        ));
+    }
+    backup_target::Topology::read(
+        Path::new(backup_target::SYSFS),
+        backup_target::MAX_BLOCK_DEVICES,
+    )
 }
 
 /// RC02's mount table in a test build (feature `headroom-seam`): read from the file
@@ -1043,7 +1094,6 @@ fn mount_table() -> Result<backup_target::MountTable, backup_target::TableWhy> {
 /// test machine's scratch sits on (the gate's scratch is tmpfs, which the device rule refuses).
 #[cfg(feature = "headroom-seam")]
 fn mount_table() -> Result<backup_target::MountTable, backup_target::TableWhy> {
-    const MOUNTS_SEAM: &str = "HEE3_TEST_MOUNTINFO";
     let Some(path) = std::env::var_os(MOUNTS_SEAM) else {
         return backup_target::MountTable::read(Path::new(backup_target::MOUNT_TABLE));
     };

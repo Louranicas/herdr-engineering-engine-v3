@@ -375,6 +375,21 @@ impl BackupWhy {
             }
         }
     }
+
+    /// The refusal line the gate reports for a backup target whose destination is `destination`
+    /// (`None`: no target was read): [`BackupWhy::line`], and for the budget the operator's
+    /// recovery (OPS12 round 2, R2-3).
+    #[must_use]
+    pub fn line_at(&self, destination: Option<&Path>) -> String {
+        match (self, destination) {
+            (Self::Budget { .. }, Some(destination)) => format!(
+                "{}; recovery: prune the oldest backups under {} by hand (retention is T18's)",
+                self.line(),
+                destination.display()
+            ),
+            _ => self.line(),
+        }
+    }
 }
 
 /// The store's refusal as the backup-failed line names it: a total `match` with no catch-all, so a
@@ -452,12 +467,13 @@ enum Gate {
 }
 
 impl Gate {
-    /// The exit this gate's refusal stops the dispatcher as, its line reported first.
-    fn stop(self, report: &(dyn Fn(&str) + Sync)) -> Exit {
+    /// The exit this gate's refusal stops the dispatcher as, its line reported first, naming the
+    /// backup `destination` where the line says a recovery under it.
+    fn stop(self, report: &(dyn Fn(&str) + Sync), destination: Option<&Path>) -> Exit {
         match self {
             Self::Poisoned => Exit::Poisoned,
             Self::Refused(why) => {
-                report(&format!("dispatcher: {}", why.line()));
+                report(&format!("dispatcher: {}", why.line_at(destination)));
                 Exit::Unavailable(Unavailable::Backup(why))
             }
         }
@@ -493,6 +509,14 @@ impl<'g> Gatekeeper<'g> {
         }
     }
 
+    /// The backup target's destination, when one was read.
+    fn destination(&self) -> Option<&'g Path> {
+        self.backup
+            .as_ref()
+            .ok()
+            .map(|target| target.destination.as_path())
+    }
+
     /// RC01's gate (OPS-2). Before every dispatch (point a) both filesystems' headroom is checked
     /// (RC01: "reserve ... before dispatch"; block R H2/F-M1), whether or not a backup is due; after
     /// a task (point b) only a due backup is. When a backup is due ([`backup_due`]): the
@@ -504,7 +528,10 @@ impl<'g> Gatekeeper<'g> {
     /// clocks": "Backup duration consumes freshness"; block R H1) — never from its completion.
     /// Quiesce is the door's own rule (it refuses `Outstanding`). A refused backup's directory is
     /// removed when empty; a partial copy is inert, since its manifest is published last and it is
-    /// never reused (the door refuses a non-empty destination).
+    /// never reused (the door refuses a non-empty destination). A backup taken is recorded and then
+    /// both filesystems' headroom is checked AGAIN, since the backup wrote onto the destination and
+    /// the reserves hold before every dispatch (OPS12 round 2, R2-2): a backup that takes the
+    /// destination below its reserve is reported complete, and the dispatch then refused by name.
     fn ensure_fresh(&self, freshness: &mut Freshness, point: Point) -> Result<(), Gate> {
         let due = backup_due(freshness.last, freshness.dispatched_since, self.clock.now());
         if due.is_none() && point == Point::AfterTask {
@@ -514,17 +541,7 @@ impl<'g> Gatekeeper<'g> {
             .backup
             .as_ref()
             .map_err(|why| Gate::Refused(BackupWhy::Target(*why)))?;
-        // Measured lazily, in RC01's order: the decision consumes the destination's measurement only
-        // once the state root's has passed.
-        headroom_decision(
-            [
-                (Fs::State, &target.state_root, STATE_RESERVE),
-                (Fs::Backup, &target.destination, BACKUP_RESERVE),
-            ]
-            .into_iter()
-            .map(|(fs, path, reserve)| (fs, self.space.free(path).ok(), reserve)),
-        )
-        .map_err(Gate::Refused)?;
+        self.headroom(target)?;
         let Some(due) = due else {
             return Ok(());
         };
@@ -576,7 +593,23 @@ impl<'g> Gatekeeper<'g> {
             backed.database_bytes,
             backed.cutoff
         ));
-        Ok(())
+        // The backup wrote onto the destination: RC01's reserves hold "before every dispatch", so
+        // both are measured again now, the backup already recorded (OPS12 round 2, R2-2).
+        self.headroom(target)
+    }
+
+    /// RC01's headroom over `target`'s two filesystems, measured lazily in RC01's order: the
+    /// decision consumes the destination's measurement only once the state root's has passed.
+    fn headroom(&self, target: &BackupTarget) -> Result<(), Gate> {
+        headroom_decision(
+            [
+                (Fs::State, &target.state_root, STATE_RESERVE),
+                (Fs::Backup, &target.destination, BACKUP_RESERVE),
+            ]
+            .into_iter()
+            .map(|(fs, path, reserve)| (fs, self.space.free(path).ok(), reserve)),
+        )
+        .map_err(Gate::Refused)
     }
 }
 
@@ -882,7 +915,7 @@ fn run<P: Provider>(dispatcher: Dispatcher<'_, P>, report: &(dyn Fn(&str) + Sync
         // latest complete backup is fresh — or the dispatcher stops by name and the task stays
         // `admitted`.
         if let Err(exit) = gate.ensure_fresh(&mut freshness, Point::Admission) {
-            return exit.stop(report);
+            return exit.stop(report, gate.destination());
         }
         // Phase one before any provider (R20 round 2 A2/A4): the free checks and the captures; a
         // refusal stops the task by name here, and a provider is opened only for an admitted task.
@@ -936,7 +969,7 @@ fn run<P: Provider>(dispatcher: Dispatcher<'_, P>, report: &(dyn Fn(&str) + Sync
         // RC01 (OPS-2 point b): after each task, back up if freshness expired or a batch ended.
         // A refusal is only reported: point (a) refuses the next dispatch if it still holds.
         if let Err(refused) = gate.ensure_fresh(&mut freshness, Point::AfterTask)
-            && let Exit::Poisoned = refused.stop(report)
+            && let Exit::Poisoned = refused.stop(report, gate.destination())
         {
             return Exit::Poisoned;
         }

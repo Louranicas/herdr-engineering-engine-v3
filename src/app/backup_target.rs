@@ -14,15 +14,26 @@
 //! rather than a device: on this host `/var` and `/var/home` are two subvolumes of one LUKS device
 //! with two `st_dev` values (block R F1/F-H1/H1). Equal sources, an equal filesystem, a filesystem
 //! with no backing device (tmpfs, ramfs, overlay, or a source that is not a device path) and a path
-//! no mount resolves are each refused by name. The table is an argument, so which mounts the rule
-//! decides over is chosen by the caller, never by arranging the machine (F95). An unmounted
+//! no mount resolves are each refused by name. RC02's separate device exists to survive a disk
+//! failure (`contract-decisions.md` RC02), so the rule then resolves each side's mount source to the
+//! top-level physical disks under it through the block topology sysfs states (`/sys/class/block`:
+//! a partition to its parent disk, a device-mapper, LVM or md device through its `slaves`) and
+//! refuses two sides sharing a disk, and a source the topology cannot carry to a physical disk (a
+//! loop or zram device, an unlisted parent), by name (OPS12 round 2, R2-1). The source is the key,
+//! never the table's `major:minor`: a btrfs mount states an anonymous `0:N` that
+//! `/sys/dev/block` does not list (measured on this host, 2026-09-29: `0:35`). A multi-device
+//! btrfs resolves only the member its source names (`/sys/fs/btrfs/<uuid>/devices` is not read);
+//! two mounts of one such filesystem are still refused as one filesystem. The table and the
+//! topology are arguments, so which mounts and disks the rule decides over is chosen by the caller,
+//! never by arranging the machine (F95). An unmounted
 //! `/var/mnt/STORAGE-10TB` (`nofail` in fstab) is refused by `DestinationAbsent` (its subdirectory
 //! is missing) and, were the subdirectory present on the bare mount point, by the device rule: the
 //! bare mount point's containing mount is then the state root's own device.
 
 use crate::app::custody::{DirectoryError, FileError, PrivateDirectory};
 use serde::Deserialize;
-use std::ffi::OsString;
+use std::collections::{BTreeMap, BTreeSet};
+use std::ffi::{OsStr, OsString};
 use std::io::Read;
 use std::os::unix::ffi::OsStringExt;
 use std::path::{Path, PathBuf};
@@ -46,6 +57,16 @@ pub const MAX_MOUNT_TABLE_BYTES: u64 = 1 << 20;
 /// name (the walk's acquisition bound: one /1 backup holds at most 4096 objects and their fan-out
 /// directories, so this is some 250 backups of the largest shape).
 pub const USAGE_ENTRY_BOUND: u64 = 1 << 20;
+/// Where the block topology is read in production: sysfs, whose `class/block` lists every block
+/// device.
+pub const SYSFS: &str = "/sys";
+/// The most block devices the topology lists, and the most `slaves` one device lists, before it is
+/// refused by name: a bound at acquisition (this host lists 18, measured 2026-09-29).
+pub const MAX_BLOCK_DEVICES: u64 = 4096;
+/// The largest block topology text read (a test build's declared topology).
+pub const MAX_TOPOLOGY_BYTES: u64 = 1 << 20;
+/// The largest device-mapper name read from `dm/name` (the kernel's `DM_NAME_LEN` is 128).
+const MAX_DM_NAME_BYTES: u64 = 256;
 
 /// Where `serve`'s backups go, and the operator's deadline for each.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -131,11 +152,81 @@ pub enum TableWhy {
     Malformed { line: usize },
 }
 
+/// Why the block topology the device rule reads could not be used.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TopologyWhy {
+    /// A sysfs entry or the declared file could not be opened or read, by the I/O kind
+    /// (`InvalidData` for a device name that is not UTF-8 or a device-mapper name over its bound).
+    Unreadable(std::io::ErrorKind),
+    /// More block devices, or more `slaves` of one, than the reader's bound.
+    TooMany { bound: u64 },
+    /// The declared text is larger than [`MAX_TOPOLOGY_BYTES`].
+    TooLarge,
+    /// The line (1-based) is not a topology line, or names a device a second time.
+    Malformed { line: usize },
+}
+
+impl TopologyWhy {
+    const fn name(self) -> &'static str {
+        match self {
+            Self::Unreadable(_) => "block topology unreadable",
+            Self::TooMany { .. } | Self::TooLarge => "block topology too large",
+            Self::Malformed { .. } => "block topology malformed",
+        }
+    }
+
+    fn line(self) -> String {
+        let name = self.name();
+        match self {
+            Self::Unreadable(kind) => format!("{name} ({kind:?})"),
+            Self::TooMany { bound } => format!("{name} (over {bound} devices)"),
+            Self::TooLarge => format!("{name} (over {MAX_TOPOLOGY_BYTES} bytes)"),
+            Self::Malformed { line } => format!("{name} (line {line})"),
+        }
+    }
+}
+
+/// Why a mount source could not be carried to the physical disks under it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Unresolvable {
+    /// The source names no block device the topology lists (`/dev/<name>` or
+    /// `/dev/mapper/<dm name>`, nothing else).
+    Source,
+    /// A device with no physical disk under it that sysfs names: a `devices/virtual` device with no
+    /// `slaves` (loop, zram, ram, nbd, a device-mapper target over nothing).
+    Virtual,
+    /// A partition's disk or a stacked device's slave that the topology does not list.
+    Unlisted,
+    /// A partition whose link names no parent directory, so no disk.
+    NoParent,
+    /// A chain of stacked devices that reaches no disk (a cycle).
+    NoDisk,
+}
+
+impl Unresolvable {
+    const fn name(self) -> &'static str {
+        match self {
+            Self::Source => "no block device",
+            Self::Virtual => "virtual device",
+            Self::Unlisted => "unlisted device",
+            Self::NoParent => "partition without a disk",
+            Self::NoDisk => "no disk",
+        }
+    }
+}
+
 /// Why RC02's separate-device rule refused (block R F1/F-H1/H1), each by its own name.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DeviceWhy {
     /// The mount table could not be used.
     Table(TableWhy),
+    /// The block topology could not be used.
+    Topology(TopologyWhy),
+    /// The side's mount source could not be resolved to a physical disk (OPS12 round 2, R2-1).
+    DiskUnresolved { side: Side, why: Unresolvable },
+    /// Both sides' mount sources rest on one physical disk (OPS12 round 2, R2-1): the table's two
+    /// mount ids.
+    SameDisk { state: u64, destination: u64 },
     /// No mount contains the side's path, or the state root could not be resolved to a canonical
     /// path to look up.
     Unresolved(Side),
@@ -162,16 +253,21 @@ impl BackupUnready {
             Self::Device(DeviceWhy::Table(TableWhy::Unreadable(_))) => "mount table unreadable",
             Self::Device(DeviceWhy::Table(TableWhy::TooLarge)) => "mount table too large",
             Self::Device(DeviceWhy::Table(TableWhy::Malformed { .. })) => "mount table malformed",
+            Self::Device(DeviceWhy::Topology(why)) => why.name(),
             Self::Device(DeviceWhy::Unresolved(_)) => "device unresolved",
+            Self::Device(DeviceWhy::DiskUnresolved { .. }) => "disk unresolved",
             Self::Device(DeviceWhy::NoDevice { .. }) => "not a block device",
-            Self::Device(DeviceWhy::SameSource { .. } | DeviceWhy::SameFilesystem { .. }) => {
-                "same device"
-            }
+            Self::Device(
+                DeviceWhy::SameSource { .. }
+                | DeviceWhy::SameFilesystem { .. }
+                | DeviceWhy::SameDisk { .. },
+            ) => "same device",
         }
     }
 
     /// The refusal as a line says it: its name, and for a device refusal what decided it — the I/O
-    /// kind, the bound, the line, the side, the filesystem, or both mount ids of the table.
+    /// kind, the bound, the line, the side, the filesystem or why its disk is unresolved, or both
+    /// mount ids of the table.
     #[must_use]
     pub fn line(self) -> String {
         let name = self.name();
@@ -185,7 +281,14 @@ impl BackupUnready {
             Self::Device(DeviceWhy::Table(TableWhy::Malformed { line })) => {
                 format!("{name} (line {line})")
             }
+            Self::Device(DeviceWhy::Topology(why)) => why.line(),
             Self::Device(DeviceWhy::Unresolved(side)) => format!("{name} ({})", side.name()),
+            Self::Device(DeviceWhy::DiskUnresolved { side, why }) => {
+                format!("{name} ({}: {})", side.name(), why.name())
+            }
+            Self::Device(DeviceWhy::SameDisk { state, destination }) => {
+                format!("{name} (one disk: state mount {state}, destination mount {destination})")
+            }
             Self::Device(DeviceWhy::NoDevice { side, kind }) => {
                 format!("{name} ({}: {})", side.name(), kind.name())
             }
@@ -350,17 +453,285 @@ fn no_device(mount: &Mount) -> Option<NoDevice> {
     }
 }
 
+/// One block device as sysfs states it under `class/block/<name>`: facts only, read as they are, so
+/// every judgement over them is the pure resolver's (F95).
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct BlockDevice {
+    /// The class link's target as `readlink` returns it (`../../devices/virtual/block/dm-0`): a
+    /// partition's parent directory is its disk, and a `devices/virtual` path has no hardware.
+    link: PathBuf,
+    /// Whether it has a `partition` attribute.
+    partition: bool,
+    /// Its device-mapper name (`dm/name`), which a `/dev/mapper/<name>` source names.
+    dm_name: Option<OsString>,
+    /// Its `slaves`: the devices it is stacked on (dm-crypt, LVM, md).
+    slaves: Vec<String>,
+}
+
+/// The block topology RC02's disk rule reads: every block device sysfs lists, by its kernel name.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct Topology {
+    devices: BTreeMap<String, BlockDevice>,
+}
+
+impl Topology {
+    /// Parse `bytes` as a declared topology, one device per line as sysfs states it:
+    /// `<name> <link> <whole|part> [dm:<dm name>] [slave:<name>]...`, fields separated by one space
+    /// and each `\ooo`-escaped as the mount table's are. At most `bound` devices, and a name given
+    /// twice is malformed. A final newline ends the last line.
+    ///
+    /// # Errors
+    /// [`TopologyWhy::Malformed`] naming the first line that is not one; [`TopologyWhy::TooMany`]
+    /// past `bound`.
+    pub fn parse(bytes: &[u8], bound: u64) -> Result<Self, TopologyWhy> {
+        let text = bytes.strip_suffix(b"\n").unwrap_or(bytes);
+        let mut devices = BTreeMap::new();
+        if text.is_empty() {
+            return Ok(Self { devices });
+        }
+        for (index, line) in text.split(|byte| *byte == b'\n').enumerate() {
+            if u64::try_from(devices.len()).unwrap_or(u64::MAX) >= bound {
+                return Err(TopologyWhy::TooMany { bound });
+            }
+            let malformed = TopologyWhy::Malformed { line: index + 1 };
+            let (name, device) = parse_device(line).ok_or(malformed)?;
+            if devices.insert(name, device).is_some() {
+                return Err(malformed);
+            }
+        }
+        Ok(Self { devices })
+    }
+
+    /// Read and parse the declared topology at `path` under [`MAX_TOPOLOGY_BYTES`] and
+    /// [`MAX_BLOCK_DEVICES`], each refused by name past it.
+    ///
+    /// # Errors
+    /// [`TopologyWhy::Unreadable`], [`TopologyWhy::TooLarge`], or [`Topology::parse`]'s.
+    pub fn read_text(path: &Path) -> Result<Self, TopologyWhy> {
+        let mut bytes = Vec::new();
+        std::fs::File::open(path)
+            .and_then(|file| file.take(MAX_TOPOLOGY_BYTES + 1).read_to_end(&mut bytes))
+            .map_err(|error| TopologyWhy::Unreadable(error.kind()))?;
+        if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > MAX_TOPOLOGY_BYTES {
+            return Err(TopologyWhy::TooLarge);
+        }
+        Self::parse(&bytes, MAX_BLOCK_DEVICES)
+    }
+
+    /// Read the topology from sysfs at `sysfs` (production: [`SYSFS`]): each entry of
+    /// `class/block`, its link as `readlink` returns it, whether it has a `partition` attribute,
+    /// its `dm/name` and its `slaves` — at most `bound` devices, and `bound` slaves of one,
+    /// refused by name past it before the next is acquired. Nothing here judges a device.
+    ///
+    /// # Errors
+    /// [`TopologyWhy::Unreadable`] by the I/O kind; [`TopologyWhy::TooMany`] past `bound`.
+    pub fn read(sysfs: &Path, bound: u64) -> Result<Self, TopologyWhy> {
+        let io = |error: std::io::Error| TopologyWhy::Unreadable(error.kind());
+        let class = sysfs.join("class/block");
+        let mut devices = BTreeMap::new();
+        for entry in std::fs::read_dir(&class).map_err(io)? {
+            let entry = entry.map_err(io)?;
+            if u64::try_from(devices.len()).unwrap_or(u64::MAX) >= bound {
+                return Err(TopologyWhy::TooMany { bound });
+            }
+            let name = utf8(entry.file_name())?;
+            let path = entry.path();
+            let device = BlockDevice {
+                link: std::fs::read_link(&path).map_err(io)?,
+                partition: present(&path.join("partition"))?,
+                dm_name: dm_name(&path.join("dm/name"))?,
+                slaves: slaves(&path.join("slaves"), bound)?,
+            };
+            devices.insert(name, device);
+        }
+        Ok(Self { devices })
+    }
+
+    /// The kernel name of the block device a mount `source` names: `/dev/mapper/<dm name>` by its
+    /// device-mapper name (one device only), `/dev/<name>` by its own name; nothing else.
+    fn device_of(&self, source: &OsStr) -> Option<&str> {
+        let bytes = source.as_encoded_bytes();
+        if let Some(mapped) = bytes.strip_prefix(b"/dev/mapper/") {
+            let mut named = self.devices.iter().filter(|(_, device)| {
+                device
+                    .dm_name
+                    .as_ref()
+                    .is_some_and(|name| name.as_encoded_bytes() == mapped)
+            });
+            let (name, _) = named.next()?;
+            return named.next().is_none().then_some(name.as_str());
+        }
+        let name = std::str::from_utf8(bytes.strip_prefix(b"/dev/")?).ok()?;
+        self.devices
+            .get_key_value(name)
+            .map(|(name, _)| name.as_str())
+    }
+
+    /// The top-level physical disks under the block device `source` names, pure (F95): a device
+    /// with `slaves` rests on each of them, a partition on the disk its link's parent names, a
+    /// `devices/virtual` device with no slaves on no disk, and any other device is a disk. Each
+    /// device is visited once, so the walk is bounded by the topology's own size.
+    fn disks(&self, source: &OsStr) -> Result<BTreeSet<&str>, Unresolvable> {
+        let mut pending = vec![self.device_of(source).ok_or(Unresolvable::Source)?];
+        let (mut seen, mut disks) = (BTreeSet::new(), BTreeSet::new());
+        while let Some(name) = pending.pop() {
+            if !seen.insert(name) {
+                continue;
+            }
+            let device = self.devices.get(name).ok_or(Unresolvable::Unlisted)?;
+            if !device.slaves.is_empty() {
+                pending.extend(device.slaves.iter().map(String::as_str));
+            } else if device.partition {
+                let parent = device
+                    .link
+                    .parent()
+                    .and_then(Path::file_name)
+                    .and_then(OsStr::to_str)
+                    .ok_or(Unresolvable::NoParent)?;
+                pending.push(parent);
+            } else if is_virtual(&device.link) {
+                return Err(Unresolvable::Virtual);
+            } else {
+                disks.insert(name);
+            }
+        }
+        if disks.is_empty() {
+            return Err(Unresolvable::NoDisk);
+        }
+        Ok(disks)
+    }
+}
+
+/// One declared topology line, or `None` when it is not one.
+fn parse_device(text: &[u8]) -> Option<(String, BlockDevice)> {
+    let mut fields = text.split(|byte| *byte == b' ');
+    let name = String::from_utf8(unescape(fields.next()?)?).ok()?;
+    let link = PathBuf::from(OsString::from_vec(unescape(fields.next()?)?));
+    let partition = match fields.next()? {
+        b"part" => true,
+        b"whole" => false,
+        _ => return None,
+    };
+    if name.is_empty() || name.contains('/') || link.as_os_str().is_empty() {
+        return None;
+    }
+    let (mut dm_name, mut slaves) = (None, Vec::new());
+    for field in fields {
+        if let Some(mapped) = field.strip_prefix(b"dm:") {
+            let mapped = unescape(mapped)?;
+            if dm_name.is_some() || mapped.is_empty() {
+                return None;
+            }
+            dm_name = Some(OsString::from_vec(mapped));
+        } else {
+            let slave = String::from_utf8(unescape(field.strip_prefix(b"slave:")?)?).ok()?;
+            if slave.is_empty() {
+                return None;
+            }
+            slaves.push(slave);
+        }
+    }
+    Some((
+        name,
+        BlockDevice {
+            link,
+            partition,
+            dm_name,
+            slaves,
+        },
+    ))
+}
+
+/// Whether a class link names a `devices/virtual` device: one with no hardware under it.
+fn is_virtual(link: &Path) -> bool {
+    let mut previous = None;
+    link.components().any(|component| {
+        let virtual_after_devices =
+            previous == Some(OsStr::new("devices")) && component.as_os_str() == "virtual";
+        previous = Some(component.as_os_str());
+        virtual_after_devices
+    })
+}
+
+/// A sysfs entry name as UTF-8, or `InvalidData`.
+fn utf8(name: OsString) -> Result<String, TopologyWhy> {
+    name.into_string()
+        .map_err(|_| TopologyWhy::Unreadable(std::io::ErrorKind::InvalidData))
+}
+
+/// Whether sysfs has `path` (a `partition` attribute): absent is `false`, any other failure refuses.
+fn present(path: &Path) -> Result<bool, TopologyWhy> {
+    match std::fs::symlink_metadata(path) {
+        Ok(_) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(TopologyWhy::Unreadable(error.kind())),
+    }
+}
+
+/// A device's `dm/name`, its final newline removed: `None` when it is not a device-mapper device;
+/// read under [`MAX_DM_NAME_BYTES`], `InvalidData` past it.
+fn dm_name(path: &Path) -> Result<Option<OsString>, TopologyWhy> {
+    let mut bytes = Vec::new();
+    match std::fs::File::open(path)
+        .and_then(|file| file.take(MAX_DM_NAME_BYTES + 1).read_to_end(&mut bytes))
+    {
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(TopologyWhy::Unreadable(error.kind())),
+    }
+    if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > MAX_DM_NAME_BYTES {
+        return Err(TopologyWhy::Unreadable(std::io::ErrorKind::InvalidData));
+    }
+    let name = bytes.strip_suffix(b"\n").unwrap_or(&bytes).to_vec();
+    Ok(Some(OsString::from_vec(name)))
+}
+
+/// A device's `slaves` entries (none when it has no `slaves` directory), at most `bound`.
+fn slaves(path: &Path, bound: u64) -> Result<Vec<String>, TopologyWhy> {
+    let io = |error: std::io::Error| TopologyWhy::Unreadable(error.kind());
+    let entries = match std::fs::read_dir(path) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(io(error)),
+    };
+    let mut names = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(io)?;
+        if u64::try_from(names.len()).unwrap_or(u64::MAX) >= bound {
+            return Err(TopologyWhy::TooMany { bound });
+        }
+        names.push(utf8(entry.file_name())?);
+    }
+    names.sort();
+    Ok(names)
+}
+
+/// What RC02's device rule is decided over: the mount table and the block topology, each as read
+/// or why it could not be.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Devices {
+    /// The mount table.
+    pub mounts: Result<MountTable, TableWhy>,
+    /// The block topology.
+    pub topology: Result<Topology, TopologyWhy>,
+}
+
 /// RC02's separate-device rule, pure (F95): the state root's and the destination's containing
-/// mounts (`None`: no mount resolves the path). Each must resolve, each must have a backing device,
-/// and they must name neither one source nor one filesystem; the first that does not hold refuses,
-/// in that order, the state root before the destination.
+/// mounts (`None`: no mount resolves the path) over the block `topology`. Each must resolve, each
+/// must have a backing device, they must name neither one source nor one filesystem, and — RC02's
+/// separate device surviving a disk failure (R2-1) — each source must resolve to its physical
+/// disks and the two sets must share none; the first that does not hold refuses, in that order, the
+/// state root before the destination. The topology is consulted only at the disk step, so a
+/// refusal that needs no topology is never masked by one that could not be read.
 ///
 /// # Errors
-/// [`DeviceWhy::Unresolved`], [`DeviceWhy::NoDevice`], [`DeviceWhy::SameSource`] or
-/// [`DeviceWhy::SameFilesystem`].
+/// [`DeviceWhy::Unresolved`], [`DeviceWhy::NoDevice`], [`DeviceWhy::SameSource`],
+/// [`DeviceWhy::SameFilesystem`], [`DeviceWhy::Topology`], [`DeviceWhy::DiskUnresolved`] or
+/// [`DeviceWhy::SameDisk`].
 pub fn device_decision(
     state: Option<&Mount>,
     destination: Option<&Mount>,
+    topology: &Result<Topology, TopologyWhy>,
 ) -> Result<(), DeviceWhy> {
     let state = state.ok_or(DeviceWhy::Unresolved(Side::State))?;
     let destination = destination.ok_or(DeviceWhy::Unresolved(Side::Destination))?;
@@ -382,6 +753,22 @@ pub fn device_decision(
             destination: mounts.1,
         });
     }
+    let topology = topology.as_ref().map_err(|why| DeviceWhy::Topology(*why))?;
+    let disks = |side, mount: &Mount| {
+        topology
+            .disks(&mount.source)
+            .map_err(|why| DeviceWhy::DiskUnresolved { side, why })
+    };
+    let (state_disks, destination_disks) = (
+        disks(Side::State, state)?,
+        disks(Side::Destination, destination)?,
+    );
+    if !state_disks.is_disjoint(&destination_disks) {
+        return Err(DeviceWhy::SameDisk {
+            state: mounts.0,
+            destination: mounts.1,
+        });
+    }
     Ok(())
 }
 
@@ -394,8 +781,8 @@ struct Record<'r> {
 }
 
 /// Read the operator's backup target from `directory` (`<config root>/backup`), for the state root
-/// at `state_root`, deciding RC02's device rule over `mounts` (the mount table, or why it could not
-/// be read). The state root is resolved to its canonical path before it is looked up: the table
+/// at `state_root`, deciding RC02's device rule over `devices` (the mount table and the block
+/// topology, each or why it could not be read). The state root is resolved to its canonical path before it is looked up: the table
 /// names canonical mount points, and on Kinoite `/home/<user>` is a link to `/var/home/<user>`.
 ///
 /// # Errors
@@ -403,7 +790,7 @@ struct Record<'r> {
 pub fn read_target(
     directory: &Path,
     state_root: &Path,
-    mounts: &Result<MountTable, TableWhy>,
+    devices: &Devices,
 ) -> Result<BackupTarget, BackupUnready> {
     let held = match PrivateDirectory::open(directory) {
         Ok(held) => held,
@@ -440,13 +827,15 @@ pub fn read_target(
             return Err(BackupUnready::DestinationCustody);
         }
     }
-    let table = mounts
+    let table = devices
+        .mounts
         .as_ref()
         .map_err(|why| BackupUnready::Device(DeviceWhy::Table(*why)))?;
     let state = state_root.canonicalize().ok();
     device_decision(
         state.as_deref().and_then(|state| table.containing(state)),
         table.containing(destination),
+        &devices.topology,
     )
     .map_err(BackupUnready::Device)?;
     Ok(BackupTarget {

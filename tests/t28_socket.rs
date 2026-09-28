@@ -548,6 +548,7 @@ fn serve_command(run: &Path, home: &Path) -> Command {
         // the mount seam.
         .env(HEADROOM_SEAM, "")
         .env_remove(MOUNTS_SEAM)
+        .env_remove(TOPOLOGY_SEAM)
         .stdin(Stdio::piped())
         .stdout(Stdio::null());
     command
@@ -580,8 +581,9 @@ impl Engine {
 
     /// Start with standard error written to `log` (as [`Engine::start_logged`]), RC01's free
     /// space declared through the test build's headroom seam — `state` bytes on the state
-    /// filesystem, `backup` on the destination's (RA1 b) — and RC02's mount table declared through
-    /// its seam as `destination`'s (Closure R1), so no verdict depends on the host's disk.
+    /// filesystem, `backup` on the destination's (RA1 b) — and RC02's mount table and block
+    /// topology declared through their seams as `destination`'s (Closure R1; OPS12 round 2), so no
+    /// verdict depends on the host's disk.
     fn start_declared(
         run: &Path,
         home: &Path,
@@ -595,6 +597,7 @@ impl Engine {
                 serve_command(run, home)
                     .env(HEADROOM_SEAM, format!("state={state} backup={backup}"))
                     .env(MOUNTS_SEAM, &destination.table)
+                    .env(TOPOLOGY_SEAM, &destination.topology)
                     .stderr(Stdio::from(fs::File::create_new(log)?))
                     .spawn()?,
             ),
@@ -4206,10 +4209,13 @@ fn commission_without_a_deadline_is_a_usage_error() -> Outcome {
 /// the host, 2026-09-28), which the test build's `serve` reads through `HEE3_TEST_MOUNTINFO`. The
 /// worlds' scratch is tmpfs in dev and in the gate, which the device rule refuses by name; the
 /// declared table decides the rule instead, through the production reader, parser and decision —
-/// no verdict here depends on which devices the machine running the proof has.
+/// no verdict here depends on which devices the machine running the proof has. The block topology
+/// is this host's own, recorded (OPS12 round 2, R2-1: `super::runtime::HOST_BLOCKTOPO`), read
+/// through `HEE3_TEST_BLOCKTOPO`: the LUKS device on the `NVMe` disk, `/dev/sdb1` on another.
 struct Destination {
     path: PathBuf,
     table: PathBuf,
+    topology: PathBuf,
 }
 
 impl Destination {
@@ -4222,11 +4228,14 @@ impl Destination {
         fs::write(
             &table,
             format!(
-                "1 0 0:35 / / rw,relatime - btrfs /dev/mapper/luks-97a2c76e rw\n\
+                "1 0 0:35 / / rw,relatime - btrfs {} rw\n\
                  2 1 8:17 / {} rw,relatime - ext4 /dev/sdb1 rw\n",
+                super::runtime::LUKS,
                 super::runtime::escaped(&path)
             ),
         )?;
+        let topology = world.home.join("blocktopo");
+        fs::write(&topology, super::runtime::HOST_BLOCKTOPO)?;
         let directory = world
             .home
             .join(".config/herdr-engineering-engine-v3/backup");
@@ -4244,7 +4253,11 @@ impl Destination {
             }))?,
             0o600,
         )?;
-        Ok(Self { path, table })
+        Ok(Self {
+            path,
+            table,
+            topology,
+        })
     }
 }
 
@@ -4257,6 +4270,18 @@ fn mounts_line(table: &Path) -> String {
     format!(
         "habitat-engine: mount table declared by the test seam: {MOUNTS_SEAM}=\"{}\"",
         table.display()
+    )
+}
+
+/// The test build's block-topology seam (OPS12 round 2, R2-1, feature `headroom-seam`): `serve`
+/// reads RC02's block topology from the file it names instead of sysfs.
+const TOPOLOGY_SEAM: &str = "HEE3_TEST_BLOCKTOPO";
+
+/// The line `serve` says once when it reads the declared block topology at `topology`, whole.
+fn topology_line(topology: &Path) -> String {
+    format!(
+        "habitat-engine: block topology declared by the test seam: {TOPOLOGY_SEAM}=\"{}\"",
+        topology.display()
     )
 }
 
@@ -4303,12 +4328,14 @@ fn backed_up_through_main(stderr: &str, destination: &Destination) -> Result<(),
     );
     let declared = declared_line(ROOMY, ROOMY);
     let mounts = mounts_line(&destination.table);
+    let topology = topology_line(&destination.topology);
     assert_eq!(
         (
             stderr
                 .lines()
                 .filter(|line| line.starts_with("habitat-engine: headroom")
-                    || line.starts_with("habitat-engine: mount table"))
+                    || line.starts_with("habitat-engine: mount table")
+                    || line.starts_with("habitat-engine: block topology"))
                 .collect::<Vec<_>>(),
             stderr
                 .lines()
@@ -4316,7 +4343,7 @@ fn backed_up_through_main(stderr: &str, destination: &Destination) -> Result<(),
                 .collect::<Vec<_>>(),
         ),
         (
-            vec![mounts.as_str(), declared.as_str()],
+            vec![mounts.as_str(), topology.as_str(), declared.as_str()],
             vec![backed.as_str()]
         ),
         "{stderr}"
@@ -4352,58 +4379,84 @@ fn held_at_headroom(
     Ok((stderr, got))
 }
 
+/// `serve` started over `world` with the mount table and block topology seams set to `table` and
+/// `topology` when given, then terminated: its standard error, whole.
+fn said_at_start(
+    world: &World,
+    table: Option<&Path>,
+    topology: Option<&Path>,
+) -> Result<String, Box<dyn Error>> {
+    let log = world.home.join("engine.log");
+    let mut command = serve_command(&world.run, &world.home);
+    if let Some(table) = table {
+        command.env(MOUNTS_SEAM, table);
+    }
+    if let Some(topology) = topology {
+        command.env(TOPOLOGY_SEAM, topology);
+    }
+    let engine = Engine {
+        child: Some(command.stderr(fs::File::create_new(&log)?).spawn()?),
+    }
+    .serving(&world.run, START_BUDGET)?;
+    let _output = engine.terminate(Duration::from_secs(20))?;
+    Ok(fs::read_to_string(&log)?)
+}
+
+/// The lines of `stderr` about the backup target and the device rule's two seams, in order.
+fn target_lines(stderr: &str) -> Vec<String> {
+    stderr
+        .lines()
+        .filter(|line| {
+            line.contains("backup target")
+                || line.contains("mount table")
+                || line.contains("block topology")
+        })
+        .map(str::to_owned)
+        .collect()
+}
+
+/// The operator's backup record's directory under `world`'s home.
+fn backup_directory(world: &World) -> PathBuf {
+    world
+        .home
+        .join(".config/herdr-engineering-engine-v3/backup")
+}
+
 /// OPS-2 case 8 · `serve` says its backup target once at start, by the one reader over the mount
-/// table it is handed (Closure R1: RC02's device rule over mount SOURCES). With no record, dispatch
-/// is unavailable by name; with a record whose destination the declared table places on another
-/// device, where the backups go; with the table this host has — the state root's `/home` and the
-/// destination's `/var` two btrfs subvolumes of one LUKS device, which `st_dev` passed — the
-/// refusal naming both mount ids; with a tmpfs destination, the refusal naming the filesystem.
-/// Four worlds, four whole lines, each world's table said by the seam first.
+/// table and block topology it is handed (Closure R1: RC02's device rule over mount SOURCES; OPS12
+/// round 2, R2-1: down to the physical disk). With no record, dispatch is unavailable by name; with
+/// a record whose destination the declared table places on another disk, where the backups go; with
+/// the table this host has — the state root's `/home` and the destination's `/var` two btrfs
+/// subvolumes of one LUKS device, which `st_dev` passed — the refusal naming both mount ids; with
+/// `/boot` (`nvme0n1p2`, another device node on the LUKS device's own `NVMe` disk), the one-disk
+/// refusal naming both mount ids; with a tmpfs destination, the refusal naming the filesystem. Five
+/// worlds, five whole line sets, each world's seams said first.
 #[test]
 fn serve_says_its_backup_target_at_start() -> Outcome {
-    let said = |world: &World, table: Option<&Path>| -> Result<String, Box<dyn Error>> {
-        let log = world.home.join("engine.log");
-        let mut command = serve_command(&world.run, &world.home);
-        if let Some(table) = table {
-            command.env(MOUNTS_SEAM, table);
-        }
-        let engine = Engine {
-            child: Some(command.stderr(fs::File::create_new(&log)?).spawn()?),
-        }
-        .serving(&world.run, START_BUDGET)?;
-        let _output = engine.terminate(Duration::from_secs(20))?;
-        Ok(fs::read_to_string(&log)?)
-    };
-    let lines = |stderr: &str| -> Vec<String> {
-        stderr
-            .lines()
-            .filter(|line| line.contains("backup target") || line.contains("mount table"))
-            .map(str::to_owned)
-            .collect()
-    };
-    let directory = |world: &World| {
-        world
-            .home
-            .join(".config/herdr-engineering-engine-v3/backup")
-    };
+    let (said, lines, directory) = (said_at_start, target_lines, backup_directory);
     // No record.
     let world = World::new()?;
     commission(&world.home)?;
     assert_eq!(
-        lines(&said(&world, None)?),
+        lines(&said(&world, None, None)?),
         [format!(
             "habitat-engine: dispatch unavailable: backup target absent ({})",
             directory(&world).display()
         )]
     );
-    // A record whose destination the table places on another device.
+    // A record whose destination the table places on another disk.
     let world = World::new()?;
     commission(&world.home)?;
     let destination = Destination::backup_record(&world)?;
     assert_eq!(
-        lines(&said(&world, Some(&destination.table))?),
+        lines(&said(
+            &world,
+            Some(&destination.table),
+            Some(&destination.topology)
+        )?),
         [
             mounts_line(&destination.table),
+            topology_line(&destination.topology),
             format!(
                 "habitat-engine: backup target read from {} (destination {})",
                 directory(&world).display(),
@@ -4411,8 +4464,8 @@ fn serve_says_its_backup_target_at_start() -> Outcome {
             )
         ]
     );
-    // This host's shape (mount ids 219 and 75 as measured): one LUKS device, two subvolumes.
-    // Then a tmpfs destination.
+    // This host's shape (mount ids 219, 75 and 146 as measured): one LUKS device, two subvolumes;
+    // `/boot` on the LUKS device's own disk; then a tmpfs destination.
     for (state_line, destination_line, refused) in [
         (
             "219 75 0:35 /home {} rw,relatime shared:217 - btrfs \
@@ -4420,6 +4473,12 @@ fn serve_says_its_backup_target_at_start() -> Outcome {
             "75 49 0:35 /var {} rw,relatime shared:199 - btrfs \
              /dev/mapper/luks-97a2c76e-e11a-4782-8bfe-4370fadfa706 rw,subvol=/var",
             "same device (one source: state mount 219, destination mount 75)",
+        ),
+        (
+            "219 75 0:35 /home {} rw,relatime shared:217 - btrfs \
+             /dev/mapper/luks-97a2c76e-e11a-4782-8bfe-4370fadfa706 rw,subvol=/home",
+            "146 49 259:2 / {} rw,relatime shared:211 - ext4 /dev/nvme0n1p2 rw",
+            "same device (one disk: state mount 219, destination mount 146)",
         ),
         (
             "146 49 259:2 / {} rw,relatime shared:211 - ext4 /dev/nvme0n1p2 rw",
@@ -4440,9 +4499,14 @@ fn serve_says_its_backup_target_at_start() -> Outcome {
             ),
         )?;
         assert_eq!(
-            lines(&said(&world, Some(&destination.table))?),
+            lines(&said(
+                &world,
+                Some(&destination.table),
+                Some(&destination.topology)
+            )?),
             [
                 mounts_line(&destination.table),
+                topology_line(&destination.topology),
                 format!(
                     "habitat-engine: dispatch unavailable: backup target {refused} ({})",
                     directory(&world).display()
@@ -4451,6 +4515,33 @@ fn serve_says_its_backup_target_at_start() -> Outcome {
             "{refused}"
         );
     }
+    Ok(())
+}
+
+/// OPS12 round 2 (R2-1) · a test build whose mount table is declared and whose block topology is
+/// not refuses the topology by name and says why — never falling to the host's sysfs, which knows
+/// nothing of the devices a declared table names; the dispatch is then unavailable naming it.
+#[test]
+fn a_declared_table_without_a_declared_topology_is_refused_by_name() -> Outcome {
+    let (said, lines, directory) = (said_at_start, target_lines, backup_directory);
+    let world = World::new()?;
+    commission(&world.home)?;
+    let destination = Destination::backup_record(&world)?;
+    assert_eq!(
+        lines(&said(&world, Some(&destination.table), None)?),
+        [
+            mounts_line(&destination.table),
+            format!(
+                "habitat-engine: block topology not declared by the test seam ({TOPOLOGY_SEAM}) \
+                 while {MOUNTS_SEAM} declares the mount table: refused"
+            ),
+            format!(
+                "habitat-engine: dispatch unavailable: backup target block topology unreadable \
+                 (InvalidInput) ({})",
+                directory(&world).display()
+            )
+        ]
+    );
     Ok(())
 }
 
