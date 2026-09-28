@@ -317,6 +317,23 @@ fn general_acceptance_preserves_its_sixty_four_object_limit() {
     no_delivery(&store);
 }
 
+/// Closure R1 (C4; `store.rs` `prepare_acceptance_inner` `>` -> `>=` on the object limit,
+/// survived the owed mutation run) · general acceptance admits EXACTLY its 64-object limit (the
+/// case above refuses 65): the limit is the last count admitted, not the first refused.
+#[test]
+fn general_acceptance_admits_exactly_sixty_four_objects() {
+    let (_area, store, evidence) = ready();
+    let objects = inventory(&store, &evidence, 64);
+    assert_eq!(objects.len(), 64, "the fixture's premise");
+    let prepared = store.prepare_acceptance(
+        &expected("3"),
+        id(ACCEPTED),
+        &identified(&objects),
+        deadline(),
+    );
+    assert!(prepared.is_ok(), "{:?}", prepared.err());
+}
+
 #[test]
 fn verified_inventory_refuses_count_overflow_before_publication() {
     let (_area, mut store, evidence) = ready();

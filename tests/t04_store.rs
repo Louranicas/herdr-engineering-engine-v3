@@ -5326,3 +5326,104 @@ fn a_check_record_must_be_bound_to_its_verification() {
         Err(Error::Corrupt)
     ));
 }
+
+// ---- Closure R1 (C4): the owed mutation run's store survivors (RA2, 2026-09-28) -----------------
+
+/// Closure R1 (C4; `run_records.rs:341:56`, `+` -> `-` in `committed_run`, survived) · a settle that
+/// commits a record of EVERY kind (`RunRecordKind::ALL`, six) is read back through `committed_run`
+/// whole: six records, each by its kind, its id and its object — the read's own bound is one past the
+/// kinds, never one short of them.
+#[test]
+fn committed_run_returns_a_settle_of_every_kind_whole()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let area = Area::new();
+    let mut store = area.open();
+    running(&mut store);
+    let objects: Vec<Object> = (0..6).map(|index| published(&store, index)).collect();
+    let every: Vec<RunRecord<'_>> = RunRecordKind::ALL
+        .iter()
+        .zip(IDS.iter().zip(&objects))
+        .map(|(kind, (id, object))| record(*kind, id, object))
+        .collect();
+    assert_eq!(
+        every.len(),
+        6,
+        "the fixture's premise: one record of each of six kinds"
+    );
+    assert_eq!(
+        observed(
+            &mut store,
+            2,
+            settled(Effect::None, Some(30), true, true),
+            &every,
+            OBS_1
+        ),
+        "3"
+    );
+    let run = store
+        .committed_run(&principal(), uuid(ATTEMPT), deadline())
+        .map_err(|error| format!("{error:?}"))?;
+    assert_eq!(run.len(), 6);
+    for ((kind, id), object) in RunRecordKind::ALL.iter().zip(IDS).zip(&objects) {
+        let committed = run.record(*kind).ok_or(format!("{kind:?} not returned"))?;
+        assert_eq!(
+            (
+                committed.artifact_id(),
+                committed.object(),
+                committed.schema_id()
+            ),
+            (id, object, kind.schema_id()),
+            "{kind:?}"
+        );
+    }
+    Ok(())
+}
+
+/// Closure R1 (C4; `run_records.rs:450:9`, `CommittedCheck::is_empty -> true`, survived) · a
+/// committed check says whether it committed any record, both ways: the R13 check committing two
+/// records is not empty and counts two; a check committing none is empty, counts none, and returns no
+/// record of any kind.
+#[test]
+fn a_committed_check_says_whether_it_committed_any_record()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let area = Area::new();
+    let mut store = area.open();
+    settled_then_checked(&area, &mut store);
+    let checked = store
+        .committed_check(&principal(), uuid(ATTEMPT), deadline())
+        .map_err(|error| format!("{error:?}"))?;
+    assert_eq!((checked.len(), checked.is_empty()), (2, false));
+    let area = Area::new();
+    let mut store = area.open();
+    running(&mut store);
+    let object = published(&store, 0);
+    let settle_set = [record(RunRecordKind::RunClock, IDS[0], &object)];
+    let observation = settled(Effect::None, Some(30), true, true);
+    assert_eq!(
+        observed(&mut store, 2, observation, &settle_set, SETTLED),
+        "3"
+    );
+    let receipt = store
+        .publish(b"the receipt", uuid(STAGE), deadline())
+        .map_err(|error| format!("{error:?}"))?;
+    let mut failed = observe(&receipt, check_identity());
+    failed.verdict = VerificationVerdict::Failed;
+    store
+        .record_verification_with_records(
+            &expected(3, 1),
+            &failed,
+            &[],
+            &[],
+            uuid(OBS_1),
+            deadline(),
+        )
+        .map_err(|error| format!("{error:?}"))?;
+    let checked = store
+        .committed_check(&principal(), uuid(ATTEMPT), deadline())
+        .map_err(|error| format!("{error:?}"))?;
+    assert_eq!((checked.len(), checked.is_empty()), (0, true));
+    for kind in RunRecordKind::ALL {
+        assert!(checked.record(kind).is_none(), "{kind:?}");
+    }
+    Ok(())
+}

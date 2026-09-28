@@ -142,9 +142,9 @@ T04_IMPLEMENTATION_PATHS = ("src/store.rs", "src/store/artifact.rs", "src/store/
                             "migrations/003.sql", "migrations/004.sql", "migrations/005.sql", "migrations/006.sql",
                             "migrations/007.sql", "migrations/008.sql", "tests/t04_store.rs")
 # Reviewed independent T04 unit suite: 95 cases (68 + store-lane A01-A03 and A24, 2026-09-24; B02's
-# unwritable-ledger read-back, 2026-09-25; B03's four task_view cases, 2026-09-25; B03b's closure-predicate case; A25's six migration-chain cases; B14-P2c's workspace CHECK and added-column preservation cases; B14a-1a's cancellation-first begin; B09b's eight migration-6 cases: run-record rules, cross-table identity, CHECKs, backup table world, committed_run off-origin, refusals, cut-before-commit, kind vocabulary; B09b-3a: a verification reference round-trips whole, identity refusals by name, split; within-observation collision; B09b-3b: a stop reference round-trips whole, an acceptance manifest and objects round-trip whole, stop and acceptance refusals by name; B14a-2b-ii: run records read back only through the commitment; B14a-3a: the settle's and the check's record sets each whole, the check door's refusals by name, the validate arm bound through verifications; B14a-5: migration 7's kind vocabulary and key, a worker settle through the commitment, a six-ledger with rows upgraded through seven, the acceptance compare-and-set on a stale generation, the check door refusing a worker settle; B14b-2: migration 8's attempt_paths and a seven-ledger upgraded with none). Source discovery or emitted
+# unwritable-ledger read-back, 2026-09-25; B03's four task_view cases, 2026-09-25; B03b's closure-predicate case; A25's six migration-chain cases; B14-P2c's workspace CHECK and added-column preservation cases; B14a-1a's cancellation-first begin; B09b's eight migration-6 cases: run-record rules, cross-table identity, CHECKs, backup table world, committed_run off-origin, refusals, cut-before-commit, kind vocabulary; B09b-3a: a verification reference round-trips whole, identity refusals by name, split; within-observation collision; B09b-3b: a stop reference round-trips whole, an acceptance manifest and objects round-trip whole, stop and acceptance refusals by name; B14a-2b-ii: run records read back only through the commitment; B14a-3a: the settle's and the check's record sets each whole, the check door's refusals by name, the validate arm bound through verifications; B14a-5: migration 7's kind vocabulary and key, a worker settle through the commitment, a six-ledger with rows upgraded through seven, the acceptance compare-and-set on a stale generation, the check door refusing a worker settle; B14b-2: migration 8's attempt_paths and a seven-ledger upgraded with none; Closure R1 C4 (the owed RA2 survivors): committed_run over a settle of every kind, a committed check's emptiness both ways). Source discovery or emitted
 # counts cannot lower this gate; None remains an explicit pending-state refusal.
-T04_TEST_COUNT = 125
+T04_TEST_COUNT = 127
 # The fixed pre-T04 batteries (T01-T03), by target name: one home, read by both census branches of
 # rust_test_expectations and by tests/t25_quality.py, which looks targets up here rather than
 # re-typing a number (S1). t02_transport is harness = false and prints no summary of its own.
@@ -167,7 +167,7 @@ T05_TARGET_COUNTS = {"t05_roster": 29, "t05_codec": 12}
 T05_STORE_TEST_COUNT = 40
 # Fixed reviewed T06 development inventory. Profile repetition earns no new cases.
 T06_TARGET_COUNTS = {
-    "t06_receipts": 64, "t06_store": 45, "t06_graph": 32,
+    "t06_receipts": 64, "t06_store": 46, "t06_graph": 32,
     "t06_driver": 30, "t06_consistency": 50, "t06_workspace": 36,
     "t06_terminal": 39, "t06_evidence": 26, "t06_collector": 29,
     "t06_availability": 22, "t06_decision": 40, "t06_staging": 20,
