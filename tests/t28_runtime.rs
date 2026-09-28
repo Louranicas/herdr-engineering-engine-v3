@@ -5946,6 +5946,18 @@ fn the_backup_destination_must_be_canonical_private_and_on_another_device() -> O
         read_target(&missing, &state, other),
         Err(BackupUnready::DestinationAbsent)
     );
+    // RA2: a destination through a regular file cannot be resolved (`NotADirectory`): custody,
+    // never absent.
+    fs::write(root.join("plain-file"), b"")?;
+    let through_file = backup_record(
+        root,
+        "through-file",
+        record(&root.join("plain-file/backups"), 60).as_bytes(),
+    )?;
+    assert_eq!(
+        read_target(&through_file, &state, other),
+        Err(BackupUnready::DestinationCustody)
+    );
     let open = root.join("open-backups");
     DirBuilder::new().mode(0o755).create(&open)?;
     fs::set_permissions(&open, fs::Permissions::from_mode(0o755))?;
@@ -6663,7 +6675,9 @@ fn the_mount_table_resolves_the_deepest_mount_by_components() -> Outcome_ {
 
 /// Closure R1 (a) · a table the parser cannot read line by line is refused naming its first bad
 /// line: no `-` separator, a non-numeric id, a relative mount point, an escape that is not three
-/// octal digits (and one cut short), no source, a blank line inside the table, a bad `major:minor`.
+/// octal digits (and one cut short), no source, a blank line inside the table, a bad `major:minor`;
+/// and (RA2) an empty filesystem type beside a present source, an empty source beside a present
+/// type, and a decimal with a leading `+` (which `u64::from_str` alone accepts).
 #[test]
 fn a_malformed_mount_table_is_refused_naming_its_line() {
     let good = "1 0 8:1 / / rw - ext4 /dev/sda1 rw\n";
@@ -6676,6 +6690,9 @@ fn a_malformed_mount_table_is_refused_naming_its_line() {
         ("no source", "2 1 8:2 / /m rw - ext4"),
         ("blank", ""),
         ("device", "2 1 8-2 / /m rw - ext4 /dev/sdb1 rw"),
+        ("empty fstype", "2 1 8:2 / /m rw -  /dev/sdb1 rw"),
+        ("empty source", "2 1 8:2 / /m rw - ext4  rw"),
+        ("plus sign", "+2 1 8:2 / /m rw - ext4 /dev/sdb1 rw"),
     ] {
         let text = format!("{good}{bad}\n{good}");
         assert_eq!(
@@ -6825,6 +6842,85 @@ fn the_backup_reader_decides_rc02_over_the_canonical_state_root() -> Outcome_ {
         })
     );
     Ok(())
+}
+
+/// RA2 (OPS12 round 2) · ramfs is refused by its filesystem whatever its source says: with the
+/// kernel's `ramfs` source and with a source that looks like a device path, on the destination
+/// side — never by the source rule, and never admitted as a block device.
+#[test]
+fn ramfs_is_refused_by_its_filesystem_whatever_its_source() -> Outcome_ {
+    let mounts = table(&format!(
+        "1 0 0:35 / / rw - btrfs {LUKS} rw\n\
+         2 1 0:50 / /r rw - ramfs ramfs rw\n\
+         3 1 0:51 / /q rw - ramfs /dev/ram0 rw\n"
+    ))?;
+    let topology = host_topology();
+    for destination in ["/r/b", "/q/b"] {
+        assert_eq!(
+            device_decision(
+                mounts.containing(Path::new("/s")),
+                mounts.containing(Path::new(destination)),
+                &topology,
+            ),
+            Err(DeviceWhy::NoDevice {
+                side: Side::Destination,
+                kind: NoDevice::Ramfs,
+            }),
+            "{destination}"
+        );
+    }
+    Ok(())
+}
+
+/// RA2 (OPS12 round 2) · the two usage readers `serve` composes answer the walk's number: over a
+/// destination holding a 3-byte and a 5-byte file, the production reader (`Statvfs::used`) and a
+/// test build's declared reader (`Declared::used`, for the destination it declares) each answer 8
+/// — the sum typed here and the one `backup_usage` walks — and the declared reader refuses any
+/// other path by name.
+#[test]
+fn the_usage_readers_answer_the_walk() -> Outcome_ {
+    let scratch = Scratch::new()?;
+    let destination = scratch.0.join("backups");
+    fs::create_dir_all(destination.join("one"))?;
+    fs::write(destination.join("a"), b"abc")?;
+    fs::write(destination.join("one/b"), b"12345")?;
+    assert_eq!(backup_usage(&destination, USAGE_ENTRY_BOUND), Ok(8));
+    assert_eq!(Statvfs.used(&destination), Ok(8));
+    let target = BackupTarget {
+        destination: destination.clone(),
+        deadline: Duration::from_secs(60),
+        state_root: scratch.0.join("state"),
+    };
+    let declared = Declared::parse("state=7 backup=9", &target).ok_or("the declaration")?;
+    assert_eq!(declared.used(&destination), Ok(8));
+    assert_eq!(
+        declared.used(&scratch.0),
+        Err(Usage::Io(std::io::ErrorKind::NotFound))
+    );
+    Ok(())
+}
+
+/// RA2 (OPS12 round 2) · every usage refusal line, whole: each I/O kind the gate names by name —
+/// not found, permission denied, already exists, storage full, read-only filesystem — and a kind it
+/// does not name, as `io`.
+#[test]
+fn every_usage_refusal_line_is_whole() {
+    use dispatcher::BackupWhy;
+    use std::io::ErrorKind;
+    for (kind, reason) in [
+        (ErrorKind::NotFound, "io:not_found"),
+        (ErrorKind::PermissionDenied, "io:permission_denied"),
+        (ErrorKind::AlreadyExists, "io:already_exists"),
+        (ErrorKind::StorageFull, "io:storage_full"),
+        (ErrorKind::ReadOnlyFilesystem, "io:read_only_filesystem"),
+        (ErrorKind::Interrupted, "io"),
+    ] {
+        assert_eq!(
+            BackupWhy::Usage(Usage::Io(kind)).line(),
+            format!("unavailable: backup usage unmeasured ({reason})"),
+            "{kind:?}"
+        );
+    }
 }
 
 // ---- OPS12 round 2 (R2-1): RC02's device rule down to the physical disk ---------------------------

@@ -809,18 +809,13 @@ pub fn place(
     let ids = (active.generation.as_str(), active.epoch.as_str());
     let verified = stage(&staged, active, deadline)
         .and_then(|()| read_back(&staged, ids, deadline).map_err(CommissionError::from));
-    let placed = verified.and_then(|verified| match place_staged(&verified.root, state_root) {
-        Ok(()) => Ok(Ok(verified)),
-        Err(Unplaced::Rename(error)) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-            Err(CommissionError::Exists(root.clone()))
-        }
-        Err(Unplaced::Rename(error)) => Err(CommissionError::Io(error.kind())),
-        Err(Unplaced::ParentSync(error)) => Ok(Err(CommissionError::Placed {
-            root: root.clone(),
-            generation: active.generation.as_str().to_owned(),
-            epoch: active.epoch.as_str().to_owned(),
-            why: PostPlacement::ParentSync(error.kind()),
-        })),
+    let placed = verified.and_then(|verified| {
+        renamed(
+            place_staged(&verified.root, state_root),
+            &root,
+            (active.generation.as_str(), active.epoch.as_str()),
+        )
+        .map(|placed| placed.map(|()| verified))
     });
     match placed {
         Ok(Ok(staged)) => Ok(Placed {
@@ -836,6 +831,32 @@ pub fn place(
             let _ = std::fs::remove_dir_all(&staged);
             Err(refused)
         }
+    }
+}
+
+/// What the one rename-into-place door's `outcome` means for commissioning `root` with `ids`
+/// (generation, epoch), pure (F95; RA2: the rename's `AlreadyExists` is reachable only by a race
+/// between the root check and the rename, so its mapping is decided here by argument): `Err` when
+/// nothing was placed — a root that appeared meanwhile is [`CommissionError::Exists`], any other
+/// rename failure [`CommissionError::Io`] by its kind; `Ok(Err(..))` when the root WAS placed and
+/// its parent sync failed ([`CommissionError::Placed`]); `Ok(Ok(()))` when it was placed.
+fn renamed(
+    outcome: Result<(), Unplaced>,
+    root: &Path,
+    ids: (&str, &str),
+) -> Result<Result<(), CommissionError>, CommissionError> {
+    match outcome {
+        Ok(()) => Ok(Ok(())),
+        Err(Unplaced::Rename(error)) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            Err(CommissionError::Exists(root.to_path_buf()))
+        }
+        Err(Unplaced::Rename(error)) => Err(CommissionError::Io(error.kind())),
+        Err(Unplaced::ParentSync(error)) => Ok(Err(CommissionError::Placed {
+            root: root.to_path_buf(),
+            generation: ids.0.to_owned(),
+            epoch: ids.1.to_owned(),
+            why: PostPlacement::ParentSync(error.kind()),
+        })),
     }
 }
 
@@ -952,4 +973,59 @@ pub fn compose_tasks(reconciled: Reconciled<'_>) -> Result<crate::app::tasks::St
         store,
         reconciled.active.epoch.as_str().to_owned(),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{CommissionError, PostPlacement, Unplaced, renamed};
+    use std::io::{Error, ErrorKind};
+    use std::path::Path;
+
+    /// RA2 (OPS12 round 2) · the rename's outcome mapped by argument (F95), whole, over two roots
+    /// and id pairs differing in every field: a root that appeared between the check and the
+    /// rename is `Exists` naming the root (never `Io`); any other rename failure is `Io` by its
+    /// kind (never `Exists`); a parent sync failure after the rename is `Placed` with the root, the
+    /// ids and the kind; success is placed.
+    #[test]
+    fn the_rename_outcome_is_named_by_argument() {
+        for (root, ids) in [
+            (
+                "/var/home/op/.local/state/herdr-engineering-engine-v3",
+                ("g-one", "e-one"),
+            ),
+            ("/tmp/w/state", ("g-two", "e-two")),
+        ] {
+            let root = Path::new(root);
+            assert_eq!(renamed(Ok(()), root, ids), Ok(Ok(())));
+            assert_eq!(
+                renamed(
+                    Err(Unplaced::Rename(Error::from(ErrorKind::AlreadyExists))),
+                    root,
+                    ids
+                ),
+                Err(CommissionError::Exists(root.to_path_buf()))
+            );
+            assert_eq!(
+                renamed(
+                    Err(Unplaced::Rename(Error::from(ErrorKind::PermissionDenied))),
+                    root,
+                    ids
+                ),
+                Err(CommissionError::Io(ErrorKind::PermissionDenied))
+            );
+            assert_eq!(
+                renamed(
+                    Err(Unplaced::ParentSync(Error::from(ErrorKind::StorageFull))),
+                    root,
+                    ids
+                ),
+                Ok(Err(CommissionError::Placed {
+                    root: root.to_path_buf(),
+                    generation: ids.0.to_owned(),
+                    epoch: ids.1.to_owned(),
+                    why: PostPlacement::ParentSync(ErrorKind::StorageFull),
+                }))
+            );
+        }
+    }
 }

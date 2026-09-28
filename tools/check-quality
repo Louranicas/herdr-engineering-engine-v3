@@ -167,7 +167,7 @@ T05_TARGET_COUNTS = {"t05_roster": 29, "t05_codec": 12}
 T05_STORE_TEST_COUNT = 40
 # Fixed reviewed T06 development inventory. Profile repetition earns no new cases.
 T06_TARGET_COUNTS = {
-    "t06_receipts": 64, "t06_store": 46, "t06_graph": 32,
+    "t06_receipts": 64, "t06_store": 47, "t06_graph": 32,
     "t06_driver": 30, "t06_consistency": 50, "t06_workspace": 36,
     "t06_terminal": 39, "t06_evidence": 26, "t06_collector": 29,
     "t06_availability": 22, "t06_decision": 40, "t06_staging": 20,
@@ -228,7 +228,7 @@ T06_UNIT_COUNTS = {
     "worker::resources::limit_tests::": 3, "worker::workspace::manifest_tests::": 2,
     "app::runtime::tests::": 11, "app::run_records::tests::": 12,
     "app::live_verifier::tests::": 3, "app::plan::tests::": 5, "app::u64_receipt::tests::": 9, "worker::host::tests::": 1,
-    "app::candidates::tests::": 5, "app::dispatcher::tests::": 8,
+    "app::candidates::tests::": 5, "app::dispatcher::tests::": 8, "app::coordinator::tests::": 1,
     "app::native_provider::tests::": 3, "worker::aggregate::tests::": 7,
 }
 
@@ -319,7 +319,7 @@ CONTEXT_INPUTS = ("src/context.rs",)
 COHORT_TARGET_COUNTS = {"t22_cohort": 67}
 COHORT_INPUTS = ("src/cohort.rs", "evaluation/cohorts/claim-overlap-v1.json",
                  "tests/fixtures/t22/C01.json", "tests/fixtures/t22/C02.json")
-ACTIONS_TARGET_COUNTS = {"t28_actions": 326}
+ACTIONS_TARGET_COUNTS = {"t28_actions": 329}
 # The control receiver (review coordinator step 1) is served from the catalogue: its wire half in
 # contracts, its catalogue half in actions, and the independent Python oracle its cases run.
 ACTIONS_INPUTS = ("src/actions.rs", "src/worker/tools.rs", "src/actions/control.rs",

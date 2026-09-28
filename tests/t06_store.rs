@@ -233,6 +233,48 @@ fn verified_inventory_exact_snapshot_capacity_accepts_and_backs_up_the_manifest(
     assert_eq!(backup, inspected);
 }
 
+/// RA2 (OPS12 round 2) · a backup's manifest is inspected under its 1 MiB bound at acquisition
+/// (`MANIFEST_BOUND`, typed here): the real manifest of a real backup, padded with JSON whitespace
+/// to exactly 1,048,576 bytes and inspected against its own digest, reads back as the backup taken
+/// (not `Bound`, not `Corrupt`); padded to 1,048,577 bytes it is refused as `Bound` by its length
+/// before it is read, though its digest is the one passed.
+#[test]
+fn a_backup_manifest_is_inspected_under_its_bound() -> Result<(), Box<dyn std::error::Error>> {
+    use sha2::{Digest, Sha256};
+    use std::fmt::Write as _;
+    let (_area, mut store, _evidence) = ready();
+    for (length, read) in [(1_048_576_usize, true), (1_048_577, false)] {
+        let backup_area = Area::new();
+        let backup = store
+            .backup(&backup_area.path, Instant::now() + Duration::from_secs(90))
+            .map_err(|error| format!("{error:?}"))?;
+        let manifest = backup_area.path.join("store-backup.json");
+        let mut bytes = fs::read(&manifest)?;
+        assert!(bytes.len() < length, "{} bytes already", bytes.len());
+        bytes.resize(length, b' ');
+        fs::write(&manifest, &bytes)?;
+        assert_eq!(fs::metadata(&manifest)?.len(), u64::try_from(length)?);
+        let mut digest = String::from("sha256:");
+        for byte in Sha256::digest(&bytes) {
+            write!(digest, "{byte:02x}")?;
+        }
+        let inspected = Store::inspect_backup(
+            &backup_area.path,
+            Sha256Digest::parse(&digest)?,
+            Instant::now() + Duration::from_secs(90),
+        );
+        if read {
+            assert_eq!(inspected.map_err(|error| format!("{error:?}"))?, backup);
+        } else {
+            assert!(
+                matches!(inspected, Err(habitat_engine::store::Error::Bound)),
+                "{inspected:?}"
+            );
+        }
+    }
+    Ok(())
+}
+
 /// The full-inventory condition at the acceptance door is DS17's one kind,
 /// `Disposition(Inventory)`, at accept and at prepare alike (B14b-1 closure 2): the registration
 /// door raises the same name, and the dispatcher stops on it by name rather than leaving the task
