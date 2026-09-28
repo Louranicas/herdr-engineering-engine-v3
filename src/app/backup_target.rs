@@ -61,7 +61,7 @@ pub const USAGE_ENTRY_BOUND: u64 = 1 << 20;
 /// device.
 pub const SYSFS: &str = "/sys";
 /// The most block devices the topology lists, and the most `slaves` one device lists, before it is
-/// refused by name: a bound at acquisition (this host lists 18, measured 2026-09-29).
+/// refused by name: a bound at acquisition (this host lists 16, measured 2026-09-29).
 pub const MAX_BLOCK_DEVICES: u64 = 4096;
 /// The largest block topology text read (a test build's declared topology).
 pub const MAX_TOPOLOGY_BYTES: u64 = 1 << 20;

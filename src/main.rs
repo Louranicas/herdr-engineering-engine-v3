@@ -962,7 +962,7 @@ const fn refused_as_a_test_build() -> Option<ExitCode> {
 /// refuses to serve or commission unless `HEE3_TEST_HEADROOM` is set, as only a proof sets it, and
 /// says it is a test build. A seamed binary installed by mistake then fails loudly at its first
 /// start instead of running with doors through which the environment replaces RC01's measured free
-/// space and RC02's mount table.
+/// space and RC02's mount table and block topology.
 #[cfg(feature = "headroom-seam")]
 fn refused_as_a_test_build() -> Option<ExitCode> {
     if std::env::var_os(HEADROOM_SEAM).is_some() {

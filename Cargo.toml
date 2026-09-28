@@ -2451,7 +2451,9 @@ resolver = "3"
 [features]
 default = []
 # RA1 (b), 2026-09-28: a test build's `serve` may take RC01's free space from `HEE3_TEST_HEADROOM`
-# (`main.rs`, `headroom_seam`), so no binary-test verdict depends on the host's free disk. Never a
+# (`main.rs`, `headroom_seam`), so no binary-test verdict depends on the host's free disk; and RC02's
+# mount table and block topology from `HEE3_TEST_MOUNTINFO` and `HEE3_TEST_BLOCKTOPO` (Closure R1;
+# OPS12 round 2), so none depends on the host's devices. Never a
 # default: only the package's dev-dependency on itself below turns it on, and dev-dependencies are
 # resolved only when a target that needs them is built (`cargo test`, `clippy --all-targets`). A
 # `cargo build --release` of `habitat-engine` has no door to it (the plant is ra1-plant.out).

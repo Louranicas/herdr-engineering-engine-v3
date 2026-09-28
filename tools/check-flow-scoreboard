@@ -37,9 +37,9 @@ FLOWS = {
             "lands_with": "C01c"},
     "F05": {"reason": "budget is not composed into settle_attempt (DS3 ruled the overrun rule)", "lands_with": "B18"},
     "F06": {"reason": "serve dispatches admitted tasks through main; every pick first meets RC01's backup gate, "
-                      "its headroom and RC02's mount table declared through the test build's seams (RA1, "
-                      "Closure R1), so in the gate a real backup is taken into a destination the declared "
-                      "table names another device, then one task stops at a pre-dispatch refusal "
+                      "its headroom and RC02's mount table and block topology declared through the test "
+                      "build's seams (RA1, Closure R1, OPS12 round 2), so in the gate a real backup is taken "
+                      "into a destination the declared table and topology place on another disk, then one task stops at a pre-dispatch refusal "
                       "(criteria_not_class) and, over the native provider, is refused at the busctl pin with "
                       "the task left admitted — no worker launches in the gate; launch, LauncherFailed and "
                       "ACCEPTED are Tier-3", "lands_with": "B14c-T3 + Q4",
