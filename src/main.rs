@@ -283,8 +283,9 @@ fn usage() -> ExitCode {
 /// operator's, with no default: a missing, zero or unparsable one is a usage error. On success the
 /// one line on standard output carries only values read back from the placed root.
 fn commission_verb(seconds: &str) -> ExitCode {
+    // Through `say`, never `eprintln!`: a closed standard error would panic the verb (block R F8).
     let refused = |code: u8, why: &str| {
-        eprintln!("habitat-engine: commission refused: {why}");
+        say(format_args!("commission refused: {why}"));
         ExitCode::from(code)
     };
     let Some(deadline) = habitat_engine::contracts::parse_u64_decimal(seconds)
@@ -335,33 +336,26 @@ fn commission_verb(seconds: &str) -> ExitCode {
     match commissioned {
         Ok(commissioned) => {
             if let Err(error) = writeln!(io::stdout().lock(), "{}", commissioned.line()) {
-                eprintln!(
-                    "habitat-engine: commissioned, but the line could not be written: {error}"
-                );
+                say(format_args!(
+                    "commissioned, but the line could not be written: {error}"
+                ));
                 return ExitCode::from(EXIT_CONTRACT);
             }
             ExitCode::SUCCESS
         }
-        Err(coordinator::CommissionError::Deadline) => refused(EXIT_TIMEOUT, "deadline"),
-        Err(coordinator::CommissionError::Exists(path)) => refused(
-            EXIT_CONTRACT,
-            &format!("state root exists at {}", path.display()),
-        ),
-        Err(coordinator::CommissionError::NotCanonical(path)) => refused(
-            EXIT_CONTRACT,
-            &format!(
-                "state root is not its own canonical path ({})",
-                path.display()
-            ),
-        ),
-        Err(coordinator::CommissionError::Store(why)) => {
-            refused(EXIT_CONTRACT, &format!("store refused ({why})"))
-        }
-        Err(coordinator::CommissionError::Io(kind)) => {
-            refused(EXIT_CONTRACT, &format!("io ({kind:?})"))
-        }
-        Err(coordinator::CommissionError::ReadBack(which)) => {
-            refused(EXIT_CONTRACT, &format!("read-back differs ({which})"))
+        Err(error) => {
+            say(format_args!("{}", error.line()));
+            // A spent deadline before placement is the timeout's exit; every other refusal, and a
+            // root placed whose verification failed after (the root stands), the contract's.
+            ExitCode::from(match error {
+                coordinator::CommissionError::Deadline => EXIT_TIMEOUT,
+                coordinator::CommissionError::Exists(_)
+                | coordinator::CommissionError::NotCanonical(_)
+                | coordinator::CommissionError::Store(_)
+                | coordinator::CommissionError::Io(_)
+                | coordinator::CommissionError::ReadBack(_)
+                | coordinator::CommissionError::Placed { .. } => EXIT_CONTRACT,
+            })
         }
     }
 }

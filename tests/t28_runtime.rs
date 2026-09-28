@@ -11,8 +11,8 @@ use super::t08_rig::{self, DaemonStandIn};
 use habitat_engine::actions::control::{TaskRequest, Tasks};
 use habitat_engine::app::backup_target::{
     BACKUP_FILE, BACKUP_SCHEMA, BackupTarget, BackupUnready, Declared, DeviceWhy, FreeSpace,
-    MAX_MOUNT_TABLE_BYTES, MountTable, NoDevice, Side, Statvfs, TableWhy, USAGE_ENTRY_BOUND, Usage,
-    backup_usage, device_decision, read_target,
+    MAX_BACKUP_BYTES, MAX_MOUNT_TABLE_BYTES, MountTable, NoDevice, Side, Statvfs, TableWhy,
+    USAGE_ENTRY_BOUND, Usage, backup_usage, device_decision, read_target,
 };
 use habitat_engine::app::candidates::{
     ClassPrompt, FilePins, NativeCandidates, Outcome as CandidateOutcome, Settle, render,
@@ -6828,6 +6828,40 @@ fn the_production_free_space_reader_agrees_with_df() -> Outcome_ {
             "{}: free={free} df avail {before}..{after} (tolerance {DF_TOLERANCE})",
             path.display()
         );
+    }
+    Ok(())
+}
+
+/// Closure R1 (C2; block R security M2) · the backup record is read under its bound at acquisition:
+/// a valid record padded to exactly `MAX_BACKUP_BYTES` (4096, typed here) is read whole; one byte
+/// more is `Malformed` by name — never `Absent`, which would say no record is there.
+#[test]
+fn the_backup_record_is_read_under_its_bound() -> Outcome_ {
+    assert_eq!(MAX_BACKUP_BYTES, 4096);
+    let scratch = Scratch::new()?;
+    let root = &scratch.0;
+    let state = root.join("state");
+    private(&state)?;
+    let destination = root.join("backups");
+    private(&destination)?;
+    let record = record_text(&destination, 60);
+    for (name, length) in [("exact", 4096), ("over", 4097)] {
+        let padded = format!("{record}{}", " ".repeat(length - record.len()));
+        assert_eq!(padded.len(), length);
+        let directory = backup_record(root, name, padded.as_bytes())?;
+        let read = read_target(&directory, &state, &two_devices(&destination));
+        if length == 4096 {
+            assert_eq!(
+                read,
+                Ok(BackupTarget {
+                    destination: destination.clone(),
+                    deadline: Duration::from_secs(60),
+                    state_root: state.clone(),
+                })
+            );
+        } else {
+            assert_eq!(read, Err(BackupUnready::Malformed));
+        }
     }
     Ok(())
 }

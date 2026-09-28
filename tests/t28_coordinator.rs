@@ -3,8 +3,8 @@
 //!
 //! Every state root here is a scratch directory; nothing touches `$HOME/.local/state`.
 use habitat_engine::app::coordinator::{
-    self, ACTIVE_MANIFEST, ACTIVE_SCHEMA, Active, CommissionError, Commissioned, Unselected,
-    commission, health_of, leaves_work_outstanding, startup_line,
+    self, ACTIVE_MANIFEST, ACTIVE_SCHEMA, Active, CommissionError, Commissioned, PostPlacement,
+    Unselected, commission, health_of, leaves_work_outstanding, place, startup_line,
 };
 use habitat_engine::app::startup::{Counts, Cursor, CursorEntry, LedgerAccess, Pass};
 use habitat_engine::contracts::UuidV4;
@@ -711,4 +711,217 @@ fn a_spent_deadline_commissions_nothing() -> Outcome {
         "the stage was removed and nothing else was made beside the root"
     );
     Ok(())
+}
+
+// ---- Closure R1 (C2; block R F2/M2/F-L1/L8, M3/L5): commission's failure semantics ---------------
+
+/// The fixture `(generation, epoch)` as the `Active` the doors take.
+fn active_of<'a>((generation, epoch): (&'a str, &'a str)) -> Result<Active<'a>, Box<dyn Error>> {
+    Ok(Active {
+        generation: UuidV4::parse(generation)?,
+        epoch: UuidV4::parse(epoch)?,
+    })
+}
+
+/// The root at `root` stands complete for `(generation, epoch)`, read by sources other than the
+/// engine's: its mode, the manifest's mode and literal bytes, and the ledger's `user_version` by a
+/// raw `PRAGMA` against the count of `migrations/*.sql`.
+fn stands_complete(root: &Path, (generation, epoch): (&str, &str)) -> Outcome {
+    assert_eq!(mode_of(root)?, 0o700);
+    assert_eq!(mode_of(&root.join(ACTIVE_MANIFEST))?, 0o600);
+    assert_eq!(
+        fs::read_to_string(root.join(ACTIVE_MANIFEST))?,
+        format!(
+            r#"{{"schema":"hee3.active-generation/1","generation":"{generation}","epoch":"{epoch}"}}"#
+        )
+    );
+    let ledger = root
+        .join("generations")
+        .join(generation)
+        .join("ledger.sqlite3");
+    assert_eq!(raw_user_version(&ledger)?, migration_count()?);
+    Ok(())
+}
+
+/// Closure R1 (C2) · the stage is verified complete BEFORE it is renamed onto the root (block R
+/// F2/M2): `place` returns what the stage read back at the STAGE'S OWN PATH — a path that no longer
+/// exists once the root is placed, so the values could only have been read before the rename — and
+/// they are the independent sources' values; `verify` then reads the same values back at the root.
+/// Two fixtures that differ in every id.
+#[test]
+fn the_stage_is_verified_complete_before_its_rename() -> Outcome {
+    let scratch = Scratch::new()?;
+    let migrations = migration_count()?;
+    for (index, fixture) in COMMISSION_FIXTURES.into_iter().enumerate() {
+        let parent = scratch.0.join(format!("home-{index}/.local/state"));
+        let root = parent.join("herdr-engineering-engine-v3");
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let placed = place(&root, active_of(fixture)?, deadline).map_err(|e| format!("{e:?}"))?;
+        let stage = parent.join(format!(".herdr-engineering-engine-v3.{}.staged", fixture.0));
+        let expected = |at: &Path| Commissioned {
+            root: at.to_path_buf(),
+            generation: fixture.0.to_owned(),
+            epoch: fixture.1.to_owned(),
+            user_version: migrations,
+            root_mode: 0o700,
+            manifest_mode: 0o600,
+        };
+        assert_eq!(placed.staged(), &expected(&stage), "{index}");
+        assert!(
+            fs::symlink_metadata(&stage).is_err(),
+            "the stage is the root now"
+        );
+        stands_complete(&root, fixture)?;
+        assert_eq!(
+            placed.verify(deadline).map_err(|e| format!("{e:?}"))?,
+            expected(&root)
+        );
+    }
+    Ok(())
+}
+
+/// Closure R1 (C2) · a failure AFTER the rename is its own named error, never a refusal (block R
+/// F2/M2/F-L1): the root stands, complete as its stage was verified, and the error and its line say
+/// so, naming the root, the ids and what failed. Two failures, reached by argument (F95): the
+/// deadline spent before the placed root is read back, and a manifest whose mode was changed after
+/// placement. A second commission then refuses the standing root by name.
+#[test]
+fn a_failure_after_placement_is_named_and_the_root_stands() -> Outcome {
+    let scratch = Scratch::new()?;
+    for (index, fixture) in COMMISSION_FIXTURES.into_iter().enumerate() {
+        let root = scratch
+            .0
+            .join(format!("home-{index}/herdr-engineering-engine-v3"));
+        let placed = place(
+            &root,
+            active_of(fixture)?,
+            Instant::now() + Duration::from_secs(10),
+        )
+        .map_err(|e| format!("{e:?}"))?;
+        let (deadline, why, said) = if index == 0 {
+            (Instant::now(), PostPlacement::Deadline, "deadline")
+        } else {
+            fs::set_permissions(
+                root.join(ACTIVE_MANIFEST),
+                fs::Permissions::from_mode(0o644),
+            )?;
+            (
+                Instant::now() + Duration::from_secs(10),
+                PostPlacement::ReadBack("manifest custody"),
+                "read-back differs: manifest custody",
+            )
+        };
+        let failed = placed.verify(deadline);
+        let error = CommissionError::Placed {
+            root: root.clone(),
+            generation: fixture.0.to_owned(),
+            epoch: fixture.1.to_owned(),
+            why,
+        };
+        assert_eq!(failed.as_ref(), Err(&error), "{index}");
+        assert_eq!(
+            error.line(),
+            format!(
+                "commission: root placed; post-placement verification failed ({said}): {} stands \
+                 as verified in its stage before the rename (manifest 0600 selecting \
+                 generation={} epoch={}, its ledger at the current migration, root 0700); serve \
+                 reconciles it, and a second commission refuses it until it is removed by hand",
+                root.display(),
+                fixture.0,
+                fixture.1
+            )
+        );
+        if index == 1 {
+            fs::set_permissions(
+                root.join(ACTIVE_MANIFEST),
+                fs::Permissions::from_mode(0o600),
+            )?;
+        }
+        stands_complete(&root, fixture)?;
+        assert_eq!(
+            commission(
+                &root,
+                active_of(fixture)?,
+                Instant::now() + Duration::from_secs(10)
+            ),
+            Err(CommissionError::Exists(root.clone()))
+        );
+    }
+    Ok(())
+}
+
+/// Closure R1 (C2) · the canonical-path refusal (block R M3), judged before anything is created
+/// (L5): a relative root and a root with no parent refuse; a root whose missing ancestors lie under
+/// a link, and one whose existing parent IS a link, refuse by the root's path with nothing created
+/// through the link — the link's target stays empty.
+#[test]
+fn commission_refuses_a_path_it_cannot_judge_canonical_and_creates_nothing() -> Outcome {
+    let scratch = Scratch::new()?;
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let active = active_of(COMMISSION_FIXTURES[0])?;
+    for root in [
+        PathBuf::from("relative/herdr-engineering-engine-v3"),
+        PathBuf::from("/"),
+    ] {
+        assert_eq!(
+            commission(&root, active, deadline),
+            Err(CommissionError::NotCanonical(root.clone())),
+            "{}",
+            root.display()
+        );
+    }
+    assert!(
+        fs::symlink_metadata("relative").is_err(),
+        "nothing made in the working directory"
+    );
+    for (case, beneath) in [("missing ancestors", ".local/state"), ("the parent", "")] {
+        let target = scratch.0.join(format!("target-{}", beneath.len()));
+        DirBuilder::new().mode(0o700).create(&target)?;
+        let link = scratch.0.join(format!("link-{}", beneath.len()));
+        symlink(&target, &link)?;
+        let root = link.join(beneath).join("herdr-engineering-engine-v3");
+        assert_eq!(
+            commission(&root, active, deadline),
+            Err(CommissionError::NotCanonical(root.clone())),
+            "{case}"
+        );
+        assert_eq!(
+            fs::read_dir(&target)?.count(),
+            0,
+            "{case}: nothing through the link"
+        );
+    }
+    Ok(())
+}
+
+/// Closure R1 (C2) · every refusal line `habitat-engine commission` says before anything is placed,
+/// whole, through the one renderer `main` prints: each names the refusal, and none says a root was
+/// placed.
+#[test]
+fn every_commission_refusal_line_is_whole() {
+    for (error, line) in [
+        (
+            CommissionError::Exists(PathBuf::from("/var/home/op/.local/state/h")),
+            "commission refused: state root exists at /var/home/op/.local/state/h",
+        ),
+        (
+            CommissionError::NotCanonical(PathBuf::from("/home/op/.local/state/h")),
+            "commission refused: state root is not its own canonical path (/home/op/.local/state/h)",
+        ),
+        (CommissionError::Deadline, "commission refused: deadline"),
+        (
+            CommissionError::Store("Locked".to_owned()),
+            "commission refused: store refused (Locked)",
+        ),
+        (
+            CommissionError::Io(std::io::ErrorKind::PermissionDenied),
+            "commission refused: io (PermissionDenied)",
+        ),
+        (
+            CommissionError::ReadBack("manifest ids"),
+            "commission refused: read-back differs (manifest ids)",
+        ),
+    ] {
+        assert_eq!(error.line(), line, "{error:?}");
+    }
 }

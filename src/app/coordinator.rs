@@ -504,46 +504,144 @@ fn place_marked(staged: &Path, root: &Path, id: &str) -> Result<(), RootIdError>
     if root.parent().is_none() {
         return Err(RootIdError::Custody);
     }
-    place_staged(staged, root).map_err(|error| RootIdError::Io(error.kind()))
+    place_staged(staged, root).map_err(|unplaced| RootIdError::Io(unplaced.kind()))
+}
+
+/// Why [`place_staged`] did not finish: the rename failed, so nothing was placed; or the root was
+/// placed and its parent could not be synced.
+enum Unplaced {
+    Rename(std::io::Error),
+    ParentSync(std::io::Error),
+}
+
+impl Unplaced {
+    fn kind(&self) -> std::io::ErrorKind {
+        match self {
+            Self::Rename(error) | Self::ParentSync(error) => error.kind(),
+        }
+    }
 }
 
 /// Rename `staged` onto `root` only if nothing is there (`RENAME_NOREPLACE`), then sync `root`'s
 /// parent: the one rename-into-place door, shared by the attempts root (`place_marked`) and the
-/// state root ([`commission`]). A root that appeared meanwhile is `AlreadyExists`, never replaced.
+/// state root ([`place`]). A root that appeared meanwhile is `AlreadyExists`, never replaced.
 ///
 /// # Errors
-/// The rename's or the parent sync's failure; `InvalidInput` for a root with no parent.
-fn place_staged(staged: &Path, root: &Path) -> std::io::Result<()> {
+/// [`Unplaced::Rename`] when nothing was placed (`InvalidInput` for a root with no parent, checked
+/// before the rename); [`Unplaced::ParentSync`] when the root WAS placed and the parent sync failed.
+fn place_staged(staged: &Path, root: &Path) -> Result<(), Unplaced> {
+    let parent = root
+        .parent()
+        .ok_or_else(|| Unplaced::Rename(std::io::Error::from(std::io::ErrorKind::InvalidInput)))?;
     rustix::fs::renameat_with(
         rustix::fs::CWD,
         staged,
         rustix::fs::CWD,
         root,
         rustix::fs::RenameFlags::NOREPLACE,
-    )?;
-    let parent = root
-        .parent()
-        .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::InvalidInput))?;
-    File::open(parent)?.sync_all()
+    )
+    .map_err(|error| Unplaced::Rename(error.into()))?;
+    File::open(parent)
+        .and_then(|parent| parent.sync_all())
+        .map_err(Unplaced::ParentSync)
 }
 
-/// Why [`commission`] created nothing, or left nothing it created in place (OPS-1).
+/// Why [`commission`] did not complete (OPS-1). Every variant but [`CommissionError::Placed`] is a
+/// refusal that left nothing it created in place (its stage, if made, is removed; a spent deadline
+/// may leave missing ancestors of the root, which RC02 does not constrain). [`CommissionError::Placed`]
+/// is the one that did: the state root stands.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum CommissionError {
     /// Something already stands at the state root: a directory (even an empty one), a file or a
     /// link. It is never altered; the operator removes it by hand (R1.4).
     Exists(PathBuf),
-    /// The state root is relative, or its parent is not its own canonical path.
+    /// The state root is relative, or has no parent, or its parent is not its own canonical path —
+    /// judged at the deepest ancestor that exists before anything is created (block R L5), and at
+    /// the parent again once its missing ancestors are made.
     NotCanonical(PathBuf),
-    /// The operator's deadline was spent before the ledger was created or read back.
+    /// The operator's deadline was spent before the stage was verified: nothing was placed.
     Deadline,
-    /// The store refused to create or to re-open the ledger, by its error's `Debug` rendering
-    /// (`store::Error` holds I/O and SQLite errors, which are not comparable).
+    /// The store refused to create the ledger in the stage or to re-open it there, by its error's
+    /// `Debug` rendering (`store::Error` holds I/O and SQLite errors, which are not comparable).
     Store(String),
-    /// A directory, the manifest or the rename failed, by its kind.
+    /// A directory, the manifest, the stage's read-back of a mode, or the rename failed, by its
+    /// kind: nothing was placed.
     Io(std::io::ErrorKind),
-    /// The state root read back differs from what was written, by what differs.
+    /// The stage read back differs from what was written, by what differs: nothing was placed.
     ReadBack(&'static str),
+    /// The state root WAS placed — renamed from a stage verified complete before the rename (the
+    /// manifest selecting `generation` and `epoch`, 0600; the ledger opening at the current
+    /// migration; the root 0700) — and a step after the rename failed (block R F2/M2/F-L1/L8). The
+    /// root stands as verified: `serve` reconciles it; a second `commission` refuses it by name.
+    Placed {
+        root: PathBuf,
+        generation: String,
+        epoch: String,
+        why: PostPlacement,
+    },
+}
+
+/// What failed after the state root was placed.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum PostPlacement {
+    /// The root's parent could not be synced after the rename, by its kind.
+    ParentSync(std::io::ErrorKind),
+    /// The operator's deadline was spent before the placed root was read back.
+    Deadline,
+    /// The store refused to open the ledger at the placed root.
+    Store(String),
+    /// A mode of the placed root could not be read, by its kind.
+    Io(std::io::ErrorKind),
+    /// The placed root read back differs from its stage, by what differs.
+    ReadBack(&'static str),
+}
+
+impl PostPlacement {
+    fn line(&self) -> String {
+        match self {
+            Self::ParentSync(kind) => format!("parent sync: {kind:?}"),
+            Self::Deadline => "deadline".to_owned(),
+            Self::Store(why) => format!("store refused: {why}"),
+            Self::Io(kind) => format!("io: {kind:?}"),
+            Self::ReadBack(which) => format!("read-back differs: {which}"),
+        }
+    }
+}
+
+impl CommissionError {
+    /// The one line `habitat-engine commission` says for this error (after `habitat-engine: `): a
+    /// refusal as `commission refused: ...`, and a placed root as what stands and what failed.
+    #[must_use]
+    pub fn line(&self) -> String {
+        match self {
+            Self::Exists(path) => format!(
+                "commission refused: state root exists at {}",
+                path.display()
+            ),
+            Self::NotCanonical(path) => format!(
+                "commission refused: state root is not its own canonical path ({})",
+                path.display()
+            ),
+            Self::Deadline => "commission refused: deadline".to_owned(),
+            Self::Store(why) => format!("commission refused: store refused ({why})"),
+            Self::Io(kind) => format!("commission refused: io ({kind:?})"),
+            Self::ReadBack(which) => format!("commission refused: read-back differs ({which})"),
+            Self::Placed {
+                root,
+                generation,
+                epoch,
+                why,
+            } => format!(
+                "commission: root placed; post-placement verification failed ({}): {} stands \
+                 as verified in its stage before the rename (manifest 0600 selecting \
+                 generation={generation} epoch={epoch}, its ledger at the current migration, root \
+                 0700); serve reconciles it, and a second commission refuses it until it is \
+                 removed by hand",
+                why.line(),
+                root.display()
+            ),
+        }
+    }
 }
 
 /// A commissioned state root, every value read back from it after it was placed (OPS-1 step 7):
@@ -581,30 +679,88 @@ impl Commissioned {
     }
 }
 
-/// Commission the state root at `state_root` for `active` (OPS-1; RC02; HO-03): the operator's act
-/// that creates the state root, its active-generation manifest and the generation's first ledger.
-/// `serve` never creates any of them. The root is born complete: a 0700 directory is staged beside
-/// it, the ledger created in it through the store's one create door ([`Store::open`] with `create`,
-/// migrations applied to `CURRENT`), the manifest written LAST through the custody door, and the
-/// stage renamed onto the root only if nothing stands there (`place_staged`, `RENAME_NOREPLACE`).
-/// A crash leaves only an inert `.staged` directory. The result is read back from the placed root:
-/// the manifest through [`read_manifest`], the ledger through [`Store::open_inspection`]. The one
-/// `deadline` is the operator's; nothing here adds a bound (R22-4).
+/// A state root [`place`] renamed into place from a stage verified complete before the rename:
+/// what [`Placed::verify`] reads back at the root.
+#[derive(Debug)]
+#[must_use = "a placed root is verified at its own path by `Placed::verify`"]
+pub struct Placed {
+    root: PathBuf,
+    generation: String,
+    epoch: String,
+    staged: Commissioned,
+}
+
+impl Placed {
+    /// What the stage read back BEFORE the rename, at the stage's own path (which no longer exists
+    /// once the root is placed): the proof that the verification preceded the placement.
+    #[must_use]
+    pub const fn staged(&self) -> &Commissioned {
+        &self.staged
+    }
+
+    /// OPS-1 step 7: the placed root read back through the readers `serve` uses — the manifest,
+    /// the ledger re-opened AT THE ROOT'S OWN PATH (the proof that nothing in the stage recorded
+    /// the stage's path, I1's premise), the modes — every value [`Commissioned`] carries taken from
+    /// it.
+    ///
+    /// # Errors
+    /// [`CommissionError::Placed`], naming what failed: the root stands.
+    pub fn verify(self, deadline: Instant) -> Result<Commissioned, CommissionError> {
+        read_back(&self.root, (&self.generation, &self.epoch), deadline).map_err(|unread| {
+            CommissionError::Placed {
+                why: match unread {
+                    Unread::Deadline => PostPlacement::Deadline,
+                    Unread::Store(why) => PostPlacement::Store(why),
+                    Unread::Io(kind) => PostPlacement::Io(kind),
+                    Unread::Differs(which) => PostPlacement::ReadBack(which),
+                },
+                root: self.root,
+                generation: self.generation,
+                epoch: self.epoch,
+            }
+        })
+    }
+}
+
+/// Commission the state root at `state_root` for `active` (OPS-1; RC02; HO-03): [`place`] it, then
+/// [`Placed::verify`] it at its own path. `serve` never creates the root, its manifest or its
+/// ledger; this is the operator's door (`habitat-engine commission`). The one `deadline` is the
+/// operator's; nothing here adds a bound (R22-4).
+///
+/// # Errors
+/// [`place`]'s, then [`Placed::verify`]'s.
+pub fn commission(
+    state_root: &Path,
+    active: Active<'_>,
+    deadline: Instant,
+) -> Result<Commissioned, CommissionError> {
+    place(state_root, active, deadline)?.verify(deadline)
+}
+
+/// Place the state root at `state_root` for `active` (OPS-1 steps 1-6): the root is born complete. A
+/// 0700 directory is staged beside it, the ledger created in it through the store's one create door
+/// ([`Store::open`] with `create`, migrations applied to `CURRENT`), the manifest written LAST
+/// through the custody door, and the stage verified complete — the manifest through
+/// [`read_manifest`], the ledger through [`Store::open_inspection`], the modes — BEFORE it is
+/// renamed onto the root only if nothing stands there (`place_staged`, `RENAME_NOREPLACE`; block R
+/// F2/M2). A crash leaves only an inert `.staged` directory; a refusal before the rename removes
+/// the stage.
 ///
 /// The caller holds IPC01 custody (`control_socket::prepare`) across the call, so no engine serves
 /// while a root is commissioned.
 ///
 /// # Errors
 /// [`CommissionError::Exists`] when anything stands at `state_root`; [`CommissionError::NotCanonical`]
-/// for a relative root or a parent that is not its own canonical path; [`CommissionError::Deadline`]
+/// for a relative root, one with no parent, or a path through a link; [`CommissionError::Deadline`]
 /// for a spent deadline; [`CommissionError::Store`] for the store's refusal;
 /// [`CommissionError::Io`] for a directory, manifest or rename that failed;
-/// [`CommissionError::ReadBack`] when the placed root does not read back as written.
-pub fn commission(
+/// [`CommissionError::ReadBack`] when the stage does not read back as written — each with nothing
+/// placed; [`CommissionError::Placed`] when the root was placed and its parent sync failed.
+pub fn place(
     state_root: &Path,
     active: Active<'_>,
     deadline: Instant,
-) -> Result<Commissioned, CommissionError> {
+) -> Result<Placed, CommissionError> {
     let root = state_root.to_path_buf();
     let (Some(parent), Some(name)) = (
         state_root.parent(),
@@ -615,14 +771,25 @@ pub fn commission(
     if !state_root.is_absolute() {
         return Err(CommissionError::NotCanonical(root));
     }
-    // 1. The parent: its missing ancestors created (at the umask's default: RC02 constrains the
-    //    root, not `~/.local`), then required to be its own canonical path.
-    std::fs::create_dir_all(parent).map_err(|error| CommissionError::Io(error.kind()))?;
-    let resolved = parent
-        .canonicalize()
-        .map_err(|error| CommissionError::Io(error.kind()))?;
-    if resolved != parent {
-        return Err(CommissionError::NotCanonical(root));
+    // 1. The parent must be its own canonical path. Its deepest ancestor that exists is judged
+    //    BEFORE anything is created, so a link on the way refuses with nothing made through it
+    //    (block R L5); the missing ancestors are then created (at the umask's default: RC02
+    //    constrains the root, not `~/.local`) and the parent judged again.
+    let existing = parent
+        .ancestors()
+        .find(|ancestor| std::fs::symlink_metadata(ancestor).is_ok())
+        .ok_or_else(|| CommissionError::NotCanonical(root.clone()))?;
+    for judged in [Some(existing), None] {
+        if judged.is_none() {
+            std::fs::create_dir_all(parent).map_err(|error| CommissionError::Io(error.kind()))?;
+        }
+        let judged = judged.unwrap_or(parent);
+        let resolved = judged
+            .canonicalize()
+            .map_err(|error| CommissionError::Io(error.kind()))?;
+        if resolved != judged {
+            return Err(CommissionError::NotCanonical(root));
+        }
     }
     // 2. Nothing may stand at the root: `read_manifest` cannot decide this (it says `Absent` for a
     //    root with no manifest), so the custody door's own open does. A directory, a file or a link
@@ -638,23 +805,43 @@ pub fn commission(
         .mode(0o700)
         .create(&staged)
         .map_err(|error| CommissionError::Io(error.kind()))?;
-    let placed = stage_and_place(&staged, state_root, active, deadline);
-    if placed.is_err() {
-        // Best effort: the stage is never read or renamed once refused, so a leftover is inert.
-        let _ = std::fs::remove_dir_all(&staged);
+    // 4-6. Filled, verified, and only then placed.
+    let ids = (active.generation.as_str(), active.epoch.as_str());
+    let verified = stage(&staged, active, deadline)
+        .and_then(|()| read_back(&staged, ids, deadline).map_err(CommissionError::from));
+    let placed = verified.and_then(|verified| match place_staged(&verified.root, state_root) {
+        Ok(()) => Ok(Ok(verified)),
+        Err(Unplaced::Rename(error)) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            Err(CommissionError::Exists(root.clone()))
+        }
+        Err(Unplaced::Rename(error)) => Err(CommissionError::Io(error.kind())),
+        Err(Unplaced::ParentSync(error)) => Ok(Err(CommissionError::Placed {
+            root: root.clone(),
+            generation: active.generation.as_str().to_owned(),
+            epoch: active.epoch.as_str().to_owned(),
+            why: PostPlacement::ParentSync(error.kind()),
+        })),
+    });
+    match placed {
+        Ok(Ok(staged)) => Ok(Placed {
+            root,
+            generation: active.generation.as_str().to_owned(),
+            epoch: active.epoch.as_str().to_owned(),
+            staged,
+        }),
+        // Placed: the stage is the root now, and nothing is removed.
+        Ok(Err(placed)) => Err(placed),
+        Err(refused) => {
+            // Best effort: the stage is never read or renamed once refused, so a leftover is inert.
+            let _ = std::fs::remove_dir_all(&staged);
+            Err(refused)
+        }
     }
-    placed?;
-    read_back(state_root, active, deadline)
 }
 
-/// OPS-1 steps 4-6: the ledger created in the stage through the store's one create door, the
-/// manifest written LAST through the custody door, and the stage placed onto the root.
-fn stage_and_place(
-    staged: &Path,
-    state_root: &Path,
-    active: Active<'_>,
-    deadline: Instant,
-) -> Result<(), CommissionError> {
+/// OPS-1 steps 4-5: the ledger created in the stage through the store's one create door, and the
+/// manifest written LAST through the custody door.
+fn stage(staged: &Path, active: Active<'_>, deadline: Instant) -> Result<(), CommissionError> {
     drop(
         Store::open(staged, active.generation, active.epoch, true, deadline)
             .map_err(store_refused)?,
@@ -674,48 +861,71 @@ fn stage_and_place(
             FileError::Custody | FileError::TooLarge => {
                 CommissionError::Io(std::io::ErrorKind::AlreadyExists)
             }
-        })?;
-    place_staged(staged, state_root).map_err(|error| match error.kind() {
-        std::io::ErrorKind::AlreadyExists => CommissionError::Exists(state_root.to_path_buf()),
-        kind => CommissionError::Io(kind),
-    })
+        })
 }
 
-/// OPS-1 step 7: the placed root read back through the readers `serve` uses, and every value the
-/// verb reports taken from it — the ids from [`read_manifest`], the version from a store open, the
-/// modes from the placed paths (the reader has already refused any but 0700 and 0600).
+/// Why a root did not read back as written.
+enum Unread {
+    /// The operator's deadline was spent before the ledger re-opened.
+    Deadline,
+    /// The store refused to re-open the ledger, by its error's `Debug` rendering.
+    Store(String),
+    /// A mode could not be read, by its kind.
+    Io(std::io::ErrorKind),
+    /// What was read differs from what was written, by what differs.
+    Differs(&'static str),
+}
+
+impl From<Unread> for CommissionError {
+    /// A stage that did not read back, before its rename: nothing was placed.
+    fn from(unread: Unread) -> Self {
+        match unread {
+            Unread::Deadline => Self::Deadline,
+            Unread::Store(why) => Self::Store(why),
+            Unread::Io(kind) => Self::Io(kind),
+            Unread::Differs(which) => Self::ReadBack(which),
+        }
+    }
+}
+
+/// A root read back through the readers `serve` uses — the stage before its rename, the placed root
+/// after — against the `(generation, epoch)` written, and every value it reports taken from it: the
+/// ids from [`read_manifest`], the version from a store open at `root`'s own path, the modes from
+/// `root`'s paths (the reader has already refused any but 0700 and 0600).
 fn read_back(
-    state_root: &Path,
-    active: Active<'_>,
+    root: &Path,
+    (generation, epoch): (&str, &str),
     deadline: Instant,
-) -> Result<Commissioned, CommissionError> {
-    let manifest = read_manifest(state_root).map_err(|unselected| match unselected {
-        Unselected::Absent => CommissionError::ReadBack("manifest absent"),
-        Unselected::Custody => CommissionError::ReadBack("manifest custody"),
-        Unselected::Malformed => CommissionError::ReadBack("manifest malformed"),
+) -> Result<Commissioned, Unread> {
+    let manifest = read_manifest(root).map_err(|unselected| match unselected {
+        Unselected::Absent => Unread::Differs("manifest absent"),
+        Unselected::Custody => Unread::Differs("manifest custody"),
+        Unselected::Malformed => Unread::Differs("manifest malformed"),
     })?;
     let selected = manifest
         .active()
-        .map_err(|_| CommissionError::ReadBack("manifest malformed"))?;
-    if selected != active {
-        return Err(CommissionError::ReadBack("manifest ids"));
+        .map_err(|_| Unread::Differs("manifest malformed"))?;
+    if (selected.generation.as_str(), selected.epoch.as_str()) != (generation, epoch) {
+        return Err(Unread::Differs("manifest ids"));
     }
-    let user_version =
-        Store::open_inspection(state_root, selected.generation, selected.epoch, deadline)
-            .map_err(store_refused)?
-            .schema_version();
+    let user_version = Store::open_inspection(root, selected.generation, selected.epoch, deadline)
+        .map_err(|error| match error {
+            crate::store::Error::Deadline => Unread::Deadline,
+            other => Unread::Store(format!("{other:?}")),
+        })?
+        .schema_version();
     let mode = |path: &Path| {
         std::fs::symlink_metadata(path)
             .map(|meta| meta.mode() & 0o777)
-            .map_err(|error| CommissionError::Io(error.kind()))
+            .map_err(|error| Unread::Io(error.kind()))
     };
     Ok(Commissioned {
-        root: state_root.to_path_buf(),
+        root: root.to_path_buf(),
         generation: selected.generation.as_str().to_owned(),
         epoch: selected.epoch.as_str().to_owned(),
         user_version,
-        root_mode: mode(state_root)?,
-        manifest_mode: mode(&state_root.join(ACTIVE_MANIFEST))?,
+        root_mode: mode(root)?,
+        manifest_mode: mode(&root.join(ACTIVE_MANIFEST))?,
     })
 }
 
