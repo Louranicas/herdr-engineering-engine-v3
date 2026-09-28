@@ -1301,7 +1301,7 @@ class T06QualityInventoryControls(unittest.TestCase):
     @staticmethod
     def serve(expected, overrides):
         """A run() double: each partition's stdout, the rest of the census on the main command."""
-        rows = {name: target_count(name) for name in ("t21_process", "t07_inventory", "t08_native", "recovery", "t08_contract")}
+        rows = {name: target_count(name) for name in ("t21_process", "t07_inventory", "t08_native", "recovery", "t08_contract", "t28_musl_workload")}
         main = T06QualityInventoryControls.synthetic_output(expected)
         for count in rows.values():
             if count in expected["test_counts"]:
@@ -1666,7 +1666,7 @@ class T06QualityInventoryControls(unittest.TestCase):
 
     def test_t21_partition_selects_each_declared_target_once(self):
         partitions = quality.rust_test_partitions(ROOT)
-        self.assertEqual([row[0] for row in partitions], ["tests-main", "tests-t06", "tests-t21-process"] + (["tests-t07-inventory"] if quality.has_t07(ROOT) else []) + (["tests-t08-native"] if quality.has_t08(ROOT) else []) + (["tests-recovery"] if quality.has_recovery(ROOT) else []) + (["tests-t08-contract"] if quality.has_t08_contract(ROOT) else []))
+        self.assertEqual([row[0] for row in partitions], ["tests-main", "tests-t06", "tests-t21-process"] + (["tests-t07-inventory"] if quality.has_t07(ROOT) else []) + (["tests-t08-native"] if quality.has_t08(ROOT) else []) + (["tests-recovery"] if quality.has_recovery(ROOT) else []) + (["tests-t08-contract"] if quality.has_t08_contract(ROOT) else []) + (["tests-musl-workload"] if quality.has_musl_workload(ROOT) else []))
         self.assertEqual(partitions[0][1][:2], ["--lib", "--bins"])
         self.assertEqual(partitions[2][1], ["--test", "t21_process"])
         main = partitions[0][1][2:]
@@ -1677,8 +1677,7 @@ class T06QualityInventoryControls(unittest.TestCase):
                                                   + (1 if quality.has_context_battery(ROOT) else 0)
                                                   + (1 if quality.has_cohort_battery(ROOT) else 0)
                                                   + (1 if quality.has_actions_battery(ROOT) else 0)
-                                                  + (1 if quality.has_herdr_battery(ROOT) else 0)
-                                                  + (1 if quality.has_musl_workload(ROOT) else 0)))
+                                                  + (1 if quality.has_herdr_battery(ROOT) else 0)))
         expected = {"t01_contracts", "t01_task", "t02_pi", "t02_transport", "t03_contract",
                     "t05_roster", "t05_codec", "t13_service", "t13_probe", "t13_local_probe", "t21_analysis"}
         if quality.has_t09(ROOT):
@@ -1702,9 +1701,6 @@ class T06QualityInventoryControls(unittest.TestCase):
             expected.add("t28_actions")
         if quality.has_herdr_battery(ROOT):
             expected.add("t16_herdr")
-        if quality.has_musl_workload(ROOT):
-            # HT0: its own binary (a subreaper), run with the main partition.
-            expected.add("t28_musl_workload")
         self.assertEqual(set(main[1::2]), expected)
         self.assertEqual(len(main[1::2]), len(set(main[1::2])))
         t06 = partitions[1][1]
@@ -1760,7 +1756,7 @@ class T06QualityInventoryControls(unittest.TestCase):
         common = ["--workspace", "--locked", "--offline", "--release", "--no-default-features"]
         quality.run_rust_test_partitions(ROOT, run, "/pinned/cargo", common, "no-default-release", expected)
         self.assertEqual([row[0] for row in calls],
-                         ["no-default-release-tests-main", "no-default-release-tests-t06", "no-default-release-tests-t21-process"] + (["no-default-release-tests-t07-inventory"] if quality.has_t07(ROOT) else []) + (["no-default-release-tests-t08-native"] if quality.has_t08(ROOT) else []) + (["no-default-release-tests-recovery"] if quality.has_recovery(ROOT) else []) + (["no-default-release-tests-t08-contract"] if quality.has_t08_contract(ROOT) else []))
+                         ["no-default-release-tests-main", "no-default-release-tests-t06", "no-default-release-tests-t21-process"] + (["no-default-release-tests-t07-inventory"] if quality.has_t07(ROOT) else []) + (["no-default-release-tests-t08-native"] if quality.has_t08(ROOT) else []) + (["no-default-release-tests-recovery"] if quality.has_recovery(ROOT) else []) + (["no-default-release-tests-t08-contract"] if quality.has_t08_contract(ROOT) else []) + (["no-default-release-tests-musl-workload"] if quality.has_musl_workload(ROOT) else []))
         for _, argv in calls:
             self.assertEqual(argv[:7], ["/pinned/cargo", "test", *common])
             self.assertNotIn("--all-targets", argv)
@@ -1768,7 +1764,7 @@ class T06QualityInventoryControls(unittest.TestCase):
             environment = {variable: "unused"}
             roots = [quality.retained_command_environment(environment, Path('/retained'), label)[variable]
                      for label, _ in calls]
-            self.assertEqual(len(set(roots)), 3 + sum(1 for present in (quality.has_t07, quality.has_t08, quality.has_recovery, quality.has_t08_contract) if present(ROOT)))
+            self.assertEqual(len(set(roots)), 3 + sum(1 for present in (quality.has_t07, quality.has_t08, quality.has_recovery, quality.has_t08_contract, quality.has_musl_workload) if present(ROOT)))
 
     def test_t21_partition_missing_duplicate_or_filtered_result_refuses(self):
         expected = quality.rust_test_expectations(ROOT)
@@ -1813,7 +1809,7 @@ class T06QualityInventoryControls(unittest.TestCase):
                                             "t07_startup", "accounting", "t11_notify", "t11_context", "t22_cohort",
                                             "t28_actions", "t16_herdr"], (*CONTEXT_UNITS, *ACTIONS_UNITS))
             quality.require_rust_test_summaries(self.synthetic_combined_output(expected), expected, "historical1008")
-            self.assertEqual([n for n,_ in quality.rust_test_partitions(root)], ["tests-main", "tests-t06", "tests-t21-process"])
+            self.assertEqual([n for n,_ in quality.rust_test_partitions(root)], ["tests-main", "tests-t06", "tests-t21-process"] + (["tests-musl-workload"] if quality.has_musl_workload(root) else []))
 
     def test_t07_missing_or_substituted_owned_inputs_refuse(self):
         with tempfile.TemporaryDirectory() as raw:
@@ -1860,7 +1856,7 @@ class T06QualityInventoryControls(unittest.TestCase):
 
     def test_t07_partition_selects_inventory_once_without_frontend_tests(self):
         rows = quality.rust_test_partitions(ROOT)
-        self.assertEqual([name for name,_ in rows], ["tests-main", "tests-t06", "tests-t21-process", "tests-t07-inventory", "tests-t08-native", "tests-recovery", "tests-t08-contract"])
+        self.assertEqual([name for name,_ in rows], ["tests-main", "tests-t06", "tests-t21-process", "tests-t07-inventory", "tests-t08-native", "tests-recovery", "tests-t08-contract", "tests-musl-workload"])
         self.assertEqual(rows[3][1], ["--test", "t07_inventory"])
         targets = [args[i+1] for _,args in rows for i,value in enumerate(args) if value == "--test"]
         self.assertEqual(targets.count("t07_inventory"), 1)
@@ -1979,7 +1975,7 @@ class T06QualityInventoryControls(unittest.TestCase):
 
     def test_t08_partition_selects_native_once_after_inventory(self):
         rows = quality.rust_test_partitions(ROOT)
-        self.assertEqual([name for name, _ in rows], ["tests-main", "tests-t06", "tests-t21-process", "tests-t07-inventory", "tests-t08-native", "tests-recovery", "tests-t08-contract"])
+        self.assertEqual([name for name, _ in rows], ["tests-main", "tests-t06", "tests-t21-process", "tests-t07-inventory", "tests-t08-native", "tests-recovery", "tests-t08-contract", "tests-musl-workload"])
         self.assertEqual(rows[4][1], ["--test", "t08_native"])
         self.assertNotIn("t08_native", rows[0][1])
         self.assertNotIn("t08_native", rows[1][1])
@@ -2052,7 +2048,7 @@ class T06QualityInventoryControls(unittest.TestCase):
 
     def test_t06_partition_holds_every_t06_target_once_and_nothing_else(self):
         rows = quality.rust_test_partitions(ROOT)
-        self.assertEqual(len(rows), 7)
+        self.assertEqual(len(rows), 8)
         self.assertEqual(rows[1][0], "tests-t06")
         t06 = rows[1][1]
         self.assertEqual(t06[::2], ["--test"] * (len(t06) // 2))
@@ -2112,7 +2108,7 @@ class T06QualityInventoryControls(unittest.TestCase):
             expected = quality.rust_test_expectations(root)
             self.assert_stripped(expected, ["recovery"])
             quality.require_rust_test_summaries(self.synthetic_combined_output(expected), expected, "recovery-absent")
-            self.assertEqual([n for n, _ in quality.rust_test_partitions(root)], ["tests-main", "tests-t06", "tests-t21-process", "tests-t07-inventory", "tests-t08-native", "tests-t08-contract"])
+            self.assertEqual([n for n, _ in quality.rust_test_partitions(root)], ["tests-main", "tests-t06", "tests-t21-process", "tests-t07-inventory", "tests-t08-native", "tests-t08-contract", "tests-musl-workload"])
             self.assertNotIn("src/recovery.rs", quality.quality_subject_paths(root, time.monotonic() + 5, True))
 
     def test_contract_absent_drops_exactly_its_target_and_examples(self):
@@ -2127,7 +2123,7 @@ class T06QualityInventoryControls(unittest.TestCase):
             expected = quality.rust_test_expectations(root)
             self.assert_stripped(expected, ["t08_contract"])
             quality.require_rust_test_summaries(self.synthetic_combined_output(expected), expected, "contract-absent")
-            self.assertEqual([n for n, _ in quality.rust_test_partitions(root)], ["tests-main", "tests-t06", "tests-t21-process", "tests-t07-inventory", "tests-t08-native", "tests-recovery"])
+            self.assertEqual([n for n, _ in quality.rust_test_partitions(root)], ["tests-main", "tests-t06", "tests-t21-process", "tests-t07-inventory", "tests-t08-native", "tests-recovery", "tests-musl-workload"])
             self.assertNotIn("tests/fixtures/native/contract-client.py", quality.quality_subject_paths(root, time.monotonic() + 5, True))
 
     def test_recovery_or_contract_missing_or_substituted_inputs_refuse(self):
@@ -2216,7 +2212,7 @@ class T06QualityInventoryControls(unittest.TestCase):
 
     def test_partition_selects_recovery_and_contract_once_after_native(self):
         rows = quality.rust_test_partitions(ROOT)
-        self.assertEqual([name for name, _ in rows][-2:], ["tests-recovery", "tests-t08-contract"])
+        self.assertEqual([name for name, _ in rows][-3:], ["tests-recovery", "tests-t08-contract", "tests-musl-workload"])
         self.assertEqual(rows[5][1], ["--test", "recovery"])
         self.assertEqual(rows[6][1], ["--test", "t08_contract"])
         targets = [args[i + 1] for _, args in rows for i, value in enumerate(args) if value == "--test"]
@@ -2297,7 +2293,7 @@ class T06QualityInventoryControls(unittest.TestCase):
             quality.require_rust_test_summaries(self.synthetic_combined_output(expected), expected, "t09-absent")
             self.assertEqual([n for n, _ in quality.rust_test_partitions(root)],
                              ["tests-main", "tests-t06", "tests-t21-process", "tests-t07-inventory",
-                              "tests-t08-native", "tests-recovery", "tests-t08-contract"])
+                              "tests-t08-native", "tests-recovery", "tests-t08-contract", "tests-musl-workload"])
             for name in quality.T09_INPUTS:
                 self.assertNotIn(name, quality.quality_subject_paths(root, time.monotonic() + 5, True))
 

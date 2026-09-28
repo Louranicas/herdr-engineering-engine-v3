@@ -360,7 +360,7 @@ HERDR_TARGET_COUNTS = {"t16_herdr": 76}
 HERDR_INPUTS = ("src/herdr.rs",)
 # HT0: the real toolchain through the candidate namespace (musl, rust-lld). Its own binary: it
 # becomes a child subreaper and reaps the pid-1 zombie bwrap orphans per stage, which in a shared
-# binary could take a child another test is waiting for.
+# binary could take a child another test is waiting for; and its own partition (180 s bound).
 MUSL_TARGET_COUNTS = {"t28_musl_workload": 3}
 MUSL_INPUTS = ("tests/t28_musl_workload.rs",)
 
@@ -1212,6 +1212,10 @@ def rust_test_partitions(root):
     if has_t08_contract(root):
         # The contract battery spawns its daemon stand-in and client per case.
         separate.append(("tests-t08-contract", ["--test", "t08_contract"]))
+    if has_musl_workload(root):
+        # HT0: two real compiles and links through the namespace, serial in one test: 66 s in debug.
+        # In tests-main they took the release command to its 180 s bound (gate-1ac5eb0.log).
+        separate.append(("tests-musl-workload", ["--test", "t28_musl_workload"]))
     selected = {arguments[1] for _, arguments in separate}
     # The T06 targets (listed in T06_TARGET_COUNTS: the Store/workspace/terminal/driver
     # suites) run in their own command. Evidence: the retained 795-control run
