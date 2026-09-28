@@ -31,17 +31,34 @@ pub const WRAPPER_DESTINATION: &str = "/frozen/public-wrapper.rs";
 pub const LIBRARY_DESTINATION: &str = "/frozen/libstrict_u64_workload.rlib";
 pub const DRIVER_DESTINATION: &str = "/frozen/bin/workload-driver";
 pub const INPUTS_DESTINATION: &str = "/frozen/inputs.hex";
+/// The target every candidate is built for (HT0, 2026-09-29): musl, self-contained, so the link
+/// needs no C toolchain on the host — Kinoite ships none (no `cc`, `crt1.o` or `libc.so`) — and the
+/// linked driver is static, needing no loader in its namespace. The engine's own shipped target is
+/// unchanged (RC02); this is the workload's build target only.
+pub const CANDIDATE_TARGET: &str = "x86_64-unknown-linux-musl";
 /// The compile step's flags before its input and output paths: the receipt's language-flags row
 /// and the workload read one constant (R17 round 2, decision 3).
-pub const COMPILE_FLAGS: [&str; 8] = [
+pub const COMPILE_FLAGS: [&str; 10] = [
     "--sysroot",
     "/toolchain",
+    "--target",
+    CANDIDATE_TARGET,
     "--edition=2024",
     "--crate-name",
     "strict_u64_workload",
     "--crate-type",
     "rlib",
     "-Dwarnings",
+];
+/// The link step's target and linker (HT0): the toolchain's own `rust-lld` with the target's
+/// self-contained CRT objects and libc, all under `/toolchain`.
+pub const LINK_FLAGS: [&str; 6] = [
+    "--target",
+    CANDIDATE_TARGET,
+    "-C",
+    "linker=rust-lld",
+    "-C",
+    "link-self-contained=yes",
 ];
 pub const FIXED_DESTINATIONS: [&str; 6] = [
     COMPILER_DESTINATION,
@@ -263,6 +280,8 @@ fn execute_stages(
     let [
         sysroot,
         toolchain,
+        target_flag,
+        target,
         edition,
         crate_name,
         name,
@@ -273,6 +292,8 @@ fn execute_stages(
     let lib_args = [
         sysroot,
         toolchain,
+        target_flag,
+        target,
         edition,
         crate_name,
         name,
@@ -304,21 +325,7 @@ fn execute_stages(
     let wrapper = binding(plan.protected, "public-wrapper.rs", WRAPPER_DESTINATION)?;
     let rlib = binding(&library, "libstrict_u64_workload.rlib", LIBRARY_DESTINATION)?;
     let library_argument = format!("strict_u64_workload={LIBRARY_DESTINATION}");
-    let link_args = [
-        "--sysroot",
-        "/toolchain",
-        "--edition=2024",
-        "--crate-name",
-        "workload_driver",
-        "-Dwarnings",
-        "-C",
-        "linker=/usr/bin/gcc",
-        "--extern",
-        library_argument.as_str(),
-        WRAPPER_DESTINATION,
-        "-o",
-        "/work/workload-driver",
-    ];
+    let link_args = link_arguments(&library_argument);
     run.outputs.push(library);
     if !stage(
         plan,
@@ -351,6 +358,38 @@ fn execute_stages(
         return Ok(());
     }
     evaluate(plan, run, oracle)
+}
+
+/// The link step's argv: the driver built for [`CANDIDATE_TARGET`] by [`LINK_FLAGS`] against the
+/// frozen library `library_argument` names (HT0).
+fn link_arguments(library_argument: &str) -> [&str; 17] {
+    let [
+        target_flag,
+        target,
+        codegen,
+        linker,
+        self_contained_flag,
+        self_contained,
+    ] = LINK_FLAGS;
+    [
+        "--sysroot",
+        "/toolchain",
+        target_flag,
+        target,
+        "--edition=2024",
+        "--crate-name",
+        "workload_driver",
+        "-Dwarnings",
+        codegen,
+        linker,
+        self_contained_flag,
+        self_contained,
+        "--extern",
+        library_argument,
+        WRAPPER_DESTINATION,
+        "-o",
+        "/work/workload-driver",
+    ]
 }
 
 fn evaluate(plan: &Plan<'_>, run: &mut Run, oracle: &FrozenOracle) -> Result<(), Error> {

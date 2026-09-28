@@ -52,6 +52,10 @@ mod t08_rig;
 #[path = "t28_runtime.rs"]
 mod runtime;
 
+/// HT0: the real toolchain through the candidate namespace, built for musl and linked by rust-lld.
+#[path = "t28_musl_workload.rs"]
+mod musl_workload;
+
 type Outcome = Result<(), Box<dyn Error>>;
 
 /// The plan spine's own action list — the independent source these cases compare against.

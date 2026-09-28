@@ -2470,6 +2470,12 @@ opt-level = 0
 debug-assertions = true
 overflow-checks = true
 
+# HT0 (2026-09-29): the candidate namespace hashes its whole pinned toolchain before, inside and after
+# every stage (~570 MiB, three times a stage). Unoptimized, sha2 made two real runs take 160 s of a
+# 180 s command bound; only the digest crate is optimized, and no release setting changes.
+[profile.dev.package.sha2]
+opt-level = 3
+
 [profile.release]
 opt-level = 2
 overflow-checks = true

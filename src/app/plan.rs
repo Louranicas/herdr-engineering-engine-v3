@@ -61,8 +61,9 @@ pub const SCHEMA_STANDARD: (&str, &str) = ("hee3-receipt-schema", "1");
 pub const MAX_TOOL_BYTES: usize = 64 * 1024 * 1024;
 /// The most stdout a `<compiler> -Vv` may print before it is refused as not a version report.
 pub const MAX_VERSION_BYTES: usize = 4096;
-/// The build profile's fixed facts: the target the compiler pin is for and the profile name.
-pub const BUILD_TARGET: &str = "x86_64-unknown-linux-gnu";
+/// The build profile's fixed facts: the target the workload builds for (the workload's one
+/// constant, HT0) and the profile name.
+pub const BUILD_TARGET: &str = super::workload::CANDIDATE_TARGET;
 pub const BUILD_PROFILE: &str = "frozen";
 /// The isolation profile's kind, a rendering of the namespace's own constants.
 pub const ISOLATION_KIND: &str = "hee3.isolation-profile/1";
@@ -1271,6 +1272,21 @@ mod tests {
         Ok(())
     }
 
+    /// The receipt's language-flags row as a literal, not read through `COMPILE_FLAGS` (F122):
+    /// HT0's musl target included.
+    const RECEIPT_COMPILE_FLAGS: [&str; 10] = [
+        "--sysroot",
+        "/toolchain",
+        "--target",
+        "x86_64-unknown-linux-musl",
+        "--edition=2024",
+        "--crate-name",
+        "strict_u64_workload",
+        "--crate-type",
+        "rlib",
+        "-Dwarnings",
+    ];
+
     /// One dispatch's shared publication, asserted whole against the sink that holds it.
     fn assert_dispatch(
         sink: &Evidence<'_>,
@@ -1330,7 +1346,8 @@ mod tests {
                 build.features.as_slice().len(),
                 build.build_profile.as_str()
             ),
-            (super::BUILD_TARGET, false, 0, super::BUILD_PROFILE)
+            // The resolved values, not the constants' own names (F122): HT0's musl target.
+            ("x86_64-unknown-linux-musl", false, 0, "frozen")
         );
         let flags: LanguageFlagsPageV1 = resolved(sink, &build.language_flags);
         let argv: Vec<&str> = flags.rows.as_slice()[0]
@@ -1339,7 +1356,7 @@ mod tests {
             .iter()
             .map(crate::contracts::receipt::Text::as_str)
             .collect();
-        assert_eq!(argv, super::COMPILE_FLAGS.to_vec());
+        assert_eq!(argv, RECEIPT_COMPILE_FLAGS);
         // The fixtures subject holds the oracle's PUBLIC projection, never the oracle itself.
         let fixtures: SubjectV1 = resolved(sink, &shared.fixtures);
         let fixtures_page: SubjectFilePageV1 = resolved(sink, &fixtures.files);

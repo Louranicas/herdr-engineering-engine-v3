@@ -97,7 +97,10 @@ def main():
                     library = work / (label + ".rlib")
                     # rustc requires an extern library filename beginning with lib.
                     library = library.with_name("lib" + library.name)
-                    common = ["--edition=2024", "-Dwarnings", "-C", "overflow-checks=yes", "-C", "opt-level=" + optimization]
+                    # HT0: the candidate build target and linker (src/app/workload.rs CANDIDATE_TARGET, LINK_FLAGS):
+                    # musl, self-contained, linked by the toolchain's rust-lld, so no host C toolchain.
+                    common = ["--edition=2024", "-Dwarnings", "-C", "overflow-checks=yes", "-C", "opt-level=" + optimization,
+                              "--target", "x86_64-unknown-linux-musl", "-C", "linker=rust-lld", "-C", "link-self-contained=yes"]
                     run(label + "-compile", [str(rustc), *common, "--crate-name=workload", "--crate-type=rlib", str(FIXTURE / variant / "src/lib.rs"), "-o", str(library)])
                     binary = work / (label + "-oracle")
                     run(label + "-oracle-compile", [str(rustc), *common, "--test", str(source), "--extern", "workload=" + str(library), "-o", str(binary)])
