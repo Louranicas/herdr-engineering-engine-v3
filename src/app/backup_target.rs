@@ -174,3 +174,50 @@ impl FreeSpace for Statvfs {
         Ok(stat.f_bavail.saturating_mul(stat.f_frsize))
     }
 }
+
+/// Free space declared, not measured (RA1 b): the state root's filesystem answers `state`, the
+/// destination's answers `backup`, and any other path is refused by name, so no verdict can rest on
+/// a path nothing declared (F101). Only a test build's `serve` composes one, from
+/// `HEE3_TEST_HEADROOM` (feature `headroom-seam`, which only the package's dev-dependency on itself
+/// turns on); a release build of `habitat-engine` has no door to it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Declared {
+    state_root: PathBuf,
+    destination: PathBuf,
+    state: u64,
+    backup: u64,
+}
+
+impl Declared {
+    /// `value` as exactly `state=<bytes> backup=<bytes>` (each a decimal with no leading zero), for
+    /// `target`'s two filesystems; `None` for anything else.
+    #[must_use]
+    pub fn parse(value: &str, target: &BackupTarget) -> Option<Self> {
+        let (state, backup) = value.split_once(' ')?;
+        let number = |text: &str, name: &str| {
+            text.strip_prefix(name)
+                .and_then(|digits| crate::contracts::parse_u64_decimal(digits).ok())
+        };
+        Some(Self {
+            state_root: target.state_root.clone(),
+            destination: target.destination.clone(),
+            state: number(state, "state=")?,
+            backup: number(backup, "backup=")?,
+        })
+    }
+}
+
+impl FreeSpace for Declared {
+    fn free(&self, path: &Path) -> std::io::Result<u64> {
+        if path == self.state_root {
+            Ok(self.state)
+        } else if path == self.destination {
+            Ok(self.backup)
+        } else {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!("no free space is declared for {}", path.display()),
+            ))
+        }
+    }
+}

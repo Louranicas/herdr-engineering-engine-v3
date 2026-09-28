@@ -10,7 +10,7 @@
 use super::t08_rig::{self, DaemonStandIn};
 use habitat_engine::actions::control::{TaskRequest, Tasks};
 use habitat_engine::app::backup_target::{
-    BACKUP_FILE, BACKUP_SCHEMA, BackupTarget, BackupUnready, FreeSpace, read_target,
+    BACKUP_FILE, BACKUP_SCHEMA, BackupTarget, BackupUnready, Declared, FreeSpace, read_target,
 };
 use habitat_engine::app::candidates::{
     ClassPrompt, FilePins, NativeCandidates, Outcome as CandidateOutcome, Settle, render,
@@ -5760,4 +5760,91 @@ fn every_backup_refusal_line_is_whole() {
             "{why:?}"
         );
     }
+}
+
+/// RA1 (b) · the test build's declared free space answers exactly the two filesystems its target
+/// names, each with its own number, and refuses any other path by name (F101): two targets and two
+/// values differing in every field, asserted whole. The destination's number is never the state
+/// root's, and a path under the state root is not the state root.
+#[test]
+fn declared_headroom_answers_the_two_filesystems_its_target_names() -> Outcome_ {
+    for (state_root, destination, value, state, backup) in [
+        (
+            "/var/home/op/.local/state/herdr-engineering-engine-v3",
+            "/var/mnt/STORAGE-10TB/hee3-backups",
+            "state=103079215104 backup=274877906937",
+            103_079_215_104_u64,
+            274_877_906_937_u64,
+        ),
+        (
+            "/tmp/w/home/.local/state/herdr-engineering-engine-v3",
+            "/dev/shm/hee3-t28b-1-2",
+            "state=7 backup=18446744073709551615",
+            7,
+            u64::MAX,
+        ),
+    ] {
+        let target = BackupTarget {
+            destination: PathBuf::from(destination),
+            deadline: std::time::Duration::from_secs(60),
+            state_root: PathBuf::from(state_root),
+        };
+        let declared = Declared::parse(value, &target).ok_or(value)?;
+        assert_eq!(
+            (
+                declared.free(Path::new(state_root))?,
+                declared.free(Path::new(destination))?,
+            ),
+            (state, backup),
+            "{value}"
+        );
+        for other in [
+            Path::new(state_root).join("generations"),
+            PathBuf::from("/"),
+            PathBuf::from(destination).join(".."),
+        ] {
+            let refused = declared
+                .free(&other)
+                .err()
+                .ok_or("an undeclared path answered")?;
+            assert_eq!(
+                (refused.kind(), refused.to_string()),
+                (
+                    std::io::ErrorKind::NotFound,
+                    format!("no free space is declared for {}", other.display())
+                ),
+                "{value}"
+            );
+        }
+    }
+    Ok(())
+}
+
+/// RA1 (b) · the seam's value is exactly `state=<bytes> backup=<bytes>`: every other shape is
+/// refused, so a mistyped value never reads as a declared number.
+#[test]
+fn declared_headroom_refuses_every_other_shape() {
+    let target = BackupTarget {
+        destination: PathBuf::from("/dev/shm/d"),
+        deadline: std::time::Duration::from_secs(1),
+        state_root: PathBuf::from("/tmp/s"),
+    };
+    for value in [
+        "",
+        "state=1",
+        "backup=2 state=1",
+        "state=1  backup=2",
+        "state=1 backup=2 ",
+        " state=1 backup=2",
+        "state=01 backup=2",
+        "state=1 backup=-2",
+        "state=1 backup=18446744073709551616",
+        "state=1 backup=2 extra=3",
+        "state=1,backup=2",
+        "State=1 backup=2",
+        "state= backup=2",
+    ] {
+        assert_eq!(Declared::parse(value, &target), None, "{value:?}");
+    }
+    assert!(Declared::parse("state=1 backup=2", &target).is_some());
 }

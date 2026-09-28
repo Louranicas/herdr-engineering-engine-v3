@@ -228,7 +228,7 @@ T06_UNIT_COUNTS = {
     "worker::resources::limit_tests::": 3, "worker::workspace::manifest_tests::": 2,
     "app::runtime::tests::": 11, "app::run_records::tests::": 12,
     "app::live_verifier::tests::": 3, "app::plan::tests::": 5, "app::u64_receipt::tests::": 9, "worker::host::tests::": 1,
-    "app::candidates::tests::": 5, "app::dispatcher::tests::": 5,
+    "app::candidates::tests::": 5, "app::dispatcher::tests::": 7,
     "app::native_provider::tests::": 3, "worker::aggregate::tests::": 7,
 }
 
@@ -319,7 +319,7 @@ CONTEXT_INPUTS = ("src/context.rs",)
 COHORT_TARGET_COUNTS = {"t22_cohort": 67}
 COHORT_INPUTS = ("src/cohort.rs", "evaluation/cohorts/claim-overlap-v1.json",
                  "tests/fixtures/t22/C01.json", "tests/fixtures/t22/C02.json")
-ACTIONS_TARGET_COUNTS = {"t28_actions": 294}
+ACTIONS_TARGET_COUNTS = {"t28_actions": 297}
 # The control receiver (review coordinator step 1) is served from the catalogue: its wire half in
 # contracts, its catalogue half in actions, and the independent Python oracle its cases run.
 ACTIONS_INPUTS = ("src/actions.rs", "src/worker/tools.rs", "src/actions/control.rs",

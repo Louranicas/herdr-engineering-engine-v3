@@ -36,13 +36,14 @@ FLOWS = {
     "F04": {"reason": "roster facts reach route in the preview; no dispatcher refuses a disabled record",
             "lands_with": "C01c"},
     "F05": {"reason": "budget is not composed into settle_attempt (DS3 ruled the overrun rule)", "lands_with": "B18"},
-    "F06": {"reason": "serve picks admitted tasks through main, and since OPS-2 every pick first meets RC01's "
-                      "backup gate: no gate world holds 96 GiB free on the state filesystem and 256 GiB on a "
-                      "second device, so through main the pick stops at headroom with the task left admitted "
-                      "(the pre-dispatch refusals and the busctl pin are library-level now); launch, "
-                      "LauncherFailed and ACCEPTED are Tier-3", "lands_with": "B14c-T3 + Q4",
+    "F06": {"reason": "serve dispatches admitted tasks through main; every pick first meets RC01's backup gate, "
+                      "its headroom declared through the test build's seam (RA1), so in the gate a real backup "
+                      "is taken onto another device, then one task stops at a pre-dispatch refusal "
+                      "(criteria_not_class) and, over the native provider, is refused at the busctl pin with "
+                      "the task left admitted — no worker launches in the gate; launch, LauncherFailed and "
+                      "ACCEPTED are Tier-3", "lands_with": "B14c-T3 + Q4",
             "partial": SOCKET
-            + "::with_a_native_provider_installed_serve_stops_at_rc01_headroom_before_the_provider"},
+            + "::with_a_scratch_runtime_directory_the_busctl_pin_refuses_and_the_task_stays_admitted"},
     "F07": {"reason": "check is not composed behind dispatch", "lands_with": "B16"},
     "F08": {"reason": "cohort has no durable owner (DS7) and thread.* is unserved", "lands_with": "C06"},
     "F09": {"reason": "cohort and context meet only in the library", "lands_with": "C07"},

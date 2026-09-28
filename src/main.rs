@@ -867,7 +867,10 @@ fn serve_until_signalled(
                 backup,
             }) => {
                 scope.spawn(move || {
-                    let space = backup_target::Statvfs;
+                    let measured = backup_target::Statvfs;
+                    let declared = headroom_seam(&backup);
+                    let space: &(dyn backup_target::FreeSpace + Sync) =
+                        declared.as_deref().unwrap_or(&measured);
                     let exit = match native {
                         Ok((mut provider, installed)) => dispatcher::Dispatcher {
                             tasks,
@@ -878,7 +881,7 @@ fn serve_until_signalled(
                             selections: &installed.selections,
                             drain: drain.flag(),
                             backup: &backup,
-                            space: &space,
+                            space,
                         }
                         .run(&report),
                         Err(why) => dispatcher::Dispatcher {
@@ -890,7 +893,7 @@ fn serve_until_signalled(
                             selections: &[],
                             drain: drain.flag(),
                             backup: &backup,
-                            space: &space,
+                            space,
                         }
                         .run(&report),
                     };
@@ -943,6 +946,58 @@ fn finish_drained(prepared: control_socket::Prepared) -> ExitCode {
         socket.display()
     ));
     ExitCode::SUCCESS
+}
+
+/// RA1 (b): where RC01's gate reads free space other than the host. A release build has no such
+/// door: it measures the host through `Statvfs`, always.
+#[cfg(not(feature = "headroom-seam"))]
+const fn headroom_seam(
+    _backup: &Result<BackupTarget, BackupUnready>,
+) -> Option<Box<dyn backup_target::FreeSpace + Sync>> {
+    None
+}
+
+/// RA1 (b): a test build (feature `headroom-seam`, which only the package's dev-dependency on itself
+/// turns on) takes RC01's free space from `HEE3_TEST_HEADROOM` when it is set and a backup target
+/// was read, and says so once, so no binary-test verdict depends on the host's free disk. A value it
+/// cannot take declares nothing: every filesystem is then unmeasured, never the host's numbers.
+#[cfg(feature = "headroom-seam")]
+fn headroom_seam(
+    backup: &Result<BackupTarget, BackupUnready>,
+) -> Option<Box<dyn backup_target::FreeSpace + Sync>> {
+    const HEADROOM_SEAM: &str = "HEE3_TEST_HEADROOM";
+    let value = std::env::var_os(HEADROOM_SEAM)?;
+    let target = backup.as_ref().ok()?;
+    let declared = value
+        .to_str()
+        .and_then(|text| backup_target::Declared::parse(text, target));
+    let refused = if declared.is_some() {
+        ""
+    } else {
+        " (refused: every filesystem unmeasured)"
+    };
+    say(format_args!(
+        "headroom declared by the test seam: {HEADROOM_SEAM}=\"{}\"{refused}",
+        value.display()
+    ));
+    Some(match declared {
+        Some(declared) => Box::new(declared),
+        None => Box::new(Undeclared),
+    })
+}
+
+/// A test build's malformed headroom declaration: every filesystem is unmeasured.
+#[cfg(feature = "headroom-seam")]
+struct Undeclared;
+
+#[cfg(feature = "headroom-seam")]
+impl backup_target::FreeSpace for Undeclared {
+    fn free(&self, path: &Path) -> io::Result<u64> {
+        Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("the declared headroom is malformed ({})", path.display()),
+        ))
+    }
 }
 
 /// `serve`'s one standard-error door: `line` after the engine's name, the write's error discarded.

@@ -542,10 +542,16 @@ fn serve_command(run: &Path, home: &Path) -> Command {
         .args(["serve", UNTIL_STDIN_CLOSES])
         .env("XDG_RUNTIME_DIR", run)
         .env("HOME", home)
+        // RA1 (b): never inherited — only a case that declares headroom sets the seam.
+        .env_remove(HEADROOM_SEAM)
         .stdin(Stdio::piped())
         .stdout(Stdio::null());
     command
 }
+
+/// The test build's headroom seam (RA1 b, feature `headroom-seam`): `serve` takes RC01's free space
+/// from it as `state=<bytes> backup=<bytes>` instead of measuring the host.
+const HEADROOM_SEAM: &str = "HEE3_TEST_HEADROOM";
 
 /// The engine binary under a private runtime root and home, killed by its own handle on drop.
 struct Engine {
@@ -566,6 +572,27 @@ impl Engine {
             Stdio::from(fs::File::create_new(log)?),
             START_BUDGET,
         )
+    }
+
+    /// Start with standard error written to `log` (as [`Engine::start_logged`]) and RC01's free
+    /// space declared through the test build's headroom seam: `state` bytes on the state
+    /// filesystem, `backup` on the destination's (RA1 b), so no verdict depends on the host's disk.
+    fn start_declared(
+        run: &Path,
+        home: &Path,
+        log: &Path,
+        state: u64,
+        backup: u64,
+    ) -> Result<Self, Box<dyn Error>> {
+        let engine = Self {
+            child: Some(
+                serve_command(run, home)
+                    .env(HEADROOM_SEAM, format!("state={state} backup={backup}"))
+                    .stderr(Stdio::from(fs::File::create_new(log)?))
+                    .spawn()?,
+            ),
+        };
+        engine.serving(run, START_BUDGET)
     }
 
     /// Start `serve` and wait up to `budget` for a connectable socket. The guard exists before the
@@ -1559,15 +1586,15 @@ fn the_engine_says_its_class_profile_at_start() -> Outcome {
     Ok(())
 }
 
-/// B14b-1 (c) as OPS-2 amends it, through `main`: with a class profile and a backup record
-/// installed, `serve` picks the admitted task and, before admitting it, meets RC01's headroom gate:
-/// no test world here holds 96 GiB free on the state filesystem and 256 GiB on a second device, so
-/// the dispatcher stops by the headroom line (both numbers) and `task.get` reads the task back
-/// still `admitted`. The pre-dispatch refusal this case once reached through `main`
-/// (`criteria_not_class`) is proven at the library (`runtime::pre_dispatch_refusals_…`); the
-/// ACCEPTED path through the binary stays Tier-3 (an open L3 row).
+/// B14b-1 (c), the Tier-2 claim through `main` (R20 round 2 Q4): with a class profile installed,
+/// `serve` picks an admitted task and stops it by name — here `criteria_not_class`, the free refusal
+/// admission does not screen (it screens the workspace only) — and `task.get` reads the stop back
+/// through the wrapper. The ACCEPTED path through the binary stays Tier-3 (an open L3 row). Since
+/// OPS-2 every pick first meets RC01's backup gate; RA1 (b) restores this reach through `main` by
+/// declaring both filesystems roomy through the test build's headroom seam, so the gate takes a real
+/// backup onto another device first, and its line is asserted whole against that backup.
 #[test]
-fn serve_holds_an_admitted_task_at_rc01_headroom_through_main() -> Outcome {
+fn serve_dispatches_an_admitted_task_and_stops_it_by_name_through_main() -> Outcome {
     const KEY: &str = "28c00000-0000-4000-8000-0000000000d1";
     let digest = format!("sha256:{}", "0".repeat(64));
     let world = World::granting(&["task"], &["read", "durable admission"])?;
@@ -1594,10 +1621,10 @@ fn serve_holds_an_admitted_task_at_rc01_headroom_through_main() -> Outcome {
         .as_bytes(),
         0o600,
     )?;
-    let _backups = OtherDevice::backup_record(&world)?;
+    let backups = OtherDevice::backup_record(&world)?;
     let log = world.home.join("engine.log");
-    let engine = Engine::start_logged(run, &world.home, &log)?;
-    // The declared workspace, so admission would admit; the default spec's criteria are not the class's.
+    let engine = Engine::start_declared(run, &world.home, &log, ROOMY, ROOMY)?;
+    // The declared workspace, so admission admits; the default spec's criteria are not the class's.
     let mut spec = super::tasks::spec();
     spec["workspace_id"] = json!("28c00000-0000-4000-8000-0000000000f1");
     let submitted = reply_of(&wrapper(
@@ -1614,44 +1641,69 @@ fn serve_holds_an_admitted_task_at_rc01_headroom_through_main() -> Outcome {
         .as_str()
         .ok_or("task id")?
         .to_owned();
-    let (stderr, got) = held_at_headroom(&world, &log, &task)?;
-    assert_eq!(got["body"]["task"]["state"], json!("admitted"), "{got}");
-    drop(stderr);
+    // Poll the artifact with a budget (F102/F137): the dispatcher's stop, read back through `task.get`.
+    let started = Instant::now();
+    let seen = loop {
+        let got = reply_of(&wrapper(
+            run,
+            scope,
+            &strs(&getting(&json!({"task_id": task}))),
+        )?)?;
+        let state_now = got["body"]["task"]["state"].clone();
+        if state_now == json!("failed") {
+            break got;
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(20),
+            "the task never left {state_now}: {got}"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    assert_eq!(seen["body"]["task"]["state"], json!("failed"), "{seen}");
     let _output = engine.terminate(Duration::from_secs(20))?;
+    // The engine's stderr went to the log file (`start_logged`): the dispatcher's own step line.
     let stderr = fs::read_to_string(&log)?;
-    headroom_stop(&stderr)?;
-    // No stop was written: the task was never admitted past the gate.
+    assert!(
+        stderr.contains("dispatcher: task ") && stderr.contains("TaskDone(\"criteria_not_class\")"),
+        "{stderr}"
+    );
+    // The stop's own name, from the ledger once the engine has released it.
     let db = rusqlite::Connection::open_with_flags(
         &state,
         rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NOFOLLOW,
     )?;
-    let stops: i64 = db.query_row(
-        "SELECT count(*) FROM task_stops WHERE task_id=?",
+    let reason: String = db.query_row(
+        "SELECT reason FROM task_stops WHERE task_id=?",
         [task.as_str()],
         |row| row.get(0),
     )?;
-    assert_eq!(stops, 0);
+    assert_eq!(reason, "criteria_not_class");
+    backed_up_through_main(&stderr, &backups)?;
     Ok(())
 }
 
-/// R21 S21 (N3, N12) as OPS-2 amends it, through `main` · with the operator's native file installed
-/// beside a `/2` class, `serve` installs the native agent record at start (said once), and the
-/// dispatcher's first pick meets RC01's headroom gate before any admission, so no provider is
-/// opened: the stop names the filesystem short of its reserve with both numbers, and the task stays
-/// `admitted`. The busctl-pin refusal this case once reached through `main` (`daemon manager
-/// invalid`) now needs a world with RC01's reserves — a Tier-3 row — and its named state stays
-/// proven at the library (`dispatcher::tests`).
+/// R21 S21 (N3, N12), through `main` · with the operator's native file installed beside a `/2`
+/// class, `serve` installs the native agent record and dispatches over the native provider. The
+/// rig's runtime directory is a scratch one, not `/run/user/<euid>`, so the user manager's busctl
+/// pin refuses `Invalid` before any unit is listed (R21 closure C6, M3): the provider's `open`
+/// refuses at the daemon by the manager's own name, the dispatcher says that state once, and the
+/// task stays `admitted` for the operator to fix — never stopped for the operator's configuration.
+/// The file's absent unit (`hee3-t28-absent.service`) is never reached here; that rule needs
+/// `/run/user/<euid>` and a real busctl, and is a Tier-3 row. RA1 (b): both filesystems are
+/// declared roomy through the test build's headroom seam, so RC01's gate backs up first (asserted
+/// whole) and the pick reaches the provider.
 #[test]
-fn with_a_native_provider_installed_serve_stops_at_rc01_headroom_before_the_provider() -> Outcome {
+fn with_a_scratch_runtime_directory_the_busctl_pin_refuses_and_the_task_stays_admitted() -> Outcome
+{
     const KEY: &str = "28c00000-0000-4000-8000-0000000000d2";
     let world = World::granting(&["task"], &["read", "durable admission"])?;
     let (run, scope) = (&world.run, &world.scope);
     commission(&world.home)?;
     let native = installable_native(&world.home)?;
-    let _backups = OtherDevice::backup_record(&world)?;
+    let backups = OtherDevice::backup_record(&world)?;
     let log = world.home.join("engine.log");
-    let engine = Engine::start_logged(run, &world.home, &log)?;
-    // The class's workspace and criteria, so admission would admit and open a provider.
+    let engine = Engine::start_declared(run, &world.home, &log, ROOMY, ROOMY)?;
+    // The class's workspace and criteria, so admission admits and a provider is opened.
     let mut spec = super::tasks::spec();
     spec["workspace_id"] = json!(super::runtime::CLASS_WORKSPACE);
     spec["criteria"] = json!(habitat_engine::check::consistency::U64_CRITERIA);
@@ -1669,33 +1721,59 @@ fn with_a_native_provider_installed_serve_stops_at_rc01_headroom_before_the_prov
         .as_str()
         .ok_or("task id")?
         .to_owned();
-    let (_, got) = held_at_headroom(&world, &log, &task)?;
+    // Poll the artifact with a budget (F102/F137): the dispatcher's named state in the log.
+    let said = "habitat-engine: dispatcher: unavailable: daemon manager invalid";
+    let started = Instant::now();
+    let stderr = loop {
+        let stderr = fs::read_to_string(&log)?;
+        if stderr.lines().any(|line| line == said) {
+            break stderr;
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(20),
+            "no {said:?} within 20 s:\n{stderr}"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    let got = reply_of(&wrapper(
+        run,
+        scope,
+        &strs(&getting(&json!({"task_id": task}))),
+    )?)?;
     assert_eq!(got["body"]["task"]["state"], json!("admitted"), "{got}");
     let _output = engine.terminate(Duration::from_secs(20))?;
-    let stderr = fs::read_to_string(&log)?;
+    // Read again once the engine has exited: the dispatcher's exit line follows its state line.
+    let stderr = fs::read_to_string(&log).map_err(|e| format!("{e}: {stderr}"))?;
     let installed = format!(
         "habitat-engine: native provider installed from {}",
         native.display()
     );
+    // The dispatcher's exit, whole (B14b-2 review round 2, D11): this fixture's and the refused
+    // file's below differ in every field.
+    let stopped = "habitat-engine: dispatcher stopped: Unavailable(Daemon(Manager(Invalid)))";
     assert_eq!(
-        stderr
-            .lines()
-            .filter(|line| line.starts_with(&installed))
-            .count(),
-        1,
+        (
+            stderr.lines().filter(|line| *line == said).count(),
+            stderr
+                .lines()
+                .filter(|line| line.starts_with(&installed))
+                .count(),
+            stderr.lines().filter(|line| *line == stopped).count(),
+        ),
+        (1, 1, 1),
         "{stderr}"
     );
-    headroom_stop(&stderr)?;
+    backed_up_through_main(&stderr, &backups)?;
     Ok(())
 }
 
 /// R21 round-1 LOW F8, through `main` · a native file `serve` refused at start is not "no native
 /// provider": the operator's file is present beside a `/2` class but group- and world-readable, so
-/// the custody door refuses it; the startup line says why once and nothing is installed. As OPS-2
-/// amends it, the dispatcher's first pick then meets RC01's headroom gate (no test world holds the
-/// reserves), so its stop is the headroom line, and the task stays `admitted`; the compose
-/// refusal's own dispatcher state (`native provider refused (file read)`) is proven at the library
-/// (`dispatcher::tests::each_no_native_kind_has_its_whole_name`).
+/// the custody door refuses it; the startup line says why once, nothing is installed, and the
+/// dispatcher's own named state carries the compose refusal's kind — told apart from a file that
+/// is not installed at all. The task stays `admitted`. RA1 (b): both filesystems are declared roomy
+/// through the test build's headroom seam, so RC01's gate backs up first (asserted whole) and the
+/// pick reaches the compose refusal.
 #[test]
 fn a_native_file_refused_at_start_is_named_by_its_refusal_not_as_absent() -> Outcome {
     const KEY: &str = "28c00000-0000-4000-8000-0000000000d3";
@@ -1720,9 +1798,9 @@ fn a_native_file_refused_at_start_is_named_by_its_refusal_not_as_absent() -> Out
         b"schema = \"hee3.native/1\"\n",
         0o644,
     )?;
-    let _backups = OtherDevice::backup_record(&world)?;
+    let backups = OtherDevice::backup_record(&world)?;
     let log = world.home.join("engine.log");
-    let engine = Engine::start_logged(run, &world.home, &log)?;
+    let engine = Engine::start_declared(run, &world.home, &log, ROOMY, ROOMY)?;
     let mut spec = super::tasks::spec();
     spec["workspace_id"] = json!(super::runtime::CLASS_WORKSPACE);
     spec["criteria"] = json!(habitat_engine::check::consistency::U64_CRITERIA);
@@ -1740,23 +1818,139 @@ fn a_native_file_refused_at_start_is_named_by_its_refusal_not_as_absent() -> Out
         .as_str()
         .ok_or("task id")?
         .to_owned();
-    let (_, got) = held_at_headroom(&world, &log, &task)?;
+    // Poll the artifact with a budget (F102/F137): the dispatcher's first named state in the log.
+    let prefix = "habitat-engine: dispatcher: unavailable";
+    let started = Instant::now();
+    let stderr = loop {
+        let stderr = fs::read_to_string(&log)?;
+        if stderr.lines().any(|line| line.starts_with(prefix)) {
+            break stderr;
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(20),
+            "no {prefix:?} within 20 s:\n{stderr}"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    let got = reply_of(&wrapper(
+        run,
+        scope,
+        &strs(&getting(&json!({"task_id": task}))),
+    )?)?;
     assert_eq!(got["body"]["task"]["state"], json!("admitted"), "{got}");
     let _output = engine.terminate(Duration::from_secs(20))?;
-    let stderr = fs::read_to_string(&log)?;
+    // Read again once the engine has exited: the dispatcher's exit line follows its state line.
+    let stderr = fs::read_to_string(&log).map_err(|e| format!("{e}: {stderr}"))?;
     let started_line = format!(
         "habitat-engine: native provider unavailable: refused: Read {{ what: \"file custody\" }} ({})",
         native.display()
     );
+    let named: Vec<&str> = stderr
+        .lines()
+        .filter(|line| {
+            line.starts_with(prefix) || line.starts_with("habitat-engine: native provider")
+        })
+        .collect();
+    assert_eq!(
+        named,
+        [
+            started_line.as_str(),
+            "habitat-engine: dispatcher: unavailable: native provider refused (file read)",
+        ],
+        "{stderr}"
+    );
+    // The dispatcher's exit, whole (D11): the busctl fixture's above differs in every field.
     assert_eq!(
         stderr
             .lines()
-            .filter(|line| line.starts_with("habitat-engine: native provider"))
+            .filter(|line| line.starts_with("habitat-engine: dispatcher stopped"))
             .collect::<Vec<_>>(),
-        [started_line.as_str()],
+        ["habitat-engine: dispatcher stopped: Unavailable(NoNativeProvider(Read))"],
         "{stderr}"
     );
-    headroom_stop(&stderr)?;
+    backed_up_through_main(&stderr, &backups)?;
+    Ok(())
+}
+
+/// RA1 (a, b) · RC01's headroom through `main`, decided by the numbers the case declares, never by
+/// the host's free disk: one byte short on the state filesystem (the destination roomy), then seven
+/// short on the backup filesystem (the state root at exactly its reserve) — two worlds differing in
+/// every field. Each stops the first pick by the one filesystem its numbers name, whole, with the
+/// dispatcher's exit carrying the same three values; the task stays `admitted` and no backup
+/// directory is left under the destination.
+#[test]
+fn serve_stops_at_rc01_headroom_on_the_filesystem_its_numbers_name_through_main() -> Outcome {
+    for (key, state_free, backup_free, fs, name, free, reserve) in [
+        (
+            "28c00000-0000-4000-8000-0000000000d4",
+            STATE_RESERVE_BYTES - 1,
+            ROOMY,
+            "state",
+            "State",
+            103_079_215_103_u64,
+            103_079_215_104_u64,
+        ),
+        (
+            "28c00000-0000-4000-8000-0000000000d5",
+            STATE_RESERVE_BYTES,
+            BACKUP_RESERVE_BYTES - 7,
+            "backup",
+            "Backup",
+            274_877_906_937,
+            274_877_906_944,
+        ),
+    ] {
+        let world = World::granting(&["task"], &["read", "durable admission"])?;
+        let (run, scope) = (&world.run, &world.scope);
+        commission(&world.home)?;
+        installable_native(&world.home)?;
+        let backups = OtherDevice::backup_record(&world)?;
+        let log = world.home.join("engine.log");
+        let engine = Engine::start_declared(run, &world.home, &log, state_free, backup_free)?;
+        let mut spec = super::tasks::spec();
+        spec["workspace_id"] = json!(super::runtime::CLASS_WORKSPACE);
+        spec["criteria"] = json!(habitat_engine::check::consistency::U64_CRITERIA);
+        let submitted = reply_of(&wrapper(
+            run,
+            scope,
+            &strs(&[
+                "task.submit".to_owned(),
+                format!("@idempotency_key={key}"),
+                format!("spec:={spec}"),
+            ]),
+        )?)?;
+        assert_eq!(submitted["kind"], json!("result"), "{submitted}");
+        let task = submitted["body"]["task"]["task_id"]
+            .as_str()
+            .ok_or("task id")?
+            .to_owned();
+        let (_, got) = held_at_headroom(&world, &log, &task)?;
+        assert_eq!(got["body"]["task"]["state"], json!("admitted"), "{got}");
+        let _output = engine.terminate(Duration::from_secs(20))?;
+        let stderr = fs::read_to_string(&log)?;
+        assert_eq!(
+            stderr
+                .lines()
+                .filter(|line| line.starts_with("habitat-engine: dispatcher")
+                    || line.starts_with("habitat-engine: headroom"))
+                .collect::<Vec<_>>(),
+            [
+                declared_line(state_free, backup_free).as_str(),
+                format!(
+                    "habitat-engine: dispatcher: unavailable: headroom ({fs}: free={free} \
+                     reserve={reserve})"
+                )
+                .as_str(),
+                format!(
+                    "habitat-engine: dispatcher stopped: Unavailable(Backup(Headroom(Headroom {{ \
+                     fs: {name}, free: {free}, reserve: {reserve} }})))"
+                )
+                .as_str(),
+            ],
+            "{stderr}"
+        );
+        assert_eq!(fs::read_dir(&backups.0)?.count(), 0, "{stderr}");
+    }
     Ok(())
 }
 
@@ -4061,46 +4255,55 @@ impl Drop for OtherDevice {
 const STATE_RESERVE_BYTES: u64 = 96 * 1024 * 1024 * 1024;
 const BACKUP_RESERVE_BYTES: u64 = 256 * 1024 * 1024 * 1024;
 
-/// The dispatcher's headroom stop in `stderr`, whole: exactly one headroom line naming `state` or
-/// `backup` with that filesystem's reserve and a free count below it (the world's number: which
-/// filesystem refuses depends on where the scratch is, so either is accepted and each is asserted
-/// whole), and the dispatcher's exit carrying the same three values.
-fn headroom_stop(stderr: &str) -> Result<(), Box<dyn Error>> {
-    let prefix = "habitat-engine: dispatcher: unavailable: headroom (";
-    let lines: Vec<&str> = stderr
-        .lines()
-        .filter(|line| line.starts_with("habitat-engine: dispatcher"))
-        .collect();
-    let refusal = lines
-        .iter()
-        .find(|line| line.starts_with(prefix))
-        .ok_or_else(|| format!("no headroom stop:\n{stderr}"))?;
-    let inner = refusal
-        .strip_prefix(prefix)
-        .and_then(|rest| rest.strip_suffix(')'))
-        .ok_or("the headroom line is not closed")?;
-    let (fs, numbers) = inner.split_once(": ").ok_or("no filesystem named")?;
-    let free: u64 = numbers
-        .strip_prefix("free=")
-        .and_then(|rest| rest.split(' ').next())
-        .ok_or("no free count")?
-        .parse()?;
-    let (reserve, name) = match fs {
-        "state" => (STATE_RESERVE_BYTES, "State"),
-        "backup" => (BACKUP_RESERVE_BYTES, "Backup"),
-        other => return Err(format!("an unknown filesystem {other:?}").into()),
+/// Free space well above both RC01 reserves (1 PiB), declared through the seam.
+const ROOMY: u64 = 1 << 50;
+
+/// The line `serve` says once when it takes the declared headroom `state` and `backup`, whole.
+fn declared_line(state: u64, backup: u64) -> String {
+    format!(
+        "habitat-engine: headroom declared by the test seam: {HEADROOM_SEAM}=\"state={state} \
+         backup={backup}\""
+    )
+}
+
+/// RC01's gate through `main` with roomy declared headroom: `serve` said the seam once, and the
+/// dispatcher's one backup line is the backup it took, whole — its id the one directory under
+/// `destination`, its counts read back through the store's own inspection door against the digest
+/// of its published manifest (never from the dispatcher's renderer), and the literal RC01 bound
+/// 4096. The first backup of a process is due `Never`.
+fn backed_up_through_main(stderr: &str, destination: &OtherDevice) -> Result<(), Box<dyn Error>> {
+    let children = fs::read_dir(&destination.0)?
+        .map(|entry| entry.map(|entry| entry.file_name().to_string_lossy().into_owned()))
+        .collect::<Result<Vec<_>, _>>()?;
+    let [id] = children.as_slice() else {
+        return Err(format!("not one backup under the destination: {children:?}\n{stderr}").into());
     };
-    assert!(free < reserve, "{refusal}");
-    let stop = format!(
-        "habitat-engine: dispatcher stopped: Unavailable(Backup(Headroom(Headroom {{ fs: {name}, \
-         free: {free}, reserve: {reserve} }})))"
+    let child = destination.0.join(id);
+    let manifest = fs::read(child.join("store-backup.json"))?;
+    let text = super::tasks::digest(Sha256::digest(&manifest));
+    let digest = habitat_engine::contracts::Sha256Digest::parse(&text)?;
+    let report = Store::inspect_backup(&child, digest, Instant::now() + Duration::from_secs(10))
+        .map_err(|error| format!("{error:?}"))?;
+    let backed = format!(
+        "habitat-engine: dispatcher: backup {id} complete: objects={}/4096 database_bytes={} \
+         cutoff={} due=Never",
+        report.objects.len(),
+        report.database_bytes,
+        report.cutoff
     );
+    let declared = declared_line(ROOMY, ROOMY);
     assert_eq!(
-        lines,
-        [
-            format!("{prefix}{fs}: free={free} reserve={reserve})").as_str(),
-            stop.as_str()
-        ],
+        (
+            stderr
+                .lines()
+                .filter(|line| line.starts_with("habitat-engine: headroom"))
+                .collect::<Vec<_>>(),
+            stderr
+                .lines()
+                .filter(|line| line.starts_with("habitat-engine: dispatcher: backup"))
+                .collect::<Vec<_>>(),
+        ),
+        (vec![declared.as_str()], vec![backed.as_str()]),
         "{stderr}"
     );
     Ok(())

@@ -2450,6 +2450,12 @@ resolver = "3"
 
 [features]
 default = []
+# RA1 (b), 2026-09-28: a test build's `serve` may take RC01's free space from `HEE3_TEST_HEADROOM`
+# (`main.rs`, `headroom_seam`), so no binary-test verdict depends on the host's free disk. Never a
+# default: only the package's dev-dependency on itself below turns it on, and dev-dependencies are
+# resolved only when a target that needs them is built (`cargo test`, `clippy --all-targets`). A
+# `cargo build --release` of `habitat-engine` has no door to it (the plant is ra1-plant.out).
+headroom-seam = []
 
 [profile.dev]
 opt-level = 0
@@ -2480,6 +2486,10 @@ sha2 = "=0.11.0"
 # (app lane); purpose: the serve loop's drain signal. rustix 1.1.4's signal calls are all `unsafe`
 # (`runtime` feature) and it has no signalfd, and this crate forbids `unsafe`.
 signal-hook = { version = "=0.4.4", default-features = false, features = ["iterator"] }
+
+# RA1 (b): the package's test builds carry the headroom seam, and only they (see `[features]`).
+[dev-dependencies]
+herdr-engineering-engine-v3 = { path = ".", features = ["headroom-seam"] }
 
 [[test]]
 name = "t02_pi"

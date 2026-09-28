@@ -268,6 +268,21 @@ pub(crate) fn headroom(fs: Fs, free: u64, reserve: u64) -> Result<(), Headroom> 
     }
 }
 
+/// RC01's headroom decision, pure (F95; RA1 a): each filesystem in RC01's order (the state root's,
+/// then the destination's) with its measured free bytes (`None`: unmeasured) and its reserve. The
+/// first that is unmeasured or short refuses, naming the one filesystem its own numbers determine,
+/// and nothing after it is consumed: the caller measures lazily, so a short state root leaves the
+/// destination unmeasured.
+pub(crate) fn headroom_decision(
+    measured: impl IntoIterator<Item = (Fs, Option<u64>, u64)>,
+) -> Result<(), BackupWhy> {
+    for (fs, free, reserve) in measured {
+        let free = free.ok_or(BackupWhy::Unmeasured(fs))?;
+        headroom(fs, free, reserve).map_err(BackupWhy::Headroom)?;
+    }
+    Ok(())
+}
+
 /// Why RC01's backup-freshness gate refused (OPS-2), each by its own name.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BackupWhy {
@@ -412,15 +427,17 @@ fn ensure_fresh(
     let target = backup
         .as_ref()
         .map_err(|why| Gate::Refused(BackupWhy::Target(*why)))?;
-    for (fs, path, reserve) in [
-        (Fs::State, &target.state_root, STATE_RESERVE),
-        (Fs::Backup, &target.destination, BACKUP_RESERVE),
-    ] {
-        let free = space
-            .free(path)
-            .map_err(|_| Gate::Refused(BackupWhy::Unmeasured(fs)))?;
-        headroom(fs, free, reserve).map_err(|short| Gate::Refused(BackupWhy::Headroom(short)))?;
-    }
+    // Measured lazily, in RC01's order: the decision consumes the destination's measurement only
+    // once the state root's has passed.
+    headroom_decision(
+        [
+            (Fs::State, &target.state_root, STATE_RESERVE),
+            (Fs::Backup, &target.destination, BACKUP_RESERVE),
+        ]
+        .into_iter()
+        .map(|(fs, path, reserve)| (fs, space.free(path).ok(), reserve)),
+    )
+    .map_err(Gate::Refused)?;
     let deadline = Instant::now()
         .checked_add(target.deadline)
         .ok_or(Gate::Refused(BackupWhy::Store("deadline")))?;
@@ -847,8 +864,9 @@ fn step_line(
 #[cfg(test)]
 mod tests {
     use super::{
-        BACKUP_FRESHNESS, BACKUP_RESERVE, BATCH_BOUNDARY, Due, Fs, Headroom, NativeWhy, NoNative,
-        STATE_RESERVE, Step, Unavailable, backup_due, classify, headroom, teardown_share,
+        BACKUP_FRESHNESS, BACKUP_RESERVE, BATCH_BOUNDARY, BackupWhy, Due, Fs, Headroom, NativeWhy,
+        NoNative, STATE_RESERVE, Step, Unavailable, backup_due, classify, headroom,
+        headroom_decision, teardown_share,
     };
     use crate::app::candidates::ClassPromptError;
     use crate::app::coordinator::RootIdError;
@@ -1210,6 +1228,84 @@ mod tests {
                 }),
                 Ok(()),
                 Ok(()),
+            ]
+        );
+    }
+
+    /// RA1 (a) · RC01's headroom decision is pure: each case's numbers determine the one filesystem
+    /// that refuses, asserted whole. Short on the state root alone, then on the destination alone
+    /// (two fixtures differing in every field), both short (the state root is named: RC01's order),
+    /// each unmeasured, both exactly at their reserves, and reserves that are not RC01's (the
+    /// reserve is the argument's, never the constant's).
+    #[test]
+    fn the_headroom_decision_names_the_filesystem_its_numbers_determine() {
+        let state = |free: Option<u64>| (Fs::State, free, STATE_RESERVE);
+        let backup = |free: Option<u64>| (Fs::Backup, free, BACKUP_RESERVE);
+        let short = |fs, free, reserve| Err(BackupWhy::Headroom(Headroom { fs, free, reserve }));
+        assert_eq!(
+            [
+                headroom_decision([state(Some(103_079_215_103)), backup(Some(u64::MAX))]),
+                headroom_decision([state(Some(103_079_215_104)), backup(Some(274_877_906_937))]),
+                headroom_decision([state(Some(5)), backup(Some(9))]),
+                headroom_decision([state(None), backup(Some(3))]),
+                headroom_decision([state(Some(1_099_511_627_776)), backup(None)]),
+                headroom_decision([state(Some(103_079_215_104)), backup(Some(274_877_906_944))]),
+                headroom_decision([(Fs::State, Some(10), 11), (Fs::Backup, Some(12), 12)]),
+                headroom_decision([(Fs::State, Some(11), 11), (Fs::Backup, Some(12), 13)]),
+            ],
+            [
+                short(Fs::State, 103_079_215_103, 103_079_215_104),
+                short(Fs::Backup, 274_877_906_937, 274_877_906_944),
+                short(Fs::State, 5, 103_079_215_104),
+                Err(BackupWhy::Unmeasured(Fs::State)),
+                Err(BackupWhy::Unmeasured(Fs::Backup)),
+                Ok(()),
+                short(Fs::State, 10, 11),
+                short(Fs::Backup, 12, 13),
+            ]
+        );
+    }
+
+    /// RA1 (a) · the decision consumes no measurement after the one that refuses (so the caller's
+    /// lazy measurement leaves the destination unasked when the state root is short), and consumes
+    /// every one when all pass.
+    #[test]
+    fn the_headroom_decision_consumes_nothing_after_its_refusal() {
+        let decided = |measured: [(Fs, Option<u64>, u64); 2]| {
+            let consumed = std::cell::Cell::new(0_u32);
+            let verdict = headroom_decision(
+                measured
+                    .into_iter()
+                    .inspect(|_| consumed.set(consumed.get() + 1)),
+            );
+            (verdict, consumed.get())
+        };
+        assert_eq!(
+            [
+                decided([
+                    (Fs::State, Some(7), STATE_RESERVE),
+                    (Fs::Backup, Some(u64::MAX), BACKUP_RESERVE),
+                ]),
+                decided([
+                    (Fs::State, None, STATE_RESERVE),
+                    (Fs::Backup, None, BACKUP_RESERVE),
+                ]),
+                decided([
+                    (Fs::State, Some(u64::MAX), STATE_RESERVE),
+                    (Fs::Backup, Some(u64::MAX), BACKUP_RESERVE),
+                ]),
+            ],
+            [
+                (
+                    Err(BackupWhy::Headroom(Headroom {
+                        fs: Fs::State,
+                        free: 7,
+                        reserve: 103_079_215_104
+                    })),
+                    1
+                ),
+                (Err(BackupWhy::Unmeasured(Fs::State)), 1),
+                (Ok(()), 2),
             ]
         );
     }
