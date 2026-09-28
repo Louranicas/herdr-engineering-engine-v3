@@ -319,7 +319,7 @@ CONTEXT_INPUTS = ("src/context.rs",)
 COHORT_TARGET_COUNTS = {"t22_cohort": 67}
 COHORT_INPUTS = ("src/cohort.rs", "evaluation/cohorts/claim-overlap-v1.json",
                  "tests/fixtures/t22/C01.json", "tests/fixtures/t22/C02.json")
-ACTIONS_TARGET_COUNTS = {"t28_actions": 331}
+ACTIONS_TARGET_COUNTS = {"t28_actions": 329}
 # The control receiver (review coordinator step 1) is served from the catalogue: its wire half in
 # contracts, its catalogue half in actions, and the independent Python oracle its cases run.
 ACTIONS_INPUTS = ("src/actions.rs", "src/worker/tools.rs", "src/actions/control.rs",
@@ -348,8 +348,6 @@ ACTIONS_INPUTS = ("src/actions.rs", "src/worker/tools.rs", "src/actions/control.
                   "tests/fixtures/preview/make-known-answers.py",
                   # B14a-1c: the attempt lifecycle over the real ledger, and its battery.
                   "src/app/runtime.rs", "tests/t28_runtime.rs",
-                  # HT0: the real toolchain through the candidate namespace (musl, rust-lld).
-                  "tests/t28_musl_workload.rs",
                   # B09a task.get evidence views: the store's evidence read and its battery.
                   "src/store/evidence.rs", "tests/t28_evidence.rs",
                   # T29 composition (b): the consumer the engine cases run, over skills/ and workflows/.
@@ -360,6 +358,11 @@ ACTIONS_INPUTS = ("src/actions.rs", "src/worker/tools.rs", "src/actions/control.
                   "tests/fixtures/native/control-v1/C01-metadata.json")
 HERDR_TARGET_COUNTS = {"t16_herdr": 76}
 HERDR_INPUTS = ("src/herdr.rs",)
+# HT0: the real toolchain through the candidate namespace (musl, rust-lld). Its own binary: it
+# becomes a child subreaper and reaps the pid-1 zombie bwrap orphans per stage, which in a shared
+# binary could take a child another test is waiting for.
+MUSL_TARGET_COUNTS = {"t28_musl_workload": 3}
+MUSL_INPUTS = ("tests/t28_musl_workload.rs",)
 
 T09_TARGET_COUNTS = {"t09_route": 77}
 # make-known-answers.py is the independent Python oracle that wrote known-answers.json; the gate
@@ -442,6 +445,10 @@ def has_actions_battery(root):
 
 def has_herdr_battery(root):
     return named_target_present(root, "t16_herdr", HERDR_INPUTS)
+
+
+def has_musl_workload(root):
+    return named_target_present(root, "t28_musl_workload", MUSL_INPUTS)
 
 
 def has_t09(root):
@@ -924,6 +931,8 @@ def quality_subject_paths(root, deadline, rust_only):
         required += tree_files(root, "schemas/actions", deadline)
     if has_herdr_battery(root):
         required += HERDR_INPUTS
+    if has_musl_workload(root):
+        required += MUSL_INPUTS
     if has_t08_contract(root):
         required += T08_CONTRACT_INPUTS
     if has_t13(root):
@@ -1042,6 +1051,7 @@ def rust_test_expectations(root):
                       (has_cohort_battery(root), COHORT_TARGET_COUNTS, COHORT_INPUTS),
                       (has_actions_battery(root), ACTIONS_TARGET_COUNTS, ACTIONS_INPUTS),
                       (has_herdr_battery(root), HERDR_TARGET_COUNTS, HERDR_INPUTS),
+                      (has_musl_workload(root), MUSL_TARGET_COUNTS, MUSL_INPUTS),
                       (has_t08(root), T08_TARGET_COUNTS, T08_INPUTS),
                       (has_recovery(root), RECOVERY_TARGET_COUNTS, RECOVERY_INPUTS),
                       (has_t08_contract(root), T08_CONTRACT_TARGET_COUNTS, T08_CONTRACT_INPUTS),
@@ -1121,6 +1131,8 @@ def rust_test_expectations(root):
                 unit_counts[namespace] = EXTENSION_UNIT_COUNTS[namespace]
         if has_herdr_battery(root):
             counts.extend(HERDR_TARGET_COUNTS.values())
+        if has_musl_workload(root):
+            counts.extend(MUSL_TARGET_COUNTS.values())
         if has_t08_contract(root):
             counts.extend(T08_CONTRACT_TARGET_COUNTS.values())
         if has_t13(root):

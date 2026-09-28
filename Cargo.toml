@@ -2677,3 +2677,7 @@ path = "tests/t28_actions.rs"
 [[test]]
 name = "t16_herdr"
 path = "tests/t16_herdr.rs"
+
+[[test]]
+name = "t28_musl_workload"
+path = "tests/t28_musl_workload.rs"

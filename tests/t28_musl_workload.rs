@@ -12,6 +12,7 @@ use habitat_engine::app::workload::{
     self, CANDIDATE_TARGET, COMPILER_DESTINATION, Outcome, Plan, Tools,
 };
 use habitat_engine::worker::{namespace::ReadOnlyFile, workspace::Snapshot};
+use rustix::process::WaitOptions;
 use sha2::{Digest as _, Sha256};
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -85,6 +86,9 @@ fn host_libraries(binary: &Path, toolchain: &Path) -> Result<Vec<PathBuf>> {
     let mut found = Vec::new();
     for line in String::from_utf8(output.stdout)?.lines() {
         let fields: Vec<&str> = line.split_whitespace().collect();
+        if fields.contains(&"not") && fields.contains(&"found") {
+            return Err(format!("ldd {}: {line}", binary.display()).into());
+        }
         let path = match fields.as_slice() {
             [_, "=>", path, ..] | [path, ..] if path.starts_with('/') => PathBuf::from(path),
             _ => continue,
@@ -243,8 +247,45 @@ fn run(tools: &Tools, source: &[u8]) -> Result<(Outcome, Option<bool>)> {
         };
         Ok((run.outcome, driver))
     })();
-    remove(&root)?;
-    result
+    // The run's own refusal is reported first; a cleanup failure is reported only after a run
+    // that succeeded, so it never hides what the run said.
+    let removed = remove(&root);
+    let outcome = result?;
+    removed?;
+    Ok(outcome)
+}
+
+/// Reap every child this process has adopted, waiting until none is left. bwrap's outer process
+/// exits before its namespace's pid 1 does, and that pid 1 is then killed by `--die-with-parent`
+/// and orphaned to the nearest subreaper (measured 2026-09-29: a plain `bwrap --unshare-all
+/// --die-with-parent /bin/true` leaves one zombie with the subreaper above it). This test is that
+/// subreaper, so the gate that runs it is not. Called only once every child the test spawned
+/// itself has been waited for, so whatever remains is adopted; it may still be dying, so the wait
+/// has a budget, and a child still present at the end refuses with the two numbers.
+fn reap_adopted() -> Result<usize> {
+    const BUDGET: Duration = Duration::from_secs(10);
+    let started = Instant::now();
+    let mut reaped = 0;
+    loop {
+        // `wait` (pid -1), never `waitpid(None, …)`: rustix passes `None` as pid 0, which waits
+        // only for this process group's children, and bwrap's `--new-session` gives pid 1 its own
+        // (measured 2026-09-29: `ECHILD` while six adopted zombies were this process's children).
+        match rustix::process::wait(WaitOptions::NOHANG) {
+            Ok(Some(_)) => reaped += 1,
+            // No child left at all (ECHILD): every adopted process has been reaped.
+            Err(rustix::io::Errno::CHILD) => return Ok(reaped),
+            Ok(None) if started.elapsed() < BUDGET => {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Ok(None) => {
+                return Err(format!(
+                    "adopted children still live after {BUDGET:?} ({reaped} reaped)"
+                )
+                .into());
+            }
+            Err(error) => return Err(error.into()),
+        }
+    }
 }
 
 fn failed_ids(outcome: &Outcome) -> Vec<&str> {
@@ -259,31 +300,33 @@ fn failed_ids(outcome: &Outcome) -> Vec<&str> {
     }
 }
 
+/// The reference and the base, one after the other through the real namespace: one test, so the
+/// subreaper's reaping can never take a child another test is waiting for.
 #[test]
-fn reference_compiles_links_static_and_matches_every_case() -> Result<()> {
-    let (outcome, interpreter) = run(&tools()?, REFERENCE)?;
-    let Outcome::Matched(evaluation) = &outcome else {
-        return Err(format!("reference outcome {outcome:?}").into());
+fn reference_and_base_build_for_musl_link_static_and_meet_the_oracle() -> Result<()> {
+    rustix::process::set_child_subreaper(Some(rustix::process::getpid()))?;
+    let tools = tools()?;
+    let (reference, interpreter) = run(&tools, REFERENCE)?;
+    let adopted = reap_adopted()?;
+    let Outcome::Matched(evaluation) = &reference else {
+        return Err(format!("reference outcome {reference:?}").into());
     };
     assert_eq!(
         (evaluation.matched, evaluation.failed, interpreter),
         (335, 0, Some(false)),
-        "the reference matches all 335 cases with a static driver (no PT_INTERP)"
+        "the reference matches all 335 cases with a static driver (no PT_INTERP); adopted {adopted}"
     );
-    Ok(())
-}
-
-#[test]
-fn base_links_and_fails_the_cases_its_parser_admits() -> Result<()> {
-    let (outcome, interpreter) = run(&tools()?, BASE)?;
-    let Outcome::Mismatch(evaluation) = &outcome else {
-        return Err(format!("base outcome {outcome:?}").into());
+    let (base, interpreter) = run(&tools, BASE)?;
+    let adopted = reap_adopted()?;
+    let Outcome::Mismatch(evaluation) = &base else {
+        return Err(format!("base outcome {base:?}").into());
     };
-    let failed = failed_ids(&outcome);
+    let failed = failed_ids(&base);
     assert_eq!(
         (evaluation.matched, evaluation.failed, interpreter),
         (196, 139, Some(false)),
-        "the base fails 139 of 335 cases (independent Python reading), with a static driver"
+        "the base fails 139 of 335 cases (independent Python reading), with a static driver; \
+         adopted {adopted}"
     );
     for id in ["leading_zero", "plus_sign", "full_width_digit"] {
         assert!(
@@ -291,5 +334,58 @@ fn base_links_and_fails_the_cases_its_parser_admits() -> Result<()> {
             "base must fail {id}; failed: {failed:?}"
         );
     }
+    Ok(())
+}
+
+/// The workload's compile and link flags, each as the literal the review read, not through the
+/// constants' own names (F122).
+#[test]
+fn the_compile_and_link_flags_are_the_musl_rust_lld_argv() {
+    assert_eq!(
+        (
+            workload::COMPILE_FLAGS,
+            workload::LINK_FLAGS,
+            CANDIDATE_TARGET
+        ),
+        (
+            [
+                "--sysroot",
+                "/toolchain",
+                "--target",
+                "x86_64-unknown-linux-musl",
+                "--edition=2024",
+                "--crate-name",
+                "strict_u64_workload",
+                "--crate-type",
+                "rlib",
+                "-Dwarnings",
+            ],
+            [
+                "--target",
+                "x86_64-unknown-linux-musl",
+                "-C",
+                "linker=rust-lld",
+                "-C",
+                "link-self-contained=yes",
+            ],
+            "x86_64-unknown-linux-musl",
+        )
+    );
+}
+
+/// The static-driver check's positive control: a detector that has only ever printed "no loader"
+/// is unproven. This test's own binary is a dynamic executable (built for the host's gnu target),
+/// so it has a `PT_INTERP`; the ELF header of a non-ELF file is refused.
+#[test]
+fn the_interpreter_check_sees_a_dynamic_executable() -> Result<()> {
+    let own = fs::read(std::env::current_exe()?)?;
+    assert!(
+        has_interpreter(&own)?,
+        "this test binary is dynamic: it names its loader"
+    );
+    assert!(
+        has_interpreter(b"#!/bin/sh\n").is_err(),
+        "a non-ELF file is refused"
+    );
     Ok(())
 }

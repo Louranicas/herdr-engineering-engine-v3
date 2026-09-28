@@ -1431,6 +1431,7 @@ class T06QualityInventoryControls(unittest.TestCase):
                       *(quality.COHORT_INPUTS if quality.has_cohort_battery(ROOT) else ()),
                       *(quality.ACTIONS_INPUTS if quality.has_actions_battery(ROOT) else ()),
                       *(quality.HERDR_INPUTS if quality.has_herdr_battery(ROOT) else ()),
+                      *(quality.MUSL_INPUTS if quality.has_musl_workload(ROOT) else ()),
                       *(target["path"] for target in declared["test"])}
             for name in sorted(inputs):
                 destination = root / name
@@ -1470,6 +1471,7 @@ class T06QualityInventoryControls(unittest.TestCase):
                   *(quality.COHORT_INPUTS if quality.has_cohort_battery(ROOT) else ()),
                   *(quality.ACTIONS_INPUTS if quality.has_actions_battery(ROOT) else ()),
                   *(quality.HERDR_INPUTS if quality.has_herdr_battery(ROOT) else ()),
+                  *(quality.MUSL_INPUTS if quality.has_musl_workload(ROOT) else ()),
                   *(target["path"] for target in declared["test"])}
         for name in sorted(inputs):
             destination = root / name
@@ -1675,7 +1677,8 @@ class T06QualityInventoryControls(unittest.TestCase):
                                                   + (1 if quality.has_context_battery(ROOT) else 0)
                                                   + (1 if quality.has_cohort_battery(ROOT) else 0)
                                                   + (1 if quality.has_actions_battery(ROOT) else 0)
-                                                  + (1 if quality.has_herdr_battery(ROOT) else 0)))
+                                                  + (1 if quality.has_herdr_battery(ROOT) else 0)
+                                                  + (1 if quality.has_musl_workload(ROOT) else 0)))
         expected = {"t01_contracts", "t01_task", "t02_pi", "t02_transport", "t03_contract",
                     "t05_roster", "t05_codec", "t13_service", "t13_probe", "t13_local_probe", "t21_analysis"}
         if quality.has_t09(ROOT):
@@ -1699,6 +1702,9 @@ class T06QualityInventoryControls(unittest.TestCase):
             expected.add("t28_actions")
         if quality.has_herdr_battery(ROOT):
             expected.add("t16_herdr")
+        if quality.has_musl_workload(ROOT):
+            # HT0: its own binary (a subreaper), run with the main partition.
+            expected.add("t28_musl_workload")
         self.assertEqual(set(main[1::2]), expected)
         self.assertEqual(len(main[1::2]), len(set(main[1::2])))
         t06 = partitions[1][1]
@@ -1858,8 +1864,8 @@ class T06QualityInventoryControls(unittest.TestCase):
         self.assertEqual(rows[3][1], ["--test", "t07_inventory"])
         targets = [args[i+1] for _,args in rows for i,value in enumerate(args) if value == "--test"]
         self.assertEqual(targets.count("t07_inventory"), 1)
-        self.assertEqual(len(targets), 41)
-        self.assertEqual(len(set(targets)), 41)
+        self.assertEqual(len(targets), 42)
+        self.assertEqual(len(set(targets)), 42)
         for name in ["recovery_cancel", "recovery_inspect", "recovery_crash", "recovery_pi_queue", "frontend_controls"]:
             self.assertNotIn(name, targets)
 
@@ -1979,8 +1985,8 @@ class T06QualityInventoryControls(unittest.TestCase):
         self.assertNotIn("t08_native", rows[1][1])
         targets = [args[i + 1] for _, args in rows for i, value in enumerate(args) if value == "--test"]
         self.assertEqual(targets.count("t08_native"), 1)
-        self.assertEqual(len(targets), 41)
-        self.assertEqual(len(set(targets)), 41)
+        self.assertEqual(len(targets), 42)
+        self.assertEqual(len(set(targets)), 42)
         # The partition world is the manifest's declared test inventory, every target once.
         declared = quality.tomllib.loads((ROOT / "Cargo.toml").read_text())
         self.assertEqual(sorted(targets), sorted(target["name"] for target in declared["test"]))
