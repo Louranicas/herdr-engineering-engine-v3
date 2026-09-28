@@ -1,3 +1,7 @@
+> FROZEN at c82e0d2 (2026-09-28): design history, not state. Code is the source of truth.
+> State: `python3 tools/check-flow-scoreboard`;
+> latest handover: `ls -t ~/handoffs/HEE3_HANDOVER_* | head -1`.
+
 # Herdr Engineering Engine v3 — quick start
 
 <!-- HEE3-RESUME-NAVIGATION-BEGIN -->

@@ -1,3 +1,7 @@
+> FROZEN at c82e0d2 (2026-09-28): design history, not state. Code is the source of truth.
+> State: `python3 tools/check-flow-scoreboard`;
+> latest handover: `ls -t ~/handoffs/HEE3_HANDOVER_* | head -1`.
+
 # Start coding in a new context — Herdr Engineering Engine v3
 
 Workspace: `/var/home/herdr-engineering-engine-v3` on the Fedora host; this Toolbx view uses `/run/host/var/home/herdr-engineering-engine-v3`. Authoring atlas: `/var/home/Louranicas/planning/herdr-engine-vision-20260915`. The codebase root IS a Git repository; read `git -C /var/home/herdr-engineering-engine-v3 status --porcelain` and `rev-parse HEAD` for branch, commit and dirty state rather than trusting any figure written here. (An earlier generation of this file said no repository was present; that was true at the 2026-09-16 review and stopped being true before it was noticed.) Recheck actual state before work.
