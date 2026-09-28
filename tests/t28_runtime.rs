@@ -1077,6 +1077,29 @@ fn run_dispatcher<P: dispatcher::Provider + Send + 'static>(
     ))
 }
 
+/// When a dispatcher proof's budget elapses (S17): on the wall clock (`Wall`, every proof but one),
+/// or when the proof's own clock says so (`Signalled`: a message on `elapsed`) — the helper's own
+/// control, which must fail at its budget whatever the machine's load, uses the second, so the
+/// instant the budget elapses is chosen by the proof (F95) and not by how fast a loaded machine
+/// reaches the provider. `guard` bounds the wait for that message on the wall clock (F102).
+enum Budget {
+    Wall(Duration),
+    Signalled {
+        elapsed: mpsc::Receiver<()>,
+        guard: Duration,
+    },
+}
+
+impl Budget {
+    /// How the budget is named in the helper's failure.
+    fn name(&self) -> String {
+        match self {
+            Self::Wall(budget) => format!("{budget:?}"),
+            Self::Signalled { .. } => "its budget (signalled by the proof's clock)".to_owned(),
+        }
+    }
+}
+
 /// Run the dispatcher over the rig until it exits, with `stop` as both the engine's drain and the
 /// between-attempts drain flag; every step it reports is collected. The dispatcher runs on a thread
 /// of its own over owned state (R21 N21: an unscoped spawn, since a scoped thread is joined and so
@@ -1090,6 +1113,20 @@ fn run_dispatcher_owned<P: dispatcher::Provider + Send + 'static>(
     stop: Arc<AtomicBool>,
     selections: Vec<Selection>,
     budget: Duration,
+) -> Result<(dispatcher::Exit, Vec<String>), String> {
+    run_dispatcher_budgeted(rig, provider, stop, selections, Budget::Wall(budget))
+}
+
+/// [`run_dispatcher_owned`] under a [`Budget`]. The wake at the budget is detached (S17): waking
+/// takes the store's guard, which a dispatcher that ignores its stop may hold — through a backup,
+/// an admission — for as long as it likes, so a wake on this thread would make the helper's own
+/// return wait on the dispatcher it exists to give up on.
+fn run_dispatcher_budgeted<P: dispatcher::Provider + Send + 'static>(
+    rig: Arc<Rig>,
+    provider: P,
+    stop: Arc<AtomicBool>,
+    selections: Vec<Selection>,
+    budget: Budget,
 ) -> Result<(dispatcher::Exit, Vec<String>), String> {
     let (report_to, reported) = mpsc::channel::<String>();
     let (exit_to, exited) = mpsc::channel();
@@ -1122,7 +1159,25 @@ fn run_dispatcher_owned<P: dispatcher::Provider + Send + 'static>(
             let _ = exit_to.send(exit);
         })
         .map_err(|error| format!("the dispatcher thread did not start: {error}"))?;
-    match exited.recv_timeout(budget) {
+    let named = budget.name();
+    let waited = match budget {
+        Budget::Wall(budget) => exited.recv_timeout(budget),
+        Budget::Signalled { elapsed, guard } => {
+            if elapsed.recv_timeout(guard).is_err() {
+                waker_stop.store(true, Ordering::SeqCst);
+                std::thread::spawn(move || waker_rig.tasks.wake());
+                return Err(format!(
+                    "the proof's clock never signalled its budget within {guard:?}"
+                ));
+            }
+            // The proof's clock says the budget has elapsed: an exit that came first is taken.
+            exited.try_recv().map_err(|error| match error {
+                mpsc::TryRecvError::Empty => mpsc::RecvTimeoutError::Timeout,
+                mpsc::TryRecvError::Disconnected => mpsc::RecvTimeoutError::Disconnected,
+            })
+        }
+    };
+    match waited {
         Ok(exit) => {
             handle
                 .join()
@@ -1131,10 +1186,10 @@ fn run_dispatcher_owned<P: dispatcher::Provider + Send + 'static>(
         }
         Err(mpsc::RecvTimeoutError::Timeout) => {
             waker_stop.store(true, Ordering::SeqCst);
-            waker_rig.tasks.wake();
+            std::thread::spawn(move || waker_rig.tasks.wake());
             let lines: Vec<String> = reported.try_iter().collect();
             Err(format!(
-                "the dispatcher did not end within {budget:?}: {lines:?}"
+                "the dispatcher did not end within {named}: {lines:?}"
             ))
         }
         Err(mpsc::RecvTimeoutError::Disconnected) => {
@@ -1153,10 +1208,15 @@ fn run_dispatcher_owned<P: dispatcher::Provider + Send + 'static>(
     }
 }
 
-/// A provider whose `open` sleeps `nap` and reads no stop: the stand-in for a dispatcher that
-/// ignores its drain. It records the task it was handed, sent when its `open` returns.
+/// A provider whose `open` reads no stop: the stand-in for a dispatcher that ignores its drain. It
+/// says when it has entered `open` (`entered`: the proof's clock, at which the proof's budget
+/// elapses), then holds there until the proof opens its `gate` — or its `guard` passes on the wall
+/// clock (F102) — records that it returned, and sends the task it was handed.
 struct Sleeper {
-    nap: Duration,
+    entered: mpsc::Sender<()>,
+    gate: mpsc::Receiver<()>,
+    guard: Duration,
+    returned: Arc<AtomicBool>,
     woke: mpsc::Sender<String>,
 }
 
@@ -1168,7 +1228,9 @@ impl dispatcher::Provider for Sleeper {
         next: &habitat_engine::store::Dispatchable,
         _admitted: &habitat_engine::app::runtime::Admitted<'_>,
     ) -> Result<(Script<'static>, Oracle<'static>), dispatcher::Unavailable> {
-        std::thread::sleep(self.nap);
+        let _ = self.entered.send(());
+        let _ = self.gate.recv_timeout(self.guard);
+        self.returned.store(true, Ordering::SeqCst);
         let _ = self.woke.send(next.task.clone());
         Err(dispatcher::Unavailable::NoNativeProvider(
             dispatcher::NoNative::NotInstalled,
@@ -1177,45 +1239,59 @@ impl dispatcher::Provider for Sleeper {
 }
 
 /// R21 N21 (D9), the helper's own control · a dispatcher that ignores its stop fails the proof by
-/// name at the budget instead of hanging it: the provider's `open` sleeps 1 s under a 200 ms budget
-/// (Q15: short, to spare `t21_process`'s margin). The helper answers `Err` naming the budget before
-/// the sleep ends, having raised the stop; the thread it left behind ends by itself — its `open`
-/// returns the task it was handed and it releases the rig (budgeted, F102) — and holds no stand-in
-/// process, so no descendant outlives the proof.
+/// name at the budget instead of hanging it. S17 (Closure R1 C5): the budget elapses on the proof's
+/// clock — the instant the dispatcher is inside a provider `open` that reads no stop — never on the
+/// wall clock, which a loaded machine (a real backup now precedes `open`) could spend before `open`
+/// is reached; and "at the budget, not after the provider returned" is proven causally, not by
+/// timing: the provider is still held inside `open` (the proof has not opened its gate) when the
+/// helper answers `Err` naming the budget, having raised the stop. The thread it left behind then
+/// ends by itself once the gate opens — its `open` returns the task it was handed and it releases
+/// the rig (budgeted, F102) — and holds no stand-in process, so no descendant outlives the proof.
 #[test]
 fn a_dispatcher_that_ignores_its_stop_fails_the_proof_by_name() -> Outcome_ {
     let rig = Arc::new(rig(&Shape::default())?);
     let stop = Arc::new(AtomicBool::new(false));
+    let (entered, elapsed) = mpsc::channel();
+    let (release, gate) = mpsc::channel::<()>();
     let (woke, opened) = mpsc::channel();
-    let nap = Duration::from_secs(1);
-    let started = Instant::now();
-    let result = run_dispatcher_owned(
+    let returned = Arc::new(AtomicBool::new(false));
+    let guard = Duration::from_secs(60);
+    let result = run_dispatcher_budgeted(
         Arc::clone(&rig),
-        Sleeper { nap, woke },
+        Sleeper {
+            entered,
+            gate,
+            guard,
+            returned: Arc::clone(&returned),
+            woke,
+        },
         Arc::clone(&stop),
         rig.selections.clone(),
-        Duration::from_millis(200),
+        Budget::Signalled { elapsed, guard },
     );
-    let failed_after = started.elapsed();
     let message = result
         .err()
         .ok_or("the proof passed a dispatcher that ignored its stop")?;
     assert!(
-        message.starts_with("the dispatcher did not end within 200ms"),
+        message.starts_with(
+            "the dispatcher did not end within its budget (signalled by the proof's clock)"
+        ),
         "{message}"
     );
     assert!(
-        failed_after < nap,
-        "failed at the budget, not after the sleep: {failed_after:?} against {nap:?}"
+        !returned.load(Ordering::SeqCst),
+        "the helper answered while the provider was still inside `open`, never after it returned"
     );
     assert!(stop.load(Ordering::SeqCst), "the helper raised the stop");
-    let budget = Duration::from_secs(5);
-    assert_eq!(opened.recv_timeout(budget)?, TASK, "the left thread's open");
+    release
+        .send(())
+        .map_err(|_| "the left thread's gate is gone")?;
+    assert_eq!(opened.recv_timeout(guard)?, TASK, "the left thread's open");
     let released = Instant::now();
     while Arc::strong_count(&rig) > 1 {
         assert!(
-            released.elapsed() < budget,
-            "the left thread still holds the rig after {:?} (budget {budget:?}): {} holders",
+            released.elapsed() < guard,
+            "the left thread still holds the rig after {:?} (budget {guard:?}): {} holders",
             released.elapsed(),
             Arc::strong_count(&rig)
         );
@@ -3259,28 +3335,53 @@ fn a_second_writer_is_refused_as_a_concurrent_writer() -> Outcome_ {
     Ok(())
 }
 
+/// The overrun proof's work reservation (S17; Closure R1 C5), in ms: wide enough for the dispatch's
+/// own plan, which the first attempt is charged from, on a loaded machine. Derived from a measured
+/// distribution (`closure-r1/c5-measure-baseline*.out`, 2026-09-28): the plan charge was 188-239 ms
+/// unloaded and at most 469 ms over 48 runs under a parallel from-scratch release build (loadavg up
+/// to 23 on 16 cores); S17 saw the old 1,200 ms window spent under the owed mutation run. 6,000 ms
+/// is 12x the measured maximum and 5x the window S17 saw spent.
+const OVERRUN_WORK_MS: u64 = 6_000;
+
 /// B14a-1c · a settle measured past what the reservation holds is an unknown cost, never a clean
 /// failure: `used_ms` is not recorded, the task waits `effect_unknown`, and the stop needs
-/// settlement.
+/// settlement. S17 (Closure R1 C5): the overrun is the candidate's by construction, whatever the
+/// plan before it took — the hook holds the source until 200 ms past the attempt's own work window,
+/// measured from the instant the attempt is charged from (the `Ask` it was handed) — and the window
+/// holds the plan on a loaded machine (`OVERRUN_WORK_MS`). The plan is made slow on purpose: the
+/// source's `ready`, which the first attempt is charged for, takes 1.5 s — past the 1,200 ms window
+/// S17 saw spent — so the proof holds under the plan a loaded machine takes, not only a fast one.
+/// Should the plan ever outrun the window, the failure says so with both numbers.
 #[test]
 fn an_overrun_is_recorded_as_an_unknown_cost() -> Outcome_ {
-    // The work reservation holds the dispatch's own plan (charged to attempt 1) and leaves a
-    // window the hook then sleeps past: the overrun is the candidate's, not the plan's.
     let rig = rig(&Shape {
-        work_ms: 1_200,
+        work_ms: OVERRUN_WORK_MS,
         teardown_ms: 0,
         ..Shape::default()
     })?;
     let principal = owner();
-    let (mut source, _) = script(vec![Candidate::Replacement(SECOND.to_vec())]);
-    source.hook = Some(Box::new(|| {
-        std::thread::sleep(Duration::from_millis(1_400));
+    let (mut source, asked) = script(vec![Candidate::Replacement(SECOND.to_vec())]);
+    let (seen, plan_ms) = (Arc::clone(&asked), Arc::new(Mutex::new(Vec::new())));
+    let planned = Arc::clone(&plan_ms);
+    source.ready_hook = Some(Box::new(|_| {
+        std::thread::sleep(Duration::from_millis(1_500));
+    }));
+    source.hook = Some(Box::new(move || {
+        if let Some(charged_from) = taken(&seen).last().map(|seen| seen.charged_from) {
+            record(&planned, charged_from.elapsed().as_millis());
+            let past = charged_from + Duration::from_millis(OVERRUN_WORK_MS + 200);
+            std::thread::sleep(past.saturating_duration_since(Instant::now()));
+        }
     }));
     let (verifier, handed) = oracle(vec![]);
-    let outcome = run(&rig, &principal, source, verifier, 10).map_err(|e| format!("{e:?}"))?;
+    let outcome = run(&rig, &principal, source, verifier, OVERRUN_WORK_MS / 2)
+        .map_err(|e| format!("{e:?}"))?;
     assert_eq!(
         outcome,
-        Outcome::Driven(Driven::NeedsSettlement(StopReason::Unsettled))
+        Outcome::Driven(Driven::NeedsSettlement(StopReason::Unsettled)),
+        "the plan charge before the source was asked (ms): {:?}, against a {OVERRUN_WORK_MS} ms \
+         window",
+        taken(&plan_ms)
     );
     assert_eq!(state(&rig)?, "effect_unknown");
     assert_eq!(
@@ -3289,7 +3390,7 @@ fn an_overrun_is_recorded_as_an_unknown_cost() -> Outcome_ {
     );
     assert!(taken(&handed).is_empty());
     assert!(verifications(&rig)?.is_empty());
-    assert_eq!(rig.reserved_work_ms, 1_200);
+    assert_eq!(rig.reserved_work_ms, OVERRUN_WORK_MS);
     Ok(())
 }
 
