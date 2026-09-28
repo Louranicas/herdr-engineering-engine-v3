@@ -564,14 +564,12 @@ struct Dispatching<'a> {
 }
 
 /// RC01's backup target (OPS-2), read once from the operator's record and said in one line: where
-/// the backups go, or why dispatch is unavailable. The state root's device is the real one here;
-/// the reader takes it as an argument so its rule is chosen by argument in the proofs.
+/// the backups go, or why dispatch is unavailable. RC02's device rule is decided over this process's
+/// real mount table here (`mount_table`); the reader takes the table as an argument, so its rule is
+/// chosen by argument in the proofs.
 fn read_backup_target(home: &Path, state_root: &Path) -> Result<BackupTarget, BackupUnready> {
-    use std::os::unix::fs::MetadataExt;
     let directory = coordinator::config_path(home, backup_target::BACKUP_DIRECTORY);
-    let read = std::fs::metadata(state_root)
-        .map_err(|_| BackupUnready::Custody)
-        .and_then(|state| backup_target::read_target(&directory, state_root, state.dev()));
+    let read = backup_target::read_target(&directory, state_root, &mount_table());
     match &read {
         Ok(target) => say(format_args!(
             "backup target read from {} (destination {})",
@@ -881,6 +879,7 @@ fn serve_until_signalled(
                             drain: drain.flag(),
                             backup: &backup,
                             space,
+                            clock: &dispatcher::Monotonic,
                         }
                         .run(&report),
                         Err(why) => dispatcher::Dispatcher {
@@ -893,6 +892,7 @@ fn serve_until_signalled(
                             drain: drain.flag(),
                             backup: &backup,
                             space,
+                            clock: &dispatcher::Monotonic,
                         }
                         .run(&report),
                     };
@@ -997,6 +997,33 @@ impl backup_target::FreeSpace for Undeclared {
             format!("the declared headroom is malformed ({})", path.display()),
         ))
     }
+
+    fn used(&self, _destination: &Path) -> Result<u64, backup_target::Usage> {
+        Err(backup_target::Usage::Io(io::ErrorKind::InvalidInput))
+    }
+}
+
+/// RC02's mount table as a release build reads it: this process's own, always.
+#[cfg(not(feature = "headroom-seam"))]
+fn mount_table() -> Result<backup_target::MountTable, backup_target::TableWhy> {
+    backup_target::MountTable::read(Path::new(backup_target::MOUNT_TABLE))
+}
+
+/// RC02's mount table in a test build (feature `headroom-seam`): read from the file
+/// `HEE3_TEST_MOUNTINFO` names when it is set, and said so once, through the same bounded reader and
+/// parser; this process's own otherwise. No binary-test verdict then depends on which devices the
+/// test machine's scratch sits on (the gate's scratch is tmpfs, which the device rule refuses).
+#[cfg(feature = "headroom-seam")]
+fn mount_table() -> Result<backup_target::MountTable, backup_target::TableWhy> {
+    const MOUNTS_SEAM: &str = "HEE3_TEST_MOUNTINFO";
+    let Some(path) = std::env::var_os(MOUNTS_SEAM) else {
+        return backup_target::MountTable::read(Path::new(backup_target::MOUNT_TABLE));
+    };
+    say(format_args!(
+        "mount table declared by the test seam: {MOUNTS_SEAM}=\"{}\"",
+        path.display()
+    ));
+    backup_target::MountTable::read(Path::new(&path))
 }
 
 /// `serve`'s one standard-error door: `line` after the engine's name, the write's error discarded.

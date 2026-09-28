@@ -10,7 +10,9 @@
 use super::t08_rig::{self, DaemonStandIn};
 use habitat_engine::actions::control::{TaskRequest, Tasks};
 use habitat_engine::app::backup_target::{
-    BACKUP_FILE, BACKUP_SCHEMA, BackupTarget, BackupUnready, Declared, FreeSpace, read_target,
+    BACKUP_FILE, BACKUP_SCHEMA, BackupTarget, BackupUnready, Declared, DeviceWhy, FreeSpace,
+    MAX_MOUNT_TABLE_BYTES, MountTable, NoDevice, Side, Statvfs, TableWhy, USAGE_ENTRY_BOUND, Usage,
+    backup_usage, device_decision, read_target,
 };
 use habitat_engine::app::candidates::{
     ClassPrompt, FilePins, NativeCandidates, Outcome as CandidateOutcome, Settle, render,
@@ -48,7 +50,7 @@ use std::error::Error;
 use std::fs::{self, DirBuilder};
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError, mpsc};
 use std::time::{Duration, Instant};
 
@@ -141,41 +143,76 @@ struct Rig {
     backups: PathBuf,
     /// The operator's backup record's directory, holding `backup.json` naming `backups`.
     backup_config: PathBuf,
-    /// The free-space double the dispatcher measures RC01's headroom through.
+    /// The free-space double the dispatcher measures RC01's headroom and backup usage through.
     space: Space,
+    /// The clock RC01's freshness is measured on: the monotonic clock unless a proof chooses one.
+    clock: Box<dyn dispatcher::Clock + Send + Sync>,
 }
 
-/// A free-space double (F101: a model that records what it was asked): the state root's filesystem
-/// answers `state_free`, any other path `backup_free`, and every path asked is kept in order.
+/// A space double (F101: a model that records what it was asked): the state root's filesystem
+/// answers `state_free`, any other path `backup_free` — each settable while the dispatcher runs, so a
+/// proof can spend a reserve between picks — and the destination's usage is the real walk of it plus
+/// `used_offset`, a proof's stand-in for backups it cannot write. Every path asked is kept in order.
 struct Space {
     state: PathBuf,
-    state_free: u64,
-    backup_free: u64,
+    state_free: AtomicU64,
+    backup_free: AtomicU64,
+    used_offset: u64,
     asked: Mutex<Vec<PathBuf>>,
+    used_asked: Mutex<Vec<PathBuf>>,
 }
 
 impl FreeSpace for Space {
     fn free(&self, path: &Path) -> std::io::Result<u64> {
-        if let Ok(mut asked) = self.asked.lock() {
-            asked.push(path.to_path_buf());
-        }
+        record(&self.asked, path.to_path_buf());
         Ok(if path == self.state {
-            self.state_free
+            self.state_free.load(Ordering::SeqCst)
         } else {
-            self.backup_free
+            self.backup_free.load(Ordering::SeqCst)
         })
+    }
+
+    fn used(&self, destination: &Path) -> Result<u64, Usage> {
+        record(&self.used_asked, destination.to_path_buf());
+        backup_usage(destination, USAGE_ENTRY_BOUND).map(|used| used + self.used_offset)
     }
 }
 
 /// Free space well above both RC01 reserves: the rig's default world.
 const ROOMY: u64 = 1 << 50;
 
-/// The rig's backup target through the one reader, with the state root's device chosen by
-/// argument as one other than the destination's (F95): the scratch holds both on one device.
+/// A mountinfo field as the kernel escapes it: space, tab, newline and backslash as `\ooo`.
+pub(super) fn escaped(path: &Path) -> String {
+    path.to_string_lossy()
+        .chars()
+        .map(|c| match c {
+            ' ' => "\\040".to_owned(),
+            '\t' => "\\011".to_owned(),
+            '\n' => "\\012".to_owned(),
+            '\\' => "\\134".to_owned(),
+            other => other.to_string(),
+        })
+        .collect()
+}
+
+/// A mount table declaring the scratch's root on this host's LUKS btrfs and `destination` on the
+/// STORAGE-10TB ext4 disk (the shapes measured on the host, 2026-09-28): two devices, chosen by
+/// argument (F95), while the scratch really holds both on one.
+fn two_devices(destination: &Path) -> Result<MountTable, TableWhy> {
+    MountTable::parse(
+        format!(
+            "1 0 0:35 / / rw,relatime - btrfs /dev/mapper/luks-97a2c76e rw\n\
+             2 1 8:17 / {} rw,relatime - ext4 /dev/sdb1 rw\n",
+            escaped(destination)
+        )
+        .as_bytes(),
+    )
+}
+
+/// The rig's backup target through the one reader, over a mount table placing the destination on
+/// another device than the state root (F95): the scratch holds both on one.
 fn target(rig: &Rig) -> Result<BackupTarget, BackupUnready> {
-    use std::os::unix::fs::MetadataExt;
-    let other = fs::metadata(&rig.backups).map_or(0, |meta| meta.dev().wrapping_add(1));
-    read_target(&rig.backup_config, &rig.state, other)
+    read_target(&rig.backup_config, &rig.state, &two_devices(&rig.backups))
 }
 
 /// The children of the rig's backup destination: one per backup taken.
@@ -545,10 +582,13 @@ fn rig_spaced(shape: &Shape<'_>, state_free: u64, backup_free: u64) -> Result<Ri
         teardown_ms: shape.teardown_ms,
         space: Space {
             state: state.clone(),
-            state_free,
-            backup_free,
+            state_free: AtomicU64::new(state_free),
+            backup_free: AtomicU64::new(backup_free),
+            used_offset: 0,
             asked: Mutex::new(Vec::new()),
+            used_asked: Mutex::new(Vec::new()),
         },
+        clock: Box::new(dispatcher::Monotonic),
         state,
         backups,
         backup_config,
@@ -1076,6 +1116,7 @@ fn run_dispatcher_owned<P: dispatcher::Provider + Send + 'static>(
                 drain: &stop,
                 backup: &backup,
                 space: &rig.space,
+                clock: rig.clock.as_ref(),
             }
             .run(&report);
             let _ = exit_to.send(exit);
@@ -5508,21 +5549,45 @@ fn record_text(destination: &Path, deadline: u64) -> String {
         .to_string()
 }
 
+/// A mount table of `(mount point, fstype, source, major:minor)` rows, ids from 1 in order, each
+/// line as the kernel writes it (its fields escaped).
+fn mounts(rows: &[(&Path, &str, &str, &str)]) -> Result<MountTable, TableWhy> {
+    let lines: Vec<String> = rows
+        .iter()
+        .enumerate()
+        .map(|(index, (point, fstype, source, device))| {
+            format!(
+                "{} 1 {device} / {} rw,relatime shared:1 - {fstype} {source} rw\n",
+                index + 1,
+                escaped(point)
+            )
+        })
+        .collect();
+    MountTable::parse(lines.concat().as_bytes())
+}
+
 /// OPS-2 · the operator's backup record (RC01/RC02; HO-03 "a required config field with no
 /// default") read through its one reader: every field required and no other admitted, a positive
 /// deadline, and custody of the record. Two accepted records that differ in every field are
-/// compared as whole values; the state root's device is chosen by argument as another (F95).
+/// compared as whole values; the mount table is chosen by argument (F95), placing both
+/// destinations on devices other than the state root's.
 #[test]
 fn the_backup_record_is_read_whole_with_no_defaults() -> Outcome_ {
-    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    use std::os::unix::fs::PermissionsExt;
     let scratch = Scratch::new()?;
     let root = &scratch.0;
     let state = root.join("state");
+    private(&state)?;
     let destination = root.join("backups");
     private(&destination)?;
     let other_destination = root.join("backups-two");
     private(&other_destination)?;
-    let other = fs::metadata(&destination)?.dev().wrapping_add(1);
+    let other = mounts(&[
+        (Path::new("/"), "btrfs", "/dev/mapper/luks-97a2c76e", "0:35"),
+        (&destination, "ext4", "/dev/sdb1", "8:17"),
+        (&other_destination, "xfs", "/dev/nvme1n1p1", "259:5"),
+    ]);
+    let other = &other;
     let record = record_text;
     // Accepted, whole, over two records differing in every field.
     for (name, at, seconds) in [
@@ -5615,19 +5680,24 @@ fn the_backup_record_is_read_whole_with_no_defaults() -> Outcome_ {
 
 /// OPS-2 · the destination the record names (RC02 "Backups": a separate local device, mode 0700):
 /// its own canonical path (not relative, not reached through a link), present (an unmounted disk's
-/// missing directory is named), the operator's private directory, and on another device than the
-/// state root — the state root's device chosen by argument (F95): the same device is refused with
-/// both numbers.
+/// missing directory is named), the operator's private directory — each refused before the device
+/// rule is asked. The device rule's own cases are `rc02_s_device_rule_*` below.
 #[test]
 fn the_backup_destination_must_be_canonical_private_and_on_another_device() -> Outcome_ {
-    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    use std::os::unix::fs::PermissionsExt;
     let scratch = Scratch::new()?;
     let root = &scratch.0;
     let state = root.join("state");
+    private(&state)?;
     let destination = root.join("backups");
     private(&destination)?;
-    let device = fs::metadata(&destination)?.dev();
-    let other = device.wrapping_add(1);
+    // A table under which every destination here would pass the device rule: each refusal below
+    // is the reader's own, not the rule's.
+    let other = &mounts(&[
+        (Path::new("/"), "btrfs", "/dev/mapper/luks-97a2c76e", "0:35"),
+        (root, "ext4", "/dev/sdb1", "8:17"),
+        (&state, "btrfs", "/dev/mapper/luks-97a2c76e", "0:35"),
+    ]);
     let record = record_text;
     // Not canonical: relative, and reached through a link.
     let relative = backup_record(
@@ -5664,13 +5734,15 @@ fn the_backup_destination_must_be_canonical_private_and_on_another_device() -> O
         read_target(&opened, &state, other),
         Err(BackupUnready::DestinationCustody)
     );
-    // The same device as the state root: refused with both devices (RC02).
-    let same = backup_record(root, "same", record(&destination, 60).as_bytes())?;
+    // And the same destination, accepted under that table: the rule is what the cases above were
+    // not refused by.
+    let accepted = backup_record(root, "accepted", record(&destination, 60).as_bytes())?;
     assert_eq!(
-        read_target(&same, &state, device),
-        Err(BackupUnready::SameDevice {
-            state: device,
-            destination: device,
+        read_target(&accepted, &state, other),
+        Ok(BackupTarget {
+            destination: destination.clone(),
+            deadline: Duration::from_secs(60),
+            state_root: state.clone(),
         })
     );
     Ok(())
@@ -5740,17 +5812,124 @@ fn every_backup_refusal_line_is_whole() {
             BackupWhy::Target(BackupUnready::DestinationCustody),
             "unavailable: no backup target (destination custody)",
         ),
-        (
-            BackupWhy::Target(BackupUnready::SameDevice {
-                state: 64_769,
-                destination: 2_065,
-            }),
-            "unavailable: no backup target (same device (state=64769 destination=2065))",
-        ),
         (BackupWhy::Id, "unavailable: backup failed (id)"),
         (
             BackupWhy::Destination("io:permission_denied"),
             "unavailable: backup failed (destination io:permission_denied)",
+        ),
+        (
+            BackupWhy::Usage(Usage::Io(std::io::ErrorKind::PermissionDenied)),
+            "unavailable: backup usage unmeasured (io:permission_denied)",
+        ),
+        (
+            BackupWhy::Usage(Usage::Bound { bound: 1_048_576 }),
+            "unavailable: backup usage unmeasured (over 1048576 entries)",
+        ),
+        (
+            BackupWhy::Budget {
+                used: 137_438_953_000,
+                backup: 1_306_624,
+                budget: 137_438_953_472,
+            },
+            "unavailable: backup budget (used=137438953000 backup=1306624 \
+             budget=137438953472)",
+        ),
+        (
+            BackupWhy::Budget {
+                used: 0,
+                backup: 9,
+                budget: 8,
+            },
+            "unavailable: backup budget (used=0 backup=9 budget=8)",
+        ),
+    ] {
+        assert_eq!(why.line(), line, "{why:?}");
+        assert_eq!(
+            dispatcher::Unavailable::Backup(why).name(),
+            "unavailable: backup",
+            "{why:?}"
+        );
+    }
+}
+
+/// Closure R1 (a) · every refusal RC02's device rule reports, whole, through the one renderer:
+/// one source and one filesystem with both mount ids (two fixtures differing in every field), each
+/// filesystem without a device on each side, an unresolved path on each side, and each reason the
+/// mount table could not be used — the unreadable one by its kind, the oversize one with its bound,
+/// the malformed one with its line.
+#[test]
+fn every_device_refusal_line_is_whole() {
+    use dispatcher::BackupWhy;
+    for (why, line) in [
+        (
+            BackupWhy::Target(BackupUnready::Device(DeviceWhy::SameSource {
+                state: 1_331,
+                destination: 1_262,
+            })),
+            "unavailable: no backup target (same device (one source: state mount 1331, \
+             destination mount 1262))",
+        ),
+        (
+            BackupWhy::Target(BackupUnready::Device(DeviceWhy::SameFilesystem {
+                state: 7,
+                destination: 90,
+            })),
+            "unavailable: no backup target (same device (one filesystem: state mount 7, \
+             destination mount 90))",
+        ),
+        (
+            BackupWhy::Target(BackupUnready::Device(DeviceWhy::NoDevice {
+                side: Side::Destination,
+                kind: NoDevice::Tmpfs,
+            })),
+            "unavailable: no backup target (not a block device (destination: tmpfs))",
+        ),
+        (
+            BackupWhy::Target(BackupUnready::Device(DeviceWhy::NoDevice {
+                side: Side::State,
+                kind: NoDevice::Ramfs,
+            })),
+            "unavailable: no backup target (not a block device (state: ramfs))",
+        ),
+        (
+            BackupWhy::Target(BackupUnready::Device(DeviceWhy::NoDevice {
+                side: Side::Destination,
+                kind: NoDevice::Overlay,
+            })),
+            "unavailable: no backup target (not a block device (destination: overlay))",
+        ),
+        (
+            BackupWhy::Target(BackupUnready::Device(DeviceWhy::NoDevice {
+                side: Side::State,
+                kind: NoDevice::Source,
+            })),
+            "unavailable: no backup target (not a block device (state: no device source))",
+        ),
+        (
+            BackupWhy::Target(BackupUnready::Device(DeviceWhy::Unresolved(Side::State))),
+            "unavailable: no backup target (device unresolved (state))",
+        ),
+        (
+            BackupWhy::Target(BackupUnready::Device(DeviceWhy::Unresolved(
+                Side::Destination,
+            ))),
+            "unavailable: no backup target (device unresolved (destination))",
+        ),
+        (
+            BackupWhy::Target(BackupUnready::Device(DeviceWhy::Table(
+                TableWhy::Unreadable(std::io::ErrorKind::PermissionDenied),
+            ))),
+            "unavailable: no backup target (mount table unreadable (PermissionDenied))",
+        ),
+        (
+            BackupWhy::Target(BackupUnready::Device(DeviceWhy::Table(TableWhy::TooLarge))),
+            "unavailable: no backup target (mount table too large (over 1048576 bytes))",
+        ),
+        (
+            BackupWhy::Target(BackupUnready::Device(DeviceWhy::Table(
+                TableWhy::Malformed { line: 3 },
+            ))),
+            "unavailable: no backup target (mount table malformed (line 3))",
         ),
     ] {
         assert_eq!(why.line(), line, "{why:?}");
@@ -5847,4 +6026,808 @@ fn declared_headroom_refuses_every_other_shape() {
         assert_eq!(Declared::parse(value, &target), None, "{value:?}");
     }
     assert!(Declared::parse("state=1 backup=2", &target).is_some());
+}
+
+// ---- Closure R1 (block R F1 / F-H1 / H1): RC02's device rule over the mount table -----------------
+
+/// This host's mount table, the lines the rule's cases need, verbatim and in the table's order
+/// (`flatpak-spawn --host cat /proc/self/mountinfo`, 2026-09-28; the whole table is in the OPS
+/// evidence dir, `closure-r1/host-mountinfo-20260928.txt`): the composefs root, the `/var` and
+/// `/home` subvolumes of one LUKS btrfs (`st_dev` 57 and 59), `/boot` and the STORAGE-10TB disk on
+/// ext4, tmpfs `/tmp` and `/run/user/1000`, a credentials tmpfs whose mount point carries the
+/// kernel's `\134` escapes and whose source is `none`, pstore (`none`) and the document portal.
+const HOST_MOUNTINFO: &str = r"49 1 0:39 / / ro,relatime shared:1 - overlay composefs ro,seclabel,lowerdir+=/run/ostree/.private/cfsroot-lower,datadir+=/sysroot/ostree/repo/objects,redirect_dir=on,metacopy=on
+50 49 0:35 /root /sysroot ro,relatime shared:3 - btrfs /dev/mapper/luks-97a2c76e-e11a-4782-8bfe-4370fadfa706 rw,seclabel,ssd,discard=async,space_cache=v2,subvolid=258,subvol=/root
+54 45 0:30 / /sys/fs/pstore rw,nosuid,nodev,noexec,relatime shared:11 - pstore none rw,seclabel
+58 49 0:28 / /run rw,nosuid,nodev shared:16 - tmpfs tmpfs rw,seclabel,size=19712192k,nr_inodes=819200,mode=755,inode64
+60 58 0:34 / /run/credentials/systemd-cryptsetup@luks\134x2d97a2c76e\134x2de11a\134x2d4782\134x2d8bfe\134x2d4370fadfa706.service rw,nosuid,nodev,noexec,relatime,nosymfollow shared:18 - tmpfs none ro,seclabel,size=1024k,nr_inodes=1024,mode=700,inode64,noswap
+68 49 0:45 / /tmp rw,nosuid,nodev shared:193 - tmpfs tmpfs rw,seclabel,size=49280476k,nr_inodes=1048576,inode64,usrquota
+75 49 0:35 /var /var rw,relatime shared:199 - btrfs /dev/mapper/luks-97a2c76e-e11a-4782-8bfe-4370fadfa706 rw,seclabel,ssd,discard=async,space_cache=v2,subvolid=256,subvol=/var
+146 49 259:2 / /boot rw,relatime shared:211 - ext4 /dev/nvme0n1p2 rw,seclabel
+219 75 0:35 /home /var/home rw,relatime shared:217 - btrfs /dev/mapper/luks-97a2c76e-e11a-4782-8bfe-4370fadfa706 rw,seclabel,ssd,discard=async,space_cache=v2,subvolid=257,subvol=/home
+270 75 8:17 / /var/mnt/STORAGE-10TB rw,relatime shared:231 - ext4 /dev/sdb1 rw,seclabel
+965 58 0:83 / /run/user/1000 rw,nosuid,nodev,relatime shared:781 - tmpfs tmpfs rw,seclabel,size=9856092k,nr_inodes=2464023,mode=700,uid=1000,gid=1000,inode64
+1004 965 0:91 / /run/user/1000/doc rw,nosuid,nodev,relatime shared:946 - fuse.portal portal rw,user_id=1000,group_id=1000
+";
+
+/// This toolbox's mount table, the lines the rule's cases need, verbatim (`/proc/self/mountinfo`
+/// in `fedora-toolbox-44`, 2026-09-28; `closure-r1/toolbox-mountinfo-20260928.txt`): the container
+/// overlay root, the host's `/var` and `/home` subvolumes under `/run/host`, the home bind, tmpfs
+/// `/tmp`, `/dev/shm` and `/run/user/1000`, and the STORAGE-10TB disk.
+const TOOLBOX_MOUNTINFO: &str = r#"1387 971 0:85 / / rw,relatime - overlay overlay rw,context="system_u:object_r:container_file_t:s0:c1022,c1023",redirect_dir=nofollow,userxattr
+999 1387 0:45 / /tmp rw,nosuid,nodev master:193 - tmpfs tmpfs rw,seclabel,size=49280476k,nr_inodes=1048576,inode64,usrquota
+1007 1006 8:17 / /var/mnt/STORAGE-10TB rw,relatime master:231 - ext4 /dev/sdb1 rw,seclabel
+1261 1232 0:35 /var /run/host/var rw,relatime master:199 - btrfs /dev/mapper/luks-97a2c76e-e11a-4782-8bfe-4370fadfa706 rw,seclabel,ssd,discard=async,space_cache=v2,subvolid=256,subvol=/var
+1262 1261 0:35 /home /run/host/var/home rw,relatime master:217 - btrfs /dev/mapper/luks-97a2c76e-e11a-4782-8bfe-4370fadfa706 rw,seclabel,ssd,discard=async,space_cache=v2,subvolid=257,subvol=/home
+1269 1060 0:26 / /dev/shm rw,nosuid,nodev,noexec - tmpfs tmpfs rw,seclabel,inode64,usrquota
+1329 1387 0:83 / /run/user/1000 rw,nosuid,nodev,relatime - tmpfs tmpfs rw,seclabel,size=9856092k,nr_inodes=2464023,mode=700,uid=1000,gid=1000,inode64
+1331 1387 0:35 /home/Louranicas /var/home/Louranicas rw,relatime master:217 - btrfs /dev/mapper/luks-97a2c76e-e11a-4782-8bfe-4370fadfa706 rw,seclabel,ssd,discard=async,space_cache=v2,subvolid=257,subvol=/home
+"#;
+
+/// A mount table parsed from `text`, its refusal as a message.
+fn table(text: &str) -> Result<MountTable, String> {
+    MountTable::parse(text.as_bytes()).map_err(|why| format!("{why:?}"))
+}
+
+/// Closure R1 (a) · RC02's device rule decided over the mount SOURCE of each path's containing
+/// mount, on this host's own table (block R F1/F-H1/H1). The state root is in the `/home` subvolume
+/// (mount 219); a destination anywhere else on the `/var` subvolume of the same LUKS device —
+/// `/var/tmp`, `/var/lib`, `/var/mnt`, which `st_dev` (57 against 59) passed — is refused naming
+/// both mounts, and so is one in the state root's own subvolume. STORAGE-10TB (`/dev/sdb1`) and
+/// `/boot` (`/dev/nvme0n1p2`) are other devices and pass. With STORAGE-10TB unmounted (its line
+/// gone) its bare mount point is `/var`'s, and the destination under it is refused.
+#[test]
+fn rc02_s_device_rule_refuses_this_host_s_btrfs_subvolumes_and_passes_its_second_disk() -> Outcome_
+{
+    let host = table(HOST_MOUNTINFO)?;
+    let state = Path::new("/var/home/Louranicas/.local/state/herdr-engineering-engine-v3");
+    let rule = |table: &MountTable, destination: &str| {
+        device_decision(
+            table.containing(state),
+            table.containing(Path::new(destination)),
+        )
+    };
+    assert_eq!(host.containing(state).map(|mount| mount.id), Some(219));
+    for accepted in [
+        "/var/mnt/STORAGE-10TB/herdr-engineering-engine-v3-backups",
+        "/boot/hee3-backups",
+    ] {
+        assert_eq!(rule(&host, accepted), Ok(()), "{accepted}");
+    }
+    for (destination, mount) in [
+        ("/var/tmp/hee3-backups", 75),
+        ("/var/lib/hee3-backups", 75),
+        ("/var/mnt/hee3-backups", 75),
+        ("/var/home/Louranicas/hee3-backups", 219),
+    ] {
+        assert_eq!(
+            rule(&host, destination),
+            Err(DeviceWhy::SameSource {
+                state: 219,
+                destination: mount,
+            }),
+            "{destination}"
+        );
+    }
+    let mut without_storage = String::new();
+    for line in HOST_MOUNTINFO
+        .lines()
+        .filter(|line| !line.starts_with("270 "))
+    {
+        without_storage.push_str(line);
+        without_storage.push('\n');
+    }
+    let unmounted = table(&without_storage)?;
+    assert_eq!(
+        rule(
+            &unmounted,
+            "/var/mnt/STORAGE-10TB/herdr-engineering-engine-v3-backups"
+        ),
+        Err(DeviceWhy::SameSource {
+            state: 219,
+            destination: 75,
+        })
+    );
+    Ok(())
+}
+
+/// Closure R1 (a) · on this toolbox's own table (off the host's ids): the home bind (mount 1331) and
+/// the host's `/var` seen through `/run/host` (1261) are one LUKS device and refused; STORAGE-10TB
+/// passes; each memory or union filesystem is refused on either side by name — tmpfs `/tmp`,
+/// `/dev/shm`, `/run/user/1000` and a credentials tmpfs whose source is `none`, the container's
+/// and the host's overlay roots — and on the host's table a source that is no device path (pstore's
+/// `none`, the document portal's `portal`).
+#[test]
+fn rc02_s_device_rule_refuses_every_filesystem_without_a_device() -> Outcome_ {
+    let toolbox = table(TOOLBOX_MOUNTINFO)?;
+    let host = table(HOST_MOUNTINFO)?;
+    let home = Path::new("/var/home/Louranicas/.local/state/herdr-engineering-engine-v3");
+    let decide = |table: &MountTable, state: &Path, destination: &str| {
+        device_decision(
+            table.containing(state),
+            table.containing(Path::new(destination)),
+        )
+    };
+    assert_eq!(
+        decide(&toolbox, home, "/var/mnt/STORAGE-10TB/b"),
+        Ok(()),
+        "the toolbox's view of the deploy destination"
+    );
+    assert_eq!(
+        decide(&toolbox, home, "/run/host/var/tmp/b"),
+        Err(DeviceWhy::SameSource {
+            state: 1331,
+            destination: 1261,
+        })
+    );
+    let destination = |kind| DeviceWhy::NoDevice {
+        side: Side::Destination,
+        kind,
+    };
+    for (table, destination_path, refused) in [
+        (&toolbox, "/tmp/b", destination(NoDevice::Tmpfs)),
+        (
+            &toolbox,
+            "/dev/shm/hee3-t28b-1-2",
+            destination(NoDevice::Tmpfs),
+        ),
+        (&toolbox, "/run/user/1000/b", destination(NoDevice::Tmpfs)),
+        (&toolbox, "/opt/b", destination(NoDevice::Overlay)),
+        (&host, "/usr/b", destination(NoDevice::Overlay)),
+        (&host, "/sys/fs/pstore/b", destination(NoDevice::Source)),
+        (&host, "/run/user/1000/doc/b", destination(NoDevice::Source)),
+        (
+            &host,
+            // A tmpfs whose source is `none`: named by its filesystem, which is judged first.
+            r"/run/credentials/systemd-cryptsetup@luks\x2d97a2c76e\x2de11a\x2d4782\x2d8bfe\x2d4370fadfa706.service/b",
+            destination(NoDevice::Tmpfs),
+        ),
+    ] {
+        assert_eq!(
+            decide(table, home, destination_path),
+            Err(refused),
+            "{destination_path}"
+        );
+    }
+    // The state side is judged first, by the same rule.
+    for (state, kind) in [
+        ("/tmp/w/home/.local/state/h", NoDevice::Tmpfs),
+        ("/etc/h", NoDevice::Overlay),
+    ] {
+        assert_eq!(
+            decide(&toolbox, Path::new(state), "/run/user/1000/b"),
+            Err(DeviceWhy::NoDevice {
+                side: Side::State,
+                kind,
+            }),
+            "{state}"
+        );
+    }
+    Ok(())
+}
+
+/// Closure R1 (a) · the table's lookup: the longest mount point that is a COMPONENT-wise prefix of
+/// the path (`/var/mnt` never contains `/var/mntx`), `/` containing everything, the later of two
+/// lines at one mount point (the one stacked on top), escapes decoded in the mount point and the
+/// source before either is compared, a relative path contained by nothing, and an empty table
+/// resolving nothing. Two sources naming one `major:minor` (a two-device btrfs mounted by each
+/// member) are one filesystem.
+#[test]
+fn the_mount_table_resolves_the_deepest_mount_by_components() -> Outcome_ {
+    let text = "1 0 0:35 / / rw - btrfs /dev/mapper/luks rw\n\
+                2 1 8:17 / /var/mnt rw - ext4 /dev/sdb1 rw\n\
+                3 1 8:33 / /var/mnt/deep rw - xfs /dev/sdc1 rw\n\
+                4 1 8:49 / /stacked rw - ext4 /dev/sdd1 rw\n\
+                5 4 8:65 / /stacked rw - ext4 /dev/sde1 rw\n\
+                6 1 8:81 / /with\\040space rw - ext4 /dev/disk/by-label/a\\134b rw\n\
+                7 1 0:40 / /pool-a rw - btrfs /dev/sdf1 rw\n\
+                8 1 0:40 / /pool-b rw - btrfs /dev/sdg1 rw\n";
+    let mounts = table(text)?;
+    let id = |path: &str| mounts.containing(Path::new(path)).map(|mount| mount.id);
+    for (path, expected) in [
+        ("/", Some(1)),
+        ("/var/mntx/b", Some(1)),
+        ("/var/mnt", Some(2)),
+        ("/var/mnt/b", Some(2)),
+        ("/var/mnt/deep/b", Some(3)),
+        ("/var/mnt/deeper", Some(2)),
+        ("/stacked/b", Some(5)),
+        ("/with space/b", Some(6)),
+        ("/with\\040space/b", Some(1)),
+        ("relative/b", None),
+    ] {
+        assert_eq!(id(path), expected, "{path}");
+    }
+    let spaced = mounts
+        .containing(Path::new("/with space/b"))
+        .ok_or("the escaped mount")?;
+    assert_eq!(
+        (spaced.mount_point.as_path(), spaced.source.as_os_str()),
+        (
+            Path::new("/with space"),
+            std::ffi::OsStr::new("/dev/disk/by-label/a\\b")
+        )
+    );
+    assert_eq!(table("")?.containing(Path::new("/")), None);
+    assert_eq!(
+        device_decision(
+            mounts.containing(Path::new("/pool-a/s")),
+            mounts.containing(Path::new("/pool-b/d")),
+        ),
+        Err(DeviceWhy::SameFilesystem {
+            state: 7,
+            destination: 8,
+        })
+    );
+    // Unresolved, on each side: an empty table, and a table with no mount for the destination.
+    let only = table("1 0 8:1 /x /s rw - ext4 /dev/sda1 rw\n")?;
+    assert_eq!(
+        device_decision(None, only.containing(Path::new("/s/d"))),
+        Err(DeviceWhy::Unresolved(Side::State))
+    );
+    assert_eq!(
+        device_decision(only.containing(Path::new("/s/x")), None),
+        Err(DeviceWhy::Unresolved(Side::Destination))
+    );
+    Ok(())
+}
+
+/// Closure R1 (a) · a table the parser cannot read line by line is refused naming its first bad
+/// line: no `-` separator, a non-numeric id, a relative mount point, an escape that is not three
+/// octal digits (and one cut short), no source, a blank line inside the table, a bad `major:minor`.
+#[test]
+fn a_malformed_mount_table_is_refused_naming_its_line() {
+    let good = "1 0 8:1 / / rw - ext4 /dev/sda1 rw\n";
+    for (case, bad) in [
+        ("no separator", "2 1 8:2 / /m rw ext4 /dev/sdb1 rw"),
+        ("id", "x 1 8:2 / /m rw - ext4 /dev/sdb1 rw"),
+        ("relative point", "2 1 8:2 / m rw - ext4 /dev/sdb1 rw"),
+        ("escape", "2 1 8:2 / /m\\08x rw - ext4 /dev/sdb1 rw"),
+        ("short escape", "2 1 8:2 / /m rw - ext4 /dev/sdb1\\04"),
+        ("no source", "2 1 8:2 / /m rw - ext4"),
+        ("blank", ""),
+        ("device", "2 1 8-2 / /m rw - ext4 /dev/sdb1 rw"),
+    ] {
+        let text = format!("{good}{bad}\n{good}");
+        assert_eq!(
+            MountTable::parse(text.as_bytes()),
+            Err(TableWhy::Malformed { line: 2 }),
+            "{case}"
+        );
+    }
+}
+
+/// Closure R1 (a) · the table is read under its bound at acquisition: a table of exactly
+/// `MAX_MOUNT_TABLE_BYTES` (1 MiB, typed here) is read, one byte more is refused by name, a missing
+/// file is unreadable by its kind — and this process's own `/proc/self/mountinfo` reads and
+/// resolves `/`.
+#[test]
+fn the_mount_table_is_read_under_its_bound() -> Outcome_ {
+    assert_eq!(MAX_MOUNT_TABLE_BYTES, 1_048_576);
+    let scratch = Scratch::new()?;
+    let line = "1 0 8:1 / / rw - ext4 /dev/sda1 rw\n";
+    let head = line.repeat(1000);
+    let tail = |length: usize| {
+        let prefix = "2 1 8:2 / /";
+        let suffix = " rw - ext4 /dev/sdb1 rw\n";
+        format!(
+            "{prefix}{}{suffix}",
+            "m".repeat(length - prefix.len() - suffix.len())
+        )
+    };
+    let exact = format!("{head}{}", tail(1_048_576 - head.len()));
+    let over = format!("{head}{}", tail(1_048_577 - head.len()));
+    assert_eq!((exact.len(), over.len()), (1_048_576, 1_048_577));
+    for (name, text, read) in [("exact", &exact, true), ("over", &over, false)] {
+        let path = scratch.0.join(name);
+        fs::write(&path, text)?;
+        let table = MountTable::read(&path);
+        if read {
+            let table = table.map_err(|why| format!("{why:?}"))?;
+            assert_eq!(table.containing(Path::new("/")).map(|m| m.id), Some(1));
+        } else {
+            assert_eq!(table, Err(TableWhy::TooLarge));
+        }
+    }
+    assert_eq!(
+        MountTable::read(&scratch.0.join("absent")),
+        Err(TableWhy::Unreadable(std::io::ErrorKind::NotFound))
+    );
+    let own =
+        MountTable::read(Path::new("/proc/self/mountinfo")).map_err(|why| format!("{why:?}"))?;
+    assert!(own.containing(Path::new("/")).is_some(), "{own:?}");
+    Ok(())
+}
+
+/// Closure R1 (a) · the reader decides the device rule over the canonical state root and the table
+/// it is handed, after every other check: one source refused with both mount ids; a tmpfs
+/// destination refused; a state root that does not resolve (absent) refused as unresolved; a table
+/// that could not be read refused by its own reason — each read back whole through the reader.
+#[test]
+fn the_backup_reader_decides_rc02_over_the_canonical_state_root() -> Outcome_ {
+    let scratch = Scratch::new()?;
+    let root = &scratch.0;
+    let state = root.join("state");
+    private(&state)?;
+    let destination = root.join("backups");
+    private(&destination)?;
+    let directory = backup_record(root, "record", record_text(&destination, 60).as_bytes())?;
+    let one_source = mounts(&[
+        (Path::new("/"), "btrfs", "/dev/mapper/luks-97a2c76e", "0:35"),
+        (&state, "btrfs", "/dev/mapper/luks-97a2c76e", "0:35"),
+        (&destination, "btrfs", "/dev/mapper/luks-97a2c76e", "0:35"),
+    ]);
+    let memory = mounts(&[
+        (Path::new("/"), "btrfs", "/dev/mapper/luks-97a2c76e", "0:35"),
+        (&destination, "tmpfs", "tmpfs", "0:45"),
+    ]);
+    let linked_state = root.join("state-link");
+    std::os::unix::fs::symlink(&state, &linked_state)?;
+    // The state root reached through a link resolves to where it is: the table's `state` mount.
+    let through_link = mounts(&[
+        (Path::new("/"), "ext4", "/dev/sdb1", "8:17"),
+        (&state, "tmpfs", "tmpfs", "0:45"),
+    ]);
+    for (case, state_root, table, refused) in [
+        (
+            "one source",
+            &state,
+            one_source,
+            DeviceWhy::SameSource {
+                state: 2,
+                destination: 3,
+            },
+        ),
+        (
+            "tmpfs",
+            &state,
+            memory,
+            DeviceWhy::NoDevice {
+                side: Side::Destination,
+                kind: NoDevice::Tmpfs,
+            },
+        ),
+        (
+            "absent state root",
+            &root.join("absent"),
+            two_devices(&destination),
+            DeviceWhy::Unresolved(Side::State),
+        ),
+        (
+            "linked state root",
+            &linked_state,
+            through_link,
+            DeviceWhy::NoDevice {
+                side: Side::State,
+                kind: NoDevice::Tmpfs,
+            },
+        ),
+        (
+            "unreadable table",
+            &state,
+            Err(TableWhy::Unreadable(std::io::ErrorKind::PermissionDenied)),
+            DeviceWhy::Table(TableWhy::Unreadable(std::io::ErrorKind::PermissionDenied)),
+        ),
+    ] {
+        assert_eq!(
+            read_target(&directory, state_root, &table),
+            Err(BackupUnready::Device(refused)),
+            "{case}"
+        );
+    }
+    assert_eq!(
+        read_target(&directory, &state, &two_devices(&destination)),
+        Ok(BackupTarget {
+            destination,
+            deadline: Duration::from_secs(60),
+            state_root: state.clone(),
+        })
+    );
+    Ok(())
+}
+
+// ---- Closure R1 (b)-(f): RC01's gate, measured where RC01 says --------------------------------------
+
+/// A clock model (F101: state in, state out): its time past `base` is the world's — `backup` for
+/// every backup published under the rig's destination (its manifest present) and `task` for every
+/// task the provider opened — so a backup's duration and a task's are the proof's to choose, and
+/// every instant it answered is kept, as an offset from `base`.
+struct Elapsed {
+    base: Instant,
+    backups: PathBuf,
+    opened: Arc<Mutex<Vec<String>>>,
+    backup: Duration,
+    task: Duration,
+    answered: Arc<Mutex<Vec<Duration>>>,
+}
+
+impl dispatcher::Clock for Elapsed {
+    fn now(&self) -> Instant {
+        let published = fs::read_dir(&self.backups).map_or(0, |entries| {
+            entries
+                .filter_map(Result::ok)
+                .filter(|entry| entry.path().join("store-backup.json").exists())
+                .count()
+        });
+        let opened = taken(&self.opened).len();
+        let offset = self.backup * u32::try_from(published).unwrap_or(u32::MAX)
+            + self.task * u32::try_from(opened).unwrap_or(u32::MAX);
+        record(&self.answered, offset);
+        self.base + offset
+    }
+}
+
+/// Closure R1 (b, e) · freshness is measured from the backup's snapshot CUTOFF — the instant read
+/// under the store's hold before the door copies — not from its completion (RC01: "Backup duration
+/// consumes freshness"; block R H1), and the `Aged` branch is reached by choosing instants (F95),
+/// not by waiting 15 minutes (M4). The model makes each backup take `backup` and each task 6
+/// minutes. With 10-minute backups the task ends 16 minutes after the first backup's cutoff (6 after
+/// its completion): point (b) backs up again, `due=Aged`, the instant read before that door ran.
+/// With 9-minute backups the task ends exactly 15 minutes after the cutoff, which RC01 calls fresh:
+/// no second backup. The instants the clock answered are asserted whole, in minutes.
+#[test]
+fn freshness_is_measured_from_the_backup_s_cutoff_not_its_completion() -> Outcome_ {
+    for (backup, answered, dues) in [
+        (10, vec![0, 0, 16, 16], vec!["Never", "Aged"]),
+        (9, vec![0, 0, 15], vec!["Never"]),
+    ] {
+        let mut rig = rig(&Shape::default())?;
+        let (source, _) = script(vec![Candidate::Replacement(SECOND.to_vec())]);
+        let (mut verifier, _) = oracle(vec![matched(7)]);
+        let stop = Arc::new(AtomicBool::new(false));
+        let flag = Arc::clone(&stop);
+        verifier.hook = Some(Box::new(move || {
+            flag.store(true, Ordering::SeqCst);
+        }));
+        let (provider, opened) = provider_of(vec![(source, verifier)], &stop);
+        let log = Arc::new(Mutex::new(Vec::new()));
+        rig.clock = Box::new(Elapsed {
+            base: Instant::now(),
+            backups: rig.backups.clone(),
+            opened: Arc::clone(&opened),
+            backup: Duration::from_mins(backup),
+            task: Duration::from_mins(6),
+            answered: Arc::clone(&log),
+        });
+        let rig = Arc::new(rig);
+        let (exit, lines) = run_dispatcher_owned(
+            Arc::clone(&rig),
+            provider,
+            Arc::clone(&stop),
+            rig.selections.clone(),
+            DISPATCHER_BUDGET,
+        )?;
+        assert_eq!(exit, dispatcher::Exit::Drained, "{backup}: {lines:?}");
+        let mut backups = backup_children(&rig)?
+            .into_iter()
+            .map(|id| inspected(&rig, &id).map(|report| (report.cutoff, id)))
+            .collect::<Result<Vec<_>, _>>()?;
+        backups.sort();
+        let mut expected = vec![backup_line(&rig, &backups[0].1, dues[0])?];
+        expected.push(format!(
+            "dispatcher: task {TASK} -> TaskDone(\"accepted\"), custody: settled=0 pending=0"
+        ));
+        for ((_, id), due) in backups.iter().zip(&dues).skip(1) {
+            expected.push(backup_line(&rig, id, due)?);
+        }
+        assert_eq!(backups.len(), dues.len(), "{backup}: {backups:?}");
+        assert_eq!(lines, expected, "{backup}");
+        assert_eq!(
+            taken(&log)
+                .iter()
+                .map(|offset| offset.as_secs() / 60)
+                .collect::<Vec<_>>(),
+            answered,
+            "{backup}"
+        );
+    }
+    Ok(())
+}
+
+/// Closure R1 (c) · RC01's headroom is checked before EVERY dispatch (RC01 "reserve ... before
+/// dispatch ... stop intake when headroom is exhausted"; block R H2/F-M1), not only when a backup
+/// is due: the first task spends a reserve while it runs, and the second pick — fresh, one dispatch
+/// into the batch, no backup due — stops by name with both numbers, the task left `admitted`. Two
+/// fixtures that differ in every field: the state root one byte short (the destination then never
+/// asked), and the destination seven short (both asked).
+#[test]
+fn headroom_is_checked_before_every_dispatch_not_only_before_a_backup() -> Outcome_ {
+    const STATE: u64 = 96 * 1024 * 1024 * 1024;
+    const BACKUP: u64 = 256 * 1024 * 1024 * 1024;
+    for (state_after, backup_after, fs, free, reserve, line, second_asked) in [
+        (
+            STATE - 1,
+            ROOMY,
+            dispatcher::Fs::State,
+            103_079_215_103_u64,
+            103_079_215_104_u64,
+            "dispatcher: unavailable: headroom (state: free=103079215103 reserve=103079215104)",
+            1,
+        ),
+        (
+            ROOMY,
+            BACKUP - 7,
+            dispatcher::Fs::Backup,
+            274_877_906_937,
+            274_877_906_944,
+            "dispatcher: unavailable: headroom (backup: free=274877906937 reserve=274877906944)",
+            2,
+        ),
+    ] {
+        let rig = Arc::new(rig(&Shape::default())?);
+        let second = submit_as(
+            &rig,
+            &owner(),
+            "28f10000-0000-4000-8000-0000000009e2",
+            U64_CRITERIA.iter().map(|c| (*c).to_owned()).collect(),
+        )?;
+        let (source, _) = script(vec![Candidate::Replacement(SECOND.to_vec())]);
+        let (mut verifier, _) = oracle(vec![matched(7)]);
+        let spender = Arc::clone(&rig);
+        verifier.hook = Some(Box::new(move || {
+            spender
+                .space
+                .state_free
+                .store(state_after, Ordering::SeqCst);
+            spender
+                .space
+                .backup_free
+                .store(backup_after, Ordering::SeqCst);
+        }));
+        let stop = Arc::new(AtomicBool::new(false));
+        let (provider, opened) = provider_of(vec![(source, verifier)], &stop);
+        let (exit, lines) = run_dispatcher_owned(
+            Arc::clone(&rig),
+            provider,
+            Arc::clone(&stop),
+            rig.selections.clone(),
+            DISPATCHER_BUDGET,
+        )?;
+        let children = backup_children(&rig)?;
+        assert_eq!(
+            children.len(),
+            1,
+            "one backup, at the first pick: {children:?}"
+        );
+        assert_eq!(
+            (exit, lines),
+            (
+                dispatcher::Exit::Unavailable(dispatcher::Unavailable::Backup(
+                    dispatcher::BackupWhy::Headroom(dispatcher::Headroom { fs, free, reserve })
+                )),
+                vec![
+                    backup_line(&rig, &children[0], "Never")?,
+                    format!(
+                        "dispatcher: task {TASK} -> TaskDone(\"accepted\"), custody: settled=0 \
+                         pending=0"
+                    ),
+                    line.to_owned(),
+                ]
+            )
+        );
+        let mut expected = vec![rig.state.clone(), rig.backups.clone()];
+        expected.extend(
+            [rig.state.clone(), rig.backups.clone()][..second_asked]
+                .iter()
+                .cloned(),
+        );
+        assert_eq!(asked(&rig), expected);
+        assert_eq!(taken(&opened), vec![TASK.to_owned()]);
+        assert_eq!(state_of(&rig, &second)?, "admitted");
+        assert_eq!(
+            count(
+                &rig,
+                &format!("SELECT count(*) FROM attempts WHERE task_id='{second}'")
+            )?,
+            0
+        );
+    }
+    Ok(())
+}
+
+/// The bytes of the regular files under `path`, as `find -type f -printf %s` sums them (coreutils:
+/// a source independent of the engine's walk and of the store's own accounting).
+fn found_bytes(path: &Path) -> Result<u64, Box<dyn Error>> {
+    let listed = std::process::Command::new("find")
+        .arg(path)
+        .args(["-type", "f", "-printf", "%s\n"])
+        .output()?;
+    assert!(listed.status.success(), "{listed:?}");
+    Ok(String::from_utf8(listed.stdout)?
+        .lines()
+        .map(str::parse::<u64>)
+        .sum::<Result<u64, _>>()?)
+}
+
+/// What a backup of the rig's store would write, from sources other than the store's own formula:
+/// SQLite's backup API copying the rig's ledger into a scratch file (that file's length), the
+/// object files the generation holds (`found_bytes`), and the 1 MiB manifest bound typed here.
+fn independent_backup_bytes(rig: &Rig) -> Result<u64, Box<dyn Error>> {
+    let copy = rig.scratch.0.join("independent-ledger-copy.sqlite3");
+    let source = ledger(rig)?;
+    let mut target = rusqlite::Connection::open(&copy)?;
+    rusqlite::backup::Backup::new(&source, &mut target)?.run_to_completion(
+        64,
+        Duration::ZERO,
+        None,
+    )?;
+    drop(target);
+    let database = fs::metadata(&copy)?.len();
+    fs::remove_file(&copy)?;
+    let objects = found_bytes(
+        &rig.scratch
+            .0
+            .join("state/generations")
+            .join(GENERATION)
+            .join("objects"),
+    )?;
+    Ok(database + objects + 1_048_576)
+}
+
+/// Closure R1 (d) · RC01's 128-GiB backup budget (block R F6/F-M2): before a backup the
+/// destination's existing usage is measured, and a backup that would take it past the budget
+/// refuses by name with all three numbers — nothing deleted, the backup's directory removed, the
+/// task left `admitted`. One byte less and the backup is taken. The backup's bytes come from an
+/// independent source (`independent_backup_bytes`), and the one backup taken reads back with that
+/// many database bytes.
+#[test]
+fn a_backup_past_rc01_s_budget_refuses_by_name_and_one_at_it_is_taken() -> Outcome_ {
+    const BUDGET: u64 = 128 * 1024 * 1024 * 1024;
+    for over in [1_u64, 0] {
+        let mut rig = rig(&Shape::default())?;
+        let backup = independent_backup_bytes(&rig)?;
+        rig.space.used_offset = BUDGET - backup + over;
+        let rig = Arc::new(rig);
+        let stop = Arc::new(AtomicBool::new(false));
+        let pairs = if over == 0 {
+            let (source, _) = script(vec![Candidate::Replacement(SECOND.to_vec())]);
+            let (mut verifier, _) = oracle(vec![matched(7)]);
+            let flag = Arc::clone(&stop);
+            verifier.hook = Some(Box::new(move || flag.store(true, Ordering::SeqCst)));
+            vec![(source, verifier)]
+        } else {
+            Vec::new()
+        };
+        let (provider, opened) = provider_of(pairs, &stop);
+        let (exit, lines) = run_dispatcher_owned(
+            Arc::clone(&rig),
+            provider,
+            Arc::clone(&stop),
+            rig.selections.clone(),
+            DISPATCHER_BUDGET,
+        )?;
+        assert_eq!(taken(&rig.space.used_asked), vec![rig.backups.clone()]);
+        let children = backup_children(&rig)?;
+        if over == 1 {
+            let used = BUDGET - backup + 1;
+            assert_eq!(
+                (exit, lines),
+                (
+                    dispatcher::Exit::Unavailable(dispatcher::Unavailable::Backup(
+                        dispatcher::BackupWhy::Budget {
+                            used,
+                            backup,
+                            budget: BUDGET,
+                        }
+                    )),
+                    vec![format!(
+                        "dispatcher: unavailable: backup budget (used={used} backup={backup} \
+                         budget=137438953472)"
+                    )]
+                )
+            );
+            assert_eq!(children, Vec::<String>::new());
+            assert!(taken(&opened).is_empty());
+            assert_eq!(state(&rig)?, "admitted");
+        } else {
+            assert_eq!(exit, dispatcher::Exit::Drained, "{lines:?}");
+            assert_eq!(children.len(), 1, "{children:?}");
+            let report = inspected(&rig, &children[0])?;
+            assert_eq!(
+                report.database_bytes
+                    + report
+                        .objects
+                        .iter()
+                        .map(habitat_engine::store::Object::size)
+                        .sum::<u64>()
+                    + 1_048_576,
+                backup,
+                "the backup taken is the size the budget was judged on"
+            );
+            assert_eq!(state(&rig)?, "accepted");
+        }
+    }
+    Ok(())
+}
+
+/// Closure R1 (d) · the production usage walk: the regular files under the destination by their
+/// length — the sum `find -type f -printf %s` gives, and 1,239 typed here — with a link neither
+/// followed nor counted (it names a 4 KiB file outside), within its entry bound (six entries: at a
+/// bound of 6 it measures, at 5 it refuses naming the bound); an unreadable directory and an absent
+/// destination refused by their kind.
+#[test]
+fn the_usage_walk_counts_regular_files_under_its_bound() -> Outcome_ {
+    use std::os::unix::fs::PermissionsExt;
+    let scratch = Scratch::new()?;
+    let destination = scratch.0.join("backups");
+    fs::create_dir_all(destination.join("sub/deeper"))?;
+    fs::write(destination.join("a"), b"12345")?;
+    fs::write(destination.join("sub/b"), vec![7_u8; 1234])?;
+    fs::write(destination.join("sub/deeper/c"), b"")?;
+    let outside = scratch.0.join("outside");
+    fs::write(&outside, vec![0_u8; 4096])?;
+    std::os::unix::fs::symlink(&outside, destination.join("link"))?;
+    let found = found_bytes(&destination)?;
+    assert_eq!((backup_usage(&destination, 6), found), (Ok(1_239), 1_239));
+    assert_eq!(
+        backup_usage(&destination, 5),
+        Err(Usage::Bound { bound: 5 })
+    );
+    assert_eq!(
+        backup_usage(&scratch.0.join("absent"), USAGE_ENTRY_BOUND),
+        Err(Usage::Io(std::io::ErrorKind::NotFound))
+    );
+    let sealed = destination.join("sub/deeper");
+    fs::set_permissions(&sealed, fs::Permissions::from_mode(0o000))?;
+    let refused = backup_usage(&destination, USAGE_ENTRY_BOUND);
+    fs::set_permissions(&sealed, fs::Permissions::from_mode(0o755))?;
+    assert_eq!(
+        refused,
+        Err(Usage::Io(std::io::ErrorKind::PermissionDenied))
+    );
+    Ok(())
+}
+
+/// `df -B1 --output=size,avail <path>`: the filesystem's size and the bytes available to this
+/// user, from coreutils — a source independent of the engine's `fstatvfs` reader.
+fn df(path: &Path) -> Result<(u64, u64), Box<dyn Error>> {
+    let output = std::process::Command::new("df")
+        .args(["-B1", "--output=size,avail"])
+        .arg(path)
+        .output()?;
+    assert!(output.status.success(), "{output:?}");
+    let text = String::from_utf8(output.stdout)?;
+    let numbers: Vec<u64> = text
+        .lines()
+        .nth(1)
+        .ok_or("df printed no row")?
+        .split_whitespace()
+        .map(str::parse)
+        .collect::<Result<_, _>>()?;
+    match numbers.as_slice() {
+        [size, avail] => Ok((*size, *avail)),
+        _ => Err(format!("df printed {text:?}").into()),
+    }
+}
+
+/// How far the production reader may sit from `df`'s reading: others write while the two are read.
+/// 1 GiB, below the gap a `f_bfree` (root-reserved blocks counted) mutant opens on this host's btrfs
+/// (533,169,254,400 free against 525,985,591,296 available, 2026-09-28). On tmpfs the two are equal,
+/// so a scratch on tmpfs (the gate's) cannot tell them apart: the manifest directory can, off tmpfs.
+const DF_TOLERANCE: u64 = 1 << 30;
+
+/// Closure R1 (f) · the production free-space reader (`Statvfs`, the one `serve` measures RC01's
+/// headroom with; block R M1) on real directories — the scratch and the package's own manifest
+/// directory — is positive, at most the filesystem's size, and within `DF_TOLERANCE` of the bytes
+/// `df` reports available, read before and after it.
+#[test]
+fn the_production_free_space_reader_agrees_with_df() -> Outcome_ {
+    let scratch = Scratch::new()?;
+    for path in [scratch.0.as_path(), Path::new(env!("CARGO_MANIFEST_DIR"))] {
+        let (size, before) = df(path)?;
+        let free = Statvfs.free(path)?;
+        let (_, after) = df(path)?;
+        let (low, high) = (before.min(after), before.max(after));
+        assert!(
+            free > 0 && free <= size,
+            "{}: free={free} size={size}",
+            path.display()
+        );
+        assert!(
+            free.saturating_add(DF_TOLERANCE) >= low && free <= high.saturating_add(DF_TOLERANCE),
+            "{}: free={free} df avail {before}..{after} (tolerance {DF_TOLERANCE})",
+            path.display()
+        );
+    }
+    Ok(())
 }

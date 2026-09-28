@@ -28,6 +28,10 @@ pub enum RestoreStatus {
 
 const BYTE_LIMIT: u64 = 32 * 1024 * 1024 * 1024;
 
+/// The largest store manifest a backup publishes or inspects: the one bound both doors keep, and the
+/// manifest's share of what [`Store::backup_bytes`] counts.
+const MANIFEST_BOUND: u64 = 1_048_576;
+
 /// A verified store snapshot; service/configuration and external effect recovery
 /// must be assembled and qualified separately before operational restore.
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -181,6 +185,33 @@ impl Store {
         Ok(report)
     }
 
+    /// What a backup of this store would write now, at most (RC01 "128-GiB backup budget"): the
+    /// ledger's pages as the backup copies them (`page_count` × `page_size`), every registered
+    /// object's size, and the manifest's bound. The budget is judged against it before a backup
+    /// starts, under the same hold as the backup, so nothing is written between the two.
+    ///
+    /// # Errors
+    /// A spent deadline, the ledger's refusal, or [`Error::Bound`] when the sum does not fit.
+    pub fn backup_bytes(&self, deadline: Instant) -> Result<u64> {
+        remaining(deadline)?;
+        let pages: u64 = self
+            .connection
+            .query_row("PRAGMA page_count", [], |row| read_number(row, 0))?;
+        let page_size: u64 = self
+            .connection
+            .query_row("PRAGMA page_size", [], |row| read_number(row, 0))?;
+        let objects: u64 = self.connection.query_row(
+            "SELECT coalesce(sum(size),0) FROM artifacts",
+            [],
+            |row| read_number(row, 0),
+        )?;
+        pages
+            .checked_mul(page_size)
+            .and_then(|database| database.checked_add(objects))
+            .and_then(|total| total.checked_add(MANIFEST_BOUND))
+            .ok_or(Error::Bound)
+    }
+
     fn copy_objects(
         &self,
         dest: &Directory,
@@ -279,11 +310,11 @@ impl Store {
         schema::runtime(deadline)?;
         let root = Directory::root(path)?;
         let file = root.regular("store-backup.json")?;
-        if file.metadata()?.len() > 1_048_576 {
+        if file.metadata()?.len() > MANIFEST_BOUND {
             return Err(Error::Bound);
         }
         let mut bytes = Vec::new();
-        file.take(1_048_577).read_to_end(&mut bytes)?;
+        file.take(MANIFEST_BOUND + 1).read_to_end(&mut bytes)?;
         if digest(&bytes) != expected.as_str() {
             return Err(Error::Corrupt);
         }
@@ -357,7 +388,7 @@ impl Store {
 
 fn publish_report(dest: &Directory, report: &BackupReport, fault: super::Fault) -> Result<String> {
     let bytes = serde_json::to_vec(report)?;
-    if bytes.len() > 1_048_576 {
+    if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > MANIFEST_BOUND {
         return Err(Error::Bound);
     }
     let mut manifest = dest.create_file(".manifest-stage")?;

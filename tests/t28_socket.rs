@@ -542,8 +542,9 @@ fn serve_command(run: &Path, home: &Path) -> Command {
         .args(["serve", UNTIL_STDIN_CLOSES])
         .env("XDG_RUNTIME_DIR", run)
         .env("HOME", home)
-        // RA1 (b): never inherited — only a case that declares headroom sets the seam.
+        // RA1 (b): never inherited — only a case that declares headroom or a table sets a seam.
         .env_remove(HEADROOM_SEAM)
+        .env_remove(MOUNTS_SEAM)
         .stdin(Stdio::piped())
         .stdout(Stdio::null());
     command
@@ -574,20 +575,23 @@ impl Engine {
         )
     }
 
-    /// Start with standard error written to `log` (as [`Engine::start_logged`]) and RC01's free
-    /// space declared through the test build's headroom seam: `state` bytes on the state
-    /// filesystem, `backup` on the destination's (RA1 b), so no verdict depends on the host's disk.
+    /// Start with standard error written to `log` (as [`Engine::start_logged`]), RC01's free
+    /// space declared through the test build's headroom seam — `state` bytes on the state
+    /// filesystem, `backup` on the destination's (RA1 b) — and RC02's mount table declared through
+    /// its seam as `destination`'s (Closure R1), so no verdict depends on the host's disk.
     fn start_declared(
         run: &Path,
         home: &Path,
         log: &Path,
         state: u64,
         backup: u64,
+        destination: &Destination,
     ) -> Result<Self, Box<dyn Error>> {
         let engine = Self {
             child: Some(
                 serve_command(run, home)
                     .env(HEADROOM_SEAM, format!("state={state} backup={backup}"))
+                    .env(MOUNTS_SEAM, &destination.table)
                     .stderr(Stdio::from(fs::File::create_new(log)?))
                     .spawn()?,
             ),
@@ -1621,9 +1625,9 @@ fn serve_dispatches_an_admitted_task_and_stops_it_by_name_through_main() -> Outc
         .as_bytes(),
         0o600,
     )?;
-    let backups = OtherDevice::backup_record(&world)?;
+    let backups = Destination::backup_record(&world)?;
     let log = world.home.join("engine.log");
-    let engine = Engine::start_declared(run, &world.home, &log, ROOMY, ROOMY)?;
+    let engine = Engine::start_declared(run, &world.home, &log, ROOMY, ROOMY, &backups)?;
     // The declared workspace, so admission admits; the default spec's criteria are not the class's.
     let mut spec = super::tasks::spec();
     spec["workspace_id"] = json!("28c00000-0000-4000-8000-0000000000f1");
@@ -1700,9 +1704,9 @@ fn with_a_scratch_runtime_directory_the_busctl_pin_refuses_and_the_task_stays_ad
     let (run, scope) = (&world.run, &world.scope);
     commission(&world.home)?;
     let native = installable_native(&world.home)?;
-    let backups = OtherDevice::backup_record(&world)?;
+    let backups = Destination::backup_record(&world)?;
     let log = world.home.join("engine.log");
-    let engine = Engine::start_declared(run, &world.home, &log, ROOMY, ROOMY)?;
+    let engine = Engine::start_declared(run, &world.home, &log, ROOMY, ROOMY, &backups)?;
     // The class's workspace and criteria, so admission admits and a provider is opened.
     let mut spec = super::tasks::spec();
     spec["workspace_id"] = json!(super::runtime::CLASS_WORKSPACE);
@@ -1798,9 +1802,9 @@ fn a_native_file_refused_at_start_is_named_by_its_refusal_not_as_absent() -> Out
         b"schema = \"hee3.native/1\"\n",
         0o644,
     )?;
-    let backups = OtherDevice::backup_record(&world)?;
+    let backups = Destination::backup_record(&world)?;
     let log = world.home.join("engine.log");
-    let engine = Engine::start_declared(run, &world.home, &log, ROOMY, ROOMY)?;
+    let engine = Engine::start_declared(run, &world.home, &log, ROOMY, ROOMY, &backups)?;
     let mut spec = super::tasks::spec();
     spec["workspace_id"] = json!(super::runtime::CLASS_WORKSPACE);
     spec["criteria"] = json!(habitat_engine::check::consistency::U64_CRITERIA);
@@ -1904,9 +1908,10 @@ fn serve_stops_at_rc01_headroom_on_the_filesystem_its_numbers_name_through_main(
         let (run, scope) = (&world.run, &world.scope);
         commission(&world.home)?;
         installable_native(&world.home)?;
-        let backups = OtherDevice::backup_record(&world)?;
+        let backups = Destination::backup_record(&world)?;
         let log = world.home.join("engine.log");
-        let engine = Engine::start_declared(run, &world.home, &log, state_free, backup_free)?;
+        let engine =
+            Engine::start_declared(run, &world.home, &log, state_free, backup_free, &backups)?;
         let mut spec = super::tasks::spec();
         spec["workspace_id"] = json!(super::runtime::CLASS_WORKSPACE);
         spec["criteria"] = json!(habitat_engine::check::consistency::U64_CRITERIA);
@@ -1949,7 +1954,7 @@ fn serve_stops_at_rc01_headroom_on_the_filesystem_its_numbers_name_through_main(
             ],
             "{stderr}"
         );
-        assert_eq!(fs::read_dir(&backups.0)?.count(), 0, "{stderr}");
+        assert_eq!(fs::read_dir(&backups.path)?.count(), 0, "{stderr}");
     }
     Ok(())
 }
@@ -4187,42 +4192,33 @@ fn commission_without_a_deadline_is_a_usage_error() -> Outcome {
 
 // ---- OPS-2: RC01's backup gate through `main` -----------------------------------------------------
 
-/// A private directory on another device than the scratch the worlds live in, removed on drop: the
-/// backup destination RC02 requires (a separate local device). Picked from `/dev/shm` and the test
-/// process's own `XDG_RUNTIME_DIR`, the first whose device differs from the scratch's; none is a
-/// failure by name, never a skip (the one place a branch here depends on the world, F95).
-struct OtherDevice(PathBuf);
+/// The backup destination RC02 requires, declared on another device (Closure R1; block R F1): a
+/// private directory in the world's home, and a mount table file placing the scratch on this host's
+/// LUKS btrfs and the destination on its STORAGE-10TB ext4 disk (the lines' shapes as measured on
+/// the host, 2026-09-28), which the test build's `serve` reads through `HEE3_TEST_MOUNTINFO`. The
+/// worlds' scratch is tmpfs in dev and in the gate, which the device rule refuses by name; the
+/// declared table decides the rule instead, through the production reader, parser and decision —
+/// no verdict here depends on which devices the machine running the proof has.
+struct Destination {
+    path: PathBuf,
+    table: PathBuf,
+}
 
-impl OtherDevice {
-    fn new(scratch: &Path) -> Result<Self, Box<dyn Error>> {
-        use std::os::unix::fs::MetadataExt;
-        let here = fs::metadata(scratch)?.dev();
-        let candidates = [
-            Some(PathBuf::from("/dev/shm")),
-            std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from),
-        ];
-        for base in candidates.into_iter().flatten() {
-            if fs::metadata(&base).is_ok_and(|meta| meta.is_dir() && meta.dev() != here) {
-                let path = base.join(format!(
-                    "hee3-t28b-{}-{}",
-                    std::process::id(),
-                    NEXT.fetch_add(1, Ordering::Relaxed)
-                ));
-                DirBuilder::new().mode(0o700).create(&path)?;
-                return Ok(Self(path));
-            }
-        }
-        Err(format!(
-            "no directory on another device than {} among /dev/shm and XDG_RUNTIME_DIR",
-            scratch.display()
-        )
-        .into())
-    }
-
-    /// Install the operator's backup record under `world`'s home, naming a destination on another
-    /// device; the destination is returned, removed when it drops.
+impl Destination {
+    /// Install the operator's backup record under `world`'s home naming `<home>/backups`, and the
+    /// mount table declaring it another device.
     fn backup_record(world: &World) -> Result<Self, Box<dyn Error>> {
-        let destination = Self::new(&world.home)?;
+        let path = world.home.join("backups");
+        DirBuilder::new().mode(0o700).create(&path)?;
+        let table = world.home.join("mountinfo");
+        fs::write(
+            &table,
+            format!(
+                "1 0 0:35 / / rw,relatime - btrfs /dev/mapper/luks-97a2c76e rw\n\
+                 2 1 8:17 / {} rw,relatime - ext4 /dev/sdb1 rw\n",
+                super::runtime::escaped(&path)
+            ),
+        )?;
         let directory = world
             .home
             .join(".config/herdr-engineering-engine-v3/backup");
@@ -4235,19 +4231,25 @@ impl OtherDevice {
             "backup.json",
             &serde_json::to_vec(&json!({
                 "schema": "hee3.backup-target/1",
-                "destination": destination.0,
+                "destination": path,
                 "deadline_seconds": 60,
             }))?,
             0o600,
         )?;
-        Ok(destination)
+        Ok(Self { path, table })
     }
 }
 
-impl Drop for OtherDevice {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.0);
-    }
+/// The test build's mount-table seam (Closure R1, feature `headroom-seam`): `serve` reads RC02's
+/// mount table from the file it names instead of `/proc/self/mountinfo`.
+const MOUNTS_SEAM: &str = "HEE3_TEST_MOUNTINFO";
+
+/// The line `serve` says once when it reads the declared mount table at `table`, whole.
+fn mounts_line(table: &Path) -> String {
+    format!(
+        "habitat-engine: mount table declared by the test seam: {MOUNTS_SEAM}=\"{}\"",
+        table.display()
+    )
 }
 
 /// RC01's reserves as the contract states them in GiB (docs/contract-decisions.md "Persistent
@@ -4271,14 +4273,14 @@ fn declared_line(state: u64, backup: u64) -> String {
 /// `destination`, its counts read back through the store's own inspection door against the digest
 /// of its published manifest (never from the dispatcher's renderer), and the literal RC01 bound
 /// 4096. The first backup of a process is due `Never`.
-fn backed_up_through_main(stderr: &str, destination: &OtherDevice) -> Result<(), Box<dyn Error>> {
-    let children = fs::read_dir(&destination.0)?
+fn backed_up_through_main(stderr: &str, destination: &Destination) -> Result<(), Box<dyn Error>> {
+    let children = fs::read_dir(&destination.path)?
         .map(|entry| entry.map(|entry| entry.file_name().to_string_lossy().into_owned()))
         .collect::<Result<Vec<_>, _>>()?;
     let [id] = children.as_slice() else {
         return Err(format!("not one backup under the destination: {children:?}\n{stderr}").into());
     };
-    let child = destination.0.join(id);
+    let child = destination.path.join(id);
     let manifest = fs::read(child.join("store-backup.json"))?;
     let text = super::tasks::digest(Sha256::digest(&manifest));
     let digest = habitat_engine::contracts::Sha256Digest::parse(&text)?;
@@ -4292,18 +4294,23 @@ fn backed_up_through_main(stderr: &str, destination: &OtherDevice) -> Result<(),
         report.cutoff
     );
     let declared = declared_line(ROOMY, ROOMY);
+    let mounts = mounts_line(&destination.table);
     assert_eq!(
         (
             stderr
                 .lines()
-                .filter(|line| line.starts_with("habitat-engine: headroom"))
+                .filter(|line| line.starts_with("habitat-engine: headroom")
+                    || line.starts_with("habitat-engine: mount table"))
                 .collect::<Vec<_>>(),
             stderr
                 .lines()
                 .filter(|line| line.starts_with("habitat-engine: dispatcher: backup"))
                 .collect::<Vec<_>>(),
         ),
-        (vec![declared.as_str()], vec![backed.as_str()]),
+        (
+            vec![mounts.as_str(), declared.as_str()],
+            vec![backed.as_str()]
+        ),
         "{stderr}"
     );
     Ok(())
@@ -4337,83 +4344,104 @@ fn held_at_headroom(
     Ok((stderr, got))
 }
 
-/// OPS-2 case 8 · `serve` says its backup target once at start, by the one reader and the real
-/// state root's device: with no record, dispatch is unavailable by name; with a record naming a
-/// destination on another device, where the backups go; with one on the state root's own device,
-/// the refusal with both devices (RC02). Three worlds, three whole lines.
+/// OPS-2 case 8 · `serve` says its backup target once at start, by the one reader over the mount
+/// table it is handed (Closure R1: RC02's device rule over mount SOURCES). With no record, dispatch
+/// is unavailable by name; with a record whose destination the declared table places on another
+/// device, where the backups go; with the table this host has — the state root's `/home` and the
+/// destination's `/var` two btrfs subvolumes of one LUKS device, which `st_dev` passed — the
+/// refusal naming both mount ids; with a tmpfs destination, the refusal naming the filesystem.
+/// Four worlds, four whole lines, each world's table said by the seam first.
 #[test]
 fn serve_says_its_backup_target_at_start() -> Outcome {
-    use std::os::unix::fs::MetadataExt;
-    let said = |world: &World| -> Result<String, Box<dyn Error>> {
+    let said = |world: &World, table: Option<&Path>| -> Result<String, Box<dyn Error>> {
         let log = world.home.join("engine.log");
-        let engine = Engine::start_logged(&world.run, &world.home, &log)?;
+        let mut command = serve_command(&world.run, &world.home);
+        if let Some(table) = table {
+            command.env(MOUNTS_SEAM, table);
+        }
+        let engine = Engine {
+            child: Some(command.stderr(fs::File::create_new(&log)?).spawn()?),
+        }
+        .serving(&world.run, START_BUDGET)?;
         let _output = engine.terminate(Duration::from_secs(20))?;
         Ok(fs::read_to_string(&log)?)
     };
-    let backup_lines = |stderr: &str| -> Vec<String> {
+    let lines = |stderr: &str| -> Vec<String> {
         stderr
             .lines()
-            .filter(|line| line.contains("backup target"))
+            .filter(|line| line.contains("backup target") || line.contains("mount table"))
             .map(str::to_owned)
             .collect()
+    };
+    let directory = |world: &World| {
+        world
+            .home
+            .join(".config/herdr-engineering-engine-v3/backup")
     };
     // No record.
     let world = World::new()?;
     commission(&world.home)?;
-    let directory = world
-        .home
-        .join(".config/herdr-engineering-engine-v3/backup");
     assert_eq!(
-        backup_lines(&said(&world)?),
+        lines(&said(&world, None)?),
         [format!(
             "habitat-engine: dispatch unavailable: backup target absent ({})",
-            directory.display()
+            directory(&world).display()
         )]
     );
-    // A record naming another device.
+    // A record whose destination the table places on another device.
     let world = World::new()?;
     commission(&world.home)?;
-    let destination = OtherDevice::backup_record(&world)?;
-    let directory = world
-        .home
-        .join(".config/herdr-engineering-engine-v3/backup");
+    let destination = Destination::backup_record(&world)?;
     assert_eq!(
-        backup_lines(&said(&world)?),
-        [format!(
-            "habitat-engine: backup target read from {} (destination {})",
-            directory.display(),
-            destination.0.display()
-        )]
+        lines(&said(&world, Some(&destination.table))?),
+        [
+            mounts_line(&destination.table),
+            format!(
+                "habitat-engine: backup target read from {} (destination {})",
+                directory(&world).display(),
+                destination.path.display()
+            )
+        ]
     );
-    // A record naming the state root's own device.
-    let world = World::new()?;
-    let state = habitat_engine::app::coordinator::state_root(&world.home);
-    commission(&world.home)?;
-    let beside = world.home.join("backups");
-    DirBuilder::new().mode(0o700).create(&beside)?;
-    let directory = world
-        .home
-        .join(".config/herdr-engineering-engine-v3/backup");
-    DirBuilder::new().mode(0o700).create(&directory)?;
-    write_grant(
-        &directory,
-        "backup.json",
-        &serde_json::to_vec(&json!({
-            "schema": "hee3.backup-target/1",
-            "destination": beside,
-            "deadline_seconds": 60,
-        }))?,
-        0o600,
-    )?;
-    let (state_dev, beside_dev) = (fs::metadata(&state)?.dev(), fs::metadata(&beside)?.dev());
-    assert_eq!(state_dev, beside_dev, "the fixture's premise: one device");
-    assert_eq!(
-        backup_lines(&said(&world)?),
-        [format!(
-            "habitat-engine: dispatch unavailable: backup target same device (state={state_dev} \
-             destination={beside_dev}) ({})",
-            directory.display()
-        )]
-    );
+    // This host's shape (mount ids 219 and 75 as measured): one LUKS device, two subvolumes.
+    // Then a tmpfs destination.
+    for (state_line, destination_line, refused) in [
+        (
+            "219 75 0:35 /home {} rw,relatime shared:217 - btrfs \
+             /dev/mapper/luks-97a2c76e-e11a-4782-8bfe-4370fadfa706 rw,subvol=/home",
+            "75 49 0:35 /var {} rw,relatime shared:199 - btrfs \
+             /dev/mapper/luks-97a2c76e-e11a-4782-8bfe-4370fadfa706 rw,subvol=/var",
+            "same device (one source: state mount 219, destination mount 75)",
+        ),
+        (
+            "146 49 259:2 / {} rw,relatime shared:211 - ext4 /dev/nvme0n1p2 rw",
+            "965 58 0:83 / {} rw,nosuid,nodev,relatime shared:781 - tmpfs tmpfs rw,mode=700",
+            "not a block device (destination: tmpfs)",
+        ),
+    ] {
+        let world = World::new()?;
+        commission(&world.home)?;
+        let destination = Destination::backup_record(&world)?;
+        let state = habitat_engine::app::coordinator::state_root(&world.home);
+        fs::write(
+            &destination.table,
+            format!(
+                "{}\n{}\n",
+                state_line.replace("{}", &super::runtime::escaped(&state)),
+                destination_line.replace("{}", &super::runtime::escaped(&destination.path))
+            ),
+        )?;
+        assert_eq!(
+            lines(&said(&world, Some(&destination.table))?),
+            [
+                mounts_line(&destination.table),
+                format!(
+                    "habitat-engine: dispatch unavailable: backup target {refused} ({})",
+                    directory(&world).display()
+                )
+            ],
+            "{refused}"
+        );
+    }
     Ok(())
 }
