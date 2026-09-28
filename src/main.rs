@@ -257,11 +257,16 @@ fn main() -> ExitCode {
         });
     }
     match args.as_slice() {
-        [command] if command == "serve" => serve(Lifetime::Signalled),
-        [command, flag] if command == "serve" && flag == UNTIL_STDIN_CLOSES => {
-            serve(Lifetime::UntilStdinCloses)
+        // A test build serves and commissions only under a proof (Closure R1 C3).
+        [command] if command == "serve" => {
+            refused_as_a_test_build().unwrap_or_else(|| serve(Lifetime::Signalled))
         }
-        [command, seconds] if command == "commission" => commission_verb(seconds),
+        [command, flag] if command == "serve" && flag == UNTIL_STDIN_CLOSES => {
+            refused_as_a_test_build().unwrap_or_else(|| serve(Lifetime::UntilStdinCloses))
+        }
+        [command, seconds] if command == "commission" => {
+            refused_as_a_test_build().unwrap_or_else(|| commission_verb(seconds))
+        }
         [action] if Catalogue::find(action).is_ok() => request(action),
         _ => usage(),
     }
@@ -941,6 +946,36 @@ fn finish_drained(prepared: control_socket::Prepared) -> ExitCode {
     ExitCode::SUCCESS
 }
 
+/// The test build's headroom seam (RA1 b): the variable a proof declares RC01's free space in, and
+/// the one a seamed binary refuses to serve or commission without (Closure R1 C3).
+#[cfg(feature = "headroom-seam")]
+const HEADROOM_SEAM: &str = "HEE3_TEST_HEADROOM";
+
+/// Closure R1 (C3; block R F-M3/M1/L1): a release build has no test seam, and nothing to refuse.
+#[cfg(not(feature = "headroom-seam"))]
+const fn refused_as_a_test_build() -> Option<ExitCode> {
+    None
+}
+
+/// Closure R1 (C3; block R F-M3/M1/L1): a binary built with the `headroom-seam` feature — every
+/// test build, and the `target/release/habitat-engine` a `cargo test --release` leaves behind —
+/// refuses to serve or commission unless `HEE3_TEST_HEADROOM` is set, as only a proof sets it, and
+/// says it is a test build. A seamed binary installed by mistake then fails loudly at its first
+/// start instead of running with doors through which the environment replaces RC01's measured free
+/// space and RC02's mount table.
+#[cfg(feature = "headroom-seam")]
+fn refused_as_a_test_build() -> Option<ExitCode> {
+    if std::env::var_os(HEADROOM_SEAM).is_some() {
+        return None;
+    }
+    say(format_args!(
+        "refused: this is a test build (feature headroom-seam), which serves or commissions only \
+         under a proof that sets {HEADROOM_SEAM}; install the product, built by `cargo build \
+         --release --locked --bin habitat-engine`, which has no seam"
+    ));
+    Some(ExitCode::from(EXIT_CONTRACT))
+}
+
 /// RA1 (b): where RC01's gate reads free space other than the host. A release build has no such
 /// door: it measures the host through `Statvfs`, always.
 #[cfg(not(feature = "headroom-seam"))]
@@ -958,7 +993,6 @@ const fn headroom_seam(
 fn headroom_seam(
     backup: &Result<BackupTarget, BackupUnready>,
 ) -> Option<Box<dyn backup_target::FreeSpace + Sync>> {
-    const HEADROOM_SEAM: &str = "HEE3_TEST_HEADROOM";
     let value = std::env::var_os(HEADROOM_SEAM)?;
     let target = backup.as_ref().ok()?;
     let declared = value

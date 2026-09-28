@@ -542,8 +542,11 @@ fn serve_command(run: &Path, home: &Path) -> Command {
         .args(["serve", UNTIL_STDIN_CLOSES])
         .env("XDG_RUNTIME_DIR", run)
         .env("HOME", home)
-        // RA1 (b): never inherited — only a case that declares headroom or a table sets a seam.
-        .env_remove(HEADROOM_SEAM)
+        // RA1 (b): never inherited. A test build serves only under a proof that sets the headroom
+        // seam (Closure R1 C3), so every serve sets it — empty, declaring no free space, unless the
+        // case declares numbers (`Engine::start_declared`); only a case that declares a table sets
+        // the mount seam.
+        .env(HEADROOM_SEAM, "")
         .env_remove(MOUNTS_SEAM)
         .stdin(Stdio::piped())
         .stdout(Stdio::null());
@@ -3698,6 +3701,7 @@ fn serve_without_its_flag_does_not_watch_its_stdin() -> Outcome {
                 .arg("serve")
                 .env("XDG_RUNTIME_DIR", &world.run)
                 .env("HOME", &world.home)
+                .env(HEADROOM_SEAM, "")
                 .stdin(Stdio::piped())
                 .stdout(Stdio::null())
                 .stderr(Stdio::from(fs::File::create_new(&log)?))
@@ -3794,6 +3798,8 @@ fn an_orphaned_serve_drains_when_its_parent_is_killed() -> Outcome {
         ])
         .args([&world.run, &world.home, &log, &socket])
         .arg(&budget)
+        // The engine the script starts inherits it: a test build serves only under the seam (C3).
+        .env(HEADROOM_SEAM, "")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -3995,6 +4001,8 @@ fn engine_verb(run: &Path, home: &Path, argv: &[&str]) -> Result<Output, Box<dyn
         .args(argv)
         .env("XDG_RUNTIME_DIR", run)
         .env("HOME", home)
+        // A test build commissions only under a proof that sets the seam (Closure R1 C3).
+        .env(HEADROOM_SEAM, "")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -4441,6 +4449,54 @@ fn serve_says_its_backup_target_at_start() -> Outcome {
                 )
             ],
             "{refused}"
+        );
+    }
+    Ok(())
+}
+
+/// Closure R1 (C3; block R F-M3/M1/L1) · the test build this suite runs (feature `headroom-seam`)
+/// refuses to serve or commission when the seam is not set — as an installed unit's environment
+/// never sets it — saying it is a test build, exit 6, before anything is made: no socket, no state
+/// root. The product build has no such door (the `strings` count and the product's own commission
+/// are measured in `closure-r1/c3-plant.out`).
+#[test]
+fn a_test_build_refuses_to_serve_or_commission_without_its_seam() -> Outcome {
+    let refused = "habitat-engine: refused: this is a test build (feature headroom-seam), which \
+                   serves or commissions only under a proof that sets HEE3_TEST_HEADROOM; install \
+                   the product, built by `cargo build --release --locked --bin habitat-engine`, \
+                   which has no seam\n";
+    for argv in [&["serve", UNTIL_STDIN_CLOSES][..], &["commission", "60"]] {
+        let world = World::new()?;
+        // Standard input a pipe closed at once: a serve that is not refused starts, then drains
+        // and exits, so the refusal is the only thing that can make the lines below.
+        let mut child = Command::new(env!("CARGO_BIN_EXE_habitat-engine"))
+            .args(argv)
+            .env("XDG_RUNTIME_DIR", &world.run)
+            .env("HOME", &world.home)
+            .env_remove(HEADROOM_SEAM)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()?;
+        drop(child.stdin.take());
+        let output = exits_within(child, Duration::from_secs(20))?;
+        assert_eq!(
+            (
+                output.status.code(),
+                String::from_utf8(output.stdout)?,
+                String::from_utf8(output.stderr)?
+            ),
+            (Some(6), String::new(), refused.to_owned()),
+            "{argv:?}"
+        );
+        assert!(
+            fs::symlink_metadata(world.run.join(RUNTIME_DIRECTORY)).is_err(),
+            "{argv:?}: no runtime directory"
+        );
+        assert!(
+            fs::symlink_metadata(habitat_engine::app::coordinator::state_root(&world.home))
+                .is_err(),
+            "{argv:?}: no state root"
         );
     }
     Ok(())
