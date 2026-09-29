@@ -780,8 +780,9 @@ pub struct DaemonPin {
     pub executable_bytes: u64,
 }
 
-/// Where a unit's main process id comes from: the user manager in production ([`Systemd`]), a
-/// double in the gate (R21 N7: in-gate the seam returns the daemon stand-in's own pid).
+/// Where the daemon's root process id comes from: the endpoint's listener in production
+/// ([`Endpoint`], N6b); a unit's main process through the user manager ([`Systemd`], which `serve`
+/// no longer composes); a double in the gate (R21 N7: the daemon stand-in's own pid).
 pub trait MainPid {
     /// # Errors
     /// The source's refusal, by name.
@@ -795,9 +796,7 @@ pub trait MainPid {
     /// Whether the resolver searches the root's descendants too: a unit's main process roots a tree
     /// the daemon may sit anywhere in, while a source that names the daemon itself ([`Endpoint`]) has
     /// no tree to search — a model runner below it runs the same executable and is not the daemon.
-    fn walks_descendants(&self) -> bool {
-        true
-    }
+    fn walks_descendants(&self) -> bool;
 }
 
 /// The user manager over the one pinned busctl door (`aggregate::main_pid`, R21 N6).
@@ -813,6 +812,10 @@ impl MainPid for Systemd {
         cancelled: &AtomicBool,
     ) -> Result<u32, Error> {
         aggregate::main_pid(&self.0, unit, deadline, cancelled).map_err(daemon_refusal)
+    }
+
+    fn walks_descendants(&self) -> bool {
+        true
     }
 }
 
@@ -958,6 +961,32 @@ pub fn holder(
     }
 }
 
+/// Whether `read` descriptors are still within the acquisition's `bound`, checked before each next
+/// descriptor is read: past it the resolver refuses by name.
+///
+/// # Errors
+/// [`EndpointWhy::Bound`] once `read` exceeds `bound`.
+pub const fn within_descriptor_bound(read: usize, bound: usize) -> Result<(), EndpointWhy> {
+    if read > bound {
+        Err(EndpointWhy::Bound)
+    } else {
+        Ok(())
+    }
+}
+
+/// Whether the holder shares the resolver's network namespace, pure over the two `ns/net` links as
+/// read: a listener in another namespace is not the endpoint the exchanges reach.
+///
+/// # Errors
+/// [`EndpointWhy::Namespace`] when the links differ.
+pub fn same_namespace(ours: &Path, theirs: &Path) -> Result<(), EndpointWhy> {
+    if ours == theirs {
+        Ok(())
+    } else {
+        Err(EndpointWhy::Namespace)
+    }
+}
+
 /// The daemon as the one process holding the one listener at [`ENDPOINT`] (N6b, 2026-09-30; Luke:
 /// "resolve by endpoint"): a unit's main process no longer roots the search, because a daemon a
 /// wrapper runs (`toolbox run` → `podman exec`) is not below the wrapper at all. The unit the
@@ -1030,9 +1059,7 @@ pub fn endpoint_holder(port: u16, deadline: Instant, cancelled: &AtomicBool) -> 
         let mut targets = Vec::new();
         for descriptor in descriptors.flatten() {
             read += 1;
-            if read > MAX_ENDPOINT_FDS {
-                return Err(Error::Endpoint(EndpointWhy::Bound));
-            }
+            within_descriptor_bound(read, MAX_ENDPOINT_FDS).map_err(Error::Endpoint)?;
             if let Ok(link) = fs::read_link(descriptor.path()) {
                 targets.push(link.to_string_lossy().into_owned());
             }
@@ -1044,9 +1071,7 @@ pub fn endpoint_holder(port: u16, deadline: Instant, cancelled: &AtomicBool) -> 
         fs::read_link("/proc/self/ns/net").map_err(|_| Error::Endpoint(EndpointWhy::Namespace))?;
     let theirs = fs::read_link(format!("/proc/{pid}/ns/net"))
         .map_err(|_| Error::Endpoint(EndpointWhy::Namespace))?;
-    if ours != theirs {
-        return Err(Error::Endpoint(EndpointWhy::Namespace));
-    }
+    same_namespace(&ours, &theirs).map_err(Error::Endpoint)?;
     Ok(pid)
 }
 

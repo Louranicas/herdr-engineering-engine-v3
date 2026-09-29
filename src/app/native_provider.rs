@@ -375,9 +375,9 @@ pub fn install(
     })
 }
 
-/// The production provider (R21 D2): the operator's file, where a unit's main pid comes from
-/// (`native::Systemd` in `serve`, a double in the gate), and the engine's runtime directory the
-/// aggregate and the scopes are pinned to.
+/// The production provider (R21 D2): the operator's file, where the daemon's pid comes from
+/// (`native::Endpoint` in `serve` since N6b; a double in the gate), and the engine's runtime
+/// directory the aggregate and the scopes are pinned to.
 pub struct NativeProvider<M> {
     file: NativeFile,
     main_pid: M,

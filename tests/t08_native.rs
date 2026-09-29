@@ -839,6 +839,10 @@ impl native::MainPid for MainPidDouble {
             .push((unit.to_owned(), deadline, cancelled.load(Ordering::Acquire)));
         self.answer
     }
+
+    fn walks_descendants(&self) -> bool {
+        true
+    }
 }
 
 /// A `/usr/bin/sh` whose one child is a `/usr/bin/sleep`: `MainPID` is the shell, the pinned
@@ -1202,12 +1206,9 @@ fn a_real_listener_is_resolved_to_this_process_and_a_closed_port_to_none()
         Instant::now() + Duration::from_secs(60),
         &AtomicBool::new(false),
     );
-    let closed = {
-        let probe = std::net::TcpListener::bind("127.0.0.1:0")?;
-        probe.local_addr()?.port()
-    };
+    // Port 0 is never a listening port: the "nothing listens" case without a bind-and-release race.
     let none = native::endpoint_holder(
-        closed,
+        0,
         Instant::now() + Duration::from_secs(60),
         &AtomicBool::new(false),
     );
@@ -1220,4 +1221,44 @@ fn a_real_listener_is_resolved_to_this_process_and_a_closed_port_to_none()
     );
     drop(open);
     Ok(())
+}
+
+#[test]
+fn an_ipv6_any_listener_is_the_endpoints_and_an_ipv6_loopback_is_not()
+-> Result<(), Box<dyn std::error::Error>> {
+    // The kernel's own spellings (review 2c M2): `[::]` accepts 127.0.0.1 on a dual-stack socket and is
+    // this process; `[::1]` does not accept an IPv4 connection, so nothing listens for the endpoint.
+    let any = std::net::TcpListener::bind("[::]:0")?;
+    let loopback = std::net::TcpListener::bind("[::1]:0")?;
+    let (any_port, loopback_port) = (any.local_addr()?.port(), loopback.local_addr()?.port());
+    let at = |port| {
+        native::endpoint_holder(
+            port,
+            Instant::now() + Duration::from_secs(60),
+            &AtomicBool::new(false),
+        )
+    };
+    assert_eq!(
+        (at(any_port), at(loopback_port)),
+        (
+            Ok(std::process::id()),
+            Err(Error::Endpoint(native::EndpointWhy::NoListener))
+        )
+    );
+    Ok(())
+}
+
+#[test]
+fn the_descriptor_bound_and_the_namespace_are_decided_by_argument() {
+    use native::EndpointWhy as Why;
+    use std::path::Path;
+    assert_eq!(
+        (
+            native::within_descriptor_bound(7, 7),
+            native::within_descriptor_bound(8, 7),
+            native::same_namespace(Path::new("net:[4026531840]"), Path::new("net:[4026531840]")),
+            native::same_namespace(Path::new("net:[4026531840]"), Path::new("net:[4026532211]")),
+        ),
+        (Ok(()), Err(Why::Bound), Ok(()), Err(Why::Namespace))
+    );
 }

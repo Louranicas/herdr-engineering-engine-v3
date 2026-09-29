@@ -1728,11 +1728,9 @@ fn with_no_daemon_at_the_declared_endpoint_the_task_stays_admitted() -> Outcome 
     let native = installable_native(&world.home)?;
     let backups = Destination::backup_record(&world)?;
     let log = world.home.join("engine.log");
-    // N6b: the daemon is resolved at the endpoint's listener. The proof declares a port nothing
-    // listens on (bound, then released), so its verdict never depends on what the host runs.
-    let quiet = std::net::TcpListener::bind("127.0.0.1:0")?
-        .local_addr()?
-        .port();
+    // N6b: the daemon is resolved at the endpoint's listener. The proof declares port 0, on which
+    // nothing ever listens, so its verdict never depends on what the host runs.
+    let quiet: u16 = 0;
     let engine = Engine::start_declared_with(
         run,
         &world.home,

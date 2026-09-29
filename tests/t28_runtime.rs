@@ -5145,6 +5145,10 @@ impl habitat_engine::worker::native::MainPid for StandInPid {
         );
         self.pid
     }
+
+    fn walks_descendants(&self) -> bool {
+        true
+    }
 }
 
 /// The operator file over the native fixture `profile` (its client, manifest, blobs, directory and

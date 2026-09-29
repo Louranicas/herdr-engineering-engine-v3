@@ -252,7 +252,7 @@ T07_INPUTS = ("src/store/recovery.rs", "tests/t07_inventory.rs")
 # interpreter is an evidence pin (see native_client_interpreter), never a
 # candidate input; the other files under tests/fixtures/native are not read by
 # any registered Rust test and earn no input status here.
-T08_TARGET_COUNTS = {"t08_native": 33}
+T08_TARGET_COUNTS = {"t08_native": 35}
 T08_INPUTS = ("src/worker/native.rs", "tests/t08_native.rs", "tests/fixtures/native/client.py",
               # N6b: the host's own socket table, the endpoint resolver's known answer.
               "tests/fixtures/native/proc-net-tcp-host-20260930.txt")
