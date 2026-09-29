@@ -136,8 +136,9 @@ def closure_files(sysroot, target):
 
 def listen_holder(port):
     """(pid, why) of the one process holding the one LISTEN socket at 127.0.0.1:`port` (v4 loopback or any, v6 any or
-    v4-mapped loopback), measured here independently of the product, which enforces the same rule at dispatch (N6b):
-    (0, reason) when there is not exactly one."""
+    v4-mapped loopback): a WITNESS for P8, measured here independently of the product. The enforcing rule is
+    `native::endpoint_holder` at dispatch (N6b), which also requires the listener to be this uid's and treats a missing
+    tcp6 as empty; this witness does neither (review 2c P1). (0, reason) when there is not exactly one."""
     spellings = ("0100007F", "00000000", "0" * 32, "0000000000000000FFFF00000100007F")
     inodes = []
     for table in ("/proc/net/tcp", "/proc/net/tcp6"):
@@ -230,13 +231,17 @@ def main():
         # ---- P8: the live daemon at the endpoint, its bytes and its GPU (N6b; review 2c N1) -----------------------
         holder, why = listen_holder(ENDPOINT_PORT)
         holder_exe = sha_file(f"/proc/{holder}/exe") if holder else "-"
+        probe_started = time.monotonic()
         run(["curl", "-s", "--noproxy", "*", "-m", "120", "http://127.0.0.1:11434/api/generate", "-d",
              json.dumps({"model": MODEL, "prompt": "ok", "stream": False, "keep_alive": 60,
                          "options": {"num_predict": 1}})], check=False)
         resident = json.loads(run(["curl", "-s", "--noproxy", "*", "-m", "5", "http://127.0.0.1:11434/api/ps"],
                                   check=False).stdout or "{}").get("models", [])
         vram = max((m.get("size_vram", 0) for m in resident if m.get("name") == MODEL), default=0)
-        measured["native_daemon"] = (f"holder={holder} {why} exe={holder_exe[7:19]} vram={vram >> 20}MiB",
+        # The probe's wall time tells a cold model load from a CPU-backed daemon when P8 fails (review 2c P2).
+        probe_s = time.monotonic() - probe_started
+        measured["native_daemon"] = (f"holder={holder} {why} exe={holder_exe[7:19]} vram={vram >> 20}MiB "
+                                     f"probe={probe_s:.1f}s",
                                      holder_exe == OLLAMA_SHA256 and os.path.getsize(f"/proc/{holder}/exe") == OLLAMA_BYTES
                                      and vram > 0)
         # ---- provisioning (the class, its closure, the native file) -------------------------------------------
