@@ -9,6 +9,7 @@ hee3-evidence/T28/HT2-host-f06-20260929/FLOW-CONTRACT.md.
 import hashlib
 import json
 import sys
+from itertools import pairwise
 
 RECORD_SCHEMA = "hee3.host-record/1"
 GRANT_SCHEMA = "hee3.grant/1"
@@ -99,6 +100,35 @@ def spec(workspace_id):
 
 # ---- what the run decides -----------------------------------------------------------------------------------
 
+def release_row(manifest, name, installed, seams, head):
+    """P2: the release the run serves is the one `current` names, whole, AND built from the tree the run runs
+    from (review 2c H1): the scoreboard's rule (f) refuses a record whose sha is not the manifest's source.
+    `installed` maps each binary to its re-hashed sha256; `name` is the release directory's; `head` is the run's."""
+    reasons = []
+    for binary, digest in sorted(installed.items()):
+        if manifest["binaries"][binary]["sha256"] != digest:
+            reasons.append(f"{binary} {digest[:12]} != manifest")
+    if hashlib.sha256(render_manifest(manifest)).hexdigest() != name:
+        reasons.append("the directory name is not the manifest's digest")
+    if seams != 0:
+        reasons.append(f"seams={seams}")
+    if manifest["source_commit"] != head:
+        reasons.append(f"source {manifest['source_commit'][:12]} != run head {head[:12]}")
+    return (f"{name[:12]} " + ("; ".join(reasons) or "whole"), not reasons)
+
+
+def render_manifest(manifest):
+    """The release manifest's own bytes, as `deploy/install-release` renders them (canonical JSON)."""
+    return (json.dumps(manifest, sort_keys=True, separators=(",", ":"), ensure_ascii=False) + "\n").encode()
+
+
+def stale_count(generations):
+    """How many events carry a task generation below their predecessor's, in `sequence` order (review 2c M3): a
+    transition advances the generation and a reconciliation repeats it (src/store/reconciliation.rs), so equal is
+    not stale; only a step back is an acceptance at a stale generation."""
+    return sum(1 for before, after in pairwise(generations) if int(after) < int(before))
+
+
 def rows(measured):
     """The precondition rows, each `P<n> <name> <value> PASS|FAIL`, and whether S1 may start (every row PASS).
     `measured` maps each row name to (value, ok); a row the run did not measure is a FAIL by name."""
@@ -130,7 +160,7 @@ def closure(ledger):
         problems.append(f"generation: stale_accepted={ledger['stale']}")
     kinds = sorted(record["kind"] for record in ledger["records"] if record["event_id"] == ledger["settled_event"])
     settle = ledger.get("settle") or {}
-    provider = "native" if str(settle.get("adapter_profile", "")).startswith("ollama-") else "none"
+    provider = "native" if settle.get("adapter_profile") == ADAPTER else "none"
     if provider != "native":
         problems.append(f"execute: the settle names no native adapter ({settle.get('adapter_profile')!r})")
     worker = [r for r in ledger["records"] if r["kind"] == "worker_settle"]
@@ -165,6 +195,8 @@ def record(fields, lines, problems):
     extra = sorted(set(fields["units_after"]) - set(fields["units_before"]))
     if extra:
         refused.append(f"units after != before: {extra}")
+    if not fields.get("restored", True):
+        refused.append("ollama.service was not read back active after the window")
     if not fields.get("compensating", {}).get("netns_differ"):
         refused.append("R0: the candidate's network namespace was not observed apart from serve's")
     if refused:
@@ -277,8 +309,24 @@ def control():
          True)
     case("profile native row", text.endswith(f'[native]\nmodel = "llama3.2:3b"\nmanifest_sha256 = "sha256:m"\n'
                                              f'adapter = "{ADAPTER}"\n'), True)
+    # Review 2c: H1 the release's source is the run's head; M3 a reconciliation's equal generation is not stale;
+    # M1 an unrestored daemon refuses the record.
+    good = {"source_commit": "a" * 40, "binaries": {"habitat-engine": {"sha256": "e" * 64}}}
+    named = hashlib.sha256(render_manifest(good)).hexdigest()
+    case("release row whole", release_row(good, named, {"habitat-engine": "e" * 64}, 0, "a" * 40),
+         (f"{named[:12]} whole", True))
+    case("release source is the run head", release_row(good, named, {"habitat-engine": "e" * 64}, 0, "b" * 40),
+         (f"{named[:12]} source aaaaaaaaaaaa != run head bbbbbbbbbbbb", False))
+    case("release digest", release_row(good, named, {"habitat-engine": "f" * 64}, 0, "a" * 40)[1], False)
+    case("release name", release_row(good, "0" * 64, {"habitat-engine": "e" * 64}, 0, "a" * 40)[1], False)
+    case("release seams", release_row(good, named, {"habitat-engine": "e" * 64}, 1, "a" * 40)[1], False)
+    case("stale counts steps back only", (stale_count(["1", "2", "3", "3", "4"]), stale_count(["1", "3", "2", "4"])),
+         (0, 1))
+    case("restore refuses", record({**fields_fixture(), "restored": False}, lines, []),
+         (None, ["ollama.service was not read back active after the window"]))
     rules = ["four lines", "terminal", "stale_accepted", "same=false", "dirty", "exe digest", "units",
-             "P-rows all pass", "R0 netns"]
+             "P-rows all pass", "R0 netns", "release source is the run head", "stale counts steps back only",
+             "restore refuses"]
     ran = sum(rule in cases for rule in rules)
     print(f"control verdict=PASS cases={ran}/{len(rules)} assertions={len(cases)}")
     return 0 if ran == len(rules) else 1

@@ -151,6 +151,7 @@ def main():
     ollama_unit = f"hee3-t3-ollama-{a.run_id}.service"
     manifest = json.loads((release / "manifest.json").read_text())
     swapped = False
+    created_root = False
     before = []
     measured, fields = {}, {"compensating": {"netns_differ": False, "slices": []}}
     lines, problems = [], ["the run did not reach the closure"]
@@ -159,6 +160,7 @@ def main():
         if root.exists():
             raise RuntimeError(f"run root exists: {root}")
         private(home)
+        created_root = True
         before = units()
         row("L0", 0, f"units={len(before)}")
         pins = {name: sha_file(path) for name, path in
@@ -167,11 +169,10 @@ def main():
                                  all(pins[k][7:] == manifest["host_pins"][k] for k in pins))
         engine, shim = release / "habitat-engine", release / "hee-namespace-shim"
         seams = sum(p.read_bytes().count(b"HEE3_TEST_") for p in (engine, shim))
-        rel_ok = (sha_file(engine)[7:] == manifest["binaries"]["habitat-engine"]["sha256"]
-                  and sha_file(shim)[7:] == manifest["binaries"]["hee-namespace-shim"]["sha256"]
-                  and hashlib.sha256((release / "manifest.json").read_bytes()).hexdigest() == release.name
-                  and seams == 0)
-        measured["release"] = (f"{release.name[:12]} seams={seams}", rel_ok)
+        head = run(["git", "-C", str(REPO), "rev-parse", "HEAD"]).stdout.strip()
+        measured["release"] = decide.release_row(
+            manifest, release.name, {"habitat-engine": sha_file(engine)[7:], "hee-namespace-shim": sha_file(shim)[7:]},
+            seams, head)
         measured["state_root"] = ("absent" if not state.exists() else "present", not state.exists())
         stray = [u for u in before if u.startswith(("hee3aggregate", "hee3-resource"))]
         measured["units"] = (f"hee3={len(stray)}", not stray)
@@ -329,8 +330,8 @@ def main():
         attempts = [{"id": r[0], "state": r[1], "generation": r[2]} for r in
                     db.execute("SELECT id, state, generation FROM attempts WHERE task_id=? ORDER BY CAST(generation AS INT)", (task_id,))]
         task_generation = db.execute("SELECT generation FROM tasks WHERE id=?", (task_id,)).fetchone()[0]
-        stale = db.execute("SELECT count(*) FROM events e1 JOIN events e2 ON e2.task_id=e1.task_id AND e2.sequence>e1.sequence "
-                           "WHERE e1.task_id=? AND CAST(e2.generation AS INT)<=CAST(e1.generation AS INT)", (task_id,)).fetchone()[0]
+        stale = decide.stale_count([r[0] for r in db.execute(
+            "SELECT generation FROM events WHERE task_id=? ORDER BY sequence", (task_id,))])
         last = attempts[-1]["id"] if attempts else None
         settled_event = db.execute("SELECT settled_event FROM attempts WHERE id=?", (last,)).fetchone()[0] if last else None
         records = [{"kind": r[0], "event_id": r[1], "digest": r[2]} for r in
@@ -369,14 +370,17 @@ def main():
                 poll("ollama.service active", lambda: unit_prop("ollama.service", "ActiveState") == "active", 60)
                 row("restore", 0, "ollama.service ActiveState=active")
             except RuntimeError as error:
+                fields["restored"] = False
                 row("restore", 1, str(error))
         after = units()
         fields["units_before"], fields["units_after"] = before, after
         extra = sorted(set(after) - set(fields["units_before"]))
         row("T2", 0 if not extra else 1, f"extra={extra}")
-        if home.exists():
+        if created_root:
             shutil.rmtree(root)
-        row("T3", 0 if not root.exists() else 1, f"removed {root}; backups kept at {backups}")
+            row("T3", 0 if not root.exists() else 1, f"removed {root}; backups kept at {backups}")
+        else:
+            row("T3", 0, f"nothing created; {root} left as found")
     fields.update({"dirty": int(run(["git", "-C", str(REPO), "status", "--porcelain"]).stdout != ""),
                    "source_sha": run(["git", "-C", str(REPO), "rev-parse", "HEAD"]).stdout.strip(),
                    "release_manifest_sha256": release.name,

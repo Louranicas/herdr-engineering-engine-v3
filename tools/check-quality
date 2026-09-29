@@ -883,6 +883,8 @@ def quality_subject_paths(root, deadline, rust_only):
                 "tools/check-mutation-survivors", "tools/check-flow-scoreboard",
                 # HT1: the release installer (RC02 path); its control is a gate step, its build a host act.
                 "deploy/install-release",
+                # HT2: the F06 host run's pure decisions (a gate step) and its host acquisition (linted only).
+                "tests/host/f06_decide.py", "tests/host/f06_run.py",
                 # A shell subject the lint must see (review of 46b1e9e, gap 4): the publication launcher.
                 "tools/corpus-sync",
                 # The flow scoreboard's world: the CS06 arrows table (HEE3_MASTER_PLAN_20260926.md §5).
@@ -1486,6 +1488,9 @@ def main():
         run("flow-scoreboard", [sys.executable, "tools/check-flow-scoreboard"],
             required_text="flows=20 l2=2 host=0 reasoned=18 unexplained=0\nverdict=PASS")
         # HT1: every installer rule refuses its plant by its own diagnostic; the census is the schema's.
+        # HT2: the F06 host run's decisions, each rule by its own diagnostic; the run itself is a host act.
+        run("f06-decide-control", [sys.executable, "-W", "error", "tests/host/f06_decide.py", "--control"],
+            required_text="control verdict=PASS cases=12/12 assertions=37")
         run("install-release-control", [sys.executable, "-W", "error", "deploy/install-release", "--control"],
             required_text="control verdict=PASS cases=21/21 obligations=22/22 assertions=48")
         run("mutation-survivor-audit", [sys.executable, "-W", "error", "tests/mutation_survivors.py"],
