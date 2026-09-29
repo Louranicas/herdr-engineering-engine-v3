@@ -11,13 +11,24 @@ real doors through the binary -- named as `<file>::<fn>` and resolved to a `#[te
 or `reason`: why it is not L2 yet and the slice it `lands_with`, optionally naming a `partial` test
 that covers part of it. A partial is never counted as L2 (HEE3_MASTER_PLAN_20260926.md §5).
 
-Prints `flows=N l2=L reasoned=R unexplained=U` and refuses any unexplained flow, any unresolved test
-and an empty world. `--control` proves each refusal fires on its own diagnostic.
+An entry may also name a `host` record (HT3; `hee3-evidence/T28/HO01-T3-20260928/FLOW-CONTRACT.md` §4): a committed
+record of the flow run on the host against an installed release. It counts as L2 only while it is verified against
+the tree and the release it names: (a) its `source_sha` is an ancestor of the tree, (b) nothing under `src`,
+`Cargo.toml` or `Cargo.lock` changed since, (c) `dirty=0`, (d) every asserted line is present, (e) the engine digest
+recomputed from the release directory equals the record's, and (f) the release manifest's `source_commit` is the
+record's `source_sha`. A stale record, an absent one, or a release this machine does not hold is legible and not
+red; a record that contradicts itself or its release is refused. Never a stored status.
+
+Prints `flows=N l2=L host=H reasoned=R unexplained=U` and refuses any unexplained flow, any unresolved test,
+any refused host record and an empty world. `--control` proves each refusal fires on its own diagnostic.
 
 Run: python3 tools/check-flow-scoreboard [--control]
 """
 
+import hashlib
+import json
 import re
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -26,6 +37,11 @@ ROOT = Path(__file__).resolve().parents[1]
 SCHEMATICS = "docs/corpus-schematics.md"
 
 SOCKET = "tests/t28_socket.rs"
+RELEASES = Path.home() / ".local/lib/herdr-engineering-engine-v3/releases"
+HOST_SCHEMA = "hee3.host-record/1"
+# The four closure lines HT2 asserts (FLOW-CONTRACT §3.3), each with the value that makes it a pass.
+HOST_LINES = {"F06": (("F06 forward ", " terminal="), ("F06 generation ", " stale_accepted=0"),
+                      ("F06 execute ", " settled_event="), ("F06 one_settle ", " same=true"))}
 
 # Measured 2026-09-26 against main's tests: L2 means the binary crosses both modules' doors.
 FLOWS = {
@@ -42,7 +58,7 @@ FLOWS = {
                       "into a destination the declared table and topology place on another disk, then one task stops at a pre-dispatch refusal "
                       "(criteria_not_class) and, over the native provider, is refused at the busctl pin with "
                       "the task left admitted — no worker launches in the gate; launch, LauncherFailed and "
-                      "ACCEPTED are Tier-3", "lands_with": "B14c-T3 + Q4",
+                      "ACCEPTED are Tier-3", "lands_with": "B14c-T3 + Q4", "host": "evidence/host/F06.json",
             "partial": SOCKET
             + "::with_a_scratch_runtime_directory_the_busctl_pin_refuses_and_the_task_stays_admitted"},
     "F07": {"reason": "check is not composed behind dispatch", "lands_with": "B16"},
@@ -125,10 +141,48 @@ def test_resolves(root, spec):
     return False
 
 
-def judge(root, text, flows):
-    """(problems, counts). Pure over its inputs, so the control can reach every branch."""
+def host_verdict(flow, seen, lines=None):
+    """('l2' | 'note' | 'refused', line) for one host observation, pure. `seen` is what main acquired: the parsed
+    `record` (None when absent), `ancestor` (bool, or None with no history to ask), `changed` (paths under src,
+    Cargo.toml, Cargo.lock since the record's sha), `release_digest` (the engine's sha256 recomputed from the release
+    directory, None when this machine holds no such release) and `manifest_source` (that release's source_commit)."""
+    record = seen.get("record")
+    if record is None:
+        return "note", f"{flow}: host=0 (record absent)"
+    sha = record.get("source_sha")
+    if record.get("schema") != HOST_SCHEMA or record.get("flow") != flow:
+        return "refused", f"{flow}: host record refused: schema {record.get('schema')!r} flow {record.get('flow')!r}"
+    if record.get("dirty") != 0:
+        return "refused", f"{flow}: host record refused: dirty={record.get('dirty')}"
+    asserted = record.get("asserted", [])
+    wanted = (lines or HOST_LINES).get(flow)
+    if wanted is None:
+        return "refused", f"{flow}: host record refused: no asserted-line contract for {flow}"
+    for prefix, value in wanted:
+        if not any(line.startswith(prefix) and value in line for line in asserted):
+            return "refused", f"{flow}: host record refused: missing line {prefix.strip()!r}"
+    if seen.get("manifest_source") is not None and seen["manifest_source"] != sha:
+        return "refused", (f"{flow}: host record refused: source_sha {sha} != manifest source_commit "
+                           f"{seen['manifest_source']}")
+    if seen.get("release_digest") is not None and seen["release_digest"] != record.get("engine_sha256"):
+        return "refused", (f"{flow}: host record refused: engine digest {record.get('engine_sha256')} != release "
+                           f"{seen['release_digest']}")
+    if seen.get("ancestor") is None:
+        return "note", f"{flow}: host record unverifiable here (no history to ask)"
+    if not seen["ancestor"] or seen.get("changed"):
+        return "note", f"{flow}: reasoned (host record stale: {sha})"
+    if seen.get("release_digest") is None:
+        return "note", f"{flow}: host_digest=unverified"
+    return "l2", f"{flow}: L2 by host record {sha}"
+
+
+def judge(root, text, flows, hosts=None, lines=None):
+    """(problems, counts). Pure over its inputs, so the control can reach every branch. `hosts` is
+    {flow: observation} for each entry that names a host record (see `host_verdict`)."""
+    hosts = hosts or {}
     found = world(text)
     problems = []
+    host = 0
     if not found:
         problems.append("the CS06 arrows table yielded no flow; the world is unreadable")
     for flow in sorted(set(found) - set(flows)):
@@ -143,20 +197,27 @@ def judge(root, text, flows):
                 l2 += 1
             else:
                 problems.append(f"{flow}: l2 names {entry['l2']}, which is not a #[test] in the tree")
+        elif "host" in entry and host_verdict(flow, hosts.get(flow, {}), lines)[0] == "l2":
+            l2 += 1
+            host += 1
         elif str(entry.get("reason", "")).strip() and str(entry.get("lands_with", "")).strip():
             reasoned += 1
+            if "host" in entry:
+                kind, line = host_verdict(flow, hosts.get(flow, {}), lines)
+                if kind == "refused":
+                    problems.append(line)
             if "partial" in entry and not test_resolves(root, entry["partial"]):
                 problems.append(f"{flow}: partial names {entry['partial']}, which is not a #[test] in the tree")
         else:
             problems.append(f"unexplained {flow}: an entry needs an l2 test, or a reason and lands_with")
     unexplained = len(found) - l2 - reasoned
-    return problems, {"flows": len(found), "l2": l2, "reasoned": reasoned, "unexplained": unexplained}
+    return problems, {"flows": len(found), "l2": l2, "host": host, "reasoned": reasoned, "unexplained": unexplained}
 
 
 def report(problems, counts):
     for problem in problems:
         print(f"  {problem}")
-    print(f"flows={counts['flows']} l2={counts['l2']} reasoned={counts['reasoned']} "
+    print(f"flows={counts['flows']} l2={counts['l2']} host={counts['host']} reasoned={counts['reasoned']} "
           f"unexplained={counts['unexplained']}")
     print("verdict=" + ("FAIL" if problems else "PASS"))
     return 1 if problems else 0
@@ -189,7 +250,68 @@ def control():
             ("a partial naming no test", {"F01": {**reason, "partial": "tests/t.rs::absent"}, "F02": reason},
              ["F01: partial names tests/t.rs::absent, which is not a #[test] in the tree"], (2, 0, 2, 0)),
         ]
+        # HT3: the host branch, over the toy world's F02 with its own asserted-line contract.
+        toy_lines = {"F02": (("F02 closes ", " ok=1"),)}
+        good = {"schema": HOST_SCHEMA, "flow": "F02", "source_sha": "a" * 40, "dirty": 0,
+                "asserted": ["F02 closes task=1 ok=1"], "engine_sha256": "e" * 64}
+        fresh = {"record": good, "ancestor": True, "changed": [], "release_digest": "e" * 64,
+                 "manifest_source": "a" * 40}
+        hosted = {"F01": reason, "F02": {**reason, "host": "evidence/host/F02.json"}}
+        host_cases = [
+            ("a fresh verified host record is L2", fresh, [], (2, 1, 1, 1, 0)),
+            ("a record whose sha is not an ancestor is stale, not red", {**fresh, "ancestor": False}, [], (2, 0, 0, 2, 0)),
+            ("a record with src changed since is stale, not red", {**fresh, "changed": ["src/x.rs"]}, [], (2, 0, 0, 2, 0)),
+            ("a dirty record is refused", {**fresh, "record": {**good, "dirty": 1}},
+             ["F02: host record refused: dirty=1"], (2, 0, 0, 2, 0)),
+            ("an engine digest the release does not hold is refused", {**fresh, "release_digest": "f" * 64},
+             [f"F02: host record refused: engine digest {'e' * 64} != release {'f' * 64}"], (2, 0, 0, 2, 0)),
+            ("a forged record over a present release is refused",
+             {**fresh, "record": {**good, "engine_sha256": "0" * 64}},
+             [f"F02: host record refused: engine digest {'0' * 64} != release {'e' * 64}"], (2, 0, 0, 2, 0)),
+            ("a release this machine does not hold is unverified, not red", {**fresh, "release_digest": None},
+             [], (2, 0, 0, 2, 0)),
+            ("a record missing an asserted line is refused", {**fresh, "record": {**good, "asserted": ["F02 closes ok=0"]}},
+             ["F02: host record refused: missing line 'F02 closes'"], (2, 0, 0, 2, 0)),
+            ("an absent record leaves the flow reasoned", {"record": None}, [], (2, 0, 0, 2, 0)),
+            ("a record from another source than its release is refused", {**fresh, "manifest_source": "b" * 40},
+             [f"F02: host record refused: source_sha {'a' * 40} != manifest source_commit {'b' * 40}"], (2, 0, 0, 2, 0)),
+            ("a record of another schema or flow is refused", {**fresh, "record": {**good, "flow": "F09"}},
+             ["F02: host record refused: schema 'hee3.host-record/1' flow 'F09'"], (2, 0, 0, 2, 0)),
+            ("a copy with no history is unverifiable, not red", {**fresh, "ancestor": None}, [], (2, 0, 0, 2, 0)),
+        ]
         failed = 0
+        for label, seen, want, counts in host_cases:
+            problems, got = judge(root, table, hosted, {"F02": seen}, toy_lines)
+            ok = problems == want and (got["flows"], got["l2"], got["host"], got["reasoned"], got["unexplained"]) == counts
+            failed += not ok
+            print(f"{'ok  ' if ok else 'FAIL'} {label}: {problems} {got}")
+        # The notes the host branch prints, whole (they are never problems, so the counts alone cannot pin them).
+        notes = [host_verdict("F02", seen, toy_lines)[1] for seen in
+                 ({**fresh, "ancestor": False}, {**fresh, "release_digest": None}, {"record": None}, {**fresh, "ancestor": None})]
+        ok = notes == [f"F02: reasoned (host record stale: {'a' * 40})", "F02: host_digest=unverified",
+                       "F02: host=0 (record absent)", "F02: host record unverifiable here (no history to ask)"]
+        failed += not ok
+        print(f"{'ok  ' if ok else 'FAIL'} the host notes, whole: {notes}")
+        # A hosted flow with no asserted-line contract is refused, never taken as passing.
+        uncontracted = host_verdict("F01", {**fresh, "record": {**good, "flow": "F01"}}, toy_lines)
+        ok = uncontracted == ("refused", "F01: host record refused: no asserted-line contract for F01")
+        failed += not ok
+        print(f"{'ok  ' if ok else 'FAIL'} a hosted flow with no line contract: {uncontracted}")
+        # F06's real contract: the four closure lines, each with its passing value.
+        real = {"schema": HOST_SCHEMA, "flow": "F06", "source_sha": "a" * 40, "dirty": 0, "engine_sha256": "e" * 64,
+                "asserted": ["F06 forward task=t attempts=1 terminal=reconciled each=1/1",
+                             "F06 generation task=t attempt_generation=1 task_generation=1 stale_accepted=0",
+                             "F06 execute attempt=a provider=native settled_event=9 run_records=capture",
+                             "F06 one_settle attempt=a usage_event=9 identity_event=9 same=true"]}
+        f06 = {**fresh, "record": real}
+        verdicts = [host_verdict("F06", f06)[0],
+                    host_verdict("F06", {**f06, "record": {**real, "asserted": [line.replace("same=true", "same=false")
+                                                                               for line in real["asserted"]]}})[1],
+                    host_verdict("F06", {**f06, "record": {**real, "asserted": real["asserted"][:3]}})[1]]
+        ok = verdicts == ["l2", "F06: host record refused: missing line 'F06 one_settle'",
+                          "F06: host record refused: missing line 'F06 one_settle'"]
+        failed += not ok
+        print(f"{'ok  ' if ok else 'FAIL'} F06's four asserted lines: {verdicts}")
         for label, flows, want, counts in cases:
             problems, got = judge(root, table, flows)
             ok = problems == want and (got["flows"], got["l2"], got["reasoned"], got["unexplained"]) == counts
@@ -199,7 +321,7 @@ def control():
         ok = problems == ["the CS06 arrows table yielded no flow; the world is unreadable"]
         failed += not ok
         print(f"{'ok  ' if ok else 'FAIL'} an empty world refuses: {problems}")
-    print(f"control verdict={'FAIL' if failed else 'PASS'} cases={len(cases) + 1}")
+    print(f"control verdict={'FAIL' if failed else 'PASS'} cases={len(cases) + 1 + len(host_cases) + 3}")
     return 1 if failed else 0
 
 
@@ -208,11 +330,38 @@ def main(argv):
         return control()
     if argv:
         raise SystemExit("usage: check-flow-scoreboard [--control]")
-    problems, counts = judge(ROOT, (ROOT / SCHEMATICS).read_text(), FLOWS)
+    hosts = {flow: observe(ROOT, entry["host"]) for flow, entry in FLOWS.items() if "host" in entry}
+    problems, counts = judge(ROOT, (ROOT / SCHEMATICS).read_text(), FLOWS, hosts)
     for flow in sorted(FLOWS):
         entry = FLOWS[flow]
         print(f"  {flow} " + (f"L2 {entry['l2']}" if "l2" in entry else f"reasoned, lands with {entry.get('lands_with')}"))
+    for flow in sorted(hosts):
+        print(f"  {host_verdict(flow, hosts[flow])[1]}")
     return report(problems, counts)
+
+
+def observe(root, relative):
+    """Acquire one host record's observation for `host_verdict`: the record, its ancestry and the src changes since
+    it (from git, None when this copy has no history), and the release it names, recomputed from disk."""
+    path = root / relative
+    if not path.is_file():
+        return {"record": None}
+    record = json.loads(path.read_text())
+    sha = str(record.get("source_sha", ""))
+    ancestry = subprocess.run(["git", "-C", str(root), "merge-base", "--is-ancestor", sha, "HEAD"],
+                              capture_output=True, text=True, check=False)
+    ancestor = None if ancestry.returncode not in (0, 1) else ancestry.returncode == 0
+    changed = []
+    if ancestor:
+        changed = subprocess.run(["git", "-C", str(root), "diff", "--name-only", sha, "HEAD", "--",
+                                  "src", "Cargo.toml", "Cargo.lock"],
+                                 capture_output=True, text=True, check=True).stdout.split()
+    release = RELEASES / str(record.get("release_manifest_sha256", ""))
+    engine, manifest = release / "habitat-engine", release / "manifest.json"
+    release_digest = hashlib.sha256(engine.read_bytes()).hexdigest() if engine.is_file() else None
+    manifest_source = json.loads(manifest.read_text()).get("source_commit") if manifest.is_file() else None
+    return {"record": record, "ancestor": ancestor, "changed": changed, "release_digest": release_digest,
+            "manifest_source": manifest_source}
 
 
 sys.exit(main(sys.argv[1:]))

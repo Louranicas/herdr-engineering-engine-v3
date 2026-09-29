@@ -1480,9 +1480,9 @@ def main():
             required_text="sites=19 killed=19 wrong_reason=0 survived=0")
         # §5: every declared flow is L2 by a named binary test or carries its reason and landing slice.
         run("flow-scoreboard-control", [sys.executable, "tools/check-flow-scoreboard", "--control"],
-            required_text="control verdict=PASS cases=7")
+            required_text="control verdict=PASS cases=22")
         run("flow-scoreboard", [sys.executable, "tools/check-flow-scoreboard"],
-            required_text="flows=20 l2=2 reasoned=18 unexplained=0\nverdict=PASS")
+            required_text="flows=20 l2=2 host=0 reasoned=18 unexplained=0\nverdict=PASS")
         # HT1: every installer rule refuses its plant by its own diagnostic; the census is the schema's.
         run("install-release-control", [sys.executable, "-W", "error", "deploy/install-release", "--control"],
             required_text="control verdict=PASS cases=21/21 obligations=22/22 assertions=48")
