@@ -51,6 +51,7 @@ HOST_PINS = {
 }
 SEAM = b"HEE3_TEST_"
 RELEASE_TARGETS = Path.home() / ".cache/hee3-release-target"
+RELEASE_WORK = Path.home() / ".cache/hee3-release-work"
 
 
 # ---- the pure policy -----------------------------------------------------------------------------------------
@@ -465,7 +466,15 @@ def main():
     refused = quiescence(host_census(), arguments.prefix / "releases")
     if refused is not None:
         raise ValueError(refused)
-    work = Path(tempfile.mkdtemp(prefix=f"hee3-release-{commit[:12]}-", dir=Path.home() / ".cache"))
+    # One work directory per commit, never a random one: the release profile keeps line tables and the offline
+    # Cargo configuration names its vendor directory, both by absolute path, so a random path made every build of one
+    # commit produce different bytes (measured 2026-09-29: engine 94f2d180… then f33ad7bd…). A previous run's
+    # directory for this commit is this tool's own scratch, removed by name.
+    work = RELEASE_WORK / commit
+    if work.exists():
+        print(f"removed previous work directory: {work}", file=sys.stderr)
+        shutil.rmtree(work)
+    work.mkdir(parents=True, mode=0o700)
     clone = work / "src"
     capture(["git", "clone", "--quiet", "--no-local", str(repo), str(clone)])
     capture(["git", "-C", str(clone), "checkout", "--quiet", commit])
