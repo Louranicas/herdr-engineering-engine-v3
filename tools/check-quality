@@ -1485,7 +1485,7 @@ def main():
             required_text="flows=20 l2=2 reasoned=18 unexplained=0\nverdict=PASS")
         # HT1: every installer rule refuses its plant by its own diagnostic; the census is the schema's.
         run("install-release-control", [sys.executable, "-W", "error", "deploy/install-release", "--control"],
-            required_text="control verdict=PASS cases=14/14 obligations=21/21 assertions=40")
+            required_text="control verdict=PASS cases=21/21 obligations=22/22 assertions=48")
         run("mutation-survivor-audit", [sys.executable, "-W", "error", "tests/mutation_survivors.py"],
             required_text="run=12 failures=0 errors=0")
         run("claim-overlap-table", [sys.executable, "evaluation/cohorts/make-claim-overlap.py", "--check"],
@@ -1570,6 +1570,12 @@ def main():
                     doc_raw, {"test_counts": [test_expectations["doctest_count"]], "has_t02": False},
                     label + "-doctests",
                 )
+        # HT1 review R1 (M3): the installer's seam census over this gate's own test build, which carries the test
+        # seams through the package's dev-dependency on itself. A census that has only ever printed 0 is unproven.
+        seamed = work / "target/debug/habitat-engine"
+        run("install-release-seam-positive", [sys.executable, "-W", "error", "deploy/install-release",
+                                              "--count-seams", str(seamed)],
+            required_text="seam_strings=3 file=" + str(seamed))
         # G05 `cargo doc` step: rustdoc under the manifest's forbidden [lints.rustdoc], once per feature set
         # (profile does not change documentation). The world is the pinned rustdoc's own list.
         lint_help = run("rustdoc-lint-world", [str(binaries["rustdoc"]), "-W", "help"],

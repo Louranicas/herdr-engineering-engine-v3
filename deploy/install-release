@@ -35,7 +35,7 @@ BINARIES = ("habitat-engine", "hee-namespace-shim")
 # RA7: every RC02 obligation is a value or UNMEASURED(owner). This tuple IS the schema: the census of the
 # missing-obligation control is taken from it, never from a second list.
 REQUIRED = ("schema", "profile_id", "source_commit", "source_tree_clean", "binaries", "seam_strings", "features",
-            "host_pins", "rustc", "rustflags", "cc", "release_profile", "cargo_lock_sha256", "dependency_closure",
+            "host_pins", "rustc", "rustflags", "cargo_config", "cc", "release_profile", "cargo_lock_sha256", "dependency_closure",
             "offline_bundle", "sqlite_archive", "sqlite_runtime_readback", "licenses", "advisories", "built_at_utc",
             "builder")
 # HO-11: advisories are not fetched until Luke's go; any other value is a fetch that did not have it.
@@ -96,6 +96,11 @@ def problems(manifest):
     for binary, count in sorted(manifest.get("seam_strings", {}).items()):
         if count != 0:
             found.append(f"seam_strings={count} ({binary})")
+    rustc = manifest.get("rustc", {})
+    if "rustc" in manifest and not str(rustc.get("version", "")).startswith(f"rustc {rustc.get('channel')} "):
+        found.append(f"toolchain mismatch: channel {rustc.get('channel')!r}, compiler {rustc.get('version')!r}")
+    for config in manifest.get("cargo_config", {}).get("ancestor_configs", []):
+        found.append(f"cargo config refused: {config}")
     for name, (_, want) in sorted(HOST_PINS.items()):
         got = manifest.get("host_pins", {}).get(name)
         if "host_pins" in manifest and got != want:
@@ -133,6 +138,26 @@ def digest_refusal(expected, installed):
     return None
 
 
+def closure_lines(tree):
+    """`cargo tree --prefix none` as the closure's identity: each package's name and version once, sorted. A line
+    also carries markers — ` (*)`, ` (proc-macro)`, and the root's ` (<checkout path>)` — and the path is where the
+    tree was checked out, not what was built, so it is not part of the identity (review R1, M1)."""
+    return sorted({" ".join(line.split(" ")[:2]) for line in tree.splitlines() if line})
+
+
+def ancestor_cargo_configs(start, home, exists):
+    """Every Cargo configuration file Cargo would read for a build started in `start` besides `$CARGO_HOME`'s own:
+    `.cargo/config` and `.cargo/config.toml` in `start` and each ancestor, and in `home`. `exists` is the
+    filesystem's answer, an argument so the rule is reached without arranging the machine (F95)."""
+    found = []
+    for directory in [Path(start), *Path(start).parents, Path(home)]:
+        for name in (".cargo/config", ".cargo/config.toml"):
+            candidate = directory / name
+            if exists(candidate) and str(candidate) not in found:
+                found.append(str(candidate))
+    return found
+
+
 def sha256_file(path):
     digest = hashlib.sha256()
     with open(path, "rb") as stream:
@@ -157,10 +182,12 @@ def install(prefix, manifest, manifest_bytes, sources):
     releases.mkdir(parents=True, exist_ok=True, mode=0o700)
     final = releases / name
     expected = {binary: manifest["binaries"][binary]["sha256"] for binary in BINARIES}
+    for stale in sorted(releases.glob("*.partial")):
+        # A partial is never named by `current`: a failed install left it (review R1, m1).
+        print(f"removed stale partial: {stale.name}", file=sys.stderr)
+        shutil.rmtree(stale)
     if not final.exists():
         partial = releases / (name + ".partial")
-        if partial.exists():
-            shutil.rmtree(partial)
         partial.mkdir(mode=0o700)
         for binary in BINARIES:
             shutil.copyfile(sources[binary], partial / binary)
@@ -199,7 +226,8 @@ def fixture(tag):
         "binaries": {binary: {"sha256": digit * 64, "bytes": 100 + tag} for binary in BINARIES},
         "seam_strings": {binary: 0 for binary in BINARIES}, "features": [],
         "host_pins": {name: want for name, (_, want) in HOST_PINS.items()},
-        "rustc": {"version": f"rustc 1.98.{tag}", "sha256": digit * 64}, "rustflags": f"absent-{tag}",
+        "rustc": {"version": f"rustc 1.98.{tag} (x)", "sha256": digit * 64, "channel": f"1.98.{tag}"},
+        "rustflags": f"absent-{tag}", "cargo_config": {"cargo_home_config_sha256": digit * 64, "ancestor_configs": []},
         "cc": {"version": f"gcc {tag}", "sha256": digit * 64, "cflags": [f"-O{tag}"]},
         "release_profile": {"opt-level": tag}, "cargo_lock_sha256": digit * 64,
         "dependency_closure": {"sha256": digit * 64, "packages": tag}, "offline_bundle": {"name": f"b{tag}"},
@@ -222,17 +250,18 @@ def control():
     case("manifest bytes", zero, (
         '{"advisories":"' + ADVISORIES + '","binaries":{"habitat-engine":{"bytes":100,"sha256":"' + "0" * 64
         + '"},"hee-namespace-shim":{"bytes":100,"sha256":"' + "0" * 64 + '"}},"builder":"toolbox:0",'
-        '"built_at_utc":"2026-09-20T00:00:00Z","cargo_lock_sha256":"' + "0" * 64 + '","cc":{"cflags":["-O0"],'
+        '"built_at_utc":"2026-09-20T00:00:00Z","cargo_config":{"ancestor_configs":[],"cargo_home_config_sha256":"'
+        + "0" * 64 + '"},"cargo_lock_sha256":"' + "0" * 64 + '","cc":{"cflags":["-O0"],'
         '"sha256":"' + "0" * 64 + '","version":"gcc 0"},"dependency_closure":{"packages":0,"sha256":"' + "0" * 64
         + '"},"features":[],"host_pins":{"busctl":"' + HOST_PINS["busctl"][1] + '","curl":"' + HOST_PINS["curl"][1]
         + '","systemd_run":"' + HOST_PINS["systemd_run"][1] + '"},"licenses":{"crate0":"MIT"},'
         '"offline_bundle":{"name":"b0"},"profile_id":"' + PROFILE_ID + '","release_profile":{"opt-level":0},'
-        '"rustc":{"sha256":"' + "0" * 64 + '","version":"rustc 1.98.0"},"rustflags":"absent-0","schema":"'
+        '"rustc":{"channel":"1.98.0","sha256":"' + "0" * 64 + '","version":"rustc 1.98.0 (x)"},"rustflags":"absent-0","schema":"'
         + SCHEMA + '","seam_strings":{"habitat-engine":0,"hee-namespace-shim":0},"source_commit":"' + "0" * 40
         + '","source_tree_clean":true,"sqlite_archive":{"bytes":0,"sha256":"' + "0" * 64 + '"},'
         '"sqlite_runtime_readback":"' + SQLITE_READBACK + '"}\n').encode())
     one = render(fixture(1))
-    case("manifest bytes differ in every fixture field", one != zero and one.count(b"1" * 64) == 7, True)
+    case("manifest bytes differ in every fixture field", one != zero and one.count(b"1" * 64) == 8, True)
     with tempfile.NamedTemporaryFile() as stream:
         stream.write(one)
         stream.flush()
@@ -293,6 +322,15 @@ def control():
                 f" != manifest {good['binaries']['habitat-engine']['sha256']}")
         case("existing release tampered", (refused, os.readlink(prefix / "current")),
              (want, str(Path("releases") / previous.name)))
+        os.chmod(previous / "manifest.json", 0o600)
+        (previous / "manifest.json").write_bytes(b"{}\n")
+        try:
+            install(prefix, good, render(good), sources)
+            refused = None
+        except ValueError as error:
+            refused = str(error)
+        case("manifest mismatch", (refused, os.readlink(prefix / "current")),
+             (f"manifest mismatch: {previous / 'manifest.json'}", str(Path("releases") / previous.name)))
     # The schema's other refusals: an unknown field, a feature, a host pin that is not the measured one.
     extra = fixture(0)
     extra["colour"] = "blue"
@@ -303,6 +341,22 @@ def control():
     pinned = fixture(0)
     pinned["host_pins"] = {**pinned["host_pins"], "curl": "a57a75f1"}
     case("host pin", problems(pinned), [f"host pin curl: a57a75f1 != {HOST_PINS['curl'][1]}"])
+    # Review R1: the closure's identity ignores where it was checked out (M1); Cargo configuration beyond
+    # `$CARGO_HOME`'s own refuses, found by argument (M2); the compiler must be the channel's (m7).
+    tree_a = "herdr-engineering-engine-v3 v0.1.0 (/home/u/.cache/hee3-release-aaa/src)\nserde v1.0.229\nserde_derive v1.0.229 (proc-macro)\nserde v1.0.229 (*)\n"
+    tree_b = tree_a.replace("hee3-release-aaa", "hee3-release-bbb")
+    case("closure ignores the checkout path", (closure_lines(tree_a), closure_lines(tree_a) == closure_lines(tree_b)),
+         (["herdr-engineering-engine-v3 v0.1.0", "serde v1.0.229", "serde_derive v1.0.229"], True))
+    present = {"/home/u/.cargo/config.toml", "/w/.cargo/config"}
+    case("ancestor cargo configs", ancestor_cargo_configs(Path("/w/clone"), Path("/home/u"), lambda path: str(path) in present),
+         ["/w/.cargo/config", "/home/u/.cargo/config.toml"])
+    configured = fixture(0)
+    configured["cargo_config"] = {"cargo_home_config_sha256": "0" * 64, "ancestor_configs": ["/w/.cargo/config"]}
+    case("cargo config refused", problems(configured), ["cargo config refused: /w/.cargo/config"])
+    mismatched = fixture(0)
+    mismatched["rustc"] = {"version": "rustc 1.99.0 (y)", "sha256": "0" * 64, "channel": "1.98.0"}
+    case("toolchain mismatch", problems(mismatched),
+         ["toolchain mismatch: channel '1.98.0', compiler 'rustc 1.99.0 (y)'"])
     # 7 · dirty source.
     dirty = fixture(0)
     dirty["source_tree_clean"] = False
@@ -311,18 +365,23 @@ def control():
     releases = "/home/u/.local/lib/herdr-engineering-engine-v3/releases"
     census = [(4242, releases + "/abc/habitat-engine"), (7, "/usr/bin/bash")]
     case("serve running", quiescence(census, releases), f"serve running: pid 4242 ({releases}/abc/habitat-engine)")
+    case("deleted exe still running", quiescence([(9, releases + "/old/habitat-engine (deleted)")], releases),
+         f"serve running: pid 9 ({releases}/old/habitat-engine (deleted))")
     case("quiet census", quiescence([(7, "/usr/bin/bash"), (8, releases + "x/habitat-engine")], releases), None)
     # 9 · the release build's target directory.
     worktree = Path("/w/w3-HT1")
     case("target dir", target_refusal(worktree / "target", [worktree]),
          f"target dir refused: {worktree / 'target'} is under {worktree}")
+    case("target is the root", target_refusal(worktree, [worktree]), f"target dir refused: {worktree} is under {worktree}")
     case("own target dir", target_refusal(RELEASE_TARGETS / "abc", [worktree, Path.home() / ".cache/hee-target"]),
          None)
     case("target outside the release root", target_refusal(Path("/tmp/elsewhere"), [worktree]),
          f"target dir refused: /tmp/elsewhere is not under {RELEASE_TARGETS}")
     rules = ["manifest bytes", "seam count", f"missing obligation {REQUIRED[0]}", "UNMEASURED needs an owner",
              "advisories fetched", "digest mismatch", "dirty source", "serve running", "target dir", "unknown field",
-             "features not empty", "host pin", "target outside the release root", "existing release tampered"]
+             "features not empty", "host pin", "target outside the release root", "existing release tampered",
+             "closure ignores the checkout path", "ancestor cargo configs", "cargo config refused", "toolchain mismatch",
+             "deleted exe still running", "target is the root", "manifest mismatch"]
     ran = sum(1 for rule in rules if rule in cases)
     print(f"control verdict=PASS cases={ran}/{len(rules)} obligations={obligations}/{len(REQUIRED)}"
           f" assertions={len(cases)}")
@@ -338,8 +397,14 @@ def load(name, path):
     return module
 
 
+DEADLINE = None  # the caller's monotonic deadline, set once by main
+
+
 def capture(argv, cwd=None, env=None):
-    result = subprocess.run(argv, cwd=cwd, env=env, capture_output=True, text=True, check=False)
+    remaining = None if DEADLINE is None else DEADLINE - time.monotonic()
+    if remaining is not None and remaining <= 0:
+        raise ValueError(f"caller deadline passed before {argv[0]}")
+    result = subprocess.run(argv, cwd=cwd, env=env, capture_output=True, text=True, check=False, timeout=remaining)
     if result.returncode != 0:
         raise ValueError(f"{argv[0]} exited {result.returncode}: {result.stderr.strip()[-400:]}")
     return result.stdout
@@ -386,7 +451,8 @@ def main():
         return 0
     if not (arguments.commit and arguments.bundle and arguments.deadline):
         parser.error("--commit, --bundle and --deadline are required to install")
-    deadline = time.monotonic() + arguments.deadline
+    global DEADLINE
+    deadline = DEADLINE = time.monotonic() + arguments.deadline
     repo = arguments.repo
     commit = capture(["git", "-C", str(repo), "rev-parse", "--verify", arguments.commit + "^{commit}"]).strip()
     if subprocess.run(["git", "-C", str(repo), "merge-base", "--is-ancestor", commit, "main"],
@@ -410,7 +476,9 @@ def main():
     sqlite = load("hee3_sqlite_static", clone / "tools/sqlite-static.py")
     process = load("hee3_development_process", clone / "tools/development_process.py")
     offline.validate_bundle(clone / "Cargo.lock", arguments.bundle, deadline)
-    offline.materialize(clone / "Cargo.lock", arguments.bundle, work / "rust-vendor", work / "cargo-home", deadline)
+    inventory = offline.materialize(clone / "Cargo.lock", arguments.bundle, work / "rust-vendor", work / "cargo-home",
+                                    deadline)
+    ancestors = ancestor_cargo_configs(clone, Path.home(), Path.exists)
     (clone / "tools/sqlite-inputs").mkdir(parents=True, exist_ok=True)
     shutil.copyfile(repo / sqlite.ARCHIVE_NAME, clone / sqlite.ARCHIVE_NAME)
     rustc = Path(capture(["rustup", "which", "--toolchain", "1.98.0", "rustc"]).strip())
@@ -437,10 +505,10 @@ def main():
                   "--bin", "habitat-engine", "--bin", "hee-namespace-shim"])
     tree = run("dependency-closure", [str(cargo), "tree", "--locked", "--offline", "-e", "normal",
                                       "--target", "x86_64-unknown-linux-gnu", "--prefix", "none"])["stdout"]
-    closure = sorted({line.removesuffix(" (*)") for line in tree.splitlines() if line})
+    closure = closure_lines(tree)
     metadata = json.loads(run("metadata", [str(cargo), "metadata", "--locked", "--offline",
                                            "--format-version=1"])["stdout"])
-    in_closure = {line.split(" ")[0] + " " + line.split(" ")[1] for line in closure}
+    in_closure = set(closure)
     licenses = {f"{package['name']} {package['version']}": package.get("license") or "UNMEASURED(T18; no license field)"
                 for package in metadata["packages"] if f"{package['name']} v{package['version']}" in in_closure}
     built = {binary: target / "release" / binary for binary in BINARIES}
@@ -455,6 +523,7 @@ def main():
         "rustc": {"version": capture([str(rustc), "-vV"]), "sha256": sha256_file(rustc),
                   "channel": tomllib.loads((clone / "rust-toolchain.toml").read_text())["toolchain"]["channel"]},
         "rustflags": "absent" if "RUSTFLAGS" not in env else env["RUSTFLAGS"],
+        "cargo_config": {"cargo_home_config_sha256": inventory["cargo_config_sha256"], "ancestor_configs": ancestors},
         "cc": {"version": capture([str(gcc), "--version"]).splitlines()[0], "sha256": sha256_file(gcc),
                "cflags": list(sqlite.CFLAGS)},
         "release_profile": tomllib.loads((clone / "Cargo.toml").read_text())["profile"]["release"],
