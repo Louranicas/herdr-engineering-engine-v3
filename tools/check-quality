@@ -879,6 +879,8 @@ def quality_subject_paths(root, deadline, rust_only):
                 "tests/fixtures/rustdoc/lint-help-1.98.0.txt",  # t25's verbatim rustdoc lint world
                 "tests/t25_quality.py", "tools/check-workflow-sites", "tools/check-skill-sites", "tools/check-pi-sites", "tools/check-bash-sites", "tools/site_sweep.py",
                 "tools/check-mutation-survivors", "tools/check-flow-scoreboard",
+                # HT1: the release installer (RC02 path); its control is a gate step, its build a host act.
+                "deploy/install-release",
                 # A shell subject the lint must see (review of 46b1e9e, gap 4): the publication launcher.
                 "tools/corpus-sync",
                 # The flow scoreboard's world: the CS06 arrows table (HEE3_MASTER_PLAN_20260926.md §5).
@@ -1481,6 +1483,9 @@ def main():
             required_text="control verdict=PASS cases=7")
         run("flow-scoreboard", [sys.executable, "tools/check-flow-scoreboard"],
             required_text="flows=20 l2=2 reasoned=18 unexplained=0\nverdict=PASS")
+        # HT1: every installer rule refuses its plant by its own diagnostic; the census is the schema's.
+        run("install-release-control", [sys.executable, "-W", "error", "deploy/install-release", "--control"],
+            required_text="control verdict=PASS cases=14/14 obligations=21/21 assertions=40")
         run("mutation-survivor-audit", [sys.executable, "-W", "error", "tests/mutation_survivors.py"],
             required_text="run=12 failures=0 errors=0")
         run("claim-overlap-table", [sys.executable, "evaluation/cohorts/make-claim-overlap.py", "--check"],
