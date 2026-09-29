@@ -339,7 +339,9 @@ def main():
         for r in records:
             if r["kind"] == "worker_settle":
                 hexd = r["digest"][7:]
-                settle = json.loads((state / "generations" / str(generation) / "objects" / hexd[:2] / hexd).read_bytes())
+                # The object store is objects/sha256/<first two hex>/<hex> (measured on the t3a ledger, 2026-09-29).
+                settle = json.loads((state / "generations" / str(generation) / "objects" / "sha256" / hexd[:2] / hexd)
+                                    .read_bytes())
         db.close()
         row("C0", 0 if version == decide.LEDGER_VERSION else 1, f"user_version={version}")
         lines, problems = decide.closure({"task": task_id, "task_generation": task_generation, "attempts": attempts,
