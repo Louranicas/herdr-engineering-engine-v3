@@ -273,6 +273,10 @@ def control():
     other = ledger_fixture(0)
     other["settle"] = {**other["settle"], "adapter_profile": "openai-x"}
     case("provider not native", closure(other)[1], ["execute: the settle names no native adapter ('openai-x')"])
+    sibling = ledger_fixture(0)
+    sibling["settle"] = {**sibling["settle"], "adapter_profile": "ollama-fc44-12ff8654/1"}
+    case("another ollama adapter is not the class's", closure(sibling)[1],
+         ["execute: the settle names no native adapter ('ollama-fc44-12ff8654/1')"])
     lines = closure(ledger_fixture(0))[0]
     # 5 · a dirty tree; 6 · serve's exe not the manifest's; 7 · units left behind; R0 unobserved.
     for label, change, want in (
