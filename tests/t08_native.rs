@@ -1296,8 +1296,15 @@ fn a_live_daemons_reply_is_the_declared_fields_and_its_context_is_accepted()
         ],
         "the live reply's fields, whole: a new daemon field is a new decision"
     );
+    // The recorded reply WHOLE through the product's parser (review 2c M1): only what the rig must agree
+    // with is overridden, each by name — the model the rig serves, and counts inside its /1 bounds
+    // (num_ctx 512, num_predict 64). Every other field, `context` included, is the daemon's own.
     let mut r = Rig::new();
-    r.scenario["generated"]["context"] = live["context"].clone();
+    let mut reply = live.clone();
+    reply["model"] = json!(MODEL);
+    reply["prompt_eval_count"] = json!(7);
+    reply["eval_count"] = json!(1);
+    r.scenario["generated"] = reply;
     let run = r.run();
     assert_eq!(run.error, None);
     settled(&run);

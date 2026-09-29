@@ -650,7 +650,11 @@ struct Generated {
     /// The daemon's token-id context, which a templated (`raw: false`, the `/2` profile's) non-streamed
     /// generate returns (N6c, 2026-09-30: the live daemon's reply, recorded as
     /// `tests/fixtures/native/live-generate-response-20260930.json`, carried 776 ids). Read and not used.
-    /// Every other unknown field is still refused. At `num_ctx` 4096 it stays well inside `FRAME_LIMIT`.
+    /// Every other unknown field is still refused. Its size: at most `num_ctx` 4096 ids of at most 7 bytes
+    /// with their separators, 28,672 bytes, leaving about 36.8 KB of `FRAME_LIMIT` (65,536) for the rest of
+    /// the reply; at `num_predict` 1024 that overflows only above about 35 bytes a token (possible with
+    /// Go's `\u003c`-style escapes in Rust generics). An overflow is refused as `json`: it fails closed, a
+    /// named gap, not a silent truncation (review 2c L1).
     #[serde(rename = "context")]
     _context: Option<Vec<u64>>,
 }
