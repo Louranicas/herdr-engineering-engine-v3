@@ -592,12 +592,29 @@ impl Engine {
         backup: u64,
         destination: &Destination,
     ) -> Result<Self, Box<dyn Error>> {
+        Self::start_declared_with(run, home, log, (state, backup), destination, &[])
+    }
+
+    /// [`Engine::start_declared`], with further test-build seams set (`extra`: name, value).
+    fn start_declared_with(
+        run: &Path,
+        home: &Path,
+        log: &Path,
+        (state, backup): (u64, u64),
+        destination: &Destination,
+        extra: &[(&str, String)],
+    ) -> Result<Self, Box<dyn Error>> {
+        let mut command = serve_command(run, home);
+        command
+            .env(HEADROOM_SEAM, format!("state={state} backup={backup}"))
+            .env(MOUNTS_SEAM, &destination.table)
+            .env(TOPOLOGY_SEAM, &destination.topology);
+        for (name, value) in extra {
+            command.env(name, value);
+        }
         let engine = Self {
             child: Some(
-                serve_command(run, home)
-                    .env(HEADROOM_SEAM, format!("state={state} backup={backup}"))
-                    .env(MOUNTS_SEAM, &destination.table)
-                    .env(TOPOLOGY_SEAM, &destination.topology)
+                command
                     .stderr(Stdio::from(fs::File::create_new(log)?))
                     .spawn()?,
             ),
@@ -1694,17 +1711,16 @@ fn serve_dispatches_an_admitted_task_and_stops_it_by_name_through_main() -> Outc
 
 /// R21 S21 (N3, N12), through `main` · with the operator's native file installed beside a `/2`
 /// class, `serve` installs the native agent record and dispatches over the native provider. The
-/// rig's runtime directory is a scratch one, not `/run/user/<euid>`, so the user manager's busctl
-/// pin refuses `Invalid` before any unit is listed (R21 closure C6, M3): the provider's `open`
-/// refuses at the daemon by the manager's own name, the dispatcher says that state once, and the
-/// task stays `admitted` for the operator to fix — never stopped for the operator's configuration.
-/// The file's absent unit (`hee3-t28-absent.service`) is never reached here; that rule needs
-/// `/run/user/<euid>` and a real busctl, and is a Tier-3 row. RA1 (b): both filesystems are
+/// daemon is resolved at the endpoint's listener (N6b, 2026-09-30), and the proof declares, through
+/// the test build's port seam, a port nothing listens on: the provider's `open` refuses at the
+/// daemon by the resolver's own name (`endpoint no listener`), the dispatcher says that state once,
+/// and the task stays `admitted` for the operator to fix — never stopped for the operator's
+/// configuration. Before N6b this case met the user manager's busctl pin under the scratch runtime
+/// directory; `serve` no longer asks the manager for the daemon. RA1 (b): both filesystems are
 /// declared roomy through the test build's headroom seam, so RC01's gate backs up first (asserted
 /// whole) and the pick reaches the provider.
 #[test]
-fn with_a_scratch_runtime_directory_the_busctl_pin_refuses_and_the_task_stays_admitted() -> Outcome
-{
+fn with_no_daemon_at_the_declared_endpoint_the_task_stays_admitted() -> Outcome {
     const KEY: &str = "28c00000-0000-4000-8000-0000000000d2";
     let world = World::granting(&["task"], &["read", "durable admission"])?;
     let (run, scope) = (&world.run, &world.scope);
@@ -1712,7 +1728,19 @@ fn with_a_scratch_runtime_directory_the_busctl_pin_refuses_and_the_task_stays_ad
     let native = installable_native(&world.home)?;
     let backups = Destination::backup_record(&world)?;
     let log = world.home.join("engine.log");
-    let engine = Engine::start_declared(run, &world.home, &log, ROOMY, ROOMY, &backups)?;
+    // N6b: the daemon is resolved at the endpoint's listener. The proof declares a port nothing
+    // listens on (bound, then released), so its verdict never depends on what the host runs.
+    let quiet = std::net::TcpListener::bind("127.0.0.1:0")?
+        .local_addr()?
+        .port();
+    let engine = Engine::start_declared_with(
+        run,
+        &world.home,
+        &log,
+        (ROOMY, ROOMY),
+        &backups,
+        &[("HEE3_TEST_DAEMON_PORT", quiet.to_string())],
+    )?;
     // The class's workspace and criteria, so admission admits and a provider is opened.
     let mut spec = super::tasks::spec();
     spec["workspace_id"] = json!(super::runtime::CLASS_WORKSPACE);
@@ -1732,7 +1760,7 @@ fn with_a_scratch_runtime_directory_the_busctl_pin_refuses_and_the_task_stays_ad
         .ok_or("task id")?
         .to_owned();
     // Poll the artifact with a budget (F102/F137): the dispatcher's named state in the log.
-    let said = "habitat-engine: dispatcher: unavailable: daemon manager invalid";
+    let said = "habitat-engine: dispatcher: unavailable: daemon endpoint no listener";
     let started = Instant::now();
     let stderr = loop {
         let stderr = fs::read_to_string(&log)?;
@@ -1760,7 +1788,7 @@ fn with_a_scratch_runtime_directory_the_busctl_pin_refuses_and_the_task_stays_ad
     );
     // The dispatcher's exit, whole (B14b-2 review round 2, D11): this fixture's and the refused
     // file's below differ in every field.
-    let stopped = "habitat-engine: dispatcher stopped: Unavailable(Daemon(Manager(Invalid)))";
+    let stopped = "habitat-engine: dispatcher stopped: Unavailable(Daemon(Endpoint(NoListener)))";
     assert_eq!(
         (
             stderr.lines().filter(|line| *line == said).count(),

@@ -112,8 +112,7 @@ impl Unavailable {
     #[must_use]
     pub const fn name(self) -> &'static str {
         use super::candidates::ClassPromptError as Input;
-        use crate::worker::aggregate::Error as Manager;
-        use crate::worker::native::{DirectoryError as Directory, Error as Native};
+        use crate::worker::native::DirectoryError as Directory;
         match self {
             Self::NoNativeProvider(NoNative::NotInstalled) => {
                 "unavailable: no native provider (not installed)"
@@ -149,48 +148,54 @@ impl Unavailable {
             Self::Native(NativeWhy::Directory(Directory::Custody)) => {
                 "unavailable: native directory custody"
             }
-            Self::Daemon(Native::Profile) => "unavailable: daemon profile",
-            Self::Daemon(Native::Subject) => "unavailable: daemon subject",
-            Self::Daemon(Native::Deadline) => "unavailable: daemon deadline",
-            Self::Daemon(Native::Cancelled) => "unavailable: daemon cancelled",
-            Self::Daemon(Native::Json) => "unavailable: daemon json",
-            Self::Daemon(Native::Identity) => "unavailable: daemon identity",
-            Self::Daemon(Native::Usage) => "unavailable: daemon usage",
-            Self::Daemon(Native::Response) => "unavailable: daemon response",
-            Self::Daemon(Native::Process) => "unavailable: daemon process",
-            Self::Daemon(Native::Contract(_)) => "unavailable: daemon contract",
-            Self::Daemon(Native::Census(_)) => "unavailable: daemon census",
-            Self::Daemon(Native::Candidates(_)) => "unavailable: daemon candidates",
-            Self::Daemon(Native::Matches(_)) => "unavailable: daemon matches",
-            Self::Daemon(Native::Manager(Manager::Invalid)) => {
-                "unavailable: daemon manager invalid"
-            }
-            Self::Daemon(Native::Manager(Manager::Bound)) => "unavailable: daemon manager bound",
-            Self::Daemon(Native::Manager(Manager::Deadline)) => {
-                "unavailable: daemon manager deadline"
-            }
-            Self::Daemon(Native::Manager(Manager::Cancelled)) => {
-                "unavailable: daemon manager cancelled"
-            }
-            Self::Daemon(Native::Manager(Manager::Identity)) => {
-                "unavailable: daemon manager identity"
-            }
-            Self::Daemon(Native::Manager(Manager::Io)) => "unavailable: daemon manager io",
-            Self::Daemon(Native::Manager(Manager::State)) => "unavailable: daemon manager state",
-            Self::Daemon(Native::Manager(Manager::Manager)) => {
-                "unavailable: daemon manager manager"
-            }
-            Self::Daemon(Native::Manager(Manager::Process)) => {
-                "unavailable: daemon manager process"
-            }
-            Self::Daemon(Native::Manager(Manager::Limits)) => "unavailable: daemon manager limits",
-            Self::Daemon(Native::Manager(Manager::Busy)) => "unavailable: daemon manager busy",
+            Self::Daemon(error) => daemon_name(error),
             Self::Closure => "unavailable: reviewed closure",
             Self::Prompt(Input::Task) => "unavailable: prompt task",
             Self::Prompt(Input::Cargo) => "unavailable: prompt cargo",
             Self::Prompt(Input::Base) => "unavailable: prompt base",
             Self::Backup(_) => "unavailable: backup",
         }
+    }
+}
+
+/// A daemon refusal's name, whole: one literal per variant and payload, so a new one is a compile
+/// error here (split out of [`Unavailable::name`], which kept every other state).
+const fn daemon_name(error: crate::worker::native::Error) -> &'static str {
+    use crate::worker::aggregate::Error as Manager;
+    use crate::worker::native::{EndpointWhy as Endpoint, Error as Native};
+    match error {
+        Native::Profile => "unavailable: daemon profile",
+        Native::Subject => "unavailable: daemon subject",
+        Native::Deadline => "unavailable: daemon deadline",
+        Native::Cancelled => "unavailable: daemon cancelled",
+        Native::Json => "unavailable: daemon json",
+        Native::Identity => "unavailable: daemon identity",
+        Native::Usage => "unavailable: daemon usage",
+        Native::Response => "unavailable: daemon response",
+        Native::Process => "unavailable: daemon process",
+        Native::Contract(_) => "unavailable: daemon contract",
+        Native::Census(_) => "unavailable: daemon census",
+        Native::Candidates(_) => "unavailable: daemon candidates",
+        Native::Matches(_) => "unavailable: daemon matches",
+        Native::Endpoint(Endpoint::Table) => "unavailable: daemon endpoint table",
+        Native::Endpoint(Endpoint::NoListener) => "unavailable: daemon endpoint no listener",
+        Native::Endpoint(Endpoint::Listeners(_)) => "unavailable: daemon endpoint listeners",
+        Native::Endpoint(Endpoint::OtherUid(_)) => "unavailable: daemon endpoint other uid",
+        Native::Endpoint(Endpoint::Unobserved { .. }) => "unavailable: daemon endpoint unobserved",
+        Native::Endpoint(Endpoint::Owners(_)) => "unavailable: daemon endpoint owners",
+        Native::Endpoint(Endpoint::Namespace) => "unavailable: daemon endpoint namespace",
+        Native::Endpoint(Endpoint::Bound) => "unavailable: daemon endpoint bound",
+        Native::Manager(Manager::Invalid) => "unavailable: daemon manager invalid",
+        Native::Manager(Manager::Bound) => "unavailable: daemon manager bound",
+        Native::Manager(Manager::Deadline) => "unavailable: daemon manager deadline",
+        Native::Manager(Manager::Cancelled) => "unavailable: daemon manager cancelled",
+        Native::Manager(Manager::Identity) => "unavailable: daemon manager identity",
+        Native::Manager(Manager::Io) => "unavailable: daemon manager io",
+        Native::Manager(Manager::State) => "unavailable: daemon manager state",
+        Native::Manager(Manager::Manager) => "unavailable: daemon manager manager",
+        Native::Manager(Manager::Process) => "unavailable: daemon manager process",
+        Native::Manager(Manager::Limits) => "unavailable: daemon manager limits",
+        Native::Manager(Manager::Busy) => "unavailable: daemon manager busy",
     }
 }
 

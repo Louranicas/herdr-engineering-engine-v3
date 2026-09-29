@@ -1070,3 +1070,154 @@ fn the_daemon_selection_refuses_with_how_many_matched_of_how_many() {
         refused(0, 4)
     );
 }
+
+// ---- N6b (2026-09-30; Luke: "resolve by endpoint"): the daemon is the one process holding the one
+// listener at the endpoint. The table fixture is the host's own /proc/net/tcp, recorded 2026-09-30
+// (the world produced it): one LISTEN at 127.0.0.1:11434, uid 1000, inode 34847.
+
+const HOST_TCP: &str = include_str!("fixtures/native/proc-net-tcp-host-20260930.txt");
+const HEADER: &str = "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n";
+
+fn row(local: &str, state: &str, uid: u32, inode: u64) -> String {
+    format!(
+        "   9: {local} 00000000:0000 {state} 00000000:00000000 00:00000000 00000000  {uid}        0 {inode} 1 0000000000000000 100 0 0 10 0\n"
+    )
+}
+
+#[test]
+fn the_endpoint_listener_is_read_from_the_hosts_own_table() {
+    assert_eq!(native::listener(&[HOST_TCP, ""], 11434, 1000), Ok(34847));
+    assert_eq!(native::ENDPOINT_PORT, 11434);
+    assert!(
+        native::endpoint().contains(":11434/"),
+        "the port constant and the endpoint URL name one port"
+    );
+}
+
+#[test]
+fn every_listener_refusal_is_named_by_its_own_reason() {
+    use native::EndpointWhy as Why;
+    let one = format!("{HEADER}{}", row("0100007F:2CAA", "0A", 1000, 7));
+    let not_listening = format!(
+        "{HEADER}{}{}",
+        row("0100007F:2CAA", "01", 1000, 8),
+        row("0100007F:2CAB", "0A", 1000, 9)
+    );
+    let two = format!("{one}{}", row("00000000:2CAA", "0A", 1000, 10));
+    let any6 = format!(
+        "{HEADER}{}",
+        row("00000000000000000000000000000000:2CAA", "0A", 1000, 11)
+    );
+    let mapped6 = format!(
+        "{HEADER}{}",
+        row("0000000000000000FFFF00000100007F:2CAA", "0A", 1000, 12)
+    );
+    let loopback6 = format!(
+        "{HEADER}{}",
+        row("00000000000000000000000001000000:2CAA", "0A", 1000, 13)
+    );
+    let other = format!("{HEADER}{}", row("0100007F:2CAA", "0A", 1001, 14));
+    let broken = format!("{HEADER}   9: 0100007F:2CAA 00000000:0000 0A\n");
+    assert_eq!(
+        [
+            native::listener(&[&one, ""], 11434, 1000),
+            native::listener(&[&not_listening, ""], 11434, 1000),
+            native::listener(&[&two, ""], 11434, 1000),
+            native::listener(&[&one, &any6], 11434, 1000),
+            native::listener(&["", &mapped6], 11434, 1000),
+            native::listener(&["", &loopback6], 11434, 1000),
+            native::listener(&[&other, ""], 11434, 1000),
+            native::listener(&[&broken, ""], 11434, 1000),
+            native::listener(&[HOST_TCP, ""], 11435, 1000),
+        ],
+        [
+            Ok(7),
+            Err(Why::NoListener),
+            Err(Why::Listeners(2)),
+            Err(Why::Listeners(2)),
+            Ok(12),
+            Err(Why::NoListener),
+            Err(Why::OtherUid(1001)),
+            Err(Why::Table),
+            Err(Why::NoListener),
+        ]
+    );
+}
+
+#[test]
+fn the_holder_is_one_readable_process_or_refused_by_name() {
+    use native::EndpointWhy as Why;
+    let held = |pid: u32, links: &[&str]| {
+        (
+            pid,
+            links
+                .iter()
+                .map(|link| (*link).to_owned())
+                .collect::<Vec<_>>(),
+        )
+    };
+    let one = [
+        held(40, &["/dev/null", "socket:[77]"]),
+        held(41, &["socket:[78]", "socket:[770]"]),
+    ];
+    let two = [
+        held(40, &["socket:[77]"]),
+        held(52, &["pipe:[3]", "socket:[77]"]),
+    ];
+    assert_eq!(
+        [
+            native::holder(&one, 77, 3),
+            native::holder(&one, 7, 5),
+            native::holder(&two, 77, 0),
+        ],
+        [
+            Ok(40),
+            Err(Why::Unobserved { unreadable: 5 }),
+            Err(Why::Owners(2))
+        ]
+    );
+}
+
+#[test]
+fn an_endpoint_source_names_the_daemon_and_walks_nothing_below_it() {
+    assert!(!native::MainPid::walks_descendants(&native::Endpoint {
+        port: 1
+    }));
+    assert_eq!(
+        (
+            native::daemon_candidates(7, Vec::new()),
+            native::daemon_candidates(9, vec![11, 12])
+        ),
+        (vec![7], vec![9, 11, 12])
+    );
+}
+
+#[test]
+fn a_real_listener_is_resolved_to_this_process_and_a_closed_port_to_none()
+-> Result<(), Box<dyn std::error::Error>> {
+    let open = std::net::TcpListener::bind("127.0.0.1:0")?;
+    let port = open.local_addr()?.port();
+    let found = native::endpoint_holder(
+        port,
+        Instant::now() + Duration::from_secs(60),
+        &AtomicBool::new(false),
+    );
+    let closed = {
+        let probe = std::net::TcpListener::bind("127.0.0.1:0")?;
+        probe.local_addr()?.port()
+    };
+    let none = native::endpoint_holder(
+        closed,
+        Instant::now() + Duration::from_secs(60),
+        &AtomicBool::new(false),
+    );
+    assert_eq!(
+        (found, none),
+        (
+            Ok(std::process::id()),
+            Err(Error::Endpoint(native::EndpointWhy::NoListener))
+        )
+    );
+    drop(open);
+    Ok(())
+}

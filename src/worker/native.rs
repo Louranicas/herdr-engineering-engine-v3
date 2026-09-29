@@ -404,11 +404,20 @@ pub const PROVIDER: &str = "ollama-local";
 pub fn adapter(id: &str) -> Option<&'static AdapterProfile> {
     ADAPTERS.iter().find(|profile| profile.id == id)
 }
-/// The daemon's listener. Stated gap (R21 N20): nothing ties the process listening here to the
-/// pinned daemon pid — `daemon` checks the pid's incarnation and executable, the exchanges reach
-/// whatever listens at this address, and `runtime_instance` is derived from the pid. The value's
-/// world source is the user unit's `Environment=OLLAMA_HOST=127.0.0.1:11434`.
+/// The daemon's listener. R21 N20 stated a gap: nothing tied the process listening here to the
+/// pinned daemon pid. [`Endpoint`] closes it where `serve` composes the provider (N6b, 2026-09-30):
+/// the daemon *is* the one process holding the one listener at this address, and `daemon` then
+/// checks that pid's incarnation and executable. The value's world source is the operator's
+/// `OLLAMA_HOST=127.0.0.1:11434`; [`ENDPOINT_PORT`] is its port, and `t08_native` pins the two
+/// spellings together.
 const ENDPOINT: &str = "http://127.0.0.1:11434/api/";
+/// The port [`ENDPOINT`] names: the one the endpoint resolver asks the kernel's socket tables about.
+pub const ENDPOINT_PORT: u16 = 11434;
+/// The endpoint as a URL, for the proof that pins [`ENDPOINT_PORT`] to it.
+#[must_use]
+pub const fn endpoint() -> &'static str {
+    ENDPOINT
+}
 const FRAME_LIMIT: usize = 65_536;
 const MODEL_LIMIT: u64 = 4 * 1024 * 1024 * 1024;
 
@@ -459,6 +468,8 @@ pub enum Error {
     /// Not exactly one candidate's executable matched the pin (R21 round-1 LOW L7): how many did,
     /// of how many candidates — none and several are told apart.
     Matches(DaemonMatches),
+    /// The endpoint's listener, or the one process holding it, could not be named (N6b).
+    Endpoint(EndpointWhy),
 }
 impl Error {
     /// The adapter's refusal by name, as a stop body records it.
@@ -479,6 +490,7 @@ impl Error {
             Self::Candidates(_) => "candidates",
             Self::Manager(_) => "manager",
             Self::Matches(_) => "matches",
+            Self::Endpoint(_) => "endpoint",
         }
     }
 }
@@ -779,6 +791,13 @@ pub trait MainPid {
         deadline: Instant,
         cancelled: &AtomicBool,
     ) -> Result<u32, Error>;
+
+    /// Whether the resolver searches the root's descendants too: a unit's main process roots a tree
+    /// the daemon may sit anywhere in, while a source that names the daemon itself ([`Endpoint`]) has
+    /// no tree to search — a model runner below it runs the same executable and is not the daemon.
+    fn walks_descendants(&self) -> bool {
+        true
+    }
 }
 
 /// The user manager over the one pinned busctl door (`aggregate::main_pid`, R21 N6).
@@ -834,6 +853,203 @@ pub fn select_daemon(candidates: &[u32], matched: &BTreeSet<u32>) -> Result<u32,
     }
 }
 
+/// The resolver's candidates: the root, then what the source's walk found below it (none when the
+/// source names the daemon itself).
+#[must_use]
+pub fn daemon_candidates(main: u32, below: Vec<u32>) -> Vec<u32> {
+    std::iter::once(main).chain(below).collect()
+}
+
+/// Why the endpoint's listener or its one holder could not be named (N6b), each by its reason.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum EndpointWhy {
+    /// A socket table could not be read, or a row in it is not one.
+    Table,
+    /// No listening socket would accept a connection to the endpoint.
+    NoListener,
+    /// More than one would (a second listener, `SO_REUSEPORT`): how many.
+    Listeners(usize),
+    /// The one listener belongs to another uid: the socket's.
+    OtherUid(u32),
+    /// No process this uid can read holds the listener, while `unreadable` processes could not be
+    /// read: the holder is unobserved, never "no daemon".
+    Unobserved { unreadable: usize },
+    /// More than one readable process holds it (a fork, a passed descriptor): how many.
+    Owners(usize),
+    /// The holder is in another network namespace than the resolver's own.
+    Namespace,
+    /// More descriptors than [`MAX_ENDPOINT_FDS`] were read before the holder was named.
+    Bound,
+}
+
+/// The most file descriptors the endpoint resolver reads across the processes it can read, before it
+/// refuses by name ([`EndpointWhy::Bound`]): the acquisition's bound.
+pub const MAX_ENDPOINT_FDS: usize = 1 << 18;
+/// The largest socket table read.
+const MAX_SOCKET_TABLE: u64 = 4 * 1024 * 1024;
+
+/// The address field of a listener that would accept a connection to `127.0.0.1:port`, as the
+/// kernel's tables spell it (hex, host byte order per 32-bit word): IPv4 loopback and any; IPv6 any
+/// and the IPv4-mapped loopback.
+fn accepts_loopback(address: &str, port: u16) -> bool {
+    let Some((host, listened)) = address.split_once(':') else {
+        return false;
+    };
+    listened == format!("{port:04X}")
+        && matches!(
+            host,
+            "0100007F"
+                | "00000000"
+                | "00000000000000000000000000000000"
+                | "0000000000000000FFFF00000100007F"
+        )
+}
+
+/// The inode of the one listening socket that would accept a connection to `127.0.0.1:port`, pure
+/// (F95) over the kernel's tables as read (`/proc/net/tcp` and `/proc/net/tcp6`), and required to be
+/// `uid`'s.
+///
+/// # Errors
+/// [`EndpointWhy::Table`] for a row that is not one; `NoListener`, `Listeners` or `OtherUid`.
+pub fn listener(tables: &[&str], port: u16, uid: u32) -> Result<u64, EndpointWhy> {
+    let mut found = Vec::new();
+    for table in tables {
+        for row in table.lines().skip(1).filter(|row| !row.trim().is_empty()) {
+            let fields: Vec<&str> = row.split_whitespace().collect();
+            let [_, local, _, state, _, _, _, owner, _, inode, ..] = fields.as_slice() else {
+                return Err(EndpointWhy::Table);
+            };
+            // State 0A is TCP_LISTEN.
+            if *state == "0A" && accepts_loopback(local, port) {
+                let owner = owner.parse::<u32>().map_err(|_| EndpointWhy::Table)?;
+                let inode = inode.parse::<u64>().map_err(|_| EndpointWhy::Table)?;
+                found.push((owner, inode));
+            }
+        }
+    }
+    match found.as_slice() {
+        [] => Err(EndpointWhy::NoListener),
+        [(owner, inode)] if *owner == uid => Ok(*inode),
+        [(owner, _)] => Err(EndpointWhy::OtherUid(*owner)),
+        several => Err(EndpointWhy::Listeners(several.len())),
+    }
+}
+
+/// The one process holding socket `inode`, pure over each readable process's descriptor targets
+/// (`held`: pid and the `readlink` of every descriptor) and how many processes could not be read.
+///
+/// # Errors
+/// [`EndpointWhy::Unobserved`] when no readable process holds it; `Owners` when several do.
+pub fn holder(
+    held: &[(u32, Vec<String>)],
+    inode: u64,
+    unreadable: usize,
+) -> Result<u32, EndpointWhy> {
+    let target = format!("socket:[{inode}]");
+    let holders: Vec<u32> = held
+        .iter()
+        .filter(|(_, targets)| targets.contains(&target))
+        .map(|(pid, _)| *pid)
+        .collect();
+    match holders.as_slice() {
+        [pid] => Ok(*pid),
+        [] => Err(EndpointWhy::Unobserved { unreadable }),
+        several => Err(EndpointWhy::Owners(several.len())),
+    }
+}
+
+/// The daemon as the one process holding the one listener at [`ENDPOINT`] (N6b, 2026-09-30; Luke:
+/// "resolve by endpoint"): a unit's main process no longer roots the search, because a daemon a
+/// wrapper runs (`toolbox run` → `podman exec`) is not below the wrapper at all. The unit the
+/// operator names is not consulted by this source.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Endpoint {
+    /// The port to ask the kernel about: [`ENDPOINT_PORT`] in `serve`.
+    pub port: u16,
+}
+
+impl MainPid for Endpoint {
+    fn main_pid(
+        &mut self,
+        _unit: &str,
+        deadline: Instant,
+        cancelled: &AtomicBool,
+    ) -> Result<u32, Error> {
+        endpoint_holder(self.port, deadline, cancelled)
+    }
+
+    fn walks_descendants(&self) -> bool {
+        false
+    }
+}
+
+/// Read a socket table under [`MAX_SOCKET_TABLE`]; an absent table (no IPv6) is empty.
+fn socket_table(path: &Path) -> Result<String, Error> {
+    let file = match File::open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(String::new()),
+        Err(_) => return Err(Error::Endpoint(EndpointWhy::Table)),
+    };
+    let mut bytes = Vec::new();
+    file.take(MAX_SOCKET_TABLE + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| Error::Endpoint(EndpointWhy::Table))?;
+    if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > MAX_SOCKET_TABLE {
+        return Err(Error::Endpoint(EndpointWhy::Table));
+    }
+    String::from_utf8(bytes).map_err(|_| Error::Endpoint(EndpointWhy::Table))
+}
+
+/// The acquisition behind [`Endpoint`]: the kernel's tables, then every readable process's
+/// descriptors (at most [`MAX_ENDPOINT_FDS`] read), then the holder's network namespace, which must
+/// be the resolver's own. The policy is [`listener`] and [`holder`].
+///
+/// # Errors
+/// [`Error::Endpoint`] by its reason; `Deadline`/`Cancelled`.
+pub fn endpoint_holder(port: u16, deadline: Instant, cancelled: &AtomicBool) -> Result<u32, Error> {
+    tick(deadline, cancelled)?;
+    let tcp = socket_table(Path::new("/proc/net/tcp"))?;
+    let tcp6 = socket_table(Path::new("/proc/net/tcp6"))?;
+    let uid = rustix::process::geteuid().as_raw();
+    let inode = listener(&[&tcp, &tcp6], port, uid).map_err(Error::Endpoint)?;
+    let (mut held, mut unreadable, mut read) = (Vec::new(), 0_usize, 0_usize);
+    for entry in fs::read_dir("/proc").map_err(|_| Error::Endpoint(EndpointWhy::Table))? {
+        tick(deadline, cancelled)?;
+        let Some(pid) = entry.ok().and_then(|entry| {
+            entry
+                .file_name()
+                .to_str()
+                .and_then(|name| name.parse::<u32>().ok())
+        }) else {
+            continue;
+        };
+        let Ok(descriptors) = fs::read_dir(format!("/proc/{pid}/fd")) else {
+            unreadable += 1;
+            continue;
+        };
+        let mut targets = Vec::new();
+        for descriptor in descriptors.flatten() {
+            read += 1;
+            if read > MAX_ENDPOINT_FDS {
+                return Err(Error::Endpoint(EndpointWhy::Bound));
+            }
+            if let Ok(link) = fs::read_link(descriptor.path()) {
+                targets.push(link.to_string_lossy().into_owned());
+            }
+        }
+        held.push((pid, targets));
+    }
+    let pid = holder(&held, inode, unreadable).map_err(Error::Endpoint)?;
+    let ours =
+        fs::read_link("/proc/self/ns/net").map_err(|_| Error::Endpoint(EndpointWhy::Namespace))?;
+    let theirs = fs::read_link(format!("/proc/{pid}/ns/net"))
+        .map_err(|_| Error::Endpoint(EndpointWhy::Namespace))?;
+    if ours != theirs {
+        return Err(Error::Endpoint(EndpointWhy::Namespace));
+    }
+    Ok(pid)
+}
+
 /// The daemon this dispatch talks to (R21 N6, N7): `MainPID` of the pinned unit from `source`, then
 /// a `/proc` census and the descendant walk below it; every candidate's `/proc/<pid>/exe` is hashed
 /// against the pin, and an executable that cannot be opened (EACCES across a toolbox, F2) or does
@@ -862,9 +1078,12 @@ pub fn resolve(
         process::CensusError::Cancelled => Error::Cancelled,
         other => Error::Census(other),
     })?;
-    let below =
-        process::descendants(&census, main, MAX_DAEMON_CANDIDATES).map_err(Error::Candidates)?;
-    let candidates: Vec<u32> = std::iter::once(main).chain(below).collect();
+    let below = if source.walks_descendants() {
+        process::descendants(&census, main, MAX_DAEMON_CANDIDATES).map_err(Error::Candidates)?
+    } else {
+        Vec::new()
+    };
+    let candidates = daemon_candidates(main, below);
     let mut matched = BTreeSet::new();
     for pid in &candidates {
         let executable = FilePin {

@@ -252,8 +252,10 @@ T07_INPUTS = ("src/store/recovery.rs", "tests/t07_inventory.rs")
 # interpreter is an evidence pin (see native_client_interpreter), never a
 # candidate input; the other files under tests/fixtures/native are not read by
 # any registered Rust test and earn no input status here.
-T08_TARGET_COUNTS = {"t08_native": 28}
-T08_INPUTS = ("src/worker/native.rs", "tests/t08_native.rs", "tests/fixtures/native/client.py")
+T08_TARGET_COUNTS = {"t08_native": 33}
+T08_INPUTS = ("src/worker/native.rs", "tests/t08_native.rs", "tests/fixtures/native/client.py",
+              # N6b: the host's own socket table, the endpoint resolver's known answer.
+              "tests/fixtures/native/proc-net-tcp-host-20260930.txt")
 NATIVE_CLIENT_FIXTURE = "tests/fixtures/native/client.py"
 # Reviewed T07 engine reconciliation policy target: 60 controls. tests/recovery.rs
 # reads only habitat_engine::recovery and src/recovery.rs (declared by src/lib.rs)
@@ -1575,7 +1577,7 @@ def main():
         seamed = work / "target/debug/habitat-engine"
         run("install-release-seam-positive", [sys.executable, "-W", "error", "deploy/install-release",
                                               "--count-seams", str(seamed)],
-            required_text="seam_strings=3 file=" + str(seamed))
+            required_text="seam_strings=4 file=" + str(seamed))
         # G05 `cargo doc` step: rustdoc under the manifest's forbidden [lints.rustdoc], once per feature set
         # (profile does not change documentation). The world is the pinned rustdoc's own list.
         lint_help = run("rustdoc-lint-world", [str(binaries["rustdoc"]), "-W", "help"],

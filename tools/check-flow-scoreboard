@@ -56,11 +56,12 @@ FLOWS = {
                       "its headroom and RC02's mount table and block topology declared through the test "
                       "build's seams (RA1, Closure R1, OPS12 round 2), so in the gate a real backup is taken "
                       "into a destination the declared table and topology place on another disk, then one task stops at a pre-dispatch refusal "
-                      "(criteria_not_class) and, over the native provider, is refused at the busctl pin with "
-                      "the task left admitted — no worker launches in the gate; launch, LauncherFailed and "
+                      "(criteria_not_class) and, over the native provider, is refused at the daemon (no listener at "
+                      "the declared endpoint, N6b) with the task left admitted — no worker launches in the "
+                      "gate; launch, LauncherFailed and "
                       "ACCEPTED are Tier-3", "lands_with": "B14c-T3 + Q4", "host": "evidence/host/F06.json",
             "partial": SOCKET
-            + "::with_a_scratch_runtime_directory_the_busctl_pin_refuses_and_the_task_stays_admitted"},
+            + "::with_no_daemon_at_the_declared_endpoint_the_task_stays_admitted"},
     "F07": {"reason": "check is not composed behind dispatch", "lands_with": "B16"},
     "F08": {"reason": "cohort has no durable owner (DS7) and thread.* is unserved", "lands_with": "C06"},
     "F09": {"reason": "cohort and context meet only in the library", "lands_with": "C07"},

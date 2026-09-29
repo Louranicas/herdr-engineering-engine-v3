@@ -202,9 +202,8 @@ use habitat_engine::app::native_provider::{self, Installed, NativeFileError, Nat
 use habitat_engine::app::tasks::StoreTasks;
 use habitat_engine::app::{class_profile, dispatcher, routing};
 use habitat_engine::contracts::control::{FrameReader, MAX_FRAME_BYTES, ReadError};
-use habitat_engine::worker::aggregate;
 use habitat_engine::worker::namespace_shim::{self, NamespaceExec};
-use habitat_engine::worker::native::{self, Systemd};
+use habitat_engine::worker::native;
 use signal_hook::consts::{SIGHUP, SIGINT, SIGTERM};
 use signal_hook::iterator::Signals;
 use std::io::{self, Read, Write};
@@ -538,19 +537,16 @@ fn compose_native(
             }
         }
     };
-    let systemd = Systemd(aggregate::Config {
-        busctl: aggregate::BUSCTL.into(),
-        busctl_sha256: profile.declared.busctl_sha256.clone(),
-        runtime_dir: runtime_root.to_path_buf(),
-    });
+    // N6b (2026-09-30; Luke: "resolve by endpoint"): the daemon is the one process holding the one
+    // listener at the endpoint, not a descendant of a unit's main process.
     Ok((
-        NativeProvider::new(file, systemd, runtime_root.to_path_buf()),
+        NativeProvider::new(file, daemon_endpoint(), runtime_root.to_path_buf()),
         installed,
     ))
 }
 
 /// What `compose_native` came to: the provider and its install, or the refusal's kind.
-type Composed = Result<(NativeProvider<Systemd>, Installed), NoNative>;
+type Composed = Result<(NativeProvider<native::Endpoint>, Installed), NoNative>;
 
 /// What the dispatcher runs over (B14b-2 review round 2, FT-5): the task owner, the attempts root
 /// `serve` prepared and its id, the native provider composed after both, and RC01's backup target
@@ -1051,6 +1047,40 @@ fn devices() -> backup_target::Devices {
     backup_target::Devices {
         mounts: mount_table(),
         topology: block_topology(),
+    }
+}
+
+/// The daemon source `serve` resolves through (N6b): the endpoint's own port, always, in a release
+/// build.
+#[cfg(not(feature = "headroom-seam"))]
+const fn daemon_endpoint() -> native::Endpoint {
+    native::Endpoint {
+        port: native::ENDPOINT_PORT,
+    }
+}
+
+/// The daemon source in a test build (feature `headroom-seam`; N6b): the port `HEE3_TEST_DAEMON_PORT`
+/// names when it is set, said once, and the endpoint's own otherwise. A proof chooses the port the
+/// resolver asks the kernel about, so no verdict depends on what listens on the host's endpoint. A
+/// value that is not a port is said and resolved as port 0, where nothing listens.
+#[cfg(feature = "headroom-seam")]
+fn daemon_endpoint() -> native::Endpoint {
+    const PORT_SEAM: &str = "HEE3_TEST_DAEMON_PORT";
+    let Some(declared) = std::env::var_os(PORT_SEAM) else {
+        return native::Endpoint {
+            port: native::ENDPOINT_PORT,
+        };
+    };
+    let port = declared.to_str().and_then(|text| text.parse::<u16>().ok());
+    say(format_args!(
+        "daemon endpoint port declared by the test seam: {PORT_SEAM}={}",
+        port.map_or_else(
+            || "not a port (resolved as 0)".to_owned(),
+            |port| port.to_string()
+        )
+    ));
+    native::Endpoint {
+        port: port.unwrap_or(0),
     }
 }
 
