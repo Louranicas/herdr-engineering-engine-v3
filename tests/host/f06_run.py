@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """HT2: the committed F06 host run. It acquires only, and every value and verdict is f06_decide.py's. It runs ON
 THE HOST (`flatpak-spawn --host python3 tests/host/f06_run.py …`): serve, systemctl --user, /proc and the ledger
-are the host's. Every row prints `row=<id> rc=<code> …`. The ollama swap is restored on every exit path, and the
+are the host's. Every row prints `row=<id> rc=<code> …`. The daemon is the live ollama.service, resolved by the product
+at its endpoint (N6b; Luke, "resolve by endpoint"): nothing here stops, swaps or restarts it. The
 disposable HOME is removed at T3. Contracts: hee3-evidence/T28/HO01-T3-20260928/FLOW-CONTRACT.md §3 and
-hee3-evidence/T28/HT2-host-f06-20260929/FLOW-CONTRACT.md (§6: Luke, "swap only for T3").
+hee3-evidence/T28/HT2-host-f06-20260929/FLOW-CONTRACT.md (§8 and after; §6's swap is superseded by N6b).
 
-    f06_run.py --release DIR --sysroot DIR --ollama-binary FILE --run-id ID --evidence DIR --record FILE
+    f06_run.py --release DIR --sysroot DIR --run-id ID --evidence DIR --record FILE
 
 No time limit of its own: each observation poll has a budget whose two numbers it prints when it expires (F102).
 """
@@ -26,7 +27,11 @@ REPO = HERE.parent.parent
 sys.path.insert(0, str(HERE))
 import f06_decide as decide  # noqa: E402  (the decide module sits beside this runner)
 
-OLLAMA_PIN = ("sha256:12ff8654a500a290", 32276424)  # prefix measured 2026-09-29; the full digest is read below
+# The daemon executable's pin: sha256sum /usr/bin/ollama in fedora-toolbox-44, measured 2026-09-29, whose prefix is
+# HO-04's adapter id (ollama-fc44-12ff8654). P8 requires the one LISTEN holder at :11434 to run exactly these bytes.
+OLLAMA_SHA256 = "sha256:12ff8654a500a29048e2a40ff297e778f98c31742ecbd354dc948dbab3cea1aa"
+OLLAMA_BYTES = 32276424
+ENDPOINT_PORT = 11434
 MODEL = "llama3.2:3b"
 MODELS = Path.home() / ".ollama/models"
 MANIFEST = MODELS / "manifests/registry.ollama.ai/library/llama3.2/3b"
@@ -129,6 +134,30 @@ def closure_files(sysroot, target):
     return [rows[key] for key in sorted(rows)]
 
 
+def listen_holder(port):
+    """(pid, why) of the one process holding the one LISTEN socket at 127.0.0.1:`port` (v4 loopback or any, v6 any or
+    v4-mapped loopback), measured here independently of the product, which enforces the same rule at dispatch (N6b):
+    (0, reason) when there is not exactly one."""
+    spellings = ("0100007F", "00000000", "0" * 32, "0000000000000000FFFF00000100007F")
+    inodes = []
+    for table in ("/proc/net/tcp", "/proc/net/tcp6"):
+        for line in Path(table).read_text().splitlines()[1:]:
+            f = line.split()
+            host, _, listened = f[1].partition(":")
+            if f[3] == "0A" and listened == f"{port:04X}" and host in spellings:
+                inodes.append(f[9])
+    if len(inodes) != 1:
+        return 0, f"listeners={len(inodes)}"
+    holders = []
+    for pid in filter(str.isdigit, os.listdir("/proc")):
+        try:
+            if any(os.readlink(f"/proc/{pid}/fd/{fd}") == f"socket:[{inodes[0]}]" for fd in os.listdir(f"/proc/{pid}/fd")):
+                holders.append(int(pid))
+        except OSError:
+            pass
+    return (holders[0], "holders=1") if len(holders) == 1 else (0, f"holders={len(holders)}")
+
+
 def hee3(env, *args):
     result = run(["bash", str(REPO / "integrations/bash/hee3"), *args], env=env, check=False, timeout=120)
     return result.returncode, result.stdout, result.stderr
@@ -136,7 +165,7 @@ def hee3(env, *args):
 
 def main():
     parser = argparse.ArgumentParser()
-    for name in ("--release", "--sysroot", "--ollama-binary", "--run-id", "--evidence", "--record"):
+    for name in ("--release", "--sysroot", "--run-id", "--evidence", "--record"):
         parser.add_argument(name, required=True)
     a = parser.parse_args()
     release, sysroot = Path(a.release).resolve(), Path(a.sysroot).resolve()
@@ -148,9 +177,7 @@ def main():
     config = home / ".config/herdr-engineering-engine-v3"
     backups = Path("/var/mnt/STORAGE-10TB/herdr-engineering-engine-v3-t3-backups") / a.run_id
     serve_unit = f"herdr-engineering-engine-v3-t3-{a.run_id}.service"
-    ollama_unit = f"hee3-t3-ollama-{a.run_id}.service"
     manifest = json.loads((release / "manifest.json").read_text())
-    swapped = False
     created_root = False
     before = []
     measured, fields = {}, {"compensating": {"netns_differ": False, "slices": []}}
@@ -200,21 +227,18 @@ def main():
         measured["headroom"] = (f"state={free_state >> 30}GiB backup={free_backup >> 30}GiB",
                                 free_state >= 96 << 30 and free_backup >= 256 << 30
                                 and os.stat(home).st_dev != os.stat(backups.parent).st_dev)
-        # ---- the ollama swap (Luke: T3 window only) ------------------------------------------------------------
-        daemon_sha, daemon_bytes = sha_file(a.ollama_binary), os.path.getsize(a.ollama_binary)
-        if not daemon_sha.startswith(OLLAMA_PIN[0]) or daemon_bytes != OLLAMA_PIN[1]:
-            raise RuntimeError(f"ollama binary {daemon_sha} {daemon_bytes} is not the pinned one")
-        run(["systemctl", "--user", "stop", "ollama.service"])
-        swapped = True
-        run(["systemd-run", "--user", "--quiet", f"--unit={ollama_unit}", "--setenv=OLLAMA_HOST=127.0.0.1:11434",
-             f"--setenv=OLLAMA_MODELS={MODELS}", f"--setenv=HOME={Path.home()}", a.ollama_binary, "serve"])
-        poll("ollama tags", lambda: MODEL in run(["curl", "-s", "--noproxy", "*", "-m", "2",
-                                                  "http://127.0.0.1:11434/api/tags"], check=False).stdout, 60)
-        daemon_pid = int(unit_prop(ollama_unit, "MainPID") or 0)
-        daemon_exe = sha_file(f"/proc/{daemon_pid}/exe") if daemon_pid else "-"
-        measured["native_daemon"] = (f"{ollama_unit} pid={daemon_pid} exe={daemon_exe[7:19]}",
-                                     daemon_exe == daemon_sha)
-        row("swap", 0, f"ollama.service stopped; {ollama_unit} serving {MODEL}")
+        # ---- P8: the live daemon at the endpoint, its bytes and its GPU (N6b; review 2c N1) -----------------------
+        holder, why = listen_holder(ENDPOINT_PORT)
+        holder_exe = sha_file(f"/proc/{holder}/exe") if holder else "-"
+        run(["curl", "-s", "--noproxy", "*", "-m", "120", "http://127.0.0.1:11434/api/generate", "-d",
+             json.dumps({"model": MODEL, "prompt": "ok", "stream": False, "keep_alive": 60,
+                         "options": {"num_predict": 1}})], check=False)
+        resident = json.loads(run(["curl", "-s", "--noproxy", "*", "-m", "5", "http://127.0.0.1:11434/api/ps"],
+                                  check=False).stdout or "{}").get("models", [])
+        vram = max((m.get("size_vram", 0) for m in resident if m.get("name") == MODEL), default=0)
+        measured["native_daemon"] = (f"holder={holder} {why} exe={holder_exe[7:19]} vram={vram >> 20}MiB",
+                                     holder_exe == OLLAMA_SHA256 and os.path.getsize(f"/proc/{holder}/exe") == OLLAMA_BYTES
+                                     and vram > 0)
         # ---- provisioning (the class, its closure, the native file) -------------------------------------------
         target = "x86_64-unknown-linux-musl"
         runtime_files = closure_files(sysroot, target)
@@ -247,8 +271,8 @@ def main():
         write(config / "native/native.toml", decide.native({
             "directory": str(native_dir), "curl_sha256": pins["curl"], "curl_bytes": os.path.getsize("/usr/bin/curl"),
             "manifest_path": str(MANIFEST), "manifest_sha256": sha_file(MANIFEST),
-            "manifest_bytes": os.path.getsize(MANIFEST), "blobs": str(MODELS / "blobs"), "unit": ollama_unit,
-            "daemon_sha256": daemon_sha, "daemon_bytes": daemon_bytes, "roster_key": str(uuid.uuid4()),
+            "manifest_bytes": os.path.getsize(MANIFEST), "blobs": str(MODELS / "blobs"), "unit": "ollama.service",
+            "daemon_sha256": OLLAMA_SHA256, "daemon_bytes": OLLAMA_BYTES, "roster_key": str(uuid.uuid4()),
             "endpoint_ref": str(uuid.uuid4())}).encode())
         private(backups)
         write(config / "backup/backup.json", decide.backup(backups, 3600))
@@ -354,24 +378,16 @@ def main():
     except Exception as error:  # every stop is a finding: named, recorded, and the teardown still runs
         row("STOP", 1, f"{type(error).__name__}: {error}")
     finally:
-        # ---- T1 stop serve, T2 units, T3 remove the disposable HOME, restore ollama ----------------------------
+        # ---- T1 stop serve, T2 units, T3 remove the disposable HOME ----------------------------------------------
         started = time.monotonic()
+        stopped, why = True, ""
         if unit_prop(serve_unit, "LoadState") == "loaded":
             run(["systemctl", "--user", "stop", serve_unit], check=False)
             try:
                 poll("serve gone", lambda: unit_prop(serve_unit, "MainPID") in ("0", ""), 1800)
             except RuntimeError as error:
-                row("T1", 1, str(error))
-        row("T1", 0, f"seal={time.monotonic() - started:.2f}s")
-        if swapped:
-            run(["systemctl", "--user", "stop", ollama_unit], check=False)
-            run(["systemctl", "--user", "start", "ollama.service"], check=False)
-            try:
-                poll("ollama.service active", lambda: unit_prop("ollama.service", "ActiveState") == "active", 60)
-                row("restore", 0, "ollama.service ActiveState=active")
-            except RuntimeError as error:
-                fields["restored"] = False
-                row("restore", 1, str(error))
+                stopped, why = False, str(error)
+        row("T1", 0 if stopped else 1, why or f"seal={time.monotonic() - started:.2f}s")
         after = units()
         fields["units_before"], fields["units_after"] = before, after
         extra = sorted(set(after) - set(fields["units_before"]))

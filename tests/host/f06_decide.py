@@ -195,8 +195,6 @@ def record(fields, lines, problems):
     extra = sorted(set(fields["units_after"]) - set(fields["units_before"]))
     if extra:
         refused.append(f"units after != before: {extra}")
-    if not fields.get("restored", True):
-        refused.append("ollama.service was not read back active after the window")
     if not fields.get("compensating", {}).get("netns_differ"):
         refused.append("R0: the candidate's network namespace was not observed apart from serve's")
     if refused:
@@ -314,7 +312,7 @@ def control():
     case("profile native row", text.endswith(f'[native]\nmodel = "llama3.2:3b"\nmanifest_sha256 = "sha256:m"\n'
                                              f'adapter = "{ADAPTER}"\n'), True)
     # Review 2c: H1 the release's source is the run's head; M3 a reconciliation's equal generation is not stale;
-    # M1 an unrestored daemon refuses the record.
+    # (M1's restore rule left with the swap it guarded: N6b resolves the live daemon.)
     good = {"source_commit": "a" * 40, "binaries": {"habitat-engine": {"sha256": "e" * 64}}}
     named = hashlib.sha256(render_manifest(good)).hexdigest()
     case("release row whole", release_row(good, named, {"habitat-engine": "e" * 64}, 0, "a" * 40),
@@ -326,11 +324,8 @@ def control():
     case("release seams", release_row(good, named, {"habitat-engine": "e" * 64}, 1, "a" * 40)[1], False)
     case("stale counts steps back only", (stale_count(["1", "2", "3", "3", "4"]), stale_count(["1", "3", "2", "4"])),
          (0, 1))
-    case("restore refuses", record({**fields_fixture(), "restored": False}, lines, []),
-         (None, ["ollama.service was not read back active after the window"]))
     rules = ["four lines", "terminal", "stale_accepted", "same=false", "dirty", "exe digest", "units",
-             "P-rows all pass", "R0 netns", "release source is the run head", "stale counts steps back only",
-             "restore refuses"]
+             "P-rows all pass", "R0 netns", "release source is the run head", "stale counts steps back only"]
     ran = sum(rule in cases for rule in rules)
     print(f"control verdict=PASS cases={ran}/{len(rules)} assertions={len(cases)}")
     return 0 if ran == len(rules) else 1
