@@ -1262,3 +1262,44 @@ fn the_descriptor_bound_and_the_namespace_are_decided_by_argument() {
         (Ok(()), Err(Why::Bound), Ok(()), Err(Why::Namespace))
     );
 }
+
+/// N6c (2026-09-30): the live daemon's reply to the class's templated generate, recorded (the world's
+/// answer, never a hand-typed shape: F113). A fixture typed without it made every real reply a `json`
+/// refusal.
+const LIVE_GENERATE: &str = include_str!("fixtures/native/live-generate-response-20260930.json");
+
+#[test]
+fn a_live_daemons_reply_is_the_declared_fields_and_its_context_is_accepted()
+-> Result<(), Box<dyn std::error::Error>> {
+    let live: Value = serde_json::from_str(LIVE_GENERATE)?;
+    let keys: Vec<&str> = live
+        .as_object()
+        .ok_or("an object")?
+        .keys()
+        .map(String::as_str)
+        .collect();
+    assert_eq!(
+        keys,
+        [
+            "context",
+            "created_at",
+            "done",
+            "done_reason",
+            "eval_count",
+            "eval_duration",
+            "load_duration",
+            "model",
+            "prompt_eval_count",
+            "prompt_eval_duration",
+            "response",
+            "total_duration",
+        ],
+        "the live reply's fields, whole: a new daemon field is a new decision"
+    );
+    let mut r = Rig::new();
+    r.scenario["generated"]["context"] = live["context"].clone();
+    let run = r.run();
+    assert_eq!(run.error, None);
+    settled(&run);
+    Ok(())
+}

@@ -1880,7 +1880,8 @@ class T06QualityInventoryControls(unittest.TestCase):
         self.assertNotIn("worker::native::", "".join(expected["unit_test_counts"]))
         self.assertEqual(list(quality.T08_TARGET_COUNTS), ["t08_native"])
         self.assertEqual(quality.T08_INPUTS, ("src/worker/native.rs", "tests/t08_native.rs", "tests/fixtures/native/client.py",
-                                              "tests/fixtures/native/proc-net-tcp-host-20260930.txt"))
+                                              "tests/fixtures/native/proc-net-tcp-host-20260930.txt",
+                                              "tests/fixtures/native/live-generate-response-20260930.json"))
         paths = quality.quality_subject_paths(ROOT, time.monotonic() + 5, True)
         for name in quality.T08_INPUTS:
             self.assertIn(name, paths)
@@ -1901,7 +1902,8 @@ class T06QualityInventoryControls(unittest.TestCase):
             root = Path(raw); manifest = self.combined_fixture(root)
             manifest.write_text(self.strip_targets(manifest.read_text(), ["t08_native"]))
             for name in ("tests/t08_native.rs", "tests/fixtures/native/client.py",
-                         "tests/fixtures/native/proc-net-tcp-host-20260930.txt"):
+                         "tests/fixtures/native/proc-net-tcp-host-20260930.txt",
+                         "tests/fixtures/native/live-generate-response-20260930.json"):
                 (root / name).unlink()
             self.assertTrue(quality.has_t08(root))
             self.assertTrue(quality.has_t08_contract(root))
@@ -1910,12 +1912,14 @@ class T06QualityInventoryControls(unittest.TestCase):
             (root / "tests/t08_native.rs").write_text("// stub\n")
             (root / "tests/fixtures/native/client.py").write_text("#!/usr/bin/python3\n")
             (root / "tests/fixtures/native/proc-net-tcp-host-20260930.txt").write_text("sl\n")
+            (root / "tests/fixtures/native/live-generate-response-20260930.json").write_text("{}\n")
             with self.assertRaisesRegex(ValueError, r"missing=\['t08_native'\] extra=\[\] duplicate=\[\]"):
                 quality.rust_test_expectations(root)
             (root / "src/worker/native.rs").unlink()
             (root / "tests/t08_native.rs").unlink()
             (root / "tests/fixtures/native/client.py").unlink()
             (root / "tests/fixtures/native/proc-net-tcp-host-20260930.txt").unlink()
+            (root / "tests/fixtures/native/live-generate-response-20260930.json").unlink()
             self.assertFalse(quality.has_t08(root))
             with self.assertRaisesRegex(ValueError, "required extension input: src/worker/native.rs"):
                 quality.rust_test_expectations(root)

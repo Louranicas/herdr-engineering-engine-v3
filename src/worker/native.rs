@@ -647,6 +647,12 @@ struct Generated {
     eval_count: u64,
     #[serde(rename = "eval_duration")]
     _eval_duration: Option<u64>,
+    /// The daemon's token-id context, which a templated (`raw: false`, the `/2` profile's) non-streamed
+    /// generate returns (N6c, 2026-09-30: the live daemon's reply, recorded as
+    /// `tests/fixtures/native/live-generate-response-20260930.json`, carried 776 ids). Read and not used.
+    /// Every other unknown field is still refused. At `num_ctx` 4096 it stays well inside `FRAME_LIMIT`.
+    #[serde(rename = "context")]
+    _context: Option<Vec<u64>>,
 }
 
 fn parse<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> Result<T, Error> {
