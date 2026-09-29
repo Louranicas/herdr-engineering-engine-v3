@@ -411,7 +411,7 @@ pub fn adapter(id: &str) -> Option<&'static AdapterProfile> {
 /// `OLLAMA_HOST=127.0.0.1:11434`; [`ENDPOINT_PORT`] is its port, and `t08_native` pins the two
 /// spellings together.
 const ENDPOINT: &str = "http://127.0.0.1:11434/api/";
-/// The port [`ENDPOINT`] names: the one the endpoint resolver asks the kernel's socket tables about.
+/// The port [`endpoint()`] names: the one the endpoint resolver asks the kernel's socket tables about.
 pub const ENDPOINT_PORT: u16 = 11434;
 /// The endpoint as a URL, for the proof that pins [`ENDPOINT_PORT`] to it.
 #[must_use]
@@ -987,7 +987,7 @@ pub fn same_namespace(ours: &Path, theirs: &Path) -> Result<(), EndpointWhy> {
     }
 }
 
-/// The daemon as the one process holding the one listener at [`ENDPOINT`] (N6b, 2026-09-30; Luke:
+/// The daemon as the one process holding the one listener at [`endpoint()`] (N6b, 2026-09-30; Luke:
 /// "resolve by endpoint"): a unit's main process no longer roots the search, because a daemon a
 /// wrapper runs (`toolbox run` → `podman exec`) is not below the wrapper at all. The unit the
 /// operator names is not consulted by this source.
