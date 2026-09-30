@@ -319,7 +319,7 @@ def main():
         # ---- R-exec: observe until the task's attempt settles; R0 while a candidate lives ----------------------
         serve_net = os.readlink(f"/proc/{serve_pid}/ns/net")
         deadline = time.monotonic() + 1500
-        final = None
+        final, last_reply = None, None
         while time.monotonic() < deadline:
             for pid in os.listdir("/proc"):
                 if not pid.isdigit():
@@ -339,7 +339,7 @@ def main():
                                                              ("CPUQuotaPerSecUSec", "MemoryMax", "TasksMax")}})
             rc, out, _ = hee3(wrapper, "task.get", "selector:=" + json.dumps({"task_id": task_id}), "evidence=none")
             if rc == 0:
-                reply = json.loads(out)["body"]
+                reply = last_reply = json.loads(out)["body"]
                 attempts = reply.get("attempts", [])
                 if decide.observation_finished(reply.get("task", {}).get("state"),
                                                [x.get("state") for x in attempts]):
@@ -347,7 +347,9 @@ def main():
                     break
             time.sleep(0.2)
         (evidence / "R-exec-task-get.json").write_text(json.dumps(final, indent=1))
-        row("R-exec", 0 if final else 1, json.dumps((final or {}).get("task", {}))[:240])
+        # On budget, the last state seen names why (review 2c M1): a state the decide does not know is visible.
+        last = json.dumps((final or last_reply or {}).get("task", {}))[:240]
+        row("R-exec", 0 if final else 1, last if final else f"budget 1500s spent; last task {last}")
         # ---- C1: the ledger, read-only ------------------------------------------------------------------------
         active = json.loads((state / "active.json").read_text())
         generation = active["generation"]

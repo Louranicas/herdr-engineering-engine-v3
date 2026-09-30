@@ -8,8 +8,10 @@ hee3-evidence/T28/HT2-host-f06-20260929/FLOW-CONTRACT.md.
 """
 import hashlib
 import json
+import sqlite3
 import sys
 from itertools import pairwise
+from pathlib import Path
 
 RECORD_SCHEMA = "hee3.host-record/1"
 GRANT_SCHEMA = "hee3.grant/1"
@@ -126,6 +128,52 @@ def render_manifest(manifest):
 # moving. `verifying` is where the candidate's workload runs, after the attempt settles, so R0 can only be observed
 # before it ends (t3d, 2026-09-30: the observation stopped at the settle and saw no candidate).
 TERMINAL_TASK_STATES = ("accepted", "failed", "cancelled", "abandoned", "effect_unknown", "blocked")
+# The states in which the task still moves: together with TERMINAL_TASK_STATES exactly the schema's set, which the
+# control reads from the migrations themselves (review 2c M1: a hand-typed include list cannot see a new state).
+MOVING_TASK_STATES = ("admitted", "queued", "running", "verifying", "repair_pending", "cancellation_requested")
+MIGRATIONS = Path(__file__).resolve().parents[2] / "migrations"
+
+
+def in_list(sql, column):
+    """The quoted literals of `CHECK(<column> IN ('a','b',…))` in a CREATE TABLE statement, read by a quote-aware
+    scan (never a regex: a literal may hold a parenthesis, F140). `''` inside a literal is one quote."""
+    marker = f"CHECK({column} IN ("
+    start = sql.index(marker) + len(marker)
+    values, current, quoted, index = [], [], False, start
+    while index < len(sql):
+        char = sql[index]
+        if quoted:
+            if char == "'" and sql[index + 1:index + 2] == "'":
+                current.append("'")
+                index += 1
+            elif char == "'":
+                quoted = False
+                values.append("".join(current))
+                current = []
+            else:
+                current.append(char)
+        elif char == "'":
+            quoted = True
+        elif char == ")":
+            return values
+        index += 1
+    raise ValueError(f"unterminated CHECK({column} IN (…)")
+
+
+def schema_task_states(migrations=MIGRATIONS):
+    """The task states the schema allows, from the migrations applied in order to an empty database: the final
+    `tasks` table's own CHECK, whatever a later migration rebuilt it as."""
+    applied = sorted(migrations.glob("*.sql"))
+    db = sqlite3.connect(":memory:")
+    try:
+        for migration in applied:
+            db.executescript(migration.read_text())
+        row = db.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='tasks'").fetchone()
+    finally:
+        db.close()
+    if row is None:
+        raise ValueError(f"no tasks table after {len(applied)} migrations at {migrations}")
+    return in_list(row[0], "state")
 
 
 def observation_finished(task_state, attempt_states):
@@ -337,13 +385,20 @@ def control():
     case("release seams", release_row(good, named, {"habitat-engine": "e" * 64}, 1, "a" * 40)[1], False)
     case("stale counts steps back only", (stale_count(["1", "2", "3", "3", "4"]), stale_count(["1", "3", "2", "4"])),
          (0, 1))
+    world = schema_task_states()
+    case("the task states partition the schema's", (sorted(set(TERMINAL_TASK_STATES) | set(MOVING_TASK_STATES)),
+                                                     set(TERMINAL_TASK_STATES) & set(MOVING_TASK_STATES)),
+         (sorted(world), set()))
+    for state in world:
+        case(f"state {state}", observation_finished(state, ["settled"]), state in TERMINAL_TASK_STATES)
+    case("the scan reads a quoted parenthesis", in_list("x CHECK(s IN ('a)b','c''d','e'))", "s"), ["a)b", "c'd", "e"])
     case("observation waits for verification", (
         observation_finished("verifying", ["settled"]), observation_finished("repair_pending", ["settled"]),
         observation_finished("failed", ["running"]), observation_finished("accepted", ["settled"]),
         observation_finished("effect_unknown", ["unknown"])), (False, False, False, True, True))
     rules = ["four lines", "terminal", "stale_accepted", "same=false", "dirty", "exe digest", "units",
              "P-rows all pass", "R0 netns", "release source is the run head", "stale counts steps back only",
-             "observation waits for verification"]
+             "observation waits for verification", "the task states partition the schema's"]
     ran = sum(rule in cases for rule in rules)
     print(f"control verdict=PASS cases={ran}/{len(rules)} assertions={len(cases)}")
     return 0 if ran == len(rules) else 1
