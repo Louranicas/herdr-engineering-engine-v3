@@ -341,10 +341,8 @@ def main():
             if rc == 0:
                 reply = json.loads(out)["body"]
                 attempts = reply.get("attempts", [])
-                if attempts and all(x.get("state") in ("settled", "unknown") for x in attempts):
-                    final = reply
-                    break
-                if reply.get("task", {}).get("state") not in ("admitted", "running", "queued", None) and not attempts:
+                if decide.observation_finished(reply.get("task", {}).get("state"),
+                                               [x.get("state") for x in attempts]):
                     final = reply
                     break
             time.sleep(0.2)

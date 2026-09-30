@@ -122,6 +122,19 @@ def render_manifest(manifest):
     return (json.dumps(manifest, sort_keys=True, separators=(",", ":"), ensure_ascii=False) + "\n").encode()
 
 
+# The task states that end the run's observation (migrations/001.sql `tasks.state`): every other state is still
+# moving. `verifying` is where the candidate's workload runs, after the attempt settles, so R0 can only be observed
+# before it ends (t3d, 2026-09-30: the observation stopped at the settle and saw no candidate).
+TERMINAL_TASK_STATES = ("accepted", "failed", "cancelled", "abandoned", "effect_unknown", "blocked")
+
+
+def observation_finished(task_state, attempt_states):
+    """Whether the run may stop observing: the task is in a terminal state and every attempt is settled or an
+    explicit unknown. A settled attempt under a task still `verifying` or `repair_pending` is not finished."""
+    return (task_state in TERMINAL_TASK_STATES
+            and all(state in ("settled", "unknown") for state in attempt_states))
+
+
 def stale_count(generations):
     """How many events carry a task generation below their predecessor's, in `sequence` order (review 2c M3): a
     transition advances the generation and a reconciliation repeats it (src/store/reconciliation.rs), so equal is
@@ -324,8 +337,13 @@ def control():
     case("release seams", release_row(good, named, {"habitat-engine": "e" * 64}, 1, "a" * 40)[1], False)
     case("stale counts steps back only", (stale_count(["1", "2", "3", "3", "4"]), stale_count(["1", "3", "2", "4"])),
          (0, 1))
+    case("observation waits for verification", (
+        observation_finished("verifying", ["settled"]), observation_finished("repair_pending", ["settled"]),
+        observation_finished("failed", ["running"]), observation_finished("accepted", ["settled"]),
+        observation_finished("effect_unknown", ["unknown"])), (False, False, False, True, True))
     rules = ["four lines", "terminal", "stale_accepted", "same=false", "dirty", "exe digest", "units",
-             "P-rows all pass", "R0 netns", "release source is the run head", "stale counts steps back only"]
+             "P-rows all pass", "R0 netns", "release source is the run head", "stale counts steps back only",
+             "observation waits for verification"]
     ran = sum(rule in cases for rule in rules)
     print(f"control verdict=PASS cases={ran}/{len(rules)} assertions={len(cases)}")
     return 0 if ran == len(rules) else 1
