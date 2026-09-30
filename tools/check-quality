@@ -883,6 +883,8 @@ def quality_subject_paths(root, deadline, rust_only):
                 "tests/fixtures/rustdoc/lint-help-1.98.0.txt",  # t25's verbatim rustdoc lint world
                 "tests/t25_quality.py", "tools/check-workflow-sites", "tools/check-skill-sites", "tools/check-pi-sites", "tools/check-bash-sites", "tools/site_sweep.py",
                 "tools/check-mutation-survivors", "tools/check-flow-scoreboard",
+                # HT3b: the committed F06 host record the scoreboard judges (the flow run on the host).
+                "evidence/host/F06.json",
                 # HT1: the release installer (RC02 path); its control is a gate step, its build a host act.
                 "deploy/install-release",
                 # HT2: the F06 host run's pure decisions (a gate step) and its host acquisition (linted only).
@@ -1486,9 +1488,14 @@ def main():
             required_text="sites=19 killed=19 wrong_reason=0 survived=0")
         # §5: every declared flow is L2 by a named binary test or carries its reason and landing slice.
         run("flow-scoreboard-control", [sys.executable, "tools/check-flow-scoreboard", "--control"],
-            required_text="control verdict=PASS cases=22")
-        run("flow-scoreboard", [sys.executable, "tools/check-flow-scoreboard"],
-            required_text="flows=20 l2=2 host=0 reasoned=18 unexplained=0\nverdict=PASS")
+            required_text="control verdict=PASS cases=26")
+        # HT3b (range review build-01/tests-8): the committed host record is a declared input, git is asked in the
+        # repository the gate copied, and the installed release is NOT consulted (machine state): the gate measures
+        # everything the tree decides, rules (a)-(d) and the record's own consistency, and a self-contradicting record
+        # reds this step. Rules (e)/(f) against the installed release, and so F06's L2 (l2=3), are the host act
+        # `python3 tools/check-flow-scoreboard` on the checkout; the gate pins what it can decide.
+        run("flow-scoreboard", [sys.executable, "tools/check-flow-scoreboard", "--history", str(ROOT), "--no-release"],
+            required_text="hosts present=1 counted=0\nflows=20 l2=2 host=0 reasoned=18 unexplained=0\nverdict=PASS")
         # HT1: every installer rule refuses its plant by its own diagnostic; the census is the schema's.
         # HT2: the F06 host run's decisions, each rule by its own diagnostic; the run itself is a host act.
         run("f06-decide-control", [sys.executable, "-W", "error", "tests/host/f06_decide.py", "--control"],
