@@ -389,8 +389,14 @@ def control():
     case("the task states partition the schema's", (sorted(set(TERMINAL_TASK_STATES) | set(MOVING_TASK_STATES)),
                                                      set(TERMINAL_TASK_STATES) & set(MOVING_TASK_STATES)),
          (sorted(world), set()))
+    # The classification is policy, pinned once as literals, never read back from the tuples (review 2c, F94/F122):
+    # moving a state between TERMINAL and MOVING keeps the partition whole but reddens this table.
+    policy = {"admitted": False, "queued": False, "running": False, "verifying": False, "repair_pending": False,
+              "cancellation_requested": False, "blocked": True, "accepted": True, "failed": True, "cancelled": True,
+              "abandoned": True, "effect_unknown": True}
+    case("the policy table covers the schema", sorted(policy), sorted(world))
     for state in world:
-        case(f"state {state}", observation_finished(state, ["settled"]), state in TERMINAL_TASK_STATES)
+        case(f"state {state}", observation_finished(state, ["settled"]), policy[state])
     case("the scan reads a quoted parenthesis", in_list("x CHECK(s IN ('a)b','c''d','e'))", "s"), ["a)b", "c'd", "e"])
     case("observation waits for verification", (
         observation_finished("verifying", ["settled"]), observation_finished("repair_pending", ["settled"]),

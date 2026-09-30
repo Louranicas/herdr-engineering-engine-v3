@@ -1492,7 +1492,7 @@ def main():
         # HT1: every installer rule refuses its plant by its own diagnostic; the census is the schema's.
         # HT2: the F06 host run's decisions, each rule by its own diagnostic; the run itself is a host act.
         run("f06-decide-control", [sys.executable, "-W", "error", "tests/host/f06_decide.py", "--control"],
-            required_text="control verdict=PASS cases=13/13 assertions=52")
+            required_text="control verdict=PASS cases=13/13 assertions=53")
         run("install-release-control", [sys.executable, "-W", "error", "deploy/install-release", "--control"],
             required_text="control verdict=PASS cases=21/21 obligations=22/22 assertions=48")
         run("mutation-survivor-audit", [sys.executable, "-W", "error", "tests/mutation_survivors.py"],
