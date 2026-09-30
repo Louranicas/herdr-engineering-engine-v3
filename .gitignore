@@ -12,6 +12,9 @@
 # required-file list read it, so ignoring it made a clone of main fail its own gate.
 /evidence/*
 !/evidence/mutation-equivalences.json
+# A committed host record (HT2/HT3): the F06 flow run on the host against an installed release, which
+# tools/check-flow-scoreboard verifies against the tree and the release (never a stored status).
+!/evidence/host/
 # A recorded real-SDK output that tests/t02_pi.rs reads by this path: a fixture the world
 # produced, so it cannot be regenerated from source. Each parent must be re-included and
 # its siblings excluded again, level by level -- git will not look inside an excluded dir.

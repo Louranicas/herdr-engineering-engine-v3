@@ -1,0 +1,31 @@
+{
+ "asserted": [
+  "F06 forward task=3945775c-23b4-4289-8e1a-644b7e684e3b attempts=1 terminal=reconciled each=1/1",
+  "F06 generation task=3945775c-23b4-4289-8e1a-644b7e684e3b attempt_generation=1 task_generation=4 stale_accepted=0",
+  "F06 execute attempt=d7d81988-8142-4642-a6ef-da1a0dd20c1c provider=native settled_event=dc7315e7-0c0e-4299-87f0-eee3a3aa496e run_records=worker_settle",
+  "F06 one_settle attempt=d7d81988-8142-4642-a6ef-da1a0dd20c1c usage_event=dc7315e7-0c0e-4299-87f0-eee3a3aa496e identity_event=dc7315e7-0c0e-4299-87f0-eee3a3aa496e same=true"
+ ],
+ "compensating": {
+  "netns_differ": true,
+  "observed": "pid=568848 net=net:[4026533084] serve=net:[4026531833]",
+  "slices": [
+   {
+    "CPUQuotaPerSecUSec": "4s",
+    "MemoryMax": "17179869184",
+    "TasksMax": "256",
+    "unit": "hee3aggregated7d8198881424642a6efda1a0dd20c1c.slice"
+   }
+  ]
+ },
+ "dirty": 0,
+ "engine_sha256": "f980e699de5e2522443de62bf443c00f1e2307b457f980526b98b6d1765e0cac",
+ "flow": "F06",
+ "ran_utc": "2026-09-30T02:52:57Z",
+ "release_manifest_sha256": "38f3dfd29b8daaf20139246956c90d8ad33764064301f5e8408c221193afcbdf",
+ "run_id": "t3e",
+ "schema": "hee3.host-record/1",
+ "shim_sha256": "c89219cd82acb2a0d3e8e6d5832aee54aacfd5d7ce6caf701598b8220717b7e7",
+ "source_sha": "cd952daf24dd063a4ae7a21a00430152f9aaecb8",
+ "test_sha256": "011c41a717b924b8d67d7177a640832c0d635965fdd2f95befbe5e9e33f56329",
+ "units_before_equals_after": true
+}
